@@ -846,7 +846,8 @@ const char* get_rbf_name_bootcore(char *str)
 
 static void vga_nag()
 {
-	if (video_fb_state())
+	// no nag if the framebuffer is routed to the analog output (direct_video or fb_terminal_vga)
+	if (video_fb_state() && !get_vga_fb())
 	{
 		EnableOsd_on(OSD_VGA);
 		OsdSetSize(16);
