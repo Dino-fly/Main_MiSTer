@@ -198,6 +198,10 @@ static void video_calculate_cvt(int horiz_pixels, int vert_pixels, float refresh
 static vmode_custom_t v_cur = {}, v_def = {}, v_pal = {}, v_ntsc = {};
 static int vmode_def = 0, vmode_pal = 0, vmode_ntsc = 0;
 
+// FB_TERMINAL_VGA: fb terminal temporarily owns the analog output via vga_fb
+static int vga_fb_takeover = 0;
+static vmode_custom_t v_takeover_saved = {};
+
 static bool supports_pr()
 {
 	static uint16_t video_version = 0xffff;
@@ -3220,6 +3224,10 @@ void video_mode_adjust(bool force)
 	static bool rep_force = false;
 	if (force) rep_force = true;
 
+	// mode is pinned while the fb terminal owns the analog output;
+	// core video changes are picked up on the poll after release
+	if (vga_fb_takeover) return;
+
 	VideoInfo video_info;
 
 	const bool vid_changed = get_video_info(rep_force, &video_info);
@@ -3334,6 +3342,18 @@ static void fb_write_module_params()
 	});
 }
 
+// same mode selection as the direct_video path in video_mode_load()
+static void tv_fb_mode(vmode_custom_t *v)
+{
+	int mode = cfg.menu_pal ? 2 : 0;
+	if (cfg.forced_scandoubler) mode++;
+
+	memset(v, 0, sizeof(*v));
+	v->item[0] = mode;
+	for (int i = 0; i < 8; i++) v->item[i + 1] = tvmodes[mode].vpar[i];
+	setPLL(tvmodes[mode].Fpix, v);
+}
+
 void video_fb_enable(int enable, int n)
 {
 	PROFILE_FUNCTION();
@@ -3402,6 +3422,29 @@ void video_fb_enable(int enable, int n)
 		DisableIO();
 		if (cfg.direct_video) set_vga_fb(enable);
 		if (is_menu()) user_io_status_set("[8:5]", (fb_enabled && !fb_num) ? 0x160 : 0);
+
+		// While the terminal is active, route the scaler output (which carries the
+		// framebuffer) to the analog port using a TV-compatible mode, so scripts are
+		// visible on VGA/SCART without vga_scaler or direct_video.
+		if (cfg.fb_terminal_vga && !cfg.direct_video && !cfg.vga_scaler)
+		{
+			if (fb_enabled && !fb_num && !vga_fb_takeover)
+			{
+				// flag must be set before video_set_mode: it re-enters here via video_fb_config
+				vga_fb_takeover = 1;
+				v_takeover_saved = v_cur;
+				vmode_custom_t v;
+				tv_fb_mode(&v);
+				video_set_mode(&v, 0);
+				set_vga_fb(1);
+			}
+			else if (vga_fb_takeover && (!fb_enabled || fb_num))
+			{
+				vga_fb_takeover = 0;
+				set_vga_fb(0);
+				video_set_mode(&v_takeover_saved, 0);
+			}
+		}
 	}
 }
 
