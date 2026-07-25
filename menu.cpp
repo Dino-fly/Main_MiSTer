@@ -858,7 +858,8 @@ static void vga_nag()
 	*/
 	if (chome_active() || chome_ingame_active()) { OsdDisable(); return; }
 
-	if (video_fb_state())
+	// no nag if the framebuffer is routed to the analog output (direct_video or fb_terminal_vga)
+	if (video_fb_state() && !get_vga_fb())
 	{
 		EnableOsd_on(OSD_VGA);
 		OsdSetSize(16);
