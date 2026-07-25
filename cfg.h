@@ -41,6 +41,7 @@ typedef struct {
 	int16_t bootcore_timeout;
 	uint8_t fb_size;
 	uint8_t fb_terminal;
+	uint8_t fb_terminal_vga;
 	uint8_t osd_rotate;
 	uint16_t osd_timeout;
 	uint8_t gamepad_defaults;
