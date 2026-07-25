@@ -20,6 +20,7 @@
 #include "fpga_io.h"
 #include "file_io.h"
 #include "menu.h"
+#include "snacpad.h"
 #include "DiskImage.h"
 #include "brightness.h"
 #include "sxmlc.h"
@@ -1385,6 +1386,8 @@ void user_io_init(const char *path, const char *xml)
 	static char mainpath[512];
 	core_name[0] = 0;
 	disable_osd = 0;
+
+	snacpad_init();
 
 	// Clean up old game ID when loading a new core
 	unlink("/tmp/GAMEID");
@@ -3135,6 +3138,8 @@ void user_io_poll()
 	}
 
 	user_io_send_buttons(0);
+
+	if (core_type == CORE_TYPE_8BIT) snacpad_poll();
 
 	if (is_minimig())
 	{
