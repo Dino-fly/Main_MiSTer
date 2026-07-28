@@ -3,6 +3,7 @@
 #include <string.h>
 #include <strings.h>
 #include <ctype.h>
+#include <unistd.h>
 #include <dirent.h>
 #include <sys/stat.h>
 
@@ -23,8 +24,38 @@
 #include "../../menu.h"
 #include "../arcade/mra_loader.h"
 #include "../../scaler.h"
+#include "../../fpga_io.h"
 
 #define CURRENT_FILE "/tmp/classicui_current"
+
+/* ------------------------------------------------------------- in-game ---- */
+
+#define IG_MAIN    0
+#define IG_LOOK    1
+#define IG_SUSPEND 2
+
+#define IGR_RESUME   0
+#define IGR_LOOK     1
+#define IGR_SUSPEND  2
+#define IGR_CLOSE    3
+#define IGR_ADVANCED 4
+#define IGR_COUNT    5
+
+static int ig_active = 0;
+static int ig_screen = IG_MAIN;
+static int ig_row = 0;
+static int ig_fb = 1;                 // framebuffer we page-flip in-game
+static int ig_have_item = 0;
+static chome_item ig_item;            // the running game, from CURRENT_FILE
+
+static uint32_t *ig_shot = 0;         // live capture, core resolution
+static int ig_shot_w = 0, ig_shot_h = 0;
+
+static uint32_t *ig_bg = 0;           // capture scaled to the canvas and dimmed
+static int ig_bg_w = 0, ig_bg_h = 0;
+
+static unsigned long ig_confirm_until = 0;   // "press A again to close"
+
 #define REF_DELAY_MS 20000
 
 /*
@@ -168,6 +199,10 @@ static const char *lang_names[] = { "English", "Deutsch", "Francais", "Italiano"
 
 static void mark_dirty() { dirty = 1; }
 
+static const uint32_t *ig_live_ref(int w, int h);
+static int ss_can_save();
+static int ss_can_load();
+
 /* ------------------------------------------------------------- helpers ---- */
 
 static const chome_entry *cur_entry()
@@ -177,6 +212,9 @@ static const chome_entry *cur_entry()
 
 static chome_item *cur_game()
 {
+	// In the pause menu the "selection" is whatever game is running.
+	if (ig_active) return ig_have_item ? &ig_item : 0;
+
 	const chome_entry *e = cur_entry();
 	if (!e || e->kind != ENT_GAME) return 0;
 	return lib_item(e->game);
@@ -777,6 +815,30 @@ static int build_legend(legend_pair *out, int max)
 	int n = 0;
 	const chome_entry *e = cur_entry();
 
+	if (ig_active)
+	{
+		switch (ig_screen)
+		{
+		case IG_LOOK:
+			if (n < max) { out[n++] = { CH_LEFT CH_RIGHT, "Choose", "Sel" }; }
+			if (n < max) { out[n++] = { "A", "Apply", "OK" }; }
+			if (n < max) { out[n++] = { "B", "Back", "Back" }; }
+			break;
+		case IG_SUSPEND:
+			if (ss_can_load() && n < max) { out[n++] = { "A", "Load", "Load" }; }
+			if (ss_can_save() && n < max) { out[n++] = { "Y", "Save", "Save" }; }
+			if (n < max) { out[n++] = { "X", "Delete", "Del" }; }
+			if (n < max) { out[n++] = { "B", "Back", "Back" }; }
+			break;
+		default:
+			if (n < max) { out[n++] = { "A", "Select", "OK" }; }
+			if (n < max) { out[n++] = { CH_UP CH_DOWN, "Move", "Move" }; }
+			if (n < max) { out[n++] = { "B", "Resume", "Play" }; }
+			break;
+		}
+		return n;
+	}
+
 	switch (screen)
 	{
 	case SCR_SUSPEND:
@@ -1129,8 +1191,13 @@ static void draw_display_screen(const chome_profile *p)
 
 	int in_use = vp_effective(sysidx, vclass);
 
-	// Preview over the user's own game when we have a frame of it.
-	const uint32_t *ref = 0;
+	/*
+	  Preview over the user's own game. Paused in-game we have the live frame,
+	  which is as current as it gets; from the menu we fall back to the reference
+	  shot captured during play, then to a suspend thumbnail.
+	*/
+	const uint32_t *ref = ig_active ? ig_live_ref(tile_w, tile_h) : 0;
+	if (!ref)
 	{
 		char rp[1024];
 		if (ref_shot_for(it, rp, sizeof(rp))) ref = art_thumb(rp, tile_w, tile_h);
@@ -1827,6 +1894,712 @@ static void back()
 	}
 }
 
+/* ------------------------------------------------------ savestate hooks --- */
+
+/*
+  MiSTer's savestates are driven by the core, but the OSD reaches them the same way
+  it reaches any core option: the core declares entries in its CONF_STR and the ARM
+  pulses the status bit behind them. A momentary entry (T/t/R/r) is set to 1 then
+  back to 0, exactly as the generic menu does in menu.cpp.
+
+  So we scan CONF_STR for the framework's savestate entries and drive the same
+  bits. This is label matching against strings the core author wrote, so it works
+  for cores using the standard wording and simply finds nothing for the rest - in
+  which case the buttons are not offered rather than doing nothing when pressed.
+*/
+
+struct ss_hooks
+{
+	int  found_save, found_load, found_slot;
+	char save_opt[32], load_opt[32], slot_opt[32];
+	int  save_ex, load_ex, slot_ex;
+	int  slot_count;
+};
+
+static ss_hooks ss_hk;
+static int ss_hk_valid = 0;
+
+static int label_has(const char *label, const char *needle)
+{
+	return strcasestr(label, needle) ? 1 : 0;
+}
+
+// Copies the option spec (everything up to the first comma) out of an entry.
+static void ss_copy_opt(const char *p, char *out, int len)
+{
+	int i = 0;
+	while (p[i] && p[i] != ',' && i < len - 1) { out[i] = p[i]; i++; }
+	out[i] = 0;
+}
+
+static void ss_scan_hooks()
+{
+	memset(&ss_hk, 0, sizeof(ss_hk));
+	ss_hk_valid = 1;
+
+	for (int i = 2; i < 128; i++)
+	{
+		char *p = user_io_get_confstr(i);
+		if (!p) break;
+
+		// Skip the hide/disable flags the generic menu strips.
+		while ((p[0] == 'H' || p[0] == 'D' || p[0] == 'h' || p[0] == 'd') && strlen(p) > 2) p += 2;
+		if (!p[0]) continue;
+
+		char label[128] = {};
+		substrcpy(label, p, 1);
+		if (!label[0]) continue;
+
+		char c = p[0];
+		int momentary = (c == 'T' || c == 'R' || c == 't' || c == 'r');
+		int option = (c == 'O' || c == 'o');
+		int ex = (c == 't' || c == 'r' || c == 'o');
+
+		if (momentary && !ss_hk.found_save && label_has(label, "save state"))
+		{
+			ss_copy_opt(p + 1, ss_hk.save_opt, sizeof(ss_hk.save_opt));
+			ss_hk.save_ex = ex;
+			ss_hk.found_save = 1;
+		}
+		else if (momentary && !ss_hk.found_load &&
+			(label_has(label, "restore state") || label_has(label, "load state")))
+		{
+			ss_copy_opt(p + 1, ss_hk.load_opt, sizeof(ss_hk.load_opt));
+			ss_hk.load_ex = ex;
+			ss_hk.found_load = 1;
+		}
+		else if (option && !ss_hk.found_slot && label_has(label, "slot"))
+		{
+			const char *spec = p + 1;
+			if (spec[0] == 'X') spec++;             // set-by-ARM marker
+			ss_copy_opt(spec, ss_hk.slot_opt, sizeof(ss_hk.slot_opt));
+			ss_hk.slot_ex = ex;
+
+			// How many values the option offers, so we never select a missing slot.
+			int n = 0;
+			char v[64];
+			while (n < 8 && substrcpy(v, p, (char)(2 + n)) && v[0]) n++;
+			ss_hk.slot_count = n ? n : 4;
+			ss_hk.found_slot = 1;
+		}
+	}
+
+	printf("ClassicUI: savestate hooks - save:%s load:%s slot:%s(%d)\n",
+		ss_hk.found_save ? ss_hk.save_opt : "-",
+		ss_hk.found_load ? ss_hk.load_opt : "-",
+		ss_hk.found_slot ? ss_hk.slot_opt : "-", ss_hk.slot_count);
+}
+
+static const ss_hooks *ss_get()
+{
+	if (!ss_hk_valid) ss_scan_hooks();
+	return &ss_hk;
+}
+
+// Pulses a momentary status bit, the way the generic menu does.
+static void ss_pulse(const char *opt, int ex)
+{
+	user_io_status_set(opt, 1, ex);
+	user_io_status_set(opt, 0, ex);
+}
+
+static int ss_select_slot(int slot)
+{
+	const ss_hooks *h = ss_get();
+	if (!h->found_slot) return (slot == 0);          // single-slot core
+	if (slot < 0 || slot >= h->slot_count) return 0;
+
+	user_io_status_set(h->slot_opt, (uint32_t)slot, h->slot_ex);
+	return 1;
+}
+
+static int ss_can_save() { return ss_get()->found_save; }
+static int ss_can_load() { return ss_get()->found_load; }
+
+static int ss_do_save(int slot)
+{
+	const ss_hooks *h = ss_get();
+	if (!h->found_save || !ss_select_slot(slot)) return 0;
+
+	printf("ClassicUI: save state -> slot %d\n", slot + 1);
+	ss_pulse(h->save_opt, h->save_ex);
+	return 1;
+}
+
+static int ss_do_load(int slot)
+{
+	const ss_hooks *h = ss_get();
+	if (!h->found_load || !ss_select_slot(slot)) return 0;
+
+	printf("ClassicUI: restore state <- slot %d\n", slot + 1);
+	ss_pulse(h->load_opt, h->load_ex);
+	return 1;
+}
+
+/* ------------------------------------------------------- in-game screens --- */
+
+// Identity of the running game, written by do_launch() before the core switch.
+static int ig_load_item()
+{
+	ig_have_item = 0;
+
+	FILE *f = fopen(CURRENT_FILE, "rt");
+	if (!f) return 0;
+
+	char sysid[64] = {}, rompath[CH_PATH_LEN] = {};
+	int ok = (fgets(sysid, sizeof(sysid), f) && fgets(rompath, sizeof(rompath), f));
+	fclose(f);
+	if (!ok) return 0;
+
+	for (char *q = sysid; *q; q++) if (*q == '\n') { *q = 0; break; }
+	for (char *q = rompath; *q; q++) if (*q == '\n') { *q = 0; break; }
+	if (!sysid[0] || !rompath[0]) return 0;
+
+	lib_load_systems();
+
+	int sysidx = -1;
+	for (int i = 0; i < lib_sys_count(); i++)
+	{
+		if (!strcasecmp(lib_sys(i)->id, sysid)) { sysidx = i; break; }
+	}
+	if (sysidx < 0) return 0;
+
+	memset(&ig_item, 0, sizeof(ig_item));
+	ig_item.kind = IT_GAME;
+	ig_item.sysidx = (int16_t)sysidx;
+	snprintf(ig_item.path, sizeof(ig_item.path), "%s", rompath);
+
+	const char *fn = strrchr(rompath, '/');
+	fn = fn ? fn + 1 : rompath;
+	snprintf(ig_item.title, sizeof(ig_item.title), "%s", fn);
+	char *dot = strrchr(ig_item.title, '.');
+	if (dot) *dot = 0;
+
+	lib_refresh_slots(&ig_item);
+
+	ig_have_item = 1;
+	return 1;
+}
+
+// The live frame, resampled to a requested size and cached, for look previews.
+static const uint32_t *ig_live_ref(int w, int h)
+{
+	static uint32_t *buf = 0;
+	static int bw = 0, bh = 0;
+
+	if (!ig_shot || w < 1 || h < 1) return 0;
+	if (buf && bw == w && bh == h) return buf;
+
+	free(buf);
+	buf = (uint32_t*)malloc((size_t)w * h * 4);
+	if (!buf) { bw = bh = 0; return 0; }
+	bw = w; bh = h;
+
+	for (int y = 0; y < h; y++)
+	{
+		int sy = (y * ig_shot_h) / h;
+		const uint32_t *srow = ig_shot + (size_t)sy * ig_shot_w;
+		uint32_t *drow = buf + (size_t)y * w;
+		for (int x = 0; x < w; x++) drow[x] = srow[(x * ig_shot_w) / w] | 0xff000000u;
+	}
+
+	return buf;
+}
+
+// Capture scaled to the canvas and dimmed, built once when the menu opens.
+static void ig_build_background(const chome_profile *p)
+{
+	free(ig_bg);
+	ig_bg = 0;
+	ig_bg_w = ig_bg_h = 0;
+
+	if (!ig_shot) return;
+
+	ig_bg = (uint32_t*)malloc((size_t)p->w * p->h * 4);
+	if (!ig_bg) return;
+	ig_bg_w = p->w;
+	ig_bg_h = p->h;
+
+	/*
+	  Fit, not stretch: a 4:3 core on a 16:9 canvas keeps its shape, with the
+	  surround left black. Then dim, so panel text stays readable over anything.
+	*/
+	int fw, fh;
+	if ((long long)ig_shot_w * p->h > (long long)ig_shot_h * p->w)
+	{
+		fw = p->w;
+		fh = (int)((long long)p->w * ig_shot_h / ig_shot_w);
+	}
+	else
+	{
+		fh = p->h;
+		fw = (int)((long long)p->h * ig_shot_w / ig_shot_h);
+	}
+	if (fw < 1) fw = 1;
+	if (fh < 1) fh = 1;
+
+	int ox = (p->w - fw) / 2, oy = (p->h - fh) / 2;
+
+	for (int i = 0; i < p->w * p->h; i++) ig_bg[i] = COL_BLACK;
+
+	for (int y = 0; y < fh; y++)
+	{
+		int sy = (y * ig_shot_h) / fh;
+		const uint32_t *srow = ig_shot + (size_t)sy * ig_shot_w;
+		uint32_t *drow = ig_bg + (size_t)(oy + y) * p->w + ox;
+
+		for (int x = 0; x < fw; x++)
+		{
+			uint32_t c = srow[(x * ig_shot_w) / fw];
+			// Dim to about a third: the game stays recognisable, the menu readable.
+			uint32_t r = ((c >> 16) & 0xff) * 5 / 16;
+			uint32_t g = ((c >> 8) & 0xff) * 5 / 16;
+			uint32_t b = (c & 0xff) * 5 / 16;
+			drow[x] = 0xff000000u | (r << 16) | (g << 8) | b;
+		}
+	}
+}
+
+static void ig_draw_background(const chome_profile *p)
+{
+	if (ig_bg && ig_bg_w == p->w && ig_bg_h == p->h)
+	{
+		gfx_blit(ig_bg, p->w, p->h, 0, 0, p->w, p->h);
+		return;
+	}
+	gfx_fill(0, 0, p->w, p->h, COL_BGDARK);
+}
+
+static void ig_draw_main(const chome_profile *p)
+{
+	static const char *rows[IGR_COUNT] =
+	{
+		"Resume", "Video Look", "Suspend Points", "Close Game", "Advanced Settings"
+	};
+
+	int s = p->ts_ui;
+	int tiny = p->ts_tiny;
+	int armed = (ig_row == IGR_CLOSE && !CheckTimer(ig_confirm_until));
+
+	int pw = (p->w * 56) / 100;
+	int rowh = 13 * s;
+	int ph = (10 * s + 6) + 8 * s + IGR_COUNT * rowh + 14 * tiny + 8 * s;
+
+	panel_box b = draw_panel_ex(p, pw, ph, ig_have_item ? ig_item.title : "Paused");
+
+	chome_item *it = cur_game();
+	const chome_sys *sy = it ? lib_sys(it->sysidx) : 0;
+
+	for (int i = 0; i < IGR_COUNT; i++)
+	{
+		int y = b.y + 4 * s + i * rowh;
+		int on = (i == ig_row);
+
+		if (on) gfx_fill(b.x + 3, y - 2 * s, b.w - 6, rowh - 2 * s, armed ? COL_RED : COL_BLUE);
+
+		char up[64];
+		if (i == IGR_CLOSE && armed) snprintf(up, sizeof(up), "CLOSE GAME? PRESS A AGAIN");
+		else snprintf(up, sizeof(up), "%s", rows[i]);
+		for (char *q = up; *q; q++) *q = (char)toupper((unsigned char)*q);
+
+		gfx_text(gfx_clip(up, s, b.w - 12 * s), b.x + 6 * s, y, s, on ? COL_WHITE : COL_INK, 0);
+
+		// Right-hand value, where there is something worth saying.
+		const char *val = 0;
+		char vbuf[48];
+
+		if (i == IGR_LOOK && it)
+		{
+			snprintf(vbuf, sizeof(vbuf), "%s", vp_name(vp_effective(it->sysidx, sel_class())));
+			val = vbuf;
+		}
+		else if (i == IGR_SUSPEND && it)
+		{
+			int used = 0;
+			for (int k = 0; k < 4; k++) if (slot_state(it, k)) used++;
+			if (!ss_can_save() && !ss_can_load() && !used) snprintf(vbuf, sizeof(vbuf), "None");
+			else snprintf(vbuf, sizeof(vbuf), "%d / 4", used);
+			val = vbuf;
+		}
+		else if (i == IGR_ADVANCED) val = "Classic Menu >";
+
+		if (val)
+		{
+			char v[48];
+			snprintf(v, sizeof(v), "%s", val);
+			for (char *q = v; *q; q++) *q = (char)toupper((unsigned char)*q);
+			gfx_text(v, b.x + b.w - 6 * s - gfx_text_w(v, s), y, s, on ? COL_WHITE : COL_PANELLO, 0);
+		}
+	}
+
+	char sub[96];
+	if (sy) snprintf(sub, sizeof(sub), "%s - THE GAME KEEPS RUNNING", sy->name);
+	else snprintf(sub, sizeof(sub), "THE GAME KEEPS RUNNING");
+	for (char *q = sub; *q; q++) *q = (char)toupper((unsigned char)*q);
+	gfx_text(gfx_clip(sub, tiny, b.w - 12 * s), b.x + 6 * s, b.y + b.h - 11 * tiny, tiny, COL_PANELLO, 0);
+}
+
+static void ig_draw_suspend(const chome_profile *p)
+{
+	chome_item *it = cur_game();
+	int s = p->ts_ui;
+	int tiny = p->ts_tiny;
+
+	int n = 4;
+	int pw = (p->w * 86) / 100;
+	int tw = (pw - 12 * s - 3 * p->thumb_gap) / n;
+	int th = (tw * 3) / 4;
+	int ph = (10 * s + 6) + 6 * s + th + 12 * tiny + 16 * tiny;
+
+	panel_box b = draw_panel_ex(p, pw, ph, "Suspend Points");
+
+	int armed = (del_arm_slot >= 0 && !CheckTimer(del_arm_until));
+
+	int x0 = b.x + (b.w - (n * tw + (n - 1) * p->thumb_gap)) / 2;
+	int ty = b.y + 4 * s;
+
+	for (int i = 0; i < n; i++)
+	{
+		int x = x0 + i * (tw + p->thumb_gap);
+		int st = slot_state(it, i);
+
+		gfx_fill(x + 3, ty + 3, tw, th, COL_SHADOW);
+
+		if (!st)
+		{
+			gfx_fill(x, ty, tw, th, COL_BG);
+			gfx_frame_rect(x, ty, tw, th, COL_DIM, 1);
+			gfx_text_c("EMPTY", x + tw / 2, ty + th / 2 - 4 * tiny, tiny, COL_DIM, 0);
+		}
+		else
+		{
+			const uint32_t *shot = 0;
+			char tp[1024];
+			if (it && lib_slot_thumb(it, i, tp, sizeof(tp))) shot = art_thumb(tp, tw, th);
+
+			if (shot) gfx_blit(shot, tw, th, x, ty, tw, th);
+			else
+			{
+				gfx_fill(x, ty, tw, th, COL_BG);
+				gfx_text_c("SAVED", x + tw / 2, ty + th / 2 - 4 * tiny, tiny, COL_DIM, 0);
+			}
+
+			if (st == 2) padlock(x + tw - 8 * tiny, ty + 3, tiny, COL_YELLOW);
+			gfx_frame_rect(x, ty, tw, th, st == 2 ? COL_YELLOW : COL_GREEN, 2);
+		}
+
+		if (i == slot_idx) gfx_frame_rect(x - 3, ty - 3, tw + 6, th + 6, armed ? COL_RED : COL_FOCUS, 2);
+
+		char cap[16];
+		snprintf(cap, sizeof(cap), "%d", i + 1);
+		gfx_text_c(cap, x + tw / 2, ty + th + 4 * tiny, tiny, COL_DIM, 0);
+	}
+
+	/*
+	  Save and load go through the same status bits the core declares in its
+	  CONF_STR and the OSD pulses. Cores that do not declare them get a plain
+	  viewer rather than buttons that would do nothing.
+	*/
+	const char *note;
+	if (armed) note = "PRESS X AGAIN TO DELETE";
+	else if (ss_can_save() && ss_can_load()) note = "A LOADS THIS SLOT   Y SAVES INTO IT";
+	else if (ss_can_save()) note = "Y SAVES INTO THIS SLOT";
+	else if (ss_can_load()) note = "A LOADS THIS SLOT";
+	else note = "THIS CORE DOES NOT OFFER SAVE STATES";
+
+	gfx_text_c(note, b.x + b.w / 2, b.y + b.h - 12 * tiny, tiny, armed ? COL_RED : COL_PANELLO, 0);
+}
+
+static void ig_render()
+{
+	const chome_profile *p = theme_get();
+
+	ig_draw_background(p);
+
+	switch (ig_screen)
+	{
+	case IG_LOOK:    draw_display_screen(p); break;
+	case IG_SUSPEND: ig_draw_suspend(p); break;
+	default:         ig_draw_main(p); break;
+	}
+
+	draw_legend(p);
+	gfx_end();
+}
+
+static void ig_close(int restore_video)
+{
+	if (!ig_active) return;
+	ig_active = 0;
+
+	free(ig_shot); ig_shot = 0; ig_shot_w = ig_shot_h = 0;
+	free(ig_bg);   ig_bg = 0;   ig_bg_w = ig_bg_h = 0;
+
+	OsdDisable();                 // keyboard back to the game
+	if (restore_video) video_fb_enable(0);
+
+	printf("ClassicUI: pause menu closed\n");
+}
+
+// Returns 1 when the menu took over, 0 when the core cannot host it.
+static int ig_open()
+{
+	const chome_profile *p;
+
+	theme_update(video_menu_fb_width(), video_menu_fb_height(), cfg.classicui_profile);
+	p = theme_get();
+	if (p->w < 8 || p->h < 8) return 0;
+
+	// Grab the running frame before we take the screen away from the core.
+	int max_px = 2048 * 1024;
+	free(ig_shot);
+	ig_shot = (uint32_t*)malloc((size_t)max_px * 4);
+	if (ig_shot && !screenshot_grab(ig_shot, max_px, &ig_shot_w, &ig_shot_h))
+	{
+		free(ig_shot);
+		ig_shot = 0;
+		ig_shot_w = ig_shot_h = 0;
+	}
+
+	if (!gfx_begin()) { free(ig_shot); ig_shot = 0; return 0; }
+
+	// Take the framebuffer. A core without support leaves us nothing to draw on.
+	if (!video_menu_fb_present(ig_fb))
+	{
+		printf("ClassicUI: core has no HPS framebuffer, leaving the OSD to it\n");
+		free(ig_shot);
+		ig_shot = 0;
+		return 0;
+	}
+
+	// Keep osd_is_visible set so keyboard and pad input reach us, with the OSD
+	// overlay itself blanked, exactly as in the menu core.
+	OsdEnable(DISABLE_KEYBOARD);
+	OsdMenuCtl(0);
+
+	ss_hk_valid = 0;              // re-read CONF_STR: it may not have been ready before
+	ig_load_item();
+	ig_build_background(p);
+	art_init(theme_get()->sel_w, theme_get()->sel_h);
+
+	ig_active = 1;
+	ig_screen = IG_MAIN;
+	ig_row = IGR_RESUME;
+	slot_idx = 0;
+	del_arm_slot = -1;
+	ig_confirm_until = 0;
+
+	gfx_damage_all();
+	mark_dirty();                 // damage alone does not schedule a draw
+	printf("ClassicUI: pause menu open (%s)\n", ig_have_item ? ig_item.title : "unknown game");
+	return 1;
+}
+
+static void ig_accept()
+{
+	chome_item *it = cur_game();
+
+	if (ig_screen == IG_LOOK)
+	{
+		if (!it) { nudge(); return; }
+
+		int vclass = sel_class();
+		int opts[VP_MAX_OPTIONS];
+		int n = vp_options_for(vclass, opts);
+		if (look_row < 0 || look_row >= n) { nudge(); return; }
+
+		vp_set(it->sysidx, vclass, opts[look_row]);
+
+		// We are in the core the look applies to, so it takes effect at once.
+		char path[1024];
+		if (vp_preset_path(opts[look_row], path, sizeof(path)))
+		{
+			printf("ClassicUI: applying \"%s\" live\n", vp_name(opts[look_row]));
+			video_loadPreset(path, true);
+		}
+		ig_screen = IG_MAIN;
+		mark_dirty();
+		return;
+	}
+
+	if (ig_screen == IG_SUSPEND)
+	{
+		if (!it || !ss_can_load() || !slot_state(it, slot_idx)) { nudge(); return; }
+
+		if (ss_do_load(slot_idx))
+		{
+			// Straight back into the game at that point.
+			ig_close(1);
+		}
+		else nudge();
+		return;
+	}
+
+	switch (ig_row)
+	{
+	case IGR_RESUME:
+		ig_close(1);
+		break;
+
+	case IGR_LOOK:
+	{
+		if (!it) { nudge(); break; }
+		int vclass = sel_class();
+		int cur = vp_effective(it->sysidx, vclass);
+		int opts[VP_MAX_OPTIONS];
+		int n = vp_options_for(vclass, opts);
+		look_row = 0;
+		for (int i = 0; i < n; i++) if (opts[i] == cur) { look_row = i; break; }
+		ig_screen = IG_LOOK;
+		mark_dirty();
+		break;
+	}
+
+	case IGR_SUSPEND:
+		if (!it) { nudge(); break; }
+		lib_refresh_slots(it);
+		slot_idx = 0;
+		del_arm_slot = -1;
+		ig_screen = IG_SUSPEND;
+		mark_dirty();
+		break;
+
+	case IGR_CLOSE:
+		// Unsaved progress dies with the core, so this takes two presses.
+		if (!CheckTimer(ig_confirm_until))
+		{
+			printf("ClassicUI: closing the game, back to the menu core\n");
+			lib_state_save();
+			ig_active = 0;
+			unlink(CURRENT_FILE);
+			fpga_load_rbf("menu.rbf");
+		}
+		else
+		{
+			ig_confirm_until = GetTimer(3000);
+			mark_dirty();
+		}
+		break;
+
+	case IGR_ADVANCED:
+		ig_close(1);
+		break;
+	}
+}
+
+// Returns 1 when the key was consumed.
+static int ig_key(uint32_t k)
+{
+	switch (k)
+	{
+	case KEY_UP:
+		if (ig_screen == IG_MAIN) { ig_row = (ig_row + IGR_COUNT - 1) % IGR_COUNT; ig_confirm_until = 0; }
+		else nudge();
+		mark_dirty();
+		return 1;
+
+	case KEY_DOWN:
+		if (ig_screen == IG_MAIN) { ig_row = (ig_row + 1) % IGR_COUNT; ig_confirm_until = 0; }
+		else if (ig_screen == IG_SUSPEND)
+		{
+			chome_item *it = cur_game();
+			int st = it ? slot_state(it, slot_idx) : 0;
+			if (!st) nudge();
+			else { lib_set_lock(it, slot_idx, st == 2 ? 0 : 1); del_arm_slot = -1; }
+		}
+		else nudge();
+		mark_dirty();
+		return 1;
+
+	case KEY_LEFT:
+	case KEY_RIGHT:
+	{
+		int dir = (k == KEY_LEFT) ? -1 : 1;
+		if (ig_screen == IG_SUSPEND)
+		{
+			int n = slot_idx + dir;
+			if (n < 0 || n > 3) nudge();
+			else { slot_idx = n; del_arm_slot = -1; }
+		}
+		else if (ig_screen == IG_LOOK)
+		{
+			int opts[VP_MAX_OPTIONS];
+			int n = vp_options_for(sel_class(), opts);
+			int next = look_row + dir;
+			if (next < 0 || next >= n) nudge();
+			else look_row = next;
+		}
+		else nudge();
+		mark_dirty();
+		return 1;
+	}
+
+	case KEY_ENTER:
+	case KEY_KPENTER:
+	case KEY_SPACE:
+		ig_accept();
+		return 1;
+
+	case KEY_BACKSPACE:              // pad Y: save into this slot
+	{
+		if (ig_screen != IG_SUSPEND) { nudge(); return 1; }
+
+		chome_item *sit = cur_game();
+		if (!sit || !ss_can_save()) { nudge(); return 1; }
+
+		if (slot_state(sit, slot_idx) == 2) { nudge(); return 1; }   // locked
+
+		if (ss_do_save(slot_idx))
+		{
+			/*
+			  The core writes the state itself and process_ss() notices on its next
+			  poll, up to a second later, then writes the file and the thumbnail.
+			  Resume so the core actually runs those frames; the slot will be there
+			  when the menu is next opened.
+			*/
+			ig_close(1);
+		}
+		else nudge();
+		return 1;
+	}
+
+	case KEY_TAB:                    // pad X: delete a suspend point
+	{
+		if (ig_screen != IG_SUSPEND) { nudge(); return 1; }
+
+		chome_item *it = cur_game();
+		int st = it ? slot_state(it, slot_idx) : 0;
+		if (!st || st == 2) { nudge(); return 1; }
+
+		if (del_arm_slot == slot_idx && !CheckTimer(del_arm_until))
+		{
+			del_arm_slot = -1;
+			if (!lib_delete_slot(it, slot_idx)) nudge();
+		}
+		else
+		{
+			del_arm_slot = slot_idx;
+			del_arm_until = GetTimer(2500);
+		}
+		mark_dirty();
+		return 1;
+	}
+
+	case KEY_BACK:
+	case KEY_ESC:
+		if (ig_screen != IG_MAIN) { ig_screen = IG_MAIN; del_arm_slot = -1; mark_dirty(); }
+		else ig_close(1);
+		return 1;
+
+	case KEY_MENU:
+	case KEY_F12:
+		ig_close(1);
+		return 1;
+	}
+
+	return 1;                        // swallow everything else while paused
+}
+
 /* --------------------------------------------------------------- driver --- */
 
 int chome_enabled()
@@ -1903,7 +2676,12 @@ void chome_core_boot()
 
 int chome_active()
 {
-	return active;
+	return active || ig_active;
+}
+
+int chome_ingame_active()
+{
+	return ig_active;
 }
 
 void chome_leave()
@@ -2006,6 +2784,38 @@ static void animate()
 
 int chome_handle(uint32_t key)
 {
+	uint32_t igk = key & ~UPSTROKE;
+	int igpress = key && !(key & UPSTROKE);
+
+	/*
+	  In-game pause menu. Runs in every core but the menu one, drawn over a still
+	  of the running game. Opening takes the HPS framebuffer, which also routes pad
+	  input here (input.cpp gates on video_fb_state()); the OSD stays enabled but
+	  blanked so the keyboard reaches us instead of the game.
+	*/
+	if (cfg.classicui && !is_menu())
+	{
+		if (ig_active)
+		{
+			if (igpress) ig_key(igk);
+			if (!ig_active) return 1;           // the key closed it
+
+			if (!gfx_begin()) { ig_close(1); return 0; }
+
+			if (!CheckTimer(ig_confirm_until) || !CheckTimer(nudge_until)) mark_dirty();
+			if (dirty) { dirty = 0; ig_render(); }
+			return 1;
+		}
+
+		if (igpress && (igk == KEY_MENU || igk == KEY_F12))
+		{
+			if (ig_open()) return 1;
+			return 0;                           // core cannot host it: classic OSD
+		}
+
+		return 0;
+	}
+
 	if (!chome_enabled())
 	{
 		if (active) active = 0;

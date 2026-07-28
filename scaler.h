@@ -44,4 +44,9 @@ void screenshot_cb(void);
 // scaler is unavailable or a normal screenshot is already in flight.
 int screenshot_thumbnail(const char *fullpath, int max_w);
 
+// Grabs the current core frame straight into a caller-owned ARGB buffer (0xAARRGGBB),
+// for drawing rather than saving. max_px bounds the buffer; returns 0 if the scaler
+// is unavailable, busy, or the frame does not fit.
+int screenshot_grab(uint32_t *dst, int max_px, int *out_w, int *out_h);
+
 #endif

@@ -536,12 +536,8 @@ int lib_scan_step()
 int lib_scanning() { return scanning; }
 int lib_scan_progress() { return nitems; }
 
-void lib_init()
+void lib_load_systems()
 {
-	if (!items) items = (chome_item*)calloc(CH_MAX_ITEMS, sizeof(chome_item));
-	if (!items) { printf("ClassicUI: out of memory for the index\n"); return; }
-
-	nitems = 0;
 	nsys = 0;
 
 	if (!load_systems_file())
@@ -550,6 +546,15 @@ void lib_init()
 	}
 
 	state_load();
+}
+
+void lib_init()
+{
+	if (!items) items = (chome_item*)calloc(CH_MAX_ITEMS, sizeof(chome_item));
+	if (!items) { printf("ClassicUI: out of memory for the index\n"); return; }
+
+	nitems = 0;
+	lib_load_systems();
 
 	scan_sys = 0;
 	scanning = 1;

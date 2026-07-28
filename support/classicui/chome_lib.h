@@ -89,6 +89,11 @@ struct chome_entry
 
 const char *lib_sort_name(int sort);
 
+// Loads the systems table and the play-state file. Cheap: no allocation of the
+// index, no scanning. The in-game pause menu only needs this much.
+void lib_load_systems();
+
+// Everything above plus the index allocation, and starts the background scan.
 void lib_init();
 
 // Advances the background scan by one slice. Returns 1 while still scanning.

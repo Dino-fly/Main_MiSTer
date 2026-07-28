@@ -158,6 +158,12 @@ static void build_sd()
 	touch(ROOT "/savestates/SNES", "Super Metroid (Europe)_2.ss", 256);
 	make_cover(ROOT "/savestates/SNES/Super Metroid (Europe)_1.png", 320, 240, 0xff1e6fa8);
 
+	// The Game Boy game gets a state too, so the in-game load path has something
+	// to act on.
+	mkpath(ROOT "/savestates/Gameboy");
+	touch(ROOT "/savestates/Gameboy", "Tetris (World)_1.ss", 256);
+	make_cover(ROOT "/savestates/Gameboy/Tetris (World)_1.png", 320, 288, 0xff70a030);
+
 	// Bonk sorts first alphabetically, so it is what the screen walk lands on:
 	// give it slots 1 and 3 plus one thumbnail so the strip is worth looking at.
 	mkpath(ROOT "/savestates/TurboGrafx16");
@@ -913,6 +919,97 @@ static void assert_video()
 	}
 }
 
+static void assert_ingame()
+{
+	printf("\n== in-game pause menu ==\n");
+
+	// Pretend a game core is running, with the game Classic Home last launched.
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "gb\nTetris (World).gb\n"); fclose(f); }
+	}
+
+	harness_set_menu_core(0);
+	harness_set_fb_supported(1);
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+
+	// Nothing should happen until the menu button is pressed.
+	chome_handle(0);
+	check(!chome_ingame_active(), "pause menu stays shut until asked");
+
+	press(KEY_MENU, 12);
+	check(chome_ingame_active(), "menu button opens the pause menu in a game core");
+	dump("ingame-1-main");
+
+	// Video Look, previewed over the live frame.
+	press(KEY_DOWN, 8);
+	press(KEY_ENTER, 14);
+	dump("ingame-2-look");
+	check(chome_ingame_active(), "still paused inside Video Look");
+	press(KEY_ESC, 10);
+
+	// Suspend points, with save and load driven by the core's own status bits.
+	press(KEY_DOWN, 8);
+	press(KEY_ENTER, 14);
+	dump("ingame-3-suspend");
+
+	harness_reset_status();
+	press(KEY_BACKSPACE, 10);                 // pad Y: save into slot 1
+	printf("  after save: opt=%s pulses=%d\n", harness_last_status_opt(), harness_status_pulses());
+	check(harness_status_pulses() >= 1, "saving pulses a status bit");
+	check(!chome_ingame_active(), "saving resumes the game so the core can run it");
+
+	// Reopen and load.
+	press(KEY_MENU, 12);
+	check(chome_ingame_active(), "reopened after saving");
+	press(KEY_DOWN, 8);
+	press(KEY_DOWN, 8);
+	press(KEY_ENTER, 14);
+	harness_reset_status();
+	press(KEY_ENTER, 10);                     // A on an occupied slot loads it
+	printf("  after load: opt=%s pulses=%d\n", harness_last_status_opt(), harness_status_pulses());
+	check(harness_status_pulses() >= 1, "loading pulses a status bit");
+	check(!chome_ingame_active(), "loading drops straight back into the game");
+
+	// Close Game needs two presses and lands on the menu core.
+	press(KEY_MENU, 12);
+	check(chome_ingame_active(), "reopened for the close test");
+	for (int i = 0; i < 3; i++) press(KEY_DOWN, 6);
+	press(KEY_ENTER, 8);
+	dump("ingame-4-close-armed");
+	check(chome_ingame_active(), "one press does not close the game");
+	press(KEY_ENTER, 8);
+	printf("  loaded rbf: %s\n", harness_last_rbf());
+	check(strstr(harness_last_rbf(), "menu.rbf") != 0, "second press returns to the menu core");
+	check(!chome_ingame_active(), "pause menu is gone after closing");
+
+	// A core with no framebuffer must decline and leave the OSD to it.
+	harness_set_fb_supported(0);
+	int consumed = chome_handle(KEY_MENU);
+	check(!consumed, "a core without a framebuffer falls through to the classic OSD");
+	check(!chome_ingame_active(), "and the pause menu does not open");
+	harness_set_fb_supported(1);
+
+	// A core that declares no savestate entries must not offer the buttons.
+	harness_set_confstr(0);
+	press(KEY_MENU, 12);
+	press(KEY_DOWN, 8);
+	press(KEY_DOWN, 8);
+	press(KEY_ENTER, 12);
+	dump("ingame-5-suspend-unsupported");
+	harness_reset_status();
+	press(KEY_BACKSPACE, 8);
+	check(harness_status_pulses() == 0, "no savestate entries means no bit is pulsed");
+	press(KEY_ESC, 8);
+	press(KEY_ESC, 8);
+	harness_set_confstr(1);
+
+	harness_set_menu_core(1);
+	gfx_shutdown();
+}
+
 /* ------------------------------------------------------------------ main -- */
 
 int main()
@@ -949,6 +1046,7 @@ int main()
 
 	walk_looks();
 	assert_launch();
+	assert_ingame();
 
 	// Display must vanish entirely when the scaler output is not what is on screen.
 	printf("\n== analog output ==\n");

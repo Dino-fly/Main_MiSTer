@@ -78,7 +78,9 @@ int video_scaler_is_visible();
 uint32_t* video_menu_fb(int n);
 int video_menu_fb_width();
 int video_menu_fb_height();
-void video_menu_fb_present(int n);
+// Returns 1 when the core accepted the framebuffer, 0 when it has no support for
+// it (in which case a front-end must fall back to the OSD).
+int video_menu_fb_present(int n);
 
 int video_bg_has_picture();
 int video_chvt(int num);
