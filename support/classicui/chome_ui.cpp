@@ -55,6 +55,7 @@ static uint32_t *ig_bg = 0;           // capture scaled to the canvas and dimmed
 static int ig_bg_w = 0, ig_bg_h = 0;
 
 static unsigned long ig_confirm_until = 0;   // "press A again to close"
+static int ig_paused = 0;                    // the core is actually halted
 
 #define REF_DELAY_MS 20000
 
@@ -1914,6 +1915,18 @@ struct ss_hooks
 	char save_opt[32], load_opt[32], slot_opt[32];
 	int  save_ex, load_ex, slot_ex;
 	int  slot_count;
+
+	/*
+	  Pause, when the core offers it. There is no generic pause command in MiSTer:
+	  cores that "pause when the OSD is open" watch the OSD enable signal, and we
+	  deliberately blank the OSD so the screen stays ours, so that route is closed
+	  to us. What is left is the same one the savestate entries use - a pause entry
+	  the core declares in CONF_STR - which we drive identically.
+	*/
+	int  found_pause;
+	int  pause_is_option;         // O/o entry (set a value) vs T/R (pulse)
+	char pause_opt[32];
+	int  pause_ex;
 };
 
 static ss_hooks ss_hk;
@@ -1968,6 +1981,22 @@ static void ss_scan_hooks()
 			ss_hk.load_ex = ex;
 			ss_hk.found_load = 1;
 		}
+		else if (!ss_hk.found_pause && label_has(label, "pause") && !label_has(label, "osd"))
+		{
+			/*
+			  "Pause when OSD is open" is a preference, not a command, so labels
+			  mentioning the OSD are skipped: setting one would not pause anything.
+			*/
+			if (momentary || option)
+			{
+				const char *spec = p + 1;
+				if (spec[0] == 'X') spec++;
+				ss_copy_opt(spec, ss_hk.pause_opt, sizeof(ss_hk.pause_opt));
+				ss_hk.pause_ex = ex;
+				ss_hk.pause_is_option = option;
+				ss_hk.found_pause = 1;
+			}
+		}
 		else if (option && !ss_hk.found_slot && label_has(label, "slot"))
 		{
 			const char *spec = p + 1;
@@ -1984,10 +2013,12 @@ static void ss_scan_hooks()
 		}
 	}
 
-	printf("ClassicUI: savestate hooks - save:%s load:%s slot:%s(%d)\n",
+	printf("ClassicUI: core hooks - save:%s load:%s slot:%s(%d) pause:%s%s\n",
 		ss_hk.found_save ? ss_hk.save_opt : "-",
 		ss_hk.found_load ? ss_hk.load_opt : "-",
-		ss_hk.found_slot ? ss_hk.slot_opt : "-", ss_hk.slot_count);
+		ss_hk.found_slot ? ss_hk.slot_opt : "-", ss_hk.slot_count,
+		ss_hk.found_pause ? ss_hk.pause_opt : "-",
+		ss_hk.found_pause ? (ss_hk.pause_is_option ? " (option)" : " (pulse)") : "");
 }
 
 static const ss_hooks *ss_get()
@@ -2015,6 +2046,40 @@ static int ss_select_slot(int slot)
 
 static int ss_can_save() { return ss_get()->found_save; }
 static int ss_can_load() { return ss_get()->found_load; }
+
+// Remembers what the pause option was, so leaving the menu restores it exactly.
+static uint32_t ss_pause_prev = 0;
+
+static int ss_pause_engage()
+{
+	const ss_hooks *h = ss_get();
+	if (!h->found_pause) return 0;
+
+	if (h->pause_is_option)
+	{
+		ss_pause_prev = user_io_status_get(h->pause_opt, h->pause_ex);
+		if (ss_pause_prev == 1) return 1;              // already paused
+		user_io_status_set(h->pause_opt, 1, h->pause_ex);
+	}
+	else
+	{
+		ss_pulse(h->pause_opt, h->pause_ex);
+	}
+
+	printf("ClassicUI: paused the core via %s\n", h->pause_opt);
+	return 1;
+}
+
+static void ss_pause_release(int engaged)
+{
+	const ss_hooks *h = ss_get();
+	if (!engaged || !h->found_pause) return;
+
+	if (h->pause_is_option) user_io_status_set(h->pause_opt, ss_pause_prev, h->pause_ex);
+	else ss_pulse(h->pause_opt, h->pause_ex);
+
+	printf("ClassicUI: resumed the core\n");
+}
 
 static int ss_do_save(int slot)
 {
@@ -2233,8 +2298,9 @@ static void ig_draw_main(const chome_profile *p)
 	}
 
 	char sub[96];
-	if (sy) snprintf(sub, sizeof(sub), "%s - THE GAME KEEPS RUNNING", sy->name);
-	else snprintf(sub, sizeof(sub), "THE GAME KEEPS RUNNING");
+	const char *run = ig_paused ? "PAUSED" : "THE GAME KEEPS RUNNING";
+	if (sy) snprintf(sub, sizeof(sub), "%s - %s", sy->name, run);
+	else snprintf(sub, sizeof(sub), "%s", run);
 	for (char *q = sub; *q; q++) *q = (char)toupper((unsigned char)*q);
 	gfx_text(gfx_clip(sub, tiny, b.w - 12 * s), b.x + 6 * s, b.y + b.h - 11 * tiny, tiny, COL_PANELLO, 0);
 }
@@ -2332,6 +2398,9 @@ static void ig_close(int restore_video)
 	if (!ig_active) return;
 	ig_active = 0;
 
+	ss_pause_release(ig_paused);
+	ig_paused = 0;
+
 	free(ig_shot); ig_shot = 0; ig_shot_w = ig_shot_h = 0;
 	free(ig_bg);   ig_bg = 0;   ig_bg_w = ig_bg_h = 0;
 
@@ -2381,6 +2450,8 @@ static int ig_open()
 	ig_load_item();
 	ig_build_background(p);
 	art_init(theme_get()->sel_w, theme_get()->sel_h);
+
+	ig_paused = ss_pause_engage();
 
 	ig_active = 1;
 	ig_screen = IG_MAIN;
@@ -2469,6 +2540,8 @@ static void ig_accept()
 		if (!CheckTimer(ig_confirm_until))
 		{
 			printf("ClassicUI: closing the game, back to the menu core\n");
+			ss_pause_release(ig_paused);
+			ig_paused = 0;
 			lib_state_save();
 			ig_active = 0;
 			unlink(CURRENT_FILE);

@@ -941,6 +941,7 @@ static void assert_ingame()
 
 	press(KEY_MENU, 12);
 	check(chome_ingame_active(), "menu button opens the pause menu in a game core");
+	check(harness_pause_val() == 1, "opening the menu pauses a core that supports it");
 	dump("ingame-1-main");
 
 	// Video Look, previewed over the live frame.
@@ -985,6 +986,15 @@ static void assert_ingame()
 	check(strstr(harness_last_rbf(), "menu.rbf") != 0, "second press returns to the menu core");
 	check(!chome_ingame_active(), "pause menu is gone after closing");
 
+	// Pausing must be undone exactly, whichever way the menu is left.
+	{
+		press(KEY_MENU, 10);
+		check(chome_ingame_active() && harness_pause_val() == 1, "reopened and paused again");
+		press(KEY_ESC, 10);
+		check(!chome_ingame_active(), "escape resumes");
+		check(harness_pause_val() == 0, "resuming restores the core's own pause setting");
+	}
+
 	// A core with no framebuffer must decline and leave the OSD to it.
 	harness_set_fb_supported(0);
 	int consumed = chome_handle(KEY_MENU);
@@ -1002,6 +1012,7 @@ static void assert_ingame()
 	harness_reset_status();
 	press(KEY_BACKSPACE, 8);
 	check(harness_status_pulses() == 0, "no savestate entries means no bit is pulsed");
+	check(harness_pause_val() == 0, "a core with no pause entry is left running");
 	press(KEY_ESC, 8);
 	press(KEY_ESC, 8);
 	harness_set_confstr(1);
