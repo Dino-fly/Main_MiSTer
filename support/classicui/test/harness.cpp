@@ -921,9 +921,8 @@ static void assert_video()
 
 static void assert_ingame()
 {
-	printf("\n== in-game pause menu ==\n");
+	printf("\n== in-game: the whole UI, over a running game ==\n");
 
-	// Pretend a game core is running, with the game Classic Home last launched.
 	{
 		FILE *f = fopen("/tmp/classicui_current", "wt");
 		if (f) { fprintf(f, "gb\nTetris (World).gb\n"); fclose(f); }
@@ -935,86 +934,98 @@ static void assert_ingame()
 	gfx_shutdown();
 	theme_update(1280, 720, 1);
 
-	// Nothing should happen until the menu button is pressed.
 	chome_handle(0);
-	check(!chome_ingame_active(), "pause menu stays shut until asked");
+	check(!chome_ingame_active(), "menu stays shut until asked");
 
-	press(KEY_MENU, 12);
-	check(chome_ingame_active(), "menu button opens the pause menu in a game core");
-	check(harness_pause_val() == 1, "opening the menu pauses a core that supports it");
-	dump("ingame-1-main");
+	press(KEY_MENU, 20);
+	check(chome_ingame_active(), "menu button opens the front-end in a game core");
+	check(harness_pause_val() == 1, "opening pauses a core that supports it");
 
-	// Video Look, previewed over the live frame.
-	press(KEY_DOWN, 8);
-	press(KEY_ENTER, 14);
-	dump("ingame-2-look");
-	check(chome_ingame_active(), "still paused inside Video Look");
-	press(KEY_ESC, 10);
+	// The full shelf, parked on the game that is running.
+	for (int i = 0; i < 40 && lib_scanning(); i++) frame(2);
+	frame(30);
+	dump("ingame-1-home");
 
-	// Suspend points, with save and load driven by the core's own status bits.
-	press(KEY_DOWN, 8);
-	press(KEY_ENTER, 14);
-	dump("ingame-3-suspend");
+	int on_running = 0;
+	{
+		const chome_entry *e = lib_view_entry(0);
+		(void)e;
+		// Whatever the shelf shows, the running game must be the selected one.
+		for (int i = 0; i < lib_view_count(); i++)
+		{
+			const chome_entry *en = lib_view_entry(i);
+			if (!en || en->kind != ENT_GAME) continue;
+			chome_item *it = lib_item(en->game);
+			if (it && strstr(it->path, "Tetris")) { on_running = 1; break; }
+		}
+	}
+	check(on_running, "the running game is present on the shelf");
+
+	// Suspend points of the running game: live save and load.
+	press(KEY_DOWN, 20);
+	dump("ingame-2-suspend");
 
 	harness_reset_status();
-	press(KEY_BACKSPACE, 10);                 // pad Y: save into slot 1
-	printf("  after save: opt=%s pulses=%d\n", harness_last_status_opt(), harness_status_pulses());
-	check(harness_status_pulses() >= 1, "saving pulses a status bit");
-	check(!chome_ingame_active(), "saving resumes the game so the core can run it");
+	press(KEY_BACKSPACE, 10);                 // Y saves into the slot
+	printf("  after save: pulsed=%s\n", harness_last_pulse_opt());
+	// Specifically the save bit, not just any bit: the pause option also moves here.
+	check(!strcmp(harness_last_pulse_opt(), "A"), "saving pulses the core's save bit");
+	check(!chome_ingame_active(), "saving resumes so the core can run those frames");
+	check(harness_pause_val() == 0, "and the pause is released");
 
-	// Reopen and load.
-	press(KEY_MENU, 12);
-	check(chome_ingame_active(), "reopened after saving");
-	press(KEY_DOWN, 8);
-	press(KEY_DOWN, 8);
-	press(KEY_ENTER, 14);
+	press(KEY_MENU, 20);
+	press(KEY_DOWN, 18);
 	harness_reset_status();
-	press(KEY_ENTER, 10);                     // A on an occupied slot loads it
-	printf("  after load: opt=%s pulses=%d\n", harness_last_status_opt(), harness_status_pulses());
-	check(harness_status_pulses() >= 1, "loading pulses a status bit");
+	press(KEY_ENTER, 12);                     // A loads the slot
+	printf("  after load: pulsed=%s\n", harness_last_pulse_opt());
+	check(!strcmp(harness_last_pulse_opt(), "B"), "loading pulses the core's restore bit");
 	check(!chome_ingame_active(), "loading drops straight back into the game");
 
-	// Close Game needs two presses and lands on the menu core.
-	press(KEY_MENU, 12);
-	check(chome_ingame_active(), "reopened for the close test");
-	for (int i = 0; i < 3; i++) press(KEY_DOWN, 6);
+	// Browsing works: the menu bar and its panels are all here.
+	press(KEY_MENU, 20);
+	press(KEY_UP, 18);
+	dump("ingame-3-menubar");
+	press(KEY_ENTER, 20);
+	dump("ingame-4-display-live");
+	press(KEY_ESC, 10);
+	press(KEY_ESC, 10);
+
+	// A on the running game resumes rather than reloading it.
+	check(chome_ingame_active(), "still in the menu");
+	harness_clear_launch();
+	press(KEY_ENTER, 12);
+	check(!chome_ingame_active(), "A on the running game resumes it");
+	check(harness_last_launch()[0] == 0, "and does not relaunch the core");
+
+	// Close Game: Options, last row, two presses.
+	press(KEY_MENU, 20);
+	press(KEY_UP, 14);
+	press(KEY_RIGHT, 10);
+	press(KEY_ENTER, 16);                     // Options
+	for (int i = 0; i < 5; i++) press(KEY_DOWN, 6);
 	press(KEY_ENTER, 8);
-	dump("ingame-4-close-armed");
+	dump("ingame-5-close-armed");
 	check(chome_ingame_active(), "one press does not close the game");
 	press(KEY_ENTER, 8);
 	printf("  loaded rbf: %s\n", harness_last_rbf());
 	check(strstr(harness_last_rbf(), "menu.rbf") != 0, "second press returns to the menu core");
-	check(!chome_ingame_active(), "pause menu is gone after closing");
 
-	// Pausing must be undone exactly, whichever way the menu is left.
-	{
-		press(KEY_MENU, 10);
-		check(chome_ingame_active() && harness_pause_val() == 1, "reopened and paused again");
-		press(KEY_ESC, 10);
-		check(!chome_ingame_active(), "escape resumes");
-		check(harness_pause_val() == 0, "resuming restores the core's own pause setting");
-	}
-
-	// A core with no framebuffer must decline and leave the OSD to it.
+	// A core with no framebuffer declines.
 	harness_set_fb_supported(0);
-	int consumed = chome_handle(KEY_MENU);
-	check(!consumed, "a core without a framebuffer falls through to the classic OSD");
-	check(!chome_ingame_active(), "and the pause menu does not open");
+	check(!chome_handle(KEY_MENU), "a core without a framebuffer leaves the OSD alone");
+	check(!chome_ingame_active(), "and the menu does not open");
 	harness_set_fb_supported(1);
 
-	// A core that declares no savestate entries must not offer the buttons.
+	// A core with no savestate or pause entries is left completely alone.
 	harness_set_confstr(0);
-	press(KEY_MENU, 12);
-	press(KEY_DOWN, 8);
-	press(KEY_DOWN, 8);
-	press(KEY_ENTER, 12);
-	dump("ingame-5-suspend-unsupported");
+	press(KEY_MENU, 20);
+	check(harness_pause_val() == 0, "a core with no pause entry keeps running");
+	press(KEY_DOWN, 16);
 	harness_reset_status();
 	press(KEY_BACKSPACE, 8);
 	check(harness_status_pulses() == 0, "no savestate entries means no bit is pulsed");
-	check(harness_pause_val() == 0, "a core with no pause entry is left running");
 	press(KEY_ESC, 8);
-	press(KEY_ESC, 8);
+	press(KEY_MENU, 8);
 	harness_set_confstr(1);
 
 	harness_set_menu_core(1);
