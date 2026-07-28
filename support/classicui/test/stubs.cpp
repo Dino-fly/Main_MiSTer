@@ -115,6 +115,9 @@ int FileLoad(const char *name, void *buf, int size)
 
 /* ---------------------------------------------------- fake framebuffers --- */
 
+static int fb_supported = 1;
+void harness_set_fb_supported(int v) { fb_supported = v; }
+
 static uint32_t *fb[3] = {};
 static int fbw = 1280, fbh = 720;
 static int presented = 1;
@@ -138,11 +141,16 @@ uint32_t *video_menu_fb(int n) { return (n >= 1 && n <= 2) ? fb[n] : 0; }
 int video_menu_fb_width() { return fbw; }
 int video_menu_fb_height() { return fbh; }
 
-void video_menu_fb_present(int n)
+int video_menu_fb_present(int n)
 {
+	if (!fb_supported) return 0;
 	presented = n;
 	present_count++;
+	return 1;
 }
+
+void video_fb_enable(int, int) {}
+void video_loadPreset(char *, bool);
 
 int video_fb_state() { return 0; }
 
@@ -163,8 +171,96 @@ void video_loadPreset(char *name, bool save)
 
 /* -------------------------------------------------------------- fake io --- */
 
-char is_menu() { return 1; }
+static int in_menu_core = 1;
+void harness_set_menu_core(int v) { in_menu_core = v; }
+char is_menu() { return (char)in_menu_core; }
+
+// CONF_STR of a core with the framework's savestate entries, so the pause menu
+// can find the same status bits the OSD pulses.
+static const char *fake_confstr[] =
+{
+	"SNES;;",
+	"-;",
+	"F1,SFCSMCBIN,Load;",
+	"O[36:35],Savestate Slot,1,2,3,4;",
+	"rA,Save state (Alt-F1);",
+	"rB,Restore state (F1);",
+	"R[0],Reset;",
+	0
+};
+static int confstr_on = 1;
+void harness_set_confstr(int v) { confstr_on = v; }
+
+char *user_io_get_confstr(int index)
+{
+	if (!confstr_on) return 0;
+	int n = (int)(sizeof(fake_confstr) / sizeof(fake_confstr[0])) - 1;
+	if (index < 0 || index >= n) return 0;
+	return (char *)fake_confstr[index];
+}
+
+int substrcpy(char *d, const char *s, char idx)
+{
+	int field = 0;
+	const char *p = s;
+	while (*p && field < idx) { if (*p == ',') field++; p++; }
+	if (field != idx) { d[0] = 0; return 0; }
+
+	int i = 0;
+	while (p[i] && p[i] != ',' && p[i] != ';' && i < 127) { d[i] = p[i]; i++; }
+	d[i] = 0;
+	return i;
+}
+
+static char last_status_opt[64] = {};
+static uint32_t last_status_val = 0;
+static int status_pulses = 0;
+
+const char *harness_last_status_opt() { return last_status_opt; }
+int harness_status_pulses() { return status_pulses; }
+void harness_reset_status() { last_status_opt[0] = 0; status_pulses = 0; }
+
+void user_io_status_set(const char *opt, uint32_t value, int)
+{
+	snprintf(last_status_opt, sizeof(last_status_opt), "%s", opt ? opt : "");
+	last_status_val = value;
+	if (value) status_pulses++;
+	printf("  [stub] user_io_status_set(\"%s\", %u)\n", last_status_opt, value);
+}
+
+int screenshot_grab(uint32_t *dst, int max_px, int *out_w, int *out_h)
+{
+	// A recognisable stand-in for a running game: bands plus a moving block.
+	int w = 320, h = 240;
+	if (w * h > max_px) return 0;
+	for (int y = 0; y < h; y++)
+	{
+		for (int x = 0; x < w; x++)
+		{
+			uint32_t c = 0xff1e3f7a;
+			if (y > h * 2 / 3) c = 0xff2e6e3a;
+			if (x > w / 3 && x < w / 2 && y > h / 3 && y < h * 2 / 3) c = 0xffe08040;
+			dst[y * w + x] = c;
+		}
+	}
+	*out_w = w; *out_h = h;
+	printf("  [stub] screenshot_grab -> %dx%d\n", w, h);
+	return 1;
+}
+
+void fpga_load_rbf_stub_marker() {}
+static char last_rbf[256] = {};
+const char *harness_last_rbf() { return last_rbf; }
+
+int fpga_load_rbf(const char *name, const char *, const char *)
+{
+	snprintf(last_rbf, sizeof(last_rbf), "%s", name ? name : "");
+	printf("  [stub] fpga_load_rbf(\"%s\")\n", last_rbf);
+	return 0;
+}
 uint32_t user_io_status_get(const char *, int) { return 0; }
+int user_io_status_bits(const char *, int *st, int *, int, int) { if (st) *st = 1; return 1; }
+uint32_t user_io_status_mask(const char *) { return 3; }
 
 void OsdEnable(unsigned char) {}
 void OsdDisable() {}

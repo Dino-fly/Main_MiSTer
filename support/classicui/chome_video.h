@@ -81,6 +81,9 @@ void vp_set(int sysidx, int vclass, int preset);
 void vp_arm_for_launch(int sysidx, int vclass_hint);
 void vp_apply_pending();
 
+// Absolute path of a look's generated preset file, for applying it directly.
+int  vp_preset_path(int i, char *out, int len);
+
 /*
   Preview of a look, cached. When ref is non-null it is used as the source frame -
   a real capture of the user's own game - and the look is applied over it; with no

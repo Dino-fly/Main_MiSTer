@@ -620,6 +620,30 @@ void do_screenshot(char* imgname)
 	return;
 }
 
+int screenshot_grab(uint32_t *dst, int max_px, int *out_w, int *out_h)
+{
+    if (!dst || max_px < 1 || screenshot_pending_atomic || screenshot_requested) return 0;
+
+    mister_scaler *ms = mister_scaler_init();
+    if (!ms) return 0;
+
+    int w = ms->width;
+    int h = ms->height;
+
+    if (w < 1 || h < 1 || w * h > max_px)
+    {
+        mister_scaler_free(ms);
+        return 0;
+    }
+
+    mister_scaler_read(ms, (unsigned char *)dst, ARGB32);
+    mister_scaler_free(ms);
+
+    if (out_w) *out_w = w;
+    if (out_h) *out_h = h;
+    return 1;
+}
+
 int screenshot_thumbnail(const char *fullpath, int max_w)
 {
     // screenshot_outputbuf is shared with the async screenshot path.

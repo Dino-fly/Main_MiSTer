@@ -3476,16 +3476,16 @@ int video_menu_fb_height()
   second for no reason. The register sequence below is the same one
   video_fb_enable()'s enable path sends.
 */
-void video_menu_fb_present(int n)
+int video_menu_fb_present(int n)
 {
-	if (n < 1 || n > 2 || !fb_base) return;
+	if (n < 1 || n > 2 || !fb_base) return 0;
 
 	menu_bgn = n;             // keep video_fb_enable()'s restore path pointing at us
 
 	if (!spi_uio_cmd_cont(UIO_SET_FBUF))
 	{
 		DisableIO();
-		return;
+		return 0;             // core without HPS framebuffer support
 	}
 
 	uint32_t fb_addr = FB_ADDR + (FB_SIZE * 4 * n);
@@ -3511,6 +3511,7 @@ void video_menu_fb_present(int n)
 
 	fb_enabled = 1;
 	fb_num = n;
+	return 1;
 }
 
 

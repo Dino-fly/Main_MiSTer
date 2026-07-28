@@ -604,6 +604,13 @@ void vp_set(int sysidx, int vclass, int preset)
 
 /* ------------------------------------------------------------ applying ---- */
 
+int vp_preset_path(int i, char *out, int len)
+{
+	if (i < 0 || i >= NPRESETS) return 0;
+	snprintf(out, len, "%s/presets/%s %s.ini", getRootDir(), PREFIX, presets[i].name);
+	return 1;
+}
+
 void vp_arm_for_launch(int sysidx, int vclass_hint)
 {
 	int p = vp_effective(sysidx, vclass_hint);

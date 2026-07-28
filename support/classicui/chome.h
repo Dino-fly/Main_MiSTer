@@ -36,4 +36,15 @@ void chome_core_boot();
 */
 void chome_core_poll();
 
+/*
+  The in-game pause menu. Opens on the OSD/menu button inside a game core, drawn
+  over a still capture of the running game.
+
+  It is not a true overlay: MiSTer's HPS framebuffer replaces the core's video
+  rather than blending with it, so the "background" is a frame grabbed the moment
+  the menu opened. The game keeps running behind it, exactly as it does behind the
+  classic OSD. Cores without framebuffer support fall through to that OSD instead.
+*/
+int chome_ingame_active();
+
 #endif
