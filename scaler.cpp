@@ -620,6 +620,43 @@ void do_screenshot(char* imgname)
 	return;
 }
 
+int screenshot_thumbnail(const char *fullpath, int max_w)
+{
+    // screenshot_outputbuf is shared with the async screenshot path.
+    if (screenshot_pending_atomic || screenshot_requested || !fullpath || max_w < 8)
+        return 0;
+
+    mister_scaler *ms = mister_scaler_init();
+    if (!ms)
+    {
+        printf("thumbnail: scaler unavailable\n");
+        return 0;
+    }
+
+    int w = ms->width;
+    int h = ms->height;
+
+    if (w < 1 || h < 1)
+    {
+        mister_scaler_free(ms);
+        return 0;
+    }
+
+    screenshot_pending_atomic = true;
+    mister_scaler_read(ms, screenshot_outputbuf);
+    mister_scaler_free(ms);
+
+    int ow = max_w;
+    int oh = (int)(((long long)max_w * h) / w);
+    if (oh < 1) oh = 1;
+
+    bool ok = write_screenshot(fullpath, screenshot_outputbuf, w, h, ow, oh);
+    screenshot_pending_atomic = false;
+
+    printf("thumbnail: %s %dx%d -> %dx%d %s\n", fullpath, w, h, ow, oh, ok ? "ok" : "FAILED");
+    return ok ? 1 : 0;
+}
+
 void request_screenshot(char *cmd, int scaled)
 {
     if (screenshot_pending_atomic || screenshot_requested)
