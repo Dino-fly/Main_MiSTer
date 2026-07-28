@@ -1,0 +1,35 @@
+# Classic Home systems table.
+#
+# Copy to the root of the SD card as   classicui_systems.txt   to override the
+# built-in table entirely (the built-in list is only used when this file is
+# absent). One system per line, fields separated by "|":
+#
+#  id | name | badge | rbf | games dir | extensions | libretro name | type | index | delay | computer | tint
+#
+#  id            short internal id, any unique string
+#  name          shown to the user - this is the only name they ever see
+#  badge         2-4 characters, drawn on the fallback card
+#  rbf           core path relative to the SD root, no datecode, no extension
+#  games dir     folder name searched under games/ (and usb/network variants)
+#  extensions    comma separated, case insensitive
+#  libretro name thumbnail system name, used to find and fetch cover art.
+#                Must match https://thumbnails.libretro.com exactly.
+#  type          MGL file type: f = load into memory, s = mount
+#  index         MGL slot index
+#  delay         seconds to wait after the core loads before sending the file
+#  computer      1 = lives under Computers and uses the file browser
+#  tint          RRGGBB plate colour for the generated fallback card
+#
+# IMPORTANT: type and index come from the core's CONF_STR. Get them wrong and the
+# file is handed to the wrong slot, so the game will not boot. To check a core,
+# read its CONF_STR on GitHub: an entry like "F1,SFCSMC,Load;" is type f index 1,
+# "S0,CUECHD,Insert CD;" is type s index 0. The values below are the common ones
+# and are a starting point, not a guarantee.
+
+snes  | Super Nintendo    | SNES | _Console/SNES         | SNES    | sfc,smc      | Nintendo - Super Nintendo Entertainment System | f | 0 | 2 | 0 | 5B4B8A
+nes   | Nintendo (NES)    | NES  | _Console/NES          | NES     | nes,fds      | Nintendo - Nintendo Entertainment System       | f | 0 | 2 | 0 | 8A4B2B
+md    | Mega Drive        | MD   | _Console/Genesis      | Genesis | md,bin,gen   | Sega - Mega Drive - Genesis                    | f | 0 | 2 | 0 | 2B4C7E
+tg16  | TurboGrafx-16     | TG16 | _Console/TurboGrafx16 | TGFX16  | pce,sgx      | NEC - PC Engine - TurboGrafx 16               | f | 0 | 2 | 0 | 8A6E2B
+gba   | Game Boy Advance  | GBA  | _Console/GBA          | GBA     | gba          | Nintendo - Game Boy Advance                   | f | 0 | 2 | 0 | 4A3C8A
+arcade| Arcade            | ARC  |                       | _Arcade | mra          | MAME                                          | f | 0 | 0 | 0 | 7E2B3A
+amiga | Amiga             | AMI  | _Computer/Minimig     | Amiga   | adf,hdf      | Commodore - Amiga                             | f | 0 | 3 | 1 | 2E6E63
