@@ -66,6 +66,20 @@ int   hasAPI1_5();
 void video_fb_enable(int enable, int n = 0);
 int video_fb_state();
 void video_menu_bg(int n, int idle = 0);
+
+// 1 when an HDMI sink is attached, 0 when not, -1 when unknown.
+int video_hdmi_connected();
+
+// 1 when the scaler's output is what the user sees, so filters/masks/gamma apply.
+int video_scaler_is_visible();
+
+// Menu-core framebuffer access for alternative front-ends (support/classicui).
+// n is 1 or 2: the menu background double-buffer pair.
+uint32_t* video_menu_fb(int n);
+int video_menu_fb_width();
+int video_menu_fb_height();
+void video_menu_fb_present(int n);
+
 int video_bg_has_picture();
 int video_chvt(int num);
 void video_cmd(char *cmd);

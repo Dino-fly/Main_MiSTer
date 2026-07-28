@@ -3415,6 +3415,104 @@ int video_fb_state()
 	return fb_enabled;
 }
 
+/*
+  Is an HDMI sink actually attached? Reads the ADV7513's HPD and monitor-sense
+  bits, the same pair the hotplug handler waits on.
+  Returns 1 connected, 0 not, -1 when we cannot tell (no i2c handle yet).
+*/
+int video_hdmi_connected()
+{
+	if (hdmi_main_fd < 0) return -1;
+
+	int st = i2c_smbus_read_byte_data(hdmi_main_fd, 0x42);
+	if (st < 0) return -1;
+
+	return ((st & 0x60) == 0x60) ? 1 : 0;
+}
+
+/*
+  Does the scaler's output actually reach the user's screen? The video looks all
+  live in the scaler (filters, shadow mask, gamma), so they are meaningless when
+  it is bypassed:
+    - direct_video sends raw core timing straight out the DAC, no scaling at all;
+    - without vga_scaler the analog port gets raw (scandoubled) core video, so if
+      nothing is on HDMI either, the scaler output goes nowhere visible.
+*/
+int video_scaler_is_visible()
+{
+	if (cfg.direct_video) return 0;
+	if (cfg.vga_scaler) return 1;
+
+	int hdmi = video_hdmi_connected();
+	if (hdmi < 0) return 1;        // cannot tell: assume the usual HDMI setup
+	return hdmi ? 1 : 0;
+}
+
+/*
+  Menu-core framebuffer access for alternative front-ends (see support/classicui).
+  Buffers 1 and 2 are the menu background double-buffer, the same pair video_menu_bg()
+  page-flips between; buffer 0 belongs to the Linux fb terminal and is never handed out.
+*/
+uint32_t* video_menu_fb(int n)
+{
+	if (!fb_base || n < 1 || n > 2) return 0;
+	return (uint32_t*)(fb_base + (FB_SIZE * n));
+}
+
+int video_menu_fb_width()
+{
+	return fb_width;
+}
+
+int video_menu_fb_height()
+{
+	return fb_height;
+}
+
+/*
+  Page flip. This deliberately does not go through video_fb_enable(): that also
+  calls input_switch(), which issues an EVIOCGRAB ioctl on every open input
+  device, and a front-end flipping at up to 60Hz would do it thousands of times a
+  second for no reason. The register sequence below is the same one
+  video_fb_enable()'s enable path sends.
+*/
+void video_menu_fb_present(int n)
+{
+	if (n < 1 || n > 2 || !fb_base) return;
+
+	menu_bgn = n;             // keep video_fb_enable()'s restore path pointing at us
+
+	if (!spi_uio_cmd_cont(UIO_SET_FBUF))
+	{
+		DisableIO();
+		return;
+	}
+
+	uint32_t fb_addr = FB_ADDR + (FB_SIZE * 4 * n);
+
+	int xoff = 0, yoff = 0;
+	if (cfg.direct_video)
+	{
+		xoff = v_cur.item[4] - FB_DV_LBRD;
+		yoff = v_cur.item[8] - FB_DV_UBRD;
+	}
+
+	spi_w((uint16_t)(FB_EN | FB_FMT_RxB | FB_FMT_8888));
+	spi_w((uint16_t)fb_addr);
+	spi_w(fb_addr >> 16);
+	spi_w(fb_width);
+	spi_w(fb_height);
+	spi_w(xoff);
+	spi_w(xoff + v_cur.item[1] - 1);
+	spi_w(yoff);
+	spi_w(yoff + v_cur.item[5] - 1);
+	spi_w(fb_width * 4);
+	DisableIO();
+
+	fb_enabled = 1;
+	fb_num = n;
+}
+
 
 static void video_fb_config()
 {
