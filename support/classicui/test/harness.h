@@ -15,6 +15,7 @@ void harness_set_confstr(int v);
 const char *harness_last_status_opt();
 const char *harness_last_rbf();
 int harness_status_pulses();
+uint32_t harness_pause_val();
 void harness_reset_status();
 
 uint32_t *harness_fb_shown();

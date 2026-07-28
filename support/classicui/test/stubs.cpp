@@ -183,6 +183,7 @@ static const char *fake_confstr[] =
 	"-;",
 	"F1,SFCSMCBIN,Load;",
 	"O[36:35],Savestate Slot,1,2,3,4;",
+	"O[40],Pause,Off,On;",
 	"rA,Save state (Alt-F1);",
 	"rB,Restore state (F1);",
 	"R[0],Reset;",
@@ -212,6 +213,9 @@ int substrcpy(char *d, const char *s, char idx)
 	return i;
 }
 
+static uint32_t opt_pause_val = 0;
+uint32_t harness_pause_val() { return opt_pause_val; }
+
 static char last_status_opt[64] = {};
 static uint32_t last_status_val = 0;
 static int status_pulses = 0;
@@ -224,6 +228,7 @@ void user_io_status_set(const char *opt, uint32_t value, int)
 {
 	snprintf(last_status_opt, sizeof(last_status_opt), "%s", opt ? opt : "");
 	last_status_val = value;
+	if (opt && !strcmp(opt, "[40]")) opt_pause_val = value;
 	if (value) status_pulses++;
 	printf("  [stub] user_io_status_set(\"%s\", %u)\n", last_status_opt, value);
 }
@@ -258,7 +263,11 @@ int fpga_load_rbf(const char *name, const char *, const char *)
 	printf("  [stub] fpga_load_rbf(\"%s\")\n", last_rbf);
 	return 0;
 }
-uint32_t user_io_status_get(const char *, int) { return 0; }
+uint32_t user_io_status_get(const char *opt, int)
+{
+	if (opt && !strcmp(opt, "[40]")) return opt_pause_val;
+	return 0;
+}
 int user_io_status_bits(const char *, int *st, int *, int, int) { if (st) *st = 1; return 1; }
 uint32_t user_io_status_mask(const char *) { return 3; }
 
