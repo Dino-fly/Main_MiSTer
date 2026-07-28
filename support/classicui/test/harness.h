@@ -13,6 +13,7 @@ void harness_set_menu_core(int v);
 void harness_set_fb_supported(int v);
 void harness_set_confstr(int v);
 const char *harness_last_status_opt();
+const char *harness_last_pulse_opt();
 const char *harness_last_rbf();
 int harness_status_pulses();
 uint32_t harness_pause_val();

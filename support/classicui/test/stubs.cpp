@@ -216,20 +216,27 @@ int substrcpy(char *d, const char *s, char idx)
 static uint32_t opt_pause_val = 0;
 uint32_t harness_pause_val() { return opt_pause_val; }
 
+static char last_pulse_opt[64] = {};
+const char *harness_last_pulse_opt() { return last_pulse_opt; }
+
 static char last_status_opt[64] = {};
 static uint32_t last_status_val = 0;
 static int status_pulses = 0;
 
 const char *harness_last_status_opt() { return last_status_opt; }
 int harness_status_pulses() { return status_pulses; }
-void harness_reset_status() { last_status_opt[0] = 0; status_pulses = 0; }
+void harness_reset_status() { last_status_opt[0] = 0; last_pulse_opt[0] = 0; status_pulses = 0; }
 
 void user_io_status_set(const char *opt, uint32_t value, int)
 {
 	snprintf(last_status_opt, sizeof(last_status_opt), "%s", opt ? opt : "");
 	last_status_val = value;
 	if (opt && !strcmp(opt, "[40]")) opt_pause_val = value;
-	if (value) status_pulses++;
+	if (value)
+	{
+		status_pulses++;
+		snprintf(last_pulse_opt, sizeof(last_pulse_opt), "%s", opt ? opt : "");
+	}
 	printf("  [stub] user_io_status_set(\"%s\", %u)\n", last_status_opt, value);
 }
 
