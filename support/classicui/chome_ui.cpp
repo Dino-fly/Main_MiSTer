@@ -13,6 +13,7 @@
 #include "chome_lib.h"
 #include "chome_art.h"
 #include "chome_video.h"
+#include "chome_icons32.h"
 
 #include "../../cfg.h"
 #include "../../user_io.h"
@@ -46,6 +47,8 @@ static int ig_selected_running = 0;          // shelf parked on the running game
 static unsigned long ig_close_until = 0;     // "press A again to close the game"
 
 #define REF_DELAY_MS 20000
+// Long enough for the core to have the ROM in before a state lands on top of it.
+#define RESUME_DELAY_MS 4000
 
 /*
   Reference frame for the look previews: "classicui/refshots/<system>/<rom>.png".
@@ -74,19 +77,21 @@ static void ref_shot_path(const char *sysid, const char *rompath, char *out, int
 #define SCR_DISPLAY 4
 #define SCR_OPTIONS 5
 #define SCR_ABOUT   6
-#define SCR_LANG    7
 #define SCR_BROWSE  8
 #define SCR_LAUNCH  9
 
 #define MB_DISPLAY  0
 #define MB_OPTIONS  1
-#define MB_LANGUAGE 2
-#define MB_ABOUT    3
-#define MB_MANUALS  4
-#define MB_COUNT    5
+#define MB_ABOUT    2
+#define MB_COUNT    3
 
-static const char *mb_label[MB_COUNT] = { "Display", "Options", "Language", "About", "Manuals" };
-static const char *mb_icon[MB_COUNT]  = { "screen", "gear", "globe", "info", "book" };
+/*
+  Language and Manuals are gone. The first opened a panel with nothing behind it,
+  and the second only handed the screen to the classic OSD - which is exactly what
+  the front-end is not supposed to do on its own.
+*/
+static const char *mb_label[MB_COUNT] = { "Display", "Options", "About" };
+static const char *mb_icon[MB_COUNT]  = { "screen", "gear", "info" };
 
 /*
   Every Display option lives in the scaler - filters, shadow mask, gamma - so the
@@ -137,6 +142,7 @@ static int mb_at(int slot)
 struct nav_rec { int view, sysidx, sel; };
 
 static int inited = 0;
+static int first_entry = 1;
 static int active = 0;
 static int screen = SCR_HOME;
 
@@ -149,11 +155,91 @@ static int sort_mode = SORT_TITLE;
 static nav_rec navstack[NAV_DEPTH];
 static int navdepth = 0;
 
+/*
+  Where the player was. All of the above is in memory, and launching a game re-execs
+  MiSTer, so without this the shelf comes back on the unfiltered root - a long walk
+  back to whichever system you were browsing.
+
+  The selected entry is remembered by its key rather than its index: a rescan can
+  move a game up or down the list, and an index would then land on a neighbour.
+*/
+struct session_rec
+{
+	uint32_t magic;
+	int view, viewsys, sort_mode;
+	uint32_t sel_key;                 // 0 when the selection was not a game
+	int sel_idx;                      // fallback for folders and system cards
+	int navdepth;
+	nav_rec nav[NAV_DEPTH];
+};
+
+#define SESSION_MAGIC 0x53484348u     // "CHHS"
+#define SESSION_FILE  "classicui_session.cfg"
+
+static void session_save()
+{
+	session_rec r;
+	memset(&r, 0, sizeof(r));
+	r.magic = SESSION_MAGIC;
+	r.view = view;
+	r.viewsys = viewsys;
+	r.sort_mode = sort_mode;
+	r.sel_idx = sel;
+	r.navdepth = navdepth;
+	for (int i = 0; i < navdepth && i < NAV_DEPTH; i++) r.nav[i] = navstack[i];
+
+	const chome_entry *e = lib_view_entry(sel);
+	if (e && e->kind == ENT_GAME)
+	{
+		chome_item *it = lib_item(e->game);
+		if (it) r.sel_key = it->key;
+	}
+
+	FileSaveConfig(SESSION_FILE, &r, sizeof(r));
+}
+
+// Rebuilds the view as it was; the caller has already made sure the index exists.
+static void session_restore()
+{
+	session_rec r;
+	memset(&r, 0, sizeof(r));
+
+	if (FileLoadConfig(SESSION_FILE, &r, sizeof(r)) != (int)sizeof(r)) return;
+	if (r.magic != SESSION_MAGIC) return;
+	if (r.view < 0 || r.view > VIEW_RECENT) return;
+	if (r.viewsys >= lib_sys_count()) return;
+
+	view = r.view;
+	viewsys = r.viewsys;
+	sort_mode = r.sort_mode;
+	navdepth = (r.navdepth >= 0 && r.navdepth <= NAV_DEPTH) ? r.navdepth : 0;
+	for (int i = 0; i < navdepth; i++) navstack[i] = r.nav[i];
+
+	lib_view_build(view, viewsys, sort_mode);
+
+	int n = lib_view_count();
+	sel = 0;
+
+	if (r.sel_key)
+	{
+		for (int i = 0; i < n; i++)
+		{
+			const chome_entry *e = lib_view_entry(i);
+			if (!e || e->kind != ENT_GAME) continue;
+			chome_item *it = lib_item(e->game);
+			if (it && it->key == r.sel_key) { sel = i; break; }
+		}
+	}
+	if (!sel && r.sel_idx > 0 && r.sel_idx < n) sel = r.sel_idx;
+
+	selF = sel;
+	printf("ClassicUI: back where you were - view %d, entry %d of %d\n", view, sel + 1, n);
+}
+
 static int mb_idx = 0;
 static int slot_idx = 0;
 static int sort_idx = 0;
 static int opt_row = 0;
-static int lang_row = 0;
 static int look_row = 0;
 
 static double bar_y = 0, strip_y = 0, curtain = 0;
@@ -183,8 +269,6 @@ static int browse_sel = 0, browse_top = 0;
 static int browse_sys = -1;
 static char browse_rel[CH_PATH_LEN] = {};
 
-static const char *lang_names[] = { "English", "Deutsch", "Francais", "Italiano", "Espanol", "Nederlands", "Portugues" };
-#define LANG_COUNT ((int)(sizeof(lang_names) / sizeof(lang_names[0])))
 
 static void mark_dirty() { dirty = 1; }
 
@@ -192,6 +276,8 @@ static const uint32_t *ig_live_ref(int w, int h);
 static void ig_close(int restore_video);
 static void ig_select_running();
 static int ss_can_save();
+static int susp_matches(const chome_item *it);
+static void quit_to_home(int suspend);
 static int ss_can_load();
 static int ss_do_save(int slot);
 static int ss_do_load(int slot);
@@ -451,6 +537,35 @@ static const icon_def icons[] =
 		"........" } },
 };
 
+/*
+  Per-system icon, if this system has one. Sampled rather than scaled by whole
+  pixels: the box a card can spare is 60-odd pixels at HD but barely 20 at 240p, so
+  an integer scale would be either too small on one or clipped on the other.
+*/
+static const sysicon_def *sysicon_find(const char *id)
+{
+	if (!id || !id[0]) return 0;
+	for (size_t i = 0; i < sizeof(sysicons) / sizeof(sysicons[0]); i++)
+	{
+		if (!strcasecmp(sysicons[i].id, id)) return &sysicons[i];
+	}
+	return 0;
+}
+
+static void draw_sysicon(const sysicon_def *d, int x, int y, int box, uint32_t col)
+{
+	if (box < 4) return;
+
+	for (int oy = 0; oy < box; oy++)
+	{
+		const char *row = d->rows[oy * ICON32 / box];
+		for (int ox = 0; ox < box; ox++)
+		{
+			if (row[ox * ICON32 / box] == '#') gfx_fill(x + ox, y + oy, 1, 1, col);
+		}
+	}
+}
+
 static void icon(const char *kind, int x, int y, int s, uint32_t col, uint32_t hole)
 {
 	const icon_def *d = 0;
@@ -584,10 +699,20 @@ static void draw_card(const chome_entry *e, int cx, int bottom, int w, int h, in
 		if (is * 8 > w / 3) is = (w / 3) / 8;     // never wider than a third
 		if (is < 1) is = 1;
 
-		icon(e->icon ? e->icon : "stack",
-			x + (w - 8 * is) / 2,
-			icon_top + (icon_space - 8 * is) / 2,
-			is, COL_INK, COL_PANEL);
+		const sysicon_def *si = sysicon_find(e->icon);
+		if (si)
+		{
+			int box = icon_space;
+			if (box > w / 2) box = w / 2;
+			draw_sysicon(si, x + (w - box) / 2, icon_top + (icon_space - box) / 2, box, COL_INK);
+		}
+		else
+		{
+			icon(e->icon ? e->icon : "stack",
+				x + (w - 8 * is) / 2,
+				icon_top + (icon_space - 8 * is) / 2,
+				is, COL_INK, COL_PANEL);
+		}
 
 		char up[CH_TITLE_LEN];
 		snprintf(up, sizeof(up), "%s", e->label);
@@ -871,7 +996,6 @@ static int build_legend(legend_pair *out, int max)
 		break;
 	}
 	case SCR_SORT:
-	case SCR_LANG:
 		if (n < max) { out[n++] = { btn(LBL_A), "Apply", "OK" }; }
 		if (n < max) { out[n++] = { btn(LBL_B), "Back", "Back" }; }
 		break;
@@ -906,11 +1030,16 @@ static int build_legend(legend_pair *out, int max)
 		}
 		else
 		{
-			int running = ig_is_running(cur_game());
+			int running = ig_is_running(cur_game()) || susp_matches(cur_game());
 			if (n < max) { out[n++] = { btn(LBL_A), running ? "Resume" : "Start", running ? "Play" : "Start" }; }
+			/*
+			  Order is priority: the 240p legend keeps only the first three, and
+			  favouriting a game is worth more there than re-sorting the shelf. The
+			  action itself was always here - it just never appeared on a CRT.
+			*/
 			if (n < max) { out[n++] = { CH_DOWN, "Suspend Points", "Saves" }; }
-			if (n < max) { out[n++] = { btn(LBL_SELECT), "Sort", "Sort" }; }
 			if (n < max) { out[n++] = { btn(LBL_Y), "Favourite", "Fav" }; }
+			if (n < max) { out[n++] = { btn(LBL_SELECT), "Sort", "Sort" }; }
 		}
 		break;
 	}
@@ -1359,14 +1488,6 @@ static void draw_sort_panel(const chome_profile *p)
 	draw_rows(&b, rows, 0, SORT_COUNT, sort_idx);
 }
 
-static void draw_lang_panel(const chome_profile *p)
-{
-	panel_box b = draw_panel(p, "Language");
-	const char *vals[LANG_COUNT];
-	for (int i = 0; i < LANG_COUNT; i++) vals[i] = (i == 0) ? "Active" : "Not translated";
-	draw_rows(&b, lang_names, vals, LANG_COUNT, lang_row);
-}
-
 /* ------------------------------------------------------------- browser ---- */
 
 static int browse_cmp(const void *a, const void *b)
@@ -1517,6 +1638,7 @@ static void do_launch(int sysidx, const char *relpath, chome_item *it)
 
 	if (it) lib_note_play(it);
 	lib_state_save();
+	session_save();                   // so quitting the game comes back to this shelf
 
 	vp_arm_for_launch(sysidx, class_of(sysidx, relpath));
 
@@ -1616,7 +1738,7 @@ static void render()
 	draw_position(p);
 
 	int overlay = (screen == SCR_SORT || screen == SCR_DISPLAY || screen == SCR_OPTIONS ||
-		screen == SCR_ABOUT || screen == SCR_LANG);
+		screen == SCR_ABOUT);
 	if (overlay) gfx_scrim(0, 0, p->w, p->h, COL_BGDARK, 2);
 
 	draw_suspend(p);
@@ -1629,7 +1751,6 @@ static void render()
 	case SCR_DISPLAY: draw_display_screen(p); break;
 	case SCR_OPTIONS: draw_options_panel(p); break;
 	case SCR_ABOUT:   draw_about_panel(p); break;
-	case SCR_LANG:    draw_lang_panel(p); break;
 	case SCR_LAUNCH:  draw_launch(p); break;
 	default: break;
 	}
@@ -1754,11 +1875,6 @@ static void move_v(int dir)
 		mark_dirty();
 		break;
 
-	case SCR_LANG:
-		lang_row = (lang_row + dir + LANG_COUNT) % LANG_COUNT;
-		mark_dirty();
-		break;
-
 	case SCR_DISPLAY:
 		nudge();               // one row of tiles: nothing above or below
 		break;
@@ -1826,9 +1942,7 @@ static void accept()
 			break;
 		}
 		case MB_OPTIONS:  opt_row = 0; go_screen(SCR_OPTIONS); break;
-		case MB_LANGUAGE: lang_row = 0; go_screen(SCR_LANG); break;
 		case MB_ABOUT:    go_screen(SCR_ABOUT); break;
-		case MB_MANUALS:  chome_leave(); break;   // the docs viewer lives in the classic menu
 		}
 		break;
 
@@ -1836,11 +1950,6 @@ static void accept()
 		sort_mode = sort_idx;
 		view_rebuild(0);
 		go_screen(SCR_HOME);
-		break;
-
-	case SCR_LANG:
-		if (lang_row != 0) nudge();
-		else go_screen(SCR_MENUBAR);
 		break;
 
 	case SCR_DISPLAY:
@@ -1879,13 +1988,7 @@ static void accept()
 			// Closing the game loses unsaved progress, so it takes two presses.
 			if (!CheckTimer(ig_close_until))
 			{
-				printf("ClassicUI: closing the game, back to the menu core\n");
-				ss_pause_release(ig_paused);
-				ig_paused = 0;
-				lib_state_save();
-				ig_active = 0;
-				unlink(CURRENT_FILE);
-				fpga_load_rbf("menu.rbf");
+				quit_to_home(1);
 			}
 			else
 			{
@@ -1959,7 +2062,6 @@ static void back()
 	case SCR_DISPLAY:
 	case SCR_OPTIONS:
 	case SCR_ABOUT:
-	case SCR_LANG:
 		go_screen(SCR_MENUBAR);
 		break;
 
@@ -2005,16 +2107,30 @@ struct ss_hooks
 	int  slot_count;
 
 	/*
-	  Pause, when the core offers it. There is no generic pause command in MiSTer:
-	  cores that "pause when the OSD is open" watch the OSD enable signal, and we
-	  deliberately blank the OSD so the screen stays ours, so that route is closed
-	  to us. What is left is the same one the savestate entries use - a pause entry
-	  the core declares in CONF_STR - which we drive identically.
+	  Pause. There is no pause command in MiSTer: sys_top drives osd_status into the
+	  core as OSD_STATUS (emu_ports.vh), and a core pauses on it only when its own
+	  "Pause when OSD is open" option is On - an option that ships Off. So pausing
+	  means two things at once: hold OSD_STATUS high, which ig_open/enter do by
+	  leaving the OSD enabled, and force that option On for as long as we are up.
+
+	  An earlier version of this dismissed that route and hunted for a pause command
+	  instead, which no core offers - so nothing ever paused.
 	*/
 	int  found_pause;
 	int  pause_is_option;         // O/o entry (set a value) vs T/R (pulse)
 	char pause_opt[32];
 	int  pause_ex;
+	uint32_t pause_on_val;        // which value of that option means "paused"
+
+	/*
+	  Savestates to SDCard. When this is Off the core keeps states in memory and no
+	  file is ever written, so a save from here would look like it did nothing. Its
+	  default is On, but a core config on the card can have turned it off.
+	*/
+	int  found_sd;
+	char sd_opt[32];
+	int  sd_ex;
+	uint32_t sd_on_val;
 };
 
 static ss_hooks ss_hk;
@@ -2043,8 +2159,15 @@ static void ss_scan_hooks()
 		char *p = user_io_get_confstr(i);
 		if (!p) break;
 
-		// Skip the hide/disable flags the generic menu strips.
-		while ((p[0] == 'H' || p[0] == 'D' || p[0] == 'h' || p[0] == 'd') && strlen(p) > 2) p += 2;
+		/*
+		  Strip the prefixes the generic menu strips: hide/disable flags, and the
+		  P<n> page markers. Missing the page marker is why the pause option was
+		  never found - the real one reads "P3OQ,Pause when OSD is open,Off,On",
+		  and without this it parses as an entry of unknown type "P".
+		*/
+		while (strlen(p) > 2 &&
+		       (p[0] == 'H' || p[0] == 'D' || p[0] == 'h' || p[0] == 'd' ||
+		        (p[0] == 'P' && p[1] >= '0' && p[1] <= '9'))) p += 2;
 		if (!p[0]) continue;
 
 		char label[128] = {};
@@ -2069,11 +2192,13 @@ static void ss_scan_hooks()
 			ss_hk.load_ex = ex;
 			ss_hk.found_load = 1;
 		}
-		else if (!ss_hk.found_pause && label_has(label, "pause") && !label_has(label, "osd"))
+		else if (!ss_hk.found_pause && label_has(label, "pause"))
 		{
 			/*
-			  "Pause when OSD is open" is a preference, not a command, so labels
-			  mentioning the OSD are skipped: setting one would not pause anything.
+			  This is nearly always "Pause when OSD is open", an option rather than a
+			  command, and it is the one that works: the core watches OSD_STATUS and
+			  honours it only while this is On. Find which of its values says On, since
+			  the order is the core's choice ("Off,On" here, but not guaranteed).
 			*/
 			if (momentary || option)
 			{
@@ -2082,8 +2207,33 @@ static void ss_scan_hooks()
 				ss_copy_opt(spec, ss_hk.pause_opt, sizeof(ss_hk.pause_opt));
 				ss_hk.pause_ex = ex;
 				ss_hk.pause_is_option = option;
+				ss_hk.pause_on_val = 1;
+
+				if (option)
+				{
+					char v[64];
+					for (int n = 0; n < 8 && substrcpy(v, p, (char)(2 + n)) && v[0]; n++)
+					{
+						if (!strcasecmp(v, "on") || !strcasecmp(v, "yes")) { ss_hk.pause_on_val = (uint32_t)n; break; }
+					}
+				}
 				ss_hk.found_pause = 1;
 			}
+		}
+		else if (option && !ss_hk.found_sd && label_has(label, "savestates to sd"))
+		{
+			const char *spec = p + 1;
+			if (spec[0] == 'X') spec++;
+			ss_copy_opt(spec, ss_hk.sd_opt, sizeof(ss_hk.sd_opt));
+			ss_hk.sd_ex = ex;
+			ss_hk.sd_on_val = 0;
+
+			char v[64];
+			for (int n = 0; n < 8 && substrcpy(v, p, (char)(2 + n)) && v[0]; n++)
+			{
+				if (!strcasecmp(v, "on") || !strcasecmp(v, "yes")) { ss_hk.sd_on_val = (uint32_t)n; break; }
+			}
+			ss_hk.found_sd = 1;
 		}
 		else if (option && !ss_hk.found_slot && label_has(label, "slot"))
 		{
@@ -2101,7 +2251,8 @@ static void ss_scan_hooks()
 		}
 	}
 
-	printf("ClassicUI: core hooks - save:%s load:%s slot:%s(%d) pause:%s%s\n",
+	printf("ClassicUI: core hooks - sdcard:%s save:%s load:%s slot:%s(%d) pause:%s%s\n",
+		ss_hk.found_sd ? ss_hk.sd_opt : "-",
 		ss_hk.found_save ? ss_hk.save_opt : "-",
 		ss_hk.found_load ? ss_hk.load_opt : "-",
 		ss_hk.found_slot ? ss_hk.slot_opt : "-", ss_hk.slot_count,
@@ -2133,6 +2284,116 @@ static int ss_select_slot(int slot)
 }
 
 static int ss_can_save() { return ss_get()->found_save; }
+
+/* ------------------------------------------------------- suspend points --- */
+
+/*
+  Putting a game away and getting it back later. A core that cannot host the
+  front-end has nowhere to draw a menu, so MENU means "put this away" - and doing
+  that without keeping the moment would throw the session out, which is the one
+  thing a shelf full of games must not do.
+
+  The state itself is an ordinary savestate in the core's last slot, so the pips and
+  thumbnails already show it. This file only records which game the last suspend
+  belongs to, so the shelf can offer Resume and the core can restore itself once the
+  ROM is up.
+*/
+#define SUSPEND_FILE "classicui/suspend.txt"
+
+static int susp_read(char *sysid, int sysmax, char *relpath, int pathmax, int *slot)
+{
+	char full[1024];
+	snprintf(full, sizeof(full), "%s/%s", getRootDir(), SUSPEND_FILE);
+
+	FILE *f = fopen(full, "rt");
+	if (!f) return 0;
+
+	char sl[32] = {};
+	int ok = (fgets(sysid, sysmax, f) && fgets(relpath, pathmax, f) && fgets(sl, sizeof(sl), f));
+	fclose(f);
+	if (!ok) return 0;
+
+	for (char *q = sysid; *q; q++) if (*q == '\n') { *q = 0; break; }
+	for (char *q = relpath; *q; q++) if (*q == '\n') { *q = 0; break; }
+	*slot = atoi(sl);
+	return (sysid[0] && relpath[0]);
+}
+
+static void susp_clear()
+{
+	char full[1024];
+	snprintf(full, sizeof(full), "%s/%s", getRootDir(), SUSPEND_FILE);
+	unlink(full);
+}
+
+// Does this game have a suspend point waiting?
+static int susp_matches(const chome_item *it)
+{
+	if (!it) return 0;
+
+	const chome_sys *sy = lib_sys(it->sysidx);
+	if (!sy) return 0;
+
+	char sysid[64], relpath[CH_PATH_LEN];
+	int slot = 0;
+	if (!susp_read(sysid, sizeof(sysid), relpath, sizeof(relpath), &slot)) return 0;
+
+	return (!strcmp(sysid, sy->id) && !strcmp(relpath, it->path));
+}
+
+// The core's last slot: a suspend is automatic and frequent, so it stays out of the
+// slots the player picked by hand.
+static int susp_slot()
+{
+	const ss_hooks *h = ss_get();
+	int n = h->found_slot ? h->slot_count : 1;
+	return (n > 0) ? n - 1 : 0;
+}
+
+// Best effort: a core with no savestates just cannot be suspended, and quitting
+// still has to work.
+static int susp_write()
+{
+	if (!ig_have_item || !ss_can_save()) return 0;
+
+	int slot = susp_slot();
+	if (!ss_do_save(slot)) return 0;
+
+	const chome_sys *sy = lib_sys(ig_item.sysidx);
+	if (!sy) return 0;
+
+	char dir[1024];
+	snprintf(dir, sizeof(dir), "%s/classicui", getRootDir());
+	mkdir(dir, 0777);
+
+	char full[1024];
+	snprintf(full, sizeof(full), "%s/%s", getRootDir(), SUSPEND_FILE);
+	FILE *f = fopen(full, "wt");
+	if (!f) return 0;
+
+	fprintf(f, "%s\n%s\n%d\n", sy->id, ig_item.path, slot);
+	fclose(f);
+
+	printf("ClassicUI: suspended %s into slot %d\n", ig_item.title, slot + 1);
+	return 1;
+}
+
+/*
+  Leaving a game for Classic Home. Suspending first where the core allows it, so
+  closing a game is not the same as losing it.
+*/
+static void quit_to_home(int suspend)
+{
+	if (suspend) susp_write();
+
+	ss_pause_release(ig_paused);
+	ig_paused = 0;
+	lib_state_save();
+	ig_active = 0;
+	unlink(CURRENT_FILE);
+	printf("ClassicUI: leaving the game for Classic Home\n");
+	fpga_load_rbf("menu.rbf");
+}
 static int ss_can_load() { return ss_get()->found_load; }
 
 // Remembers what the pause option was, so leaving the menu restores it exactly.
@@ -2146,8 +2407,8 @@ static int ss_pause_engage()
 	if (h->pause_is_option)
 	{
 		ss_pause_prev = user_io_status_get(h->pause_opt, h->pause_ex);
-		if (ss_pause_prev == 1) return 1;              // already paused
-		user_io_status_set(h->pause_opt, 1, h->pause_ex);
+		if (ss_pause_prev == h->pause_on_val) return 1;              // already paused
+		user_io_status_set(h->pause_opt, h->pause_on_val, h->pause_ex);
 	}
 	else
 	{
@@ -2172,10 +2433,45 @@ static void ss_pause_release(int engaged)
 static int ss_do_save(int slot)
 {
 	const ss_hooks *h = ss_get();
-	if (!h->found_save || !ss_select_slot(slot)) return 0;
 
-	printf("ClassicUI: save state -> slot %d\n", slot + 1);
+	// Say which half is missing: a silent no-op here is impossible to tell from a
+	// core that simply has no savestates.
+	if (!h->found_save) { printf("ClassicUI: this core declares no save-state entry\n"); return 0; }
+	if (!ss_select_slot(slot)) { printf("ClassicUI: cannot select slot %d\n", slot + 1); return 0; }
+
+	/*
+	  Two things have to be true for the core to actually write a file.
+
+	  It needs clocks: a paused core never services the save, so pause comes off for
+	  the pulse and goes back on afterwards. And "Savestates to SDCard" has to be On,
+	  or the state stays in memory and no file appears - which looks exactly like
+	  saving being broken.
+	*/
+	uint32_t sd_prev = 0;
+	int sd_forced = 0;
+	if (h->found_sd)
+	{
+		sd_prev = user_io_status_get(h->sd_opt, h->sd_ex);
+		if (sd_prev != h->sd_on_val)
+		{
+			printf("ClassicUI: turning \"savestates to SD card\" on for the save\n");
+			user_io_status_set(h->sd_opt, h->sd_on_val, h->sd_ex);
+			sd_forced = 1;
+		}
+	}
+
+	int was_paused = 0;
+	if (ig_paused && h->found_pause && h->pause_is_option)
+	{
+		was_paused = 1;
+		user_io_status_set(h->pause_opt, ss_pause_prev, h->pause_ex);
+	}
+
+	printf("ClassicUI: save state -> slot %d via %s\n", slot + 1, h->save_opt);
 	ss_pulse(h->save_opt, h->save_ex);
+
+	if (was_paused) user_io_status_set(h->pause_opt, h->pause_on_val, h->pause_ex);
+	if (sd_forced) user_io_status_set(h->sd_opt, sd_prev, h->sd_ex);
 	return 1;
 }
 
@@ -2411,10 +2707,10 @@ static int ig_open()
 		return 0;
 	}
 
-	// Keep osd_is_visible set so keyboard and pad input reach us, with the OSD
-	// overlay itself blanked, exactly as in the menu core.
-	OsdEnable(DISABLE_KEYBOARD);
+	// As in the menu core: input keeps arriving, the overlay is cleared, and
+	// OSD_CMD_ENABLE goes last so OSD_STATUS stays high for the core to pause on.
 	OsdMenuCtl(0);
+	OsdEnable(DISABLE_KEYBOARD);
 
 	ss_hk_valid = 0;              // re-read CONF_STR: it may not have been ready before
 	ig_load_item();
@@ -2470,12 +2766,58 @@ int chome_enabled()
   boot logos and into something representative, short enough that a quick session
   still gets one. Only written when missing, to spare the SD card.
 */
+/*
+  Resume, in the core that has just booted. The ROM has to be in before a state can
+  go back on top of it, so this waits like the reference-frame capture does, then
+  restores and drops the marker - once, whether it worked or not, so a core that
+  cannot restore does not sit here retrying forever.
+*/
+static void resume_poll()
+{
+	static int done = 0;
+	static unsigned long due = 0;
+
+	if (done) return;
+
+	if (!due) { due = GetTimer(RESUME_DELAY_MS); return; }
+	if (!CheckTimer(due)) return;
+	done = 1;
+
+	char sysid[64] = {}, relpath[CH_PATH_LEN] = {};
+	int slot = 0;
+	if (!susp_read(sysid, sizeof(sysid), relpath, sizeof(relpath), &slot)) return;
+
+	// Only for the game this core actually booted.
+	FILE *f = fopen(CURRENT_FILE, "rt");
+	if (!f) return;
+
+	char cur_sys[64] = {}, cur_path[CH_PATH_LEN] = {};
+	int ok = (fgets(cur_sys, sizeof(cur_sys), f) && fgets(cur_path, sizeof(cur_path), f));
+	fclose(f);
+	if (!ok) return;
+
+	for (char *q = cur_sys; *q; q++) if (*q == '\n') { *q = 0; break; }
+	for (char *q = cur_path; *q; q++) if (*q == '\n') { *q = 0; break; }
+	if (strcmp(cur_sys, sysid) || strcmp(cur_path, relpath)) return;
+
+	if (!ss_hk_valid) ss_scan_hooks();
+
+	if (ss_do_load(slot)) printf("ClassicUI: resumed %s from its suspend point\n", relpath);
+	else printf("ClassicUI: could not resume %s\n", relpath);
+
+	susp_clear();
+}
+
 void chome_core_poll()
 {
 	static int done = 0;
 	static unsigned long due = 0;
 
-	if (done || !cfg.classicui || is_menu()) return;
+	if (!cfg.classicui || is_menu()) return;
+
+	resume_poll();
+
+	if (done) return;
 
 	if (!due)
 	{
@@ -2543,6 +2885,7 @@ void chome_leave()
 	active = 0;
 	handed_off = 1;
 	printf("ClassicUI: handing off to the classic menu (OSD button returns)\n");
+	session_save();
 
 	// Give the analog output back: the classic menu is drawn by the core, not into
 	// the framebuffer, so holding the scaler would leave it invisible instead.
@@ -2571,11 +2914,19 @@ static void enter()
 	dirty = 1;
 	last_ms = GetTimer(0);
 
-	// Keep osd_is_visible set so keyboard and gamepad input keeps arriving here
-	// (input.cpp routes pad buttons to the menu only when the OSD is "visible"),
-	// then blank the OSD overlay itself: OsdMenuCtl() does not touch that flag.
-	OsdEnable(DISABLE_KEYBOARD);
+	/*
+	  Keep osd_is_visible set so keyboard and gamepad input keeps arriving here
+	  (input.cpp routes pad buttons to the menu only when the OSD is "visible"), and
+	  clear whatever the classic menu left in the overlay.
+
+	  Order matters: OsdMenuCtl(0) sends OSD_CMD_DISABLE and OsdEnable sends
+	  OSD_CMD_ENABLE, which is what sys_top turns into OSD_STATUS for the core. Doing
+	  it the other way round left OSD_STATUS low, so a core set to pause while the OSD
+	  is open never did. The stale overlay content is not a problem: the framebuffer
+	  replaces core video, so the core's own overlay is not on screen.
+	*/
 	OsdMenuCtl(0);
+	OsdEnable(DISABLE_KEYBOARD);
 
 	// On an analog-only setup the framebuffer reaches no screen until the scaler
 	// output is routed there. Ask before measuring: this resizes the framebuffer to
@@ -2583,7 +2934,15 @@ static void enter()
 	video_menu_fb_analog(1);
 
 	theme_update(video_menu_fb_width(), video_menu_fb_height(), cfg.classicui_profile);
-	view_rebuild(1);          // keep the shelf position across a handoff
+
+	/*
+	  First entry after a boot or a core switch picks the session up where it was
+	  left; later entries are a handoff to the classic menu and back, where the view
+	  is still in memory and only the shelf position needs keeping.
+	*/
+	if (first_entry) { first_entry = 0; session_restore(); }
+	else view_rebuild(1);
+
 	art_init(theme_get()->sel_w, theme_get()->sel_h);
 }
 
@@ -2606,7 +2965,7 @@ static void animate()
 	else selF = sel;
 
 	double bt = (screen == SCR_MENUBAR || screen == SCR_SORT || screen == SCR_DISPLAY ||
-		screen == SCR_OPTIONS || screen == SCR_ABOUT || screen == SCR_LANG) ? 1 : 0;
+		screen == SCR_OPTIONS || screen == SCR_ABOUT) ? 1 : 0;
 	if (bar_y != bt)
 	{
 		bar_y += (bt - bar_y) * (k * 2.5 > 1 ? 1 : k * 2.5);
@@ -2664,8 +3023,20 @@ int chome_handle(uint32_t key)
 	{
 		if (!ig_active)
 		{
-			if (igpress && (igk == KEY_MENU || igk == KEY_F12) && ig_open()) return 1;
-			return 0;                           // core cannot host it: classic OSD
+			if (igpress && (igk == KEY_MENU || igk == KEY_F12))
+			{
+				if (ig_open()) return 1;
+
+				/*
+				  No framebuffer in this core, so there is nowhere to draw the menu.
+				  Put the game away and go back to Classic Home rather than opening the
+				  classic OSD: the front-end is the only menu the player should meet,
+				  and the suspend point means the game is still there afterwards.
+				*/
+				quit_to_home(1);
+				return 1;
+			}
+			return 0;
 		}
 	}
 	else
