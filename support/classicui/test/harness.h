@@ -19,7 +19,10 @@ const char *harness_last_status_opt();
 const char *harness_last_pulse_opt();
 const char *harness_last_rbf();
 int harness_status_pulses();
+int harness_pulses_on(const char *opt);
 uint32_t harness_pause_val();
+uint32_t harness_opt_val(const char *opt);
+void harness_set_opt(const char *opt, uint32_t v);
 void harness_reset_status();
 
 uint32_t *harness_fb_shown();

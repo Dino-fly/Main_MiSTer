@@ -224,18 +224,28 @@ static int in_menu_core = 1;
 void harness_set_menu_core(int v) { in_menu_core = v; }
 char is_menu() { return (char)in_menu_core; }
 
-// CONF_STR of a core with the framework's savestate entries, so the pause menu
-// can find the same status bits the OSD pulses.
+/*
+  CONF_STR taken verbatim from the real Gameboy core on the hardware, because the
+  idealised version this used to hold was why the harness passed while savestates
+  and pause failed on the device. The awkward parts are all real: an "h3" hide
+  prefix on the momentary entries, a "P3" *page* prefix on the pause option, the
+  pause option being the OSD-watching preference rather than a command, the slot
+  option living in the extended status word ("o01"), and a "Savestates to SDCard"
+  option whose first value - the default - is On.
+*/
 static const char *fake_confstr[] =
 {
-	"SNES;;",
-	"-;",
-	"F1,SFCSMCBIN,Load;",
-	"O[36:35],Savestate Slot,1,2,3,4;",
-	"O[40],Pause,Off,On;",
-	"rA,Save state (Alt-F1);",
-	"rB,Restore state (F1);",
-	"R[0],Reset;",
+	"GAMEBOY",
+	"FS1,GBCGB BIN,Load ROM",
+	"OEF,System,Auto,Gameboy,Gameboy Color,MegaDuck",
+	"-",
+	"OV,Savestates to SDCard,On,Off",
+	"o01,Savestate Slot,1,2,3,4",
+	"h3RS,Save state (Alt-F1)",
+	"h3RT,Restore state (F1)",
+	"-",
+	"P3OQ,Pause when OSD is open,Off,On",
+	"R0,Reset",
 	0
 };
 static int confstr_on = 1;
@@ -262,11 +272,58 @@ int substrcpy(char *d, const char *s, char idx)
 	return i;
 }
 
-static uint32_t opt_pause_val = 0;
-uint32_t harness_pause_val() { return opt_pause_val; }
+/*
+  Options round-trip through a little map rather than one hardcoded name, so a test
+  can watch any of them. This used to key on "[40]" from an invented CONF_STR; the
+  real core's pause option is "Q" behind a P3 page prefix, and its savestate-to-card
+  option is "V", so hardcoding one name hid both.
+*/
+#define OPTMAP_MAX 16
+static struct { char opt[32]; uint32_t val; } optmap[OPTMAP_MAX];
+static int noptmap = 0;
+
+static uint32_t *opt_slot(const char *opt)
+{
+	if (!opt || !opt[0]) return 0;
+	for (int i = 0; i < noptmap; i++) if (!strcmp(optmap[i].opt, opt)) return &optmap[i].val;
+	if (noptmap >= OPTMAP_MAX) return 0;
+	snprintf(optmap[noptmap].opt, sizeof(optmap[noptmap].opt), "%s", opt);
+	optmap[noptmap].val = 0;
+	return &optmap[noptmap++].val;
+}
+
+// The pause option of the modelled core (P3OQ).
+uint32_t harness_pause_val() { uint32_t *v = opt_slot("Q"); return v ? *v : 0; }
+uint32_t harness_opt_val(const char *opt) { uint32_t *v = opt_slot(opt); return v ? *v : 0; }
+void harness_set_opt(const char *opt, uint32_t v) { uint32_t *p = opt_slot(opt); if (p) *p = v; }
 
 static char last_pulse_opt[64] = {};
 const char *harness_last_pulse_opt() { return last_pulse_opt; }
+
+/*
+  Pulses counted per option. "the last thing pulsed" is not enough now that saving
+  legitimately touches several options around the save itself - it takes pause off,
+  pulses save, puts pause back - so the last write is not the interesting one.
+*/
+static struct { char opt[32]; int n; } pulses[OPTMAP_MAX];
+static int npulses = 0;
+
+int harness_pulses_on(const char *opt)
+{
+	for (int i = 0; i < npulses; i++) if (!strcmp(pulses[i].opt, opt)) return pulses[i].n;
+	return 0;
+}
+
+static void note_pulse(const char *opt)
+{
+	for (int i = 0; i < npulses; i++)
+	{
+		if (!strcmp(pulses[i].opt, opt)) { pulses[i].n++; return; }
+	}
+	if (npulses >= OPTMAP_MAX) return;
+	snprintf(pulses[npulses].opt, sizeof(pulses[npulses].opt), "%s", opt);
+	pulses[npulses++].n = 1;
+}
 
 static char last_status_opt[64] = {};
 static uint32_t last_status_val = 0;
@@ -274,17 +331,19 @@ static int status_pulses = 0;
 
 const char *harness_last_status_opt() { return last_status_opt; }
 int harness_status_pulses() { return status_pulses; }
-void harness_reset_status() { last_status_opt[0] = 0; last_pulse_opt[0] = 0; status_pulses = 0; }
+void harness_reset_status() { last_status_opt[0] = 0; last_pulse_opt[0] = 0; status_pulses = 0; npulses = 0; }
 
 void user_io_status_set(const char *opt, uint32_t value, int)
 {
 	snprintf(last_status_opt, sizeof(last_status_opt), "%s", opt ? opt : "");
 	last_status_val = value;
-	if (opt && !strcmp(opt, "[40]")) opt_pause_val = value;
+	uint32_t *slot = opt_slot(opt);
+	if (slot) *slot = value;
 	if (value)
 	{
 		status_pulses++;
 		snprintf(last_pulse_opt, sizeof(last_pulse_opt), "%s", opt ? opt : "");
+		if (opt) note_pulse(opt);
 	}
 	printf("  [stub] user_io_status_set(\"%s\", %u)\n", last_status_opt, value);
 }
@@ -340,8 +399,8 @@ int fpga_load_rbf(const char *name, const char *, const char *)
 }
 uint32_t user_io_status_get(const char *opt, int)
 {
-	if (opt && !strcmp(opt, "[40]")) return opt_pause_val;
-	return 0;
+	uint32_t *slot = opt_slot(opt);
+	return slot ? *slot : 0;
 }
 int user_io_status_bits(const char *, int *st, int *, int, int) { if (st) *st = 1; return 1; }
 uint32_t user_io_status_mask(const char *) { return 3; }

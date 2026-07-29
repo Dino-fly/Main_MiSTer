@@ -1216,7 +1216,8 @@ int lib_view_build(int v, int sysidx, int sort)
 			if (systems[i].computer) continue;
 			int count = 0;
 			for (int j = 0; j < nitems; j++) if (items[j].sysidx == i) count++;
-			if (count) push_folder(systems[i].name, VIEW_SYS, i, "stack", ENT_FOLDER);
+			// The id doubles as the icon key, so each system can have its own.
+			if (count) push_folder(systems[i].name, VIEW_SYS, i, systems[i].id, ENT_FOLDER);
 		}
 		nfolders = nview;
 		break;
@@ -1225,7 +1226,7 @@ int lib_view_build(int v, int sysidx, int sort)
 		for (int i = 0; i < nsys; i++)
 		{
 			if (!systems[i].computer) continue;
-			push_folder(systems[i].name, VIEW_SYS, i, "disk", ENT_BROWSE);
+			push_folder(systems[i].name, VIEW_SYS, i, systems[i].id, ENT_BROWSE);
 		}
 		nfolders = nview;
 		break;

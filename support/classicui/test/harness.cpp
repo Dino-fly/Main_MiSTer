@@ -441,17 +441,24 @@ static void walk_profile(const char *tag, int profile, int w, int h)
 	press(KEY_ESC, 10);
 
 	press(KEY_RIGHT, 8);
-	press(KEY_ENTER, 20);              // Language
-	snprintf(name, sizeof(name), "%s-9-language", tag);
+	press(KEY_ENTER, 20);              // About - Language and Manuals are gone
+	snprintf(name, sizeof(name), "%s-9-about", tag);
 	dump(name);
+	press(KEY_ESC, 10);
 	press(KEY_ESC, 10);
 
-	press(KEY_RIGHT, 8);
-	press(KEY_ENTER, 20);              // About
-	snprintf(name, sizeof(name), "%s-10-about", tag);
+	/*
+	  The Systems view, which is where the per-system icons appear. Back all the way
+	  out first and then walk from the left edge: the steps above leave the shelf on a
+	  game, and a stray Enter there launches it instead.
+	*/
+	for (int i = 0; i < 4; i++) press(KEY_ESC, 8);
+	for (int i = 0; i < 6; i++) press(KEY_LEFT, 6);     // to Favourites, the first card
+	press(KEY_RIGHT, 10);                               // Systems
+	press(KEY_ENTER, 24);
+	snprintf(name, sizeof(name), "%s-10-systems", tag);
 	dump(name);
-	press(KEY_ESC, 10);
-	press(KEY_ESC, 10);
+	press(KEY_ESC, 12);
 }
 
 /* ------------------------------------------------------------ assertions -- */
@@ -1096,16 +1103,40 @@ static void assert_ingame()
 	press(KEY_BACKSPACE, 10);                 // Y saves into the slot
 	printf("  after save: pulsed=%s\n", harness_last_pulse_opt());
 	// Specifically the save bit, not just any bit: the pause option also moves here.
-	check(!strcmp(harness_last_pulse_opt(), "A"), "saving pulses the core's save bit");
+	check(harness_pulses_on("S") == 1, "saving pulses the core's save bit");
 	check(!chome_ingame_active(), "saving resumes so the core can run those frames");
 	check(harness_pause_val() == 0, "and the pause is released");
+
+	/*
+	  The core this models pauses only on its "Pause when OSD is open" option, behind
+	  a P3 page prefix. Both of those defeated the scanner before, so assert the
+	  option itself moved rather than just that something was pulsed.
+	*/
+	/*
+	  "Savestates to SDCard" set to Off means the core keeps the state in memory and
+	  writes no file - indistinguishable, from the outside, from saving being broken.
+	  Saving has to turn it on for the write and hand it back afterwards.
+	*/
+	harness_set_opt("V", 1);                  // 1 = Off in this core's value order
+	harness_reset_status();
+	press(KEY_MENU, 20);
+	press(KEY_DOWN, 20);
+	press(KEY_BACKSPACE, 12);
+	check(harness_pulses_on("S") == 1, "saving still reaches the save bit with SD off");
+	check(harness_opt_val("V") == 1, "and puts the SD-card option back where it was");
+
+	harness_set_opt("V", 0);
+	press(KEY_MENU, 20);
+	check(harness_pause_val() == 1, "opening the menu drives the core's pause option on");
+	press(KEY_ESC, 14);
+	check(harness_pause_val() == 0, "and closing it puts the option back");
 
 	press(KEY_MENU, 20);
 	press(KEY_DOWN, 18);
 	harness_reset_status();
 	press(KEY_ENTER, 12);                     // A loads the slot
 	printf("  after load: pulsed=%s\n", harness_last_pulse_opt());
-	check(!strcmp(harness_last_pulse_opt(), "B"), "loading pulses the core's restore bit");
+	check(harness_pulses_on("T") == 1, "loading pulses the core's restore bit");
 	check(!chome_ingame_active(), "loading drops straight back into the game");
 
 	// Browsing works: the menu bar and its panels are all here.
@@ -1137,9 +1168,39 @@ static void assert_ingame()
 	printf("  loaded rbf: %s\n", harness_last_rbf());
 	check(strstr(harness_last_rbf(), "menu.rbf") != 0, "second press returns to the menu core");
 
-	// A core with no framebuffer declines.
+	/*
+	  Quitting a game must not lose the shelf. The restore half needs a fresh process,
+	  so what is checked here is that the session was written and holds the view that
+	  was on screen - the reading side is exercised on hardware.
+	*/
+	{
+		FILE *f = fopen(ROOT "/config/classicui_session.cfg", "rb");
+		check(f != 0, "the session is written when a game is launched");
+		if (f)
+		{
+			uint32_t magic = 0;
+			int fields[3] = {};
+			size_t got = fread(&magic, sizeof(magic), 1, f);
+			got += fread(fields, sizeof(fields), 1, f);
+			fclose(f);
+			check(got == 2 && magic == 0x53484348u, "and it is a session record");
+			printf("  session: view=%d sys=%d sort=%d\n", fields[0], fields[1], fields[2]);
+		}
+	}
+
+	/*
+	  A core with no framebuffer has nowhere to draw the menu. It used to hand the
+	  screen to the classic OSD, which is the one thing the front-end should never do
+	  on its own; now it puts the game away and goes back to Classic Home, taking a
+	  suspend point on the way so the session is not lost.
+	*/
 	harness_set_fb_supported(0);
-	check(!chome_handle(KEY_MENU), "a core without a framebuffer leaves the OSD alone");
+	harness_reset_status();
+	harness_clear_launch();
+	check(chome_handle(KEY_MENU) == 1, "a core without a framebuffer does not fall back to the OSD");
+	printf("  loaded rbf: %s  save pulses: %d\n", harness_last_rbf(), harness_pulses_on("S"));
+	check(strstr(harness_last_rbf(), "menu.rbf") != 0, "it returns to Classic Home instead");
+	check(harness_pulses_on("S") == 1, "and suspends the game on the way out");
 	check(!chome_ingame_active(), "and the menu does not open");
 	harness_set_fb_supported(1);
 
