@@ -198,16 +198,20 @@ static void session_save()
 	FileSaveConfig(SESSION_FILE, &r, sizeof(r));
 }
 
-// Rebuilds the view as it was; the caller has already made sure the index exists.
-static void session_restore()
+/*
+  Rebuilds the view as it was. Returns 0 when there is nothing usable saved - the
+  first boot, or a stale record - and the caller then has to build a view itself:
+  leaving without doing either is how the shelf came up empty with a full index.
+*/
+static int session_restore()
 {
 	session_rec r;
 	memset(&r, 0, sizeof(r));
 
-	if (FileLoadConfig(SESSION_FILE, &r, sizeof(r)) != (int)sizeof(r)) return;
-	if (r.magic != SESSION_MAGIC) return;
-	if (r.view < 0 || r.view > VIEW_RECENT) return;
-	if (r.viewsys >= lib_sys_count()) return;
+	if (FileLoadConfig(SESSION_FILE, &r, sizeof(r)) != (int)sizeof(r)) return 0;
+	if (r.magic != SESSION_MAGIC) return 0;
+	if (r.view < 0 || r.view > VIEW_RECENT) return 0;
+	if (r.viewsys >= lib_sys_count()) return 0;
 
 	view = r.view;
 	viewsys = r.viewsys;
@@ -234,6 +238,7 @@ static void session_restore()
 
 	selF = sel;
 	printf("ClassicUI: back where you were - view %d, entry %d of %d\n", view, sel + 1, n);
+	return 1;
 }
 
 static int mb_idx = 0;
@@ -2940,7 +2945,11 @@ static void enter()
 	  left; later entries are a handoff to the classic menu and back, where the view
 	  is still in memory and only the shelf position needs keeping.
 	*/
-	if (first_entry) { first_entry = 0; session_restore(); }
+	if (first_entry)
+	{
+		first_entry = 0;
+		if (!session_restore()) view_rebuild(0);
+	}
 	else view_rebuild(1);
 
 	art_init(theme_get()->sel_w, theme_get()->sel_h);
