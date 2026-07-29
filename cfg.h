@@ -118,6 +118,7 @@ typedef struct {
 	uint8_t classicui;
 	uint8_t classicui_artfetch;
 	uint8_t classicui_profile;
+	uint8_t classicui_overscan;
 	char classicui_artdir[256];
 	char classicui_arturl[512];
 } cfg_t;

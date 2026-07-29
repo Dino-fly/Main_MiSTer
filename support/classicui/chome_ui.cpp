@@ -971,7 +971,10 @@ static void draw_menubar(const chome_profile *p, int focused)
 	if (bar_y <= 0.002) return;
 
 	int h = p->bar_h;
-	int y = (int)(-h + h * bar_y);
+
+	// Slides in to the safe margin, not to the edge: on a CRT the top few percent
+	// of the picture is behind the bezel, and the bar was landing in it.
+	int y = (int)(-h + h * bar_y) + p->safe_y;
 	gfx_fill(0, y, p->w, h, COL_PANEL);
 	gfx_fill(0, y + h - 2, p->w, 2, COL_PANELLO);
 
@@ -1096,9 +1099,12 @@ static void draw_suspend(const chome_profile *p)
 
 	chome_item *it = cur_game();
 	int ph = p->strip_h;
-	int y = p->h - (int)(ph * strip_y);
 
-	gfx_fill(0, y, p->w, ph, COL_BGDARK);
+	// Comes to rest above the overscan margin, and its panel is extended down into
+	// it so the bottom of the screen stays filled rather than showing a seam.
+	int y = p->h - p->safe_y - (int)(ph * strip_y);
+
+	gfx_fill(0, y, p->w, ph + p->safe_y, COL_BGDARK);
 	gfx_fill(0, y, p->w, 2, COL_PANELLO);
 
 	int s = p->ts_ui;
@@ -1443,17 +1449,21 @@ static void draw_browse(const chome_profile *p)
 	const chome_sys *s = lib_sys(browse_sys);
 
 	gfx_fill(0, 0, p->w, p->h, COL_BG);
-	gfx_fill(0, 0, p->w, p->bar_h, COL_PANEL);
-	gfx_fill(0, p->bar_h - 2, p->w, 2, COL_PANELLO);
+
+	// Header sits below the overscan margin; the panel behind it still runs to the
+	// edge, so the margin reads as part of the header rather than as a gap.
+	int hy = p->safe_y;
+	gfx_fill(0, 0, p->w, hy + p->bar_h, COL_PANEL);
+	gfx_fill(0, hy + p->bar_h - 2, p->w, 2, COL_PANELLO);
 
 	int s2 = p->ts_ui;
 	char hdr[160];
 	snprintf(hdr, sizeof(hdr), "%s  %s", s ? s->name : "", browse_rel);
 	for (char *q = hdr; *q; q++) *q = (char)toupper((unsigned char)*q);
-	gfx_text(gfx_clip(hdr, s2, p->w - p->inset * 2), p->inset, (p->bar_h - 8 * s2) / 2, s2, COL_INK, 0);
+	gfx_text(gfx_clip(hdr, s2, p->w - p->inset * 2), p->inset, hy + (p->bar_h - 8 * s2) / 2, s2, COL_INK, 0);
 
 	int rowh = 12 * s2;
-	int top = p->bar_h + 8;
+	int top = hy + p->bar_h + 8;
 	int avail = p->y_legend - 8 * s2 - top;
 	int rows = avail / rowh;
 	if (rows < 1) rows = 1;

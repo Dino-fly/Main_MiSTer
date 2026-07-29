@@ -27,6 +27,15 @@ struct chome_profile
 	int w, h;
 	int inset;
 
+	/*
+	  Overscan margin. A TV does not show the whole picture - a few percent of every
+	  edge sits behind the bezel - so anything anchored to an edge stops here rather
+	  than at the edge itself: the menu bar sliding down from the top, the legend and
+	  the save-state strip at the bottom. Zero on HD, where the signal is assumed to
+	  reach an HDMI display 1:1. From cfg.classicui_overscan.
+	*/
+	int safe_x, safe_y;
+
 	int card_w, card_h;
 	int sel_w, sel_h;
 	int pitch;

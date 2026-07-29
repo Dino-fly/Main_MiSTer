@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include "chome_theme.h"
+#include "../../cfg.h"
 
 static chome_profile P;
 
@@ -46,7 +47,22 @@ void theme_update(int w, int h, int force)
 	else if (w >= 480) { P.ts_title = 2; P.ts_ui = 1; P.ts_tiny = 1; }
 	else               { P.ts_title = 1; P.ts_ui = 1; P.ts_tiny = 1; }
 
+	/*
+	  Overscan. An analog canvas means a TV, and a TV keeps a few percent of every
+	  edge behind its bezel - which is why the menu bar, sliding down to y=0, was
+	  landing mostly off-screen on a CRT. HD is left alone: that canvas only arises
+	  on an HDMI display, which shows the signal 1:1.
+
+	  Horizontally this folds into inset, which every screen already indents by. The
+	  vertical margin is applied by the elements anchored to an edge.
+	*/
+	int over = (id == PROF_HD) ? 0 : cfg.classicui_overscan;
+	if (over > 15) over = 15;
+	P.safe_x = pct(w, over / 100.0);
+	P.safe_y = pct(h, over / 100.0);
+
 	P.inset = pct(w, 0.025);
+	if (P.inset < P.safe_x) P.inset = P.safe_x;
 
 	/*
 	  Card width as a fraction of the canvas, from the reviewed mockup metrics:
@@ -74,7 +90,7 @@ void theme_update(int w, int h, int force)
 	P.y_shelf  = pct(h, 0.722);
 	P.y_pips   = pct(h, 0.753);
 	P.y_pos    = pct(h, 0.808);
-	P.y_legend = h - P.inset - 8 * P.ts_ui;
+	P.y_legend = h - (P.inset > P.safe_y ? P.inset : P.safe_y) - 8 * P.ts_ui;
 
 	// Keep the shelf clear of the title block on short canvases.
 	int need = P.y_meta + 12 * P.ts_ui + P.sel_h;
