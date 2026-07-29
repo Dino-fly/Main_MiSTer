@@ -3371,6 +3371,7 @@ static void tv_fb_mode(vmode_custom_t *v)
   before video_set_mode().
 */
 static int menu_fb_analog_req = 0;
+static int takeover_sized_for = -1;     // which buffer the framebuffer size was chosen for
 
 static void vga_fb_takeover_update()
 {
@@ -3381,6 +3382,7 @@ static void vga_fb_takeover_update()
 	if (want && !vga_fb_takeover)
 	{
 		vga_fb_takeover = 1;
+		takeover_sized_for = !!fb_num;
 		v_takeover_saved = v_cur;
 		vmode_custom_t v;
 		tv_fb_mode(&v);
@@ -3390,8 +3392,16 @@ static void vga_fb_takeover_update()
 	else if (!want && vga_fb_takeover)
 	{
 		vga_fb_takeover = 0;
+		takeover_sized_for = -1;
 		set_vga_fb(0);
 		video_set_mode(&v_takeover_saved, 0);
+	}
+	else if (want && vga_fb_takeover && takeover_sized_for != !!fb_num)
+	{
+		// The takeover changed hands without a mode change, and the two owners want
+		// different framebuffer widths (see video_fb_config).
+		takeover_sized_for = !!fb_num;
+		video_fb_config();
 	}
 }
 
@@ -3615,6 +3625,19 @@ static void video_fb_config()
 
 	fb_width = v_cur.item[1] / fb_scale_x;
 	fb_height = v_cur.item[5] / fb_scale_y;
+
+	/*
+	  A 15 kHz TV mode has pixels twice as tall as they are wide - 640x240 on a 4:3
+	  screen - and the scaler stretches the framebuffer across the mode's active
+	  area regardless of its width. So a front-end drawing into the menu buffers is
+	  handed half the width: a square-pixel 320x240 canvas, the shape its 240p
+	  layout is drawn for, instead of a 640x240 one where every cover comes out
+	  portrait and the text is stretched vertically.
+
+	  The Linux console on buffer 0 keeps the full width: it sizes its own character
+	  cells and is already right at 640.
+	*/
+	if (vga_fb_takeover && fb_num && !cfg.forced_scandoubler) fb_width /= 2;
 
 	brd_x = cfg.vscale_border / fb_scale_x;
 	brd_y = cfg.vscale_border / fb_scale_y;
