@@ -477,7 +477,32 @@ static int fetch_start(int item)
 
 	if (!pid)
 	{
-		// Child: quiet, fail on HTTP errors, follow redirects, hard timeout.
+		/*
+		  Child: quiet, fail on HTTP errors, follow redirects, hard timeout.
+
+		  The CA bundle is named explicitly. This rootfs carries a curl built for a
+		  default bundle path that does not exist on it, so every https fetch dies
+		  with "unable to get local issuer certificate" while a perfectly good trust
+		  store sits next to it unused. Pass whichever bundle is really there; if
+		  none is, let curl fall back to its own default rather than give up
+		  verification, since an unverified download is not worth a cover picture.
+		*/
+		static const char *const ca[] =
+		{
+			"/etc/ssl/cert.pem",
+			"/etc/ssl/certs/cacert.pem",
+			"/etc/ssl/certs/ca-certificates.crt",
+		};
+
+		const char *bundle = 0;
+		for (size_t i = 0; !bundle && i < sizeof(ca) / sizeof(ca[0]); i++)
+		{
+			if (file_exists_abs(ca[i])) bundle = ca[i];
+		}
+
+		if (bundle) execlp("curl", "curl", "-sfL", "-m", "20", "--retry", "0",
+			"--cacert", bundle, "-o", fetch_tmp, url, (char*)NULL);
+
 		execlp("curl", "curl", "-sfL", "-m", "20", "--retry", "0",
 			"-o", fetch_tmp, url, (char*)NULL);
 		_exit(127);
