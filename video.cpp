@@ -3373,11 +3373,40 @@ static void tv_fb_mode(vmode_custom_t *v)
 static int menu_fb_analog_req = 0;
 static int takeover_sized_for = -1;     // which buffer the framebuffer size was chosen for
 
+/*
+  HPD comes over i2c and this is consulted from a per-frame path, so cache it. A
+  display being plugged in does not need noticing within one frame. Unknown counts
+  as present: the cautious answer is to leave the output alone.
+*/
+static int hdmi_present()
+{
+	static int val = -1;
+	static unsigned long next = 0;
+
+	if (val < 0 || CheckTimer(next))
+	{
+		val = video_hdmi_connected() != 0;
+		next = GetTimer(1000);
+	}
+	return val;
+}
+
 static void vga_fb_takeover_update()
 {
 	if (cfg.direct_video || cfg.vga_scaler) return;
 
-	int want = fb_enabled && ((cfg.fb_terminal_vga && !fb_num) || (menu_fb_analog_req && fb_num));
+	int want_term = cfg.fb_terminal_vga && !fb_num;
+
+	/*
+	  The front-end only needs the analog output when nothing else is showing the
+	  framebuffer. With an HDMI sink attached the scaler output is already on screen
+	  there, and taking the analog port would drag HDMI down to a 240p TV mode with
+	  it - HDMI plus a CRT on vga_scaler=0 is an ordinary setup, and it must not
+	  lose its picture because a front-end wanted the other output.
+	*/
+	int want_ui = menu_fb_analog_req && fb_num && !hdmi_present();
+
+	int want = fb_enabled && (want_term || want_ui);
 
 	if (want && !vga_fb_takeover)
 	{
