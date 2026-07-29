@@ -24,6 +24,7 @@
 #include "../chome_gfx.h"
 #include "../chome_video.h"
 #include "../../../lib/imlib2/Imlib2.h"
+#include "../../../lib/miniz/miniz.h"
 
 #include "harness.h"
 
@@ -94,6 +95,34 @@ static void make_cover(const char *path, int w, int h, uint32_t col)
 	imlib_free_image();
 }
 
+/*
+  A real archive, since the point is to exercise the zip reader rather than a
+  stand-in for it. `inner` may name several members, comma separated.
+*/
+static void make_zip(const char *dir, const char *name, const char *inner, int bytes)
+{
+	char path[1024];
+	snprintf(path, sizeof(path), "%s/%s", dir, name);
+
+	mz_zip_archive z;
+	memset(&z, 0, sizeof(z));
+	if (!mz_zip_writer_init_file(&z, path, 0)) { printf("  cannot write %s\n", path); return; }
+
+	char *buf = (char*)malloc(bytes);
+	for (int i = 0; i < bytes; i++) buf[i] = (char)(i & 0xff);
+
+	char list[512];
+	snprintf(list, sizeof(list), "%s", inner);
+	for (char *tok = strtok(list, ","); tok; tok = strtok(NULL, ","))
+	{
+		mz_zip_writer_add_mem(&z, tok, buf, bytes, MZ_BEST_SPEED);
+	}
+
+	mz_zip_writer_finalize_archive(&z);
+	mz_zip_writer_end(&z);
+	free(buf);
+}
+
 static void build_sd()
 {
 	printf("Building fake SD at %s\n", ROOT);
@@ -113,6 +142,11 @@ static void build_sd()
 
 	mkpath(ROOT "/games/SNES/Hacks");                            // recursion
 	touch(ROOT "/games/SNES/Hacks", "Super Demo World.smc", 2048);
+
+	// Zipped ROMs, which is how most cards actually store them.
+	make_zip(ROOT "/games/SNES", "Secret of Mana (USA).zip", "Secret of Mana (USA).sfc", 4096);
+	make_zip(ROOT "/games/SNES", "Capcom Collection.zip", "Final Fight.sfc,Mega Man X.sfc", 2048);
+	make_zip(ROOT "/games/SNES", "Manual Scans.zip", "readme.txt", 512);
 
 	mkpath(ROOT "/games/Genesis");
 	touch(ROOT "/games/Genesis", "Sonic The Hedgehog 2 (Europe).md", 4096);
@@ -143,6 +177,20 @@ static void build_sd()
 	mkpath(ROOT "/_Arcade");
 	touch(ROOT "/_Arcade", "Street Fighter II.mra", 512);
 	touch(ROOT "/_Arcade", "Bubble Bobble.mra", 512);
+
+	// Alternate ROM revisions live here in every arcade pack; they must not reach
+	// the shelf, or each game shows up several times over.
+	mkpath(ROOT "/_Arcade/_alternatives");
+	touch(ROOT "/_Arcade/_alternatives", "Street Fighter II (alt rev).mra", 512);
+
+	// Neo Geo romsets: named for the board, titled from romsets.xml, and the BIOS
+	// set is marked hidden so it must not be listed as a game.
+	mkpath(ROOT "/games/NEOGEO");
+	make_zip(ROOT "/games/NEOGEO", "mslug.zip", "202-c1.c1", 2048);
+	make_zip(ROOT "/games/NEOGEO", "kof98.zip", "242-c1.c1", 2048);
+	make_zip(ROOT "/games/NEOGEO", "unknownset.zip", "999-c1.c1", 2048);
+	make_zip(ROOT "/games/NEOGEO", "neogeo.zip", "sfix.sfix", 1024);
+	touch(ROOT "/games/NEOGEO", "sfix.sfix", 1024);          // system file, not a game
 
 	// A computer system: should not appear on the shelf, only under Computers.
 	mkpath(ROOT "/games/Amiga");
@@ -421,6 +469,59 @@ static void assert_index()
 	check(has_recursed, "subdirectories scanned (SNES/Hacks)");
 	check(has_mra, "arcade .mra files indexed");
 	check(has_amiga, "computer systems indexed");
+
+	/*
+	  Zipped ROMs. Nothing is unpacked: the item points at "Archive.zip/Rom.sfc",
+	  which the firmware's file layer reads through the archive, and the title comes
+	  from the archive because that is the part named to convention.
+	*/
+	int zip_single = 0, zip_path_ok = 0, zip_multi = 0, zip_junk = 0;
+	for (int i = 0; i < lib_item_count(); i++)
+	{
+		chome_item *it = lib_item(i);
+		if (!strcmp(it->title, "Secret of Mana"))
+		{
+			zip_single = 1;
+			if (!strcmp(it->path, "Secret of Mana (USA).zip/Secret of Mana (USA).sfc")) zip_path_ok = 1;
+		}
+		if (!strcmp(it->title, "Final Fight") || !strcmp(it->title, "Mega Man X")) zip_multi++;
+		if (strcasestr(it->path, "Manual Scans")) zip_junk = 1;
+	}
+
+	check(zip_single, "a zipped ROM is indexed under the archive's name");
+	check(zip_path_ok, "and points inside the archive, unpacking nothing");
+	check(zip_multi == 2, "a multi-ROM archive lists each ROM by its own name");
+	check(!zip_junk, "an archive with nothing playable in it is skipped");
+
+	/*
+	  Neo Geo. A romset archive is the game and is loaded whole, so it must not be
+	  opened up the way a zipped ROM is, and its title comes from romsets.xml.
+	*/
+	int neo_titled = 0, neo_whole = 0, neo_unknown = 0, neo_hidden = 0, neo_sysfile = 0, alts = 0;
+	for (int i = 0; i < lib_item_count(); i++)
+	{
+		chome_item *it = lib_item(i);
+		const chome_sys *s = lib_sys(it->sysidx);
+		int is_neo = s && !strcmp(s->id, "neogeo");
+
+		if (is_neo && !strcmp(it->title, "Metal Slug"))
+		{
+			neo_titled = 1;
+			if (!strcmp(it->path, "mslug.zip")) neo_whole = 1;
+		}
+		if (is_neo && !strcmp(it->title, "unknownset")) neo_unknown = 1;
+		if (is_neo && strcasestr(it->path, "neogeo.zip")) neo_hidden = 1;
+		if (is_neo && strcasestr(it->path, "sfix")) neo_sysfile = 1;
+		if (strcasestr(it->path, "_alternatives")) alts = 1;
+	}
+
+	check(harness_neogeo_scanned() > 0, "romsets.xml is read before the folder is walked");
+	check(neo_titled, "a romset is titled from romsets.xml (mslug -> \"Metal Slug\")");
+	check(neo_whole, "and points at the archive itself, not into it");
+	check(neo_unknown, "an unlisted romset still appears, under its board name");
+	check(!neo_hidden, "a romset marked hidden is left out");
+	check(!neo_sysfile, "BIOS and system files are not listed as games");
+	check(!alts, "arcade _alternatives are skipped");
 }
 
 static void assert_views()

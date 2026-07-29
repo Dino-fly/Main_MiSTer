@@ -37,6 +37,12 @@ struct chome_sys
 	int  delay;          // MGL delay in seconds
 	int  computer;       // 1: lives under Computers and uses the file browser
 	int  mra;            // 1: launch .mra files directly (arcade)
+	/*
+	  1: the games are romsets, not ROM files - a Neo Geo archive is loaded whole and
+	  is named for the board (mslug.zip), so titles come from romsets.xml through the
+	  firmware's own lookup rather than from the filename.
+	*/
+	int  romset;
 	int  vclass;         // VC_* in chome_video.h: picks the default video look
 	uint32_t tint;       // fallback-card plate colour
 };
