@@ -1816,7 +1816,7 @@ static void accept()
 		switch (opt_row)
 		{
 		case 0: cfg.classicui_artfetch = cfg.classicui_artfetch ? 0 : 1; mark_dirty(); break;
-		case 1: lib_init(); art_shutdown(); art_init(theme_get()->sel_w, theme_get()->sel_h); view_rebuild(0); break;
+		case 1: lib_rescan(); art_shutdown(); art_init(theme_get()->sel_w, theme_get()->sel_h); view_rebuild(0); break;
 		case 2: vp_install(); mark_dirty(); break;
 		case 3: nudge(); break;                       // Layout changes with left/right
 		case 4:

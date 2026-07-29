@@ -93,8 +93,19 @@ const char *lib_sort_name(int sort);
 // index, no scanning. The in-game pause menu only needs this much.
 void lib_load_systems();
 
-// Everything above plus the index allocation, and starts the background scan.
+/*
+  Everything above plus the index. Loads the cached index when it is still valid
+  and skips scanning entirely; otherwise starts the background scan and writes the
+  cache when it finishes. The cache is what makes opening the menu inside a game
+  instant instead of costing a rescan on every core switch.
+*/
 void lib_init();
+
+// Forces a fresh scan, ignoring any cache. Options > Rescan Library.
+void lib_rescan();
+
+// 1 when this session's index came from the cache rather than a scan.
+int  lib_index_cached();
 
 // Advances the background scan by one slice. Returns 1 while still scanning.
 int  lib_scan_step();
