@@ -728,6 +728,134 @@ int lib_scan_step()
 int lib_scanning() { return scanning; }
 int lib_scan_progress() { return nitems; }
 
+/* ----------------------------------------------- installation naming ------ */
+
+/*
+  One machine, several names. The downloader's names.txt renames cores and their
+  game folders to regional titles, so a European card carries _Console/MegaDrive
+  and games/MegaDrive where the table above says Genesis - and the core lookup is
+  a prefix match, so the mismatch is not a near miss, it is a system that quietly
+  vanishes from the UI.
+
+  Each row lists names that mean the same machine. The table's own name is tried
+  first; if it is not on this card, the remaining ones are, and the core file and
+  the games folder are resolved independently since a card can rename either.
+*/
+#define ALIAS_MAX 4
+static const char *const name_alias[][ALIAS_MAX] =
+{
+	{ "Genesis",       "MegaDrive",       "Mega Drive",    0            },
+	{ "TurboGrafx16",  "TGFX16",          "PCEngine",      "PC Engine"  },
+	{ "NeoGeo-Pocket", "NeoGeoPocket",    "NGP",           0            },
+	{ "Atari7800",     "A7800",           0,               0            },
+	{ "ZX-Spectrum",   "Spectrum",        "ZXSpectrum",    0            },
+	{ "MSX",           "MSX1",            0,               0            },
+	{ "SMS",           "MasterSystem",    "Master System", 0            },
+	{ "AtariLynx",     "Lynx",            0,               0            },
+	{ "Minimig",       "Minimig-AGA",     "Amiga",         0            },
+};
+
+// Does <root>/<dir> hold a core for this base name? Same rule the MGL loader
+// uses: the base, then '.' or '_' (the datecode), then ".rbf".
+static int rbf_present(const char *dir, const char *base)
+{
+	char path[1200];
+	snprintf(path, sizeof(path), "%s/%s", getRootDir(), dir);
+
+	DIR *d = opendir(path);
+	if (!d) return 0;
+
+	size_t bl = strlen(base);
+	int found = 0;
+	struct dirent *e;
+	while (!found && (e = readdir(d)) != NULL)
+	{
+		size_t l = strlen(e->d_name);
+		if (l < bl + 4) continue;
+		if (strcasecmp(e->d_name + l - 4, ".rbf")) continue;
+		if (strncasecmp(e->d_name, base, bl)) continue;
+		if (e->d_name[bl] == '.' || e->d_name[bl] == '_') found = 1;
+	}
+
+	closedir(d);
+	return found;
+}
+
+// An alias of `name` that is actually installed, or 0. games: look for a games
+// folder, otherwise a core file in `coredir`.
+static const char *alias_pick(const char *name, const char *coredir, int games)
+{
+	for (size_t g = 0; g < sizeof(name_alias) / sizeof(name_alias[0]); g++)
+	{
+		int mine = 0;
+		for (int k = 0; k < ALIAS_MAX && name_alias[g][k]; k++)
+		{
+			if (!strcasecmp(name, name_alias[g][k])) mine = 1;
+		}
+		if (!mine) continue;
+
+		for (int k = 0; k < ALIAS_MAX && name_alias[g][k]; k++)
+		{
+			const char *cand = name_alias[g][k];
+			if (!strcasecmp(cand, name)) continue;
+
+			if (games)
+			{
+				char d[1024];
+				snprintf(d, sizeof(d), "%s", cand);
+				if (findGamesDir(d, sizeof(d))) return cand;
+			}
+			else if (rbf_present(coredir, cand)) return cand;
+		}
+		break;         // a name belongs to one group
+	}
+	return 0;
+}
+
+static void resolve_names()
+{
+	for (int i = 0; i < nsys; i++)
+	{
+		chome_sys *s = &systems[i];
+
+		if (s->rbf[0])
+		{
+			char dir[80];
+			snprintf(dir, sizeof(dir), "%s", s->rbf);
+			char *slash = strrchr(dir, '/');
+			if (slash)
+			{
+				*slash = 0;
+				const char *base = slash + 1;
+				if (!rbf_present(dir, base))
+				{
+					const char *alt = alias_pick(base, dir, 0);
+					if (alt)
+					{
+						printf("ClassicUI: %s core is %s/%s on this card\n", s->id, dir, alt);
+						snprintf(s->rbf, sizeof(s->rbf), "%s/%s", dir, alt);
+					}
+				}
+			}
+		}
+
+		if (!s->mra)
+		{
+			char d[1024];
+			snprintf(d, sizeof(d), "%s", s->dir);
+			if (!findGamesDir(d, sizeof(d)))
+			{
+				const char *alt = alias_pick(s->dir, 0, 1);
+				if (alt)
+				{
+					printf("ClassicUI: %s games are in %s on this card\n", s->id, alt);
+					snprintf(s->dir, sizeof(s->dir), "%s", alt);
+				}
+			}
+		}
+	}
+}
+
 void lib_load_systems()
 {
 	nsys = 0;
@@ -737,6 +865,7 @@ void lib_load_systems()
 		for (size_t i = 0; i < sizeof(defaults) / sizeof(defaults[0]); i++) add_sys(&defaults[i]);
 	}
 
+	resolve_names();
 	state_load();
 }
 
