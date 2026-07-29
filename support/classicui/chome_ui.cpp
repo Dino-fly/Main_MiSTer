@@ -2235,6 +2235,12 @@ static void do_launch(int sysidx, const char *relpath, chome_item *it)
 		}
 	}
 
+	if (!s->mra && !s->rbf[0]) { nudge(); return; }
+
+	// The game is about to own the screen, so hand the analog output back before
+	// loading: the core brings its own video mode and must not inherit ours.
+	video_menu_fb_analog(0);
+
 	if (s->mra)
 	{
 		// Arcade: the .mra is the descriptor, hand it straight over.
@@ -2245,8 +2251,6 @@ static void do_launch(int sysidx, const char *relpath, chome_item *it)
 		xml_load(abs);
 		return;
 	}
-
-	if (!s->rbf[0]) { nudge(); return; }
 
 	launch_write_mgl(s, relpath);
 	printf("ClassicUI: launching %s via %s\n", relpath, s->rbf);
@@ -3689,6 +3693,11 @@ static void ig_close(int restore_video)
 	free(ig_bg);   ig_bg = 0;   ig_bg_w = ig_bg_h = 0;
 
 	OsdDisable();                 // keyboard back to the game
+
+	// Release the analog output unconditionally, even when the framebuffer is being
+	// left in place for a core switch: whatever runs next brings its own mode, and
+	// leaving the mux pointed at the scaler would strand it.
+	video_menu_fb_analog(0);
 	if (restore_video) video_fb_enable(0);
 
 	printf("ClassicUI: pause menu closed\n");
@@ -3747,6 +3756,23 @@ static int ig_open()
 	if (!video_menu_fb_present(ig_fb))
 	{
 		printf("ClassicUI: core has no HPS framebuffer, leaving the OSD to it\n");
+		free(ig_shot);
+		ig_shot = 0;
+		return 0;
+	}
+
+	/*
+	  With the framebuffer now ours, an analog-only setup still needs the scaler
+	  routed to the analog port or none of this is on screen. That resizes the
+	  canvas, so re-measure and re-take the compose buffer before the still of the
+	  game is scaled into it.
+	*/
+	video_menu_fb_analog(1);
+	theme_update(video_menu_fb_width(), video_menu_fb_height(), cfg.classicui_profile);
+	p = theme_get();
+	if (p->w < 8 || p->h < 8 || !gfx_begin())
+	{
+		video_menu_fb_analog(0);
 		free(ig_shot);
 		ig_shot = 0;
 		return 0;
@@ -3935,6 +3961,10 @@ void chome_leave()
 	printf("ClassicUI: handing off to the classic menu (OSD button returns)\n");
 	session_save();
 
+	// Give the analog output back: the classic menu is drawn by the core, not into
+	// the framebuffer, so holding the scaler would leave it invisible instead.
+	video_menu_fb_analog(0);
+
 	lib_state_save();
 	net_watch(0);
 	OsdMenuCtl(1);            // OSD overlay back on for the classic menu
@@ -3973,6 +4003,11 @@ static void enter()
 	*/
 	OsdEnable(DISABLE_KEYBOARD);
 	OsdMenuCtl(0);
+
+	// On an analog-only setup the framebuffer reaches no screen until the scaler
+	// output is routed there. Ask before measuring: this resizes the framebuffer to
+	// the TV mode, and the theme profile follows whatever canvas it is handed.
+	video_menu_fb_analog(1);
 
 	theme_update(video_menu_fb_width(), video_menu_fb_height(), cfg.classicui_profile);
 
@@ -4113,9 +4148,12 @@ int chome_handle(uint32_t key)
 		}
 
 		// Yield while the fb terminal owns the framebuffer (F9 console, scripts).
+		// It has its own claim on the analog output, so drop ours rather than
+		// fight over the video mode.
 		if (video_fb_state())
 		{
 			active = 0;
+			video_menu_fb_analog(0);
 			return 0;
 		}
 	}
@@ -4405,6 +4443,11 @@ int chome_handle(uint32_t key)
 		view_rebuild(1);
 		if (ig_active) ig_select_running();     // findable once its system is in
 	}
+
+	// Re-assert the claim on the analog output every frame. It is free once held,
+	// and the fb terminal shares the mechanism and drops it when a script exits,
+	// which would otherwise leave this UI drawing where nothing displays it.
+	video_menu_fb_analog(1);
 
 	if (!gfx_begin())
 	{

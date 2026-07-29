@@ -39,6 +39,7 @@ void harness_set_muted(int v);
 
 int harness_present_count();
 int harness_neogeo_scanned();
+int harness_fb_analog();
 
 const char *harness_last_launch();
 const char *harness_last_preset();

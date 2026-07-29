@@ -3224,8 +3224,8 @@ void video_mode_adjust(bool force)
 	static bool rep_force = false;
 	if (force) rep_force = true;
 
-	// mode is pinned while the fb terminal owns the analog output;
-	// core video changes are picked up on the poll after release
+	// mode is pinned while the framebuffer owns the analog output (fb terminal or
+	// an alternative front-end); core video changes are picked up after release
 	if (vga_fb_takeover) return;
 
 	VideoInfo video_info;
@@ -3354,6 +3354,62 @@ static void tv_fb_mode(vmode_custom_t *v)
 	setPLL(tvmodes[mode].Fpix, v);
 }
 
+/*
+  Put the scaler output - which is where the HPS framebuffer is composited - on
+  the analog port in a TV-compatible mode, so what lives in that framebuffer is
+  visible on VGA/SCART without vga_scaler or direct_video.
+
+  Two things ask for this. The fb terminal, buffer 0, asks through fb_terminal_vga
+  so scripts and the console are visible. An alternative front-end drawing into
+  the menu background buffers (support/classicui) asks through
+  video_menu_fb_analog(), because otherwise its entire UI renders into a buffer
+  that nothing on such a setup displays.
+
+  Setting the mode re-enters here via video_fb_config(), which is also what sizes
+  the framebuffer to the mode - so the front-end is handed a 240p canvas to draw
+  on rather than a 720p one crushed into 240 lines. That is why the flag goes up
+  before video_set_mode().
+*/
+static int menu_fb_analog_req = 0;
+
+static void vga_fb_takeover_update()
+{
+	if (cfg.direct_video || cfg.vga_scaler) return;
+
+	int want = fb_enabled && ((cfg.fb_terminal_vga && !fb_num) || (menu_fb_analog_req && fb_num));
+
+	if (want && !vga_fb_takeover)
+	{
+		vga_fb_takeover = 1;
+		v_takeover_saved = v_cur;
+		vmode_custom_t v;
+		tv_fb_mode(&v);
+		video_set_mode(&v, 0);
+		set_vga_fb(1);
+	}
+	else if (!want && vga_fb_takeover)
+	{
+		vga_fb_takeover = 0;
+		set_vga_fb(0);
+		video_set_mode(&v_takeover_saved, 0);
+	}
+}
+
+/*
+  Callable every frame: when the request is already in the state asked for and
+  the takeover is still standing, this is free. Re-asserting matters because the
+  fb terminal shares the takeover and drops it on the way out, which would
+  otherwise leave the front-end back on an output nobody can see.
+*/
+void video_menu_fb_analog(int on)
+{
+	on = on ? 1 : 0;
+	if (menu_fb_analog_req == on && (!on || vga_fb_takeover)) return;
+
+	menu_fb_analog_req = on;
+	vga_fb_takeover_update();
+}
+
 void video_fb_enable(int enable, int n)
 {
 	PROFILE_FUNCTION();
@@ -3423,28 +3479,8 @@ void video_fb_enable(int enable, int n)
 		if (cfg.direct_video) set_vga_fb(enable);
 		if (is_menu()) user_io_status_set("[8:5]", (fb_enabled && !fb_num) ? 0x160 : 0);
 
-		// While the terminal is active, route the scaler output (which carries the
-		// framebuffer) to the analog port using a TV-compatible mode, so scripts are
-		// visible on VGA/SCART without vga_scaler or direct_video.
-		if (cfg.fb_terminal_vga && !cfg.direct_video && !cfg.vga_scaler)
-		{
-			if (fb_enabled && !fb_num && !vga_fb_takeover)
-			{
-				// flag must be set before video_set_mode: it re-enters here via video_fb_config
-				vga_fb_takeover = 1;
-				v_takeover_saved = v_cur;
-				vmode_custom_t v;
-				tv_fb_mode(&v);
-				video_set_mode(&v, 0);
-				set_vga_fb(1);
-			}
-			else if (vga_fb_takeover && (!fb_enabled || fb_num))
-			{
-				vga_fb_takeover = 0;
-				set_vga_fb(0);
-				video_set_mode(&v_takeover_saved, 0);
-			}
-		}
+		// Whoever now owns the framebuffer may want it on the analog output.
+		vga_fb_takeover_update();
 	}
 }
 
