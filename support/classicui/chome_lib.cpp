@@ -9,6 +9,8 @@
 #include "chome_lib.h"
 #include "chome_video.h"
 #include "../../file_io.h"
+#include "../../lib/miniz/miniz.h"
+#include "../neogeo/neogeo_loader.h"
 
 static int is_dir_abs(const char *path)
 {
@@ -28,6 +30,7 @@ struct sys_def
 	char type;
 	int index, delay, computer, mra;
 	uint32_t tint;
+	int romset;          // last, so the rows above keep their positional layout
 };
 
 /*
@@ -47,6 +50,13 @@ static const sys_def defaults[] =
 	{ "tg16",  "TurboGrafx-16",                 "TG16", "_Console/TurboGrafx16", "TGFX16",  "pce,sgx",      "NEC - PC Engine - TurboGrafx 16",                'f', 0, 2, 0, 0, 0x8a6e2b },
 	{ "a7800", "Atari 7800",                    "A78",  "_Console/Atari7800",    "A7800",   "a78,a26,bin",  "Atari - 7800",                                   'f', 0, 2, 0, 0, 0x6e2b2b },
 	{ "psx",   "PlayStation",                   "PSX",  "_Console/PSX",          "PSX",     "cue,chd,exe",  "Sony - PlayStation",                             's', 1, 3, 0, 0, 0x4a4c58 },
+	/*
+	  Neo Geo games are romsets rather than ROM files: the archive is loaded whole and
+	  named for the board, so `romset` sends titles through the firmware's romsets.xml
+	  lookup. FS1 in the core's CONF_STR is why this is index 1, and the longer delay
+	  is for the core to come up before a romset of tens of megabytes follows it.
+	*/
+	{ "neogeo","Neo Geo",                       "NEO",  "_Console/NeoGeo",       "NEOGEO",  "zip,neo",      "SNK - Neo Geo",                                  'f', 1, 3, 0, 0, 0x8a2b2b, 1 },
 	{ "arcade","Arcade",                        "ARC",  "",                      "_Arcade", "mra",          "MAME",                                           'f', 0, 0, 0, 1, 0x7e2b3a },
 
 	// Handhelds. Game Gear rides in the SMS core above (.gg), and GBC in the Game
@@ -79,7 +89,7 @@ static int vclass_for(const char *id, int computer, int mra)
 	if (!strcasecmp(id, "lynx")) return VC_LYNX;
 	if (!strcasecmp(id, "ws")) return VC_WS;
 	if (!strcasecmp(id, "ngp")) return VC_NGPC;
-	if (mra) return VC_ARCADE;
+	if (mra || !strcasecmp(id, "neogeo")) return VC_ARCADE;
 	if (!strcasecmp(id, "ao486") || !strcasecmp(id, "x86") || !strcasecmp(id, "archie")) return VC_VGA;
 	if (computer) return VC_COMPUTER;
 	return VC_CONSOLE;
@@ -102,6 +112,7 @@ static void add_sys(const sys_def *d)
 	s->delay = d->delay;
 	s->computer = d->computer;
 	s->mra = d->mra;
+	s->romset = d->romset;
 	s->vclass = vclass_for(d->id, d->computer, d->mra);
 	s->tint = 0xff000000u | d->tint;
 }
@@ -200,6 +211,60 @@ static uint32_t hash32(const char *s)
 	uint32_t h = 2166136261u;
 	while (*s) { h ^= (unsigned char)*s++; h *= 16777619u; }
 	return h;
+}
+
+/*
+  Zipped ROMs need no unpacking. The firmware's file layer reads straight through
+  an archive - fileTYPE carries an inflate iterator and FileSeek rewinds it when
+  something seeks backwards - so a core is handed plain ROM bytes and never learns
+  it was compressed. The classic browser exposes the same thing by walking into a
+  .zip as though it were a folder, and the path it produces, "Game.zip/Game.sfc",
+  is exactly what the loader takes.
+
+  Indexing an archive therefore means looking inside for something this system can
+  run. Only the top level is considered: MiSTer rejects nested archives, and a zip
+  holding a folder tree is a romset rather than a game.
+*/
+#define ZIP_MAX_ENTRIES 8
+
+static int ext_matches(const char *name, const char *list);
+
+static int is_zip_name(const char *name)
+{
+	size_t l = strlen(name);
+	return (l > 4 && !strcasecmp(name + l - 4, ".zip"));
+}
+
+// Systems whose games *are* archives - a Neo Geo romset is loaded whole - must not
+// be peeked into: the zip itself is the item.
+static int sys_takes_zip(int sysidx)
+{
+	return ext_matches("_.zip", systems[sysidx].ext);
+}
+
+static int zip_playables(const char *zippath, const char *extlist,
+                         char inner[][CH_PATH_LEN], int max)
+{
+	mz_zip_archive z;
+	memset(&z, 0, sizeof(z));
+	if (!mz_zip_reader_init_file(&z, zippath, 0)) return 0;
+
+	int n = 0;
+	mz_uint total = mz_zip_reader_get_num_files(&z);
+	for (mz_uint i = 0; i < total && n < max; i++)
+	{
+		if (mz_zip_reader_is_file_a_directory(&z, i)) continue;
+
+		char name[CH_PATH_LEN];
+		if (!mz_zip_reader_get_filename(&z, i, name, sizeof(name))) continue;
+		if (strchr(name, '/')) continue;
+		if (!ext_matches(name, extlist)) continue;
+
+		snprintf(inner[n++], CH_PATH_LEN, "%s", name);
+	}
+
+	mz_zip_reader_end(&z);
+	return n;
 }
 
 static int ext_matches(const char *name, const char *list)
@@ -480,7 +545,9 @@ void lib_refresh_slots(chome_item *it)
 */
 
 #define IDX_MAGIC   0x58494843u        // "CHIX"
-#define IDX_VERSION 1
+// 2: archives are indexed by looking inside them, so a cache written by 1 is
+// missing every zipped ROM on the card and has to be rebuilt rather than trusted.
+#define IDX_VERSION 2
 #define IDX_MAX_DIRS 2048
 #define IDX_PATH_LEN 304
 
@@ -693,8 +760,61 @@ static void scan_dir(int sysidx, const char *root, const char *rel, int depth)
 			isdir = S_ISDIR(st.st_mode) ? 1 : 0;
 		}
 
-		if (isdir) scan_dir(sysidx, root, childrel, depth + 1);
-		else if (ext_matches(de->d_name, systems[sysidx].ext)) add_item(sysidx, childrel, de->d_name);
+		if (isdir)
+		{
+			/*
+			  Arcade packs keep alternate ROM revisions of the same games in
+			  _alternatives, and unbuildable ones in similar underscore folders. Listing
+			  them puts several near-identical entries in front of every game and buries
+			  the ~950 real ones, so the shelf skips them; they are still on the card and
+			  still reachable from the classic browser.
+			*/
+			if (systems[sysidx].mra && de->d_name[0] == '_') continue;
+
+			scan_dir(sysidx, root, childrel, depth + 1);
+		}
+		else if (ext_matches(de->d_name, systems[sysidx].ext))
+		{
+			/*
+			  A romset is named for the board - mslug.zip - so the shelf would read like a
+			  MAME set without this. Same convention as the classic browser
+			  (file_io.cpp): the key going in is the name without its extension, and the
+			  reply is the real title, NULL when the set is unknown, or -1 when
+			  romsets.xml marks it as one to hide.
+			*/
+			if (systems[sysidx].romset)
+			{
+				char key[CH_TITLE_LEN];
+				snprintf(key, sizeof(key), "%s", de->d_name);
+				char *dot = strrchr(key, '.');
+				if (dot && !strcasecmp(dot, ".zip")) *dot = 0;
+
+				char *alt = neogeo_get_altname(full, de->d_name, key);
+				if (alt == (char*)-1) continue;
+
+				add_item(sysidx, childrel, alt ? alt : key);
+			}
+			else add_item(sysidx, childrel, de->d_name);
+		}
+		else if (is_zip_name(de->d_name) && !sys_takes_zip(sysidx))
+		{
+			char inner[ZIP_MAX_ENTRIES][CH_PATH_LEN];
+			int n = zip_playables(childfull, systems[sysidx].ext, inner, ZIP_MAX_ENTRIES);
+
+			for (int i = 0; i < n; i++)
+			{
+				char p[CH_PATH_LEN];
+				snprintf(p, sizeof(p), "%s/%s", childrel, inner[i]);
+
+				/*
+				  One ROM per archive is the normal case, and there the archive carries
+				  the good name - a No-Intro zip is named properly while its member may
+				  not be - so the title comes from the zip. A multi-ROM archive has to
+				  name each entry instead, or they would all read the same.
+				*/
+				add_item(sysidx, p, (n == 1) ? de->d_name : inner[i]);
+			}
+		}
 	}
 
 	closedir(d);
@@ -717,6 +837,11 @@ int lib_scan_step()
 	if (lib_sys_games_dir(scan_sys, root, sizeof(root)))
 	{
 		int before = nitems;
+
+		// Romset titles come out of romsets.xml, which has to be read before the
+		// folder is walked so every entry can be looked up as it is found.
+		if (systems[scan_sys].romset) neogeo_scan_xml(root);
+
 		scan_dir(scan_sys, root, "", 0);
 		printf("ClassicUI: %s -> %d items\n", systems[scan_sys].name, nitems - before);
 	}

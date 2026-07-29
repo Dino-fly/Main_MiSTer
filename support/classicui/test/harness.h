@@ -24,6 +24,7 @@ void harness_reset_status();
 
 uint32_t *harness_fb_shown();
 int harness_present_count();
+int harness_neogeo_scanned();
 
 const char *harness_last_launch();
 const char *harness_last_preset();

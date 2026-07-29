@@ -174,6 +174,41 @@ int video_hdmi_connected() { return scaler_visible; }
 int video_scaler_is_visible() { return scaler_visible; }
 void video_menu_bg(int, int) {}
 
+/*
+  Neo Geo romset naming. The real pair reads romsets.xml, and the contract the
+  front-end has to honour is the return value: the title when the set is known,
+  NULL when it is not - the shelf then shows the board name - and (char*)-1 when
+  the file marks the set as one to hide.
+
+  The fake table stands in for the xml so the harness does not need the loader.
+*/
+static int neo_scanned = 0;
+int harness_neogeo_scanned() { return neo_scanned; }
+
+int neogeo_scan_xml(char *path)
+{
+	printf("  [stub] neogeo_scan_xml(%s)\n", path);
+	neo_scanned++;
+	return 2;
+}
+
+char *neogeo_get_altname(char *path, char *name, char *altname)
+{
+	static const struct { const char *set, *title; } known[] =
+	{
+		{ "mslug",  "Metal Slug" },
+		{ "kof98",  "The King of Fighters '98" },
+	};
+
+	if (!strcasecmp(altname, "neogeo")) return (char*)-1;   // BIOS set: hidden
+
+	for (size_t i = 0; i < sizeof(known) / sizeof(known[0]); i++)
+	{
+		if (!strcasecmp(altname, known[i].set)) return (char*)known[i].title;
+	}
+	return 0;
+}
+
 static char last_preset[1024] = {};
 const char *harness_last_preset() { return last_preset; }
 

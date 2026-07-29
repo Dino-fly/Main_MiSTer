@@ -43,6 +43,7 @@ g++ -std=gnu++14 -O2 -Wall -Wextra -Wno-unused-parameter -Wno-format-truncation 
     support/classicui/test/stubs.cpp \
     support/classicui/test/viewer.cpp \
     charrom.cpp \
+    lib/miniz/miniz.c \
     -lImlib2
 
 exec /tmp/harness/chome_play '"$ARGS"'
