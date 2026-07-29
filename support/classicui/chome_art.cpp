@@ -129,11 +129,24 @@ static void sanitize(const char *in, char *out, int len)
 	out[o] = 0;
 }
 
+/*
+  Name to look art up by. For a zipped ROM the path is "Game (USA).zip/Game.sfc",
+  and the archive is the part named to the convention the art packs follow - the
+  member inside is often abbreviated or differently cased - so the archive name
+  wins whenever the path runs through one.
+*/
 static void rom_base(const chome_item *it, char *out, int len)
 {
-	const char *fn = strrchr(it->path, '/');
-	fn = fn ? fn + 1 : it->path;
+	char work[CH_PATH_LEN];
+	snprintf(work, sizeof(work), "%s", it->path);
+
+	char *zip = (char*)strcasestr(work, ".zip/");
+	if (zip) zip[4] = 0;                    // cut the member off, keep "....zip"
+
+	const char *fn = strrchr(work, '/');
+	fn = fn ? fn + 1 : work;
 	snprintf(out, len, "%s", fn);
+
 	char *dot = strrchr(out, '.');
 	if (dot) *dot = 0;
 }
