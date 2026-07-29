@@ -41,7 +41,7 @@
 #include "harness.h"
 
 #define ROOT "/tmp/chome_play"
-#define PORT 8080
+#define PORT 8099
 
 /* ------------------------------------------------------------- fake SD ---- */
 
@@ -98,32 +98,56 @@ static void make_cover(const char *path, int w, int h, uint32_t col)
 	imlib_free_image();
 }
 
-struct fake_game { const char *dir; const char *file; const char *lr; uint32_t col; };
-
-static const fake_game games[] =
+/*
+  The library comes from test/placeholder_games.txt, in No-Intro / Redump naming so
+  the cover fetcher can resolve most of it against the libretro thumbnail server.
+  Only two local covers are planted, deliberately: the point is to watch the rest
+  arrive lazily.
+*/
+static int build_games_from_list()
 {
-	{ "SNES",       "Super Metroid (Europe).sfc",                          "Nintendo - Super Nintendo Entertainment System", 0xff5b4b8a },
-	{ "SNES",       "Super Mario World (Europe).sfc",                      "Nintendo - Super Nintendo Entertainment System", 0xff3fa7e0 },
-	{ "SNES",       "The Legend of Zelda - A Link to the Past (Europe).sfc","Nintendo - Super Nintendo Entertainment System", 0xff2e6e3a },
-	{ "SNES",       "Super Castlevania IV (Europe).sfc",                   "Nintendo - Super Nintendo Entertainment System", 0xff6a2a3a },
-	{ "SNES",       "F-Zero (Europe).sfc",                                 0,                                               0 },
-	{ "Genesis",    "Sonic The Hedgehog 2 (Europe).md",                    "Sega - Mega Drive - Genesis", 0xff2b4c7e },
-	{ "Genesis",    "Streets of Rage 2 (Europe).bin",                      "Sega - Mega Drive - Genesis", 0xff7a3a2a },
-	{ "Genesis",    "Gunstar Heroes (Europe).md",                          0, 0 },
-	{ "NES",        "Super Mario Bros 3 (Europe).nes",                     "Nintendo - Nintendo Entertainment System", 0xff8a4b2b },
-	{ "NES",        "Metroid (Europe).nes",                                0, 0 },
-	{ "TGFX16",     "Bonk's Adventure (USA).pce",                          "NEC - PC Engine - TurboGrafx 16", 0xff8a6e2b },
-	{ "GAMEBOY",    "Tetris (World).gb",                                   "Nintendo - Game Boy", 0xff70a030 },
-	{ "GAMEBOY",    "Super Mario Land (World).gb",                         0, 0 },
-	{ "GAMEBOY",    "Zelda - Oracle of Ages (Europe).gbc",                 0, 0 },
-	{ "GBA",        "Metroid Fusion (Europe).gba",                         "Nintendo - Game Boy Advance", 0xff4a3c8a },
-	{ "GBA",        "Advance Wars (Europe).gba",                           0, 0 },
-	{ "SMS",        "Sonic The Hedgehog (Europe) (GG).gg",                 0, 0 },
-	{ "AtariLynx",  "Chip's Challenge (USA).lnx",                          0, 0 },
-	{ "WonderSwan", "Gunpey (Japan).ws",                                   0, 0 },
-	{ "Amiga",      "Turrican II.adf",                                     0, 0 },
-	{ "Amiga",      "Lemmings.adf",                                        0, 0 },
-};
+	const char *list = "support/classicui/test/placeholder_games.txt";
+
+	FILE *f = fopen(list, "rt");
+	if (!f) { printf("cannot open %s\n", list); return 0; }
+
+	char line[1024];
+	int n = 0;
+	char last_dir[1024] = {};
+
+	while (fgets(line, sizeof(line), f))
+	{
+		char *p = line;
+		while (*p == ' ' || *p == '\t') p++;
+		if (*p == '#' || *p == '\n' || !*p) continue;
+
+		char *bar = strchr(p, '|');
+		if (!bar) continue;
+		*bar = 0;
+
+		char *dir = p;
+		char *file = bar + 1;
+		char *nl = strchr(file, '\n');
+		if (nl) *nl = 0;
+		if (!*dir || !*file) continue;
+
+		char full[1024];
+		if (!strcmp(dir, "_Arcade")) snprintf(full, sizeof(full), "%s/%s", ROOT, dir);
+		else snprintf(full, sizeof(full), "%s/games/%s", ROOT, dir);
+
+		if (strcmp(last_dir, full))
+		{
+			mkpath(full);
+			snprintf(last_dir, sizeof(last_dir), "%s", full);
+		}
+
+		touch(full, file);
+		n++;
+	}
+
+	fclose(f);
+	return n;
+}
 
 static void build_sd()
 {
@@ -132,45 +156,31 @@ static void build_sd()
 
 	mkpath(ROOT "/config");
 
-	for (size_t i = 0; i < sizeof(games) / sizeof(games[0]); i++)
-	{
-		char dir[1024];
-		snprintf(dir, sizeof(dir), "%s/games/%s", ROOT, games[i].dir);
-		mkpath(dir);
-		touch(dir, games[i].file);
+	int n = build_games_from_list();
+	printf("  %d placeholder games, in No-Intro naming\n", n);
 
-		// Cover art for some of them, so both real covers and the generated
-		// fallback card are on screen at once.
-		if (!games[i].lr) continue;
+	/*
+	  Two local covers only, so the shelf shows all three states at once: a cover
+	  already on disk, covers arriving from the network, and the generated fallback
+	  card for whatever never resolves.
+	*/
+	mkpath(ROOT "/boxart/Nintendo - Super Nintendo Entertainment System/Named_Boxarts");
+	make_cover(ROOT "/boxart/Nintendo - Super Nintendo Entertainment System/Named_Boxarts/Super Metroid (USA).png",
+		500, 700, 0xff5b4b8a);
 
-		char art[1024];
-		snprintf(art, sizeof(art), "%s/boxart/%s/Named_Boxarts", ROOT, games[i].lr);
-		mkpath(art);
+	mkpath(ROOT "/boxart/Sega - Mega Drive - Genesis/Named_Boxarts");
+	make_cover(ROOT "/boxart/Sega - Mega Drive - Genesis/Named_Boxarts/Sonic The Hedgehog 2 (World).png",
+		500, 700, 0xff2b4c7e);
 
-		char base[512];
-		snprintf(base, sizeof(base), "%s", games[i].file);
-		char *dot = strrchr(base, '.');
-		if (dot) *dot = 0;
-
-		char path[1600];
-		snprintf(path, sizeof(path), "%s/%s.png", art, base);
-		make_cover(path, 500, 700, games[i].col);
-	}
-
-	mkpath(ROOT "/_Arcade");
-	touch(ROOT "/_Arcade", "Street Fighter II.mra");
-	touch(ROOT "/_Arcade", "Bubble Bobble.mra");
-	touch(ROOT "/_Arcade", "Metal Slug.mra");
-
-	// A couple of suspend points, one with a thumbnail.
+	// Suspend points, one with a thumbnail, on games that are in the list.
 	mkpath(ROOT "/savestates/SNES");
-	touch(ROOT "/savestates/SNES", "Super Metroid (Europe)_1.ss");
-	touch(ROOT "/savestates/SNES", "Super Metroid (Europe)_3.ss");
-	make_cover(ROOT "/savestates/SNES/Super Metroid (Europe)_1.png", 320, 240, 0xff1e6fa8);
+	touch(ROOT "/savestates/SNES", "Super Metroid (USA)_1.ss");
+	touch(ROOT "/savestates/SNES", "Super Metroid (USA)_3.ss");
+	make_cover(ROOT "/savestates/SNES/Super Metroid (USA)_1.png", 320, 240, 0xff1e6fa8);
 
 	mkpath(ROOT "/savestates/Gameboy");
-	touch(ROOT "/savestates/Gameboy", "Tetris (World)_1.ss");
-	make_cover(ROOT "/savestates/Gameboy/Tetris (World)_1.png", 320, 288, 0xff70a030);
+	touch(ROOT "/savestates/Gameboy", "Tetris (World) (Rev 1)_1.ss");
+	make_cover(ROOT "/savestates/Gameboy/Tetris (World) (Rev 1)_1.png", 320, 288, 0xff70a030);
 }
 
 /* ---------------------------------------------------------------- http ---- */
@@ -342,12 +352,13 @@ static void http_service()
 
 int main(int argc, char **argv)
 {
-	int w = 1280, h = 720, profile = 1;
+	int w = 1280, h = 720, profile = 1, fetch = 1;
 
 	for (int i = 1; i < argc; i++)
 	{
 		if (!strcmp(argv[i], "--sd")) { w = 640; h = 480; profile = 2; }
 		else if (!strcmp(argv[i], "--lo")) { w = 320; h = 240; profile = 3; }
+		else if (!strcmp(argv[i], "--no-fetch")) fetch = 0;
 	}
 
 	// docker logs captures a pipe, where stdout would otherwise block-buffer and
@@ -359,9 +370,16 @@ int main(int argc, char **argv)
 	harness_use_real_clock(1);
 
 	cfg.classicui = 1;
-	cfg.classicui_artfetch = 0;
+	cfg.classicui_artfetch = (uint8_t)fetch;
 	cfg.classicui_profile = (uint8_t)profile;
 	snprintf(cfg.classicui_artdir, sizeof(cfg.classicui_artdir), "boxart");
+
+	if (fetch)
+	{
+		printf("Cover art will be fetched from %s as cards come into view.\n",
+			cfg.classicui_arturl);
+		printf("Pass --no-fetch to keep it offline.\n");
+	}
 
 	harness_set_fb(w, h);
 	theme_update(w, h, profile);
