@@ -1686,6 +1686,11 @@ int main()
 	// Display must vanish entirely when the scaler output is not what is on screen.
 	printf("\n== analog output ==\n");
 	{
+		// Back to automatic: an earlier section pinned the profile to HD, and a
+		// forced profile deliberately outranks the canvas, which would mask what
+		// this section is about.
+		cfg.classicui_profile = 0;
+
 		harness_set_scaler_visible(0);
 		chome_leave();
 		press(KEY_MENU, 20);
@@ -1697,6 +1702,24 @@ int main()
 		press(KEY_ESC, 10);
 		press(KEY_ESC, 10);
 		printf("  captured the bar with Display removed\n");
+
+		/*
+		  SCART/VGA without vga_scaler: the framebuffer reaches no screen until the
+		  scaler output is routed to the analog port, which shrinks the canvas to the
+		  TV mode. The UI has to follow that down to its 240p profile by itself,
+		  mid-session, or it draws a 720p layout into 240 lines.
+		*/
+		check(harness_fb_analog() == 1, "the analog output was taken over for the UI");
+		check(theme_get()->w == 320 && theme_get()->h == 240, "the canvas followed the TV mode");
+		check(theme_get()->id == PROF_LO, "and the 240p profile was picked up");
+		dump("analog-scart-240p");
+
+		// Handing back to the classic menu must return the output, or the classic
+		// menu - drawn by the core, not into the framebuffer - would be invisible.
+		chome_leave();
+		frame(4);
+		check(harness_fb_analog() == 0, "handing off releases the analog output");
+
 		harness_set_scaler_visible(1);
 	}
 

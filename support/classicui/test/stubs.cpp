@@ -234,6 +234,33 @@ char *neogeo_get_altname(char *path, char *name, char *altname)
 		if (!strcasecmp(altname, known[i].set)) return (char*)known[i].title;
 	}
 	return 0;
+  Models video_menu_fb_analog(). The part the UI has to cope with is that taking
+  the scaler resizes the framebuffer to the TV mode, so the canvas shrinks under it
+  mid-session; where the scaler output already reaches the screen it is a no-op.
+*/
+static int fb_analog = 0;
+static int fb_analog_w = 0, fb_analog_h = 0;
+int harness_fb_analog() { return fb_analog; }
+
+void video_menu_fb_analog(int on)
+{
+	on = on ? 1 : 0;
+	if (scaler_visible) return;
+	if (on == fb_analog) return;
+
+	fb_analog = on;
+	if (on)
+	{
+		fb_analog_w = fbw;
+		fb_analog_h = fbh;
+		harness_set_fb(320, 240);
+		printf("  [stub] analog takeover: canvas now 320x240\n");
+	}
+	else if (fb_analog_w)
+	{
+		harness_set_fb(fb_analog_w, fb_analog_h);
+		printf("  [stub] analog released: canvas back to %dx%d\n", fb_analog_w, fb_analog_h);
+	}
 }
 
 static char last_preset[1024] = {};
