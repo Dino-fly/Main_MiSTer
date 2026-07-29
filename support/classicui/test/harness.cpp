@@ -1073,7 +1073,12 @@ static void assert_ingame()
 
 	press(KEY_MENU, 20);
 	check(chome_ingame_active(), "menu button opens the front-end in a game core");
-	check(harness_pause_val() == 1, "opening pauses a core that supports it");
+	/*
+	  This core only pauses while the OSD is open, which is unusable here, so the
+	  menu holds it still with a state instead.
+	*/
+	check(harness_pause_val() == 0, "an OSD-gated pause option is left alone");
+	check(harness_pulses_on("S") >= 1, "and the game is held still with a state");
 
 	// The full shelf, parked on the game that is running.
 	for (int i = 0; i < 40 && lib_scanning(); i++) frame(2);
@@ -1122,14 +1127,16 @@ static void assert_ingame()
 	press(KEY_MENU, 20);
 	press(KEY_DOWN, 20);
 	press(KEY_BACKSPACE, 12);
-	check(harness_pulses_on("S") == 1, "saving still reaches the save bit with SD off");
+	// >= 1 because opening the menu also freezes the game with a save of its own.
+	check(harness_pulses_on("S") >= 1, "saving still reaches the save bit with SD off");
 	check(harness_opt_val("V") == 1, "and puts the SD-card option back where it was");
 
 	harness_set_opt("V", 0);
+	harness_reset_status();
 	press(KEY_MENU, 20);
-	check(harness_pause_val() == 1, "opening the menu drives the core's pause option on");
-	press(KEY_ESC, 14);
-	check(harness_pause_val() == 0, "and closing it puts the option back");
+	check(harness_pulses_on("S") == 1, "opening freezes the game with a save");
+	press(KEY_ESC, 16);
+	check(harness_pulses_on("T") == 1, "and closing restores it, so nothing advanced");
 
 	press(KEY_MENU, 20);
 	press(KEY_DOWN, 18);
