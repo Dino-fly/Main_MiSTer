@@ -82,6 +82,14 @@ int video_menu_fb_height();
 // it (in which case a front-end must fall back to the OSD).
 int video_menu_fb_present(int n);
 
+// Ask for the framebuffer to be shown on the analog output, for setups where the
+// scaler is otherwise bypassed (no vga_scaler, no direct_video) and the front-end
+// would draw to something nothing displays. A no-op when the scaler output
+// already reaches the screen. Safe to call every frame; releasing restores the
+// video mode. Resizes the framebuffer to the TV mode, so re-read
+// video_menu_fb_width/height() afterwards.
+void video_menu_fb_analog(int on);
+
 int video_bg_has_picture();
 int video_chvt(int num);
 void video_cmd(char *cmd);
