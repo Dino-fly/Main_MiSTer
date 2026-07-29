@@ -115,6 +115,11 @@ typedef struct {
 	uint8_t spd_quirk;
 	uint16_t hdmi_off;
 	uint32_t keyboard_as_joystick[256];
+	uint8_t classicui;
+	uint8_t classicui_artfetch;
+	uint8_t classicui_profile;
+	char classicui_artdir[256];
+	char classicui_arturl[512];
 } cfg_t;
 
 extern cfg_t cfg;

@@ -68,6 +68,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "profiling.h"
 #include "str_util.h"
 #include "autofire.h"
+#include "support/classicui/chome.h"
 
 /*menu states*/
 enum MENU
@@ -589,7 +590,7 @@ static uint32_t menu_key_get(void)
 		else if (CheckTimer(repeat))
 		{
 			repeat = GetTimer(REPEATRATE);
-			if (GetASCIIKey(c1) || menustate == MENU_FILE_SELECT2 || ((menustate == MENU_COMMON2) && (menusub == 17)) || ((menustate == MENU_SYSTEM2) && (menusub == 5)))
+			if (GetASCIIKey(c1) || chome_active() || menustate == MENU_FILE_SELECT2 || ((menustate == MENU_COMMON2) && (menusub == 17)) || ((menustate == MENU_SYSTEM2) && (menusub == 5)))
 			{
 				c = c1;
 				hold_cnt++;
@@ -1228,6 +1229,16 @@ void HandleUI(void)
 		c = menu_key_get();
 	}
 
+	// Applies a video look that Classic Home armed before launching this core, and
+	// grabs one reference frame for its look previews.
+	chome_core_boot();
+	chome_core_poll();
+
+	// The Classic Home front-end owns the menu core's screen when enabled. It
+	// hands control back here for advanced settings (chome_leave()), and never
+	// runs while an MGL is still playing back.
+	if (mgl->done && chome_handle(c)) return;
+
 	// decode and set events
 	menu = false;
 	back = false;
@@ -1242,7 +1253,7 @@ void HandleUI(void)
 
 	if (c && cfg.bootcore[0] != '\0') cfg.bootcore[0] = '\0';
 
-	if (!select_ini && is_menu() && cfg.osd_timeout >= 5)
+	if (!select_ini && is_menu() && cfg.osd_timeout >= 5 && !chome_active())
 	{
 		static int menu_visible = 1;
 		static unsigned long timeout = 0;

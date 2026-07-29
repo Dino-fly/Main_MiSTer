@@ -1999,6 +1999,19 @@ int process_ss(const char *rom_name, int enable)
 						int ret = FileWriteAdv(&f, base[i], size);
 						FileClose(&f);
 						printf("Wrote %d bytes to file: %s\n", ret, ss_name);
+
+						// Thumbnail beside the savestate for Classic Home's suspend
+						// point strip. The core wrote the state itself and we only
+						// notice on the next poll, so this frame is up to a second
+						// later than the save - close enough for a thumbnail.
+						if (cfg.classicui)
+						{
+							char png[1024];
+							snprintf(png, sizeof(png), "%s", ss_name);
+							char *dot = strrchr(png, '.');
+							if (dot) strcpy(dot, ".png");
+							screenshot_thumbnail(getFullPath(png), 256);
+						}
 					}
 					else
 					{
