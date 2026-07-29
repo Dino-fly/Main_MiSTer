@@ -1223,7 +1223,17 @@ int main()
 		frame(4);
 		check(harness_fb_analog() == 0, "handing off releases the analog output");
 
+		/*
+		  With a display on HDMI the framebuffer is already on screen there, so the
+		  analog output must be left alone: HDMI alongside a CRT on vga_scaler=0 is an
+		  ordinary setup, and it must not lose its picture to a 240p TV mode because
+		  the front-end wanted the other output.
+		*/
 		harness_set_scaler_visible(1);
+		press(KEY_MENU, 20);
+		frame(6);
+		check(harness_fb_analog() == 0, "HDMI attached: the analog output is left alone");
+		check(theme_get()->w == 1280, "and the UI keeps the full canvas");
 	}
 
 	printf("\n== presents ==\n");
