@@ -4,6 +4,8 @@
 #include <inttypes.h>
 
 void harness_advance(unsigned long ms);
+void harness_use_real_clock(int on);
+int  harness_sim_launched();
 unsigned long harness_now();
 
 void harness_set_root(const char *r);

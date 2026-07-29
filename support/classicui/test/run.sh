@@ -13,7 +13,7 @@ apt-get update -qq >/dev/null
 apt-get install -qq -y g++ libimlib2-dev >/dev/null
 
 mkdir -p /tmp/harness
-g++ -std=gnu++14 -O1 -g -Wall -Wextra -Wno-unused-parameter \
+g++ -std=gnu++14 -O1 -g -Wall -Wextra -Wno-unused-parameter -Wno-format-truncation \
     -I. -o /tmp/harness/chome_test \
     support/classicui/chome_gfx.cpp \
     support/classicui/chome_theme.cpp \

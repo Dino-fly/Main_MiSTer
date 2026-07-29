@@ -295,6 +295,39 @@ they do in the classic menu.
 Key repeat for the shelf needs `chome_active()` in `menu_key_get()` - without it
 `menu_key_get()` only repeats for ASCII keys and the file browser.
 
+## Running it on a laptop
+
+```
+support/classicui/test/play.sh          # 1280x720
+support/classicui/test/play.sh --sd     # 640x480
+support/classicui/test/play.sh --lo     # 320x240
+```
+
+Then open <http://localhost:8080>. Arrow keys move, Enter is A, Esc is B, Tab is X,
+Backspace is Y, backtick is Select, `-`/`=` are L/R, and **M is the OSD/menu
+button**.
+
+It runs the real front-end against a fake SD card of ~25 placeholder games across
+a dozen systems, some with generated cover art so both real covers and the
+fallback card are on screen at once, plus a couple of suspend points with
+thumbnails. Nothing is installed on the host: the container already has imlib2, and
+`linux/input.h` is the only Linux-specific header the project pulls in, so building
+natively would need a shim that this avoids.
+
+**Launching is simulated rather than refused.** Pressing A on a game flips the
+viewer into "game core" mode with a synthetic game picture derived from that game's
+name, so pressing M then exercises the in-game menu, its live save states, Video
+Look over the running frame, and Close Game - the whole loop, without a MiSTer.
+
+How it works: the viewer runs the UI and serves the compose buffer over HTTP; the
+page draws it into a canvas and posts keys back. Frames are sent only when the
+generation counter moves, so an idle menu costs nothing.
+
+What it cannot tell you, and this is the important part: redraw cost on uncached
+memory, SPI behaviour, whether a core accepts an MGL, or what the video looks
+actually do - those are the FPGA scaler's, and here they are only the software
+approximation `vp_preview()` draws.
+
 ## Testing without hardware
 
 `support/classicui/test/run.sh` builds a host binary in Docker from the real
