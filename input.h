@@ -129,6 +129,13 @@ int input_has_lightgun();
 void input_lightgun_save(int idx, int32_t *cal);
 
 void input_switch(int grab);
+
+/*
+  1 when the last key delivered to the menu came from a gamepad, 0 from a keyboard.
+  Pad buttons reach the menu as synthetic key events with the same codes a keyboard
+  produces, so this is the only way to tell which device the user is holding.
+*/
+int input_menu_key_from_pad();
 int input_state();
 void input_uinp_destroy();
 

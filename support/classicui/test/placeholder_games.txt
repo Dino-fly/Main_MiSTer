@@ -1,0 +1,580 @@
+# Placeholder library for the interactive viewer (support/classicui/test/play.sh).
+#
+# Format:  <games dir>|<rom filename>
+#
+# Names follow the No-Intro / Redump conventions that the libretro thumbnail server
+# keys covers on: a leading article moves after the title ("Legend of Zelda, The"),
+# " - " separates a subtitle, and the region goes in parentheses. That is what makes
+# these usable for testing lazy cover loading - with classicui_artfetch on, the
+# fetcher should resolve most of them against thumbnails.libretro.com.
+#
+# They are correct for the large majority of these titles but are NOT verified
+# against the actual DATs, so the odd cover will not resolve. That is a name
+# mismatch, not a loader bug.
+#
+# Every file is an empty placeholder: nothing here can actually be played.
+
+# --- NES (.nes)
+NES|Super Mario Bros. (World).nes
+NES|Super Mario Bros. 2 (USA).nes
+NES|Super Mario Bros. 3 (USA).nes
+NES|Legend of Zelda, The (USA).nes
+NES|Zelda II - The Adventure of Link (USA).nes
+NES|Metroid (USA).nes
+NES|Kid Icarus (USA, Europe).nes
+NES|Castlevania (USA).nes
+NES|Castlevania II - Simon's Quest (USA).nes
+NES|Castlevania III - Dracula's Curse (USA).nes
+NES|Mega Man (USA).nes
+NES|Mega Man 2 (USA).nes
+NES|Mega Man 3 (USA).nes
+NES|Mega Man 4 (USA).nes
+NES|Mega Man 5 (USA).nes
+NES|Mega Man 6 (USA).nes
+NES|Contra (USA).nes
+NES|Super C (USA).nes
+NES|Ninja Gaiden (USA).nes
+NES|Ninja Gaiden II - The Dark Sword of Chaos (USA).nes
+NES|Ninja Gaiden III - The Ancient Ship of Doom (USA).nes
+NES|Mike Tyson's Punch-Out!! (USA).nes
+NES|Excitebike (Japan, USA).nes
+NES|Ice Climber (USA, Europe).nes
+NES|Kirby's Adventure (USA).nes
+NES|DuckTales (USA).nes
+NES|DuckTales 2 (USA).nes
+NES|Chip 'n Dale Rescue Rangers (USA).nes
+NES|Darkwing Duck (USA).nes
+NES|Batman - The Video Game (USA).nes
+NES|Bionic Commando (USA).nes
+NES|Blaster Master (USA).nes
+NES|Bubble Bobble (USA).nes
+NES|Double Dragon (USA).nes
+NES|Double Dragon II - The Revenge (USA).nes
+NES|River City Ransom (USA).nes
+NES|Tetris (USA).nes
+NES|Dr. Mario (Japan, USA).nes
+NES|Final Fantasy (USA).nes
+NES|Dragon Warrior (USA).nes
+NES|Crystalis (USA).nes
+NES|StarTropics (USA).nes
+NES|Little Nemo - The Dream Master (USA).nes
+NES|Adventure Island (USA).nes
+NES|Gradius (USA).nes
+NES|Life Force (USA).nes
+NES|Rush'n Attack (USA).nes
+NES|Teenage Mutant Ninja Turtles II - The Arcade Game (USA).nes
+NES|Battletoads (USA).nes
+NES|Guardian Legend, The (USA).nes
+
+# --- SNES (.sfc)
+SNES|Super Mario World (USA).sfc
+SNES|Super Mario All-Stars (USA).sfc
+SNES|Super Mario Kart (USA).sfc
+SNES|Super Metroid (USA).sfc
+SNES|Legend of Zelda, The - A Link to the Past (USA).sfc
+SNES|Donkey Kong Country (USA).sfc
+SNES|Donkey Kong Country 2 - Diddy's Kong Quest (USA).sfc
+SNES|Donkey Kong Country 3 - Dixie Kong's Double Trouble (USA).sfc
+SNES|Super Castlevania IV (USA).sfc
+SNES|Contra III - The Alien Wars (USA).sfc
+SNES|Mega Man X (USA).sfc
+SNES|Mega Man X2 (USA).sfc
+SNES|Mega Man X3 (USA).sfc
+SNES|Final Fantasy III (USA).sfc
+SNES|Chrono Trigger (USA).sfc
+SNES|Secret of Mana (USA).sfc
+SNES|Super Mario RPG - Legend of the Seven Stars (USA).sfc
+SNES|EarthBound (USA).sfc
+SNES|Star Fox (USA).sfc
+SNES|F-Zero (USA).sfc
+SNES|Pilotwings (USA).sfc
+SNES|Super Punch-Out!! (USA).sfc
+SNES|Kirby Super Star (USA).sfc
+SNES|Kirby's Dream Course (USA).sfc
+SNES|Super Mario World 2 - Yoshi's Island (USA).sfc
+SNES|Tetris Attack (USA).sfc
+SNES|Street Fighter II - The World Warrior (USA).sfc
+SNES|Street Fighter II Turbo (USA).sfc
+SNES|Super Street Fighter II (USA).sfc
+SNES|Mortal Kombat (USA).sfc
+SNES|Mortal Kombat II (USA).sfc
+SNES|Killer Instinct (USA).sfc
+SNES|Super Ghouls 'n Ghosts (USA).sfc
+SNES|ActRaiser (USA).sfc
+SNES|Illusion of Gaia (USA).sfc
+SNES|Breath of Fire (USA).sfc
+SNES|Breath of Fire II (USA).sfc
+SNES|Lufia II - Rise of the Sinistrals (USA).sfc
+SNES|Terranigma (Europe).sfc
+SNES|Demon's Crest (USA).sfc
+SNES|Zombies Ate My Neighbors (USA).sfc
+SNES|Sunset Riders (USA).sfc
+SNES|Teenage Mutant Ninja Turtles IV - Turtles in Time (USA).sfc
+SNES|Axelay (USA).sfc
+SNES|U.N. Squadron (USA).sfc
+SNES|R-Type III - The Third Lightning (USA).sfc
+SNES|Gradius III (USA).sfc
+SNES|Super Bomberman (USA).sfc
+SNES|Super Bomberman 2 (USA).sfc
+SNES|Harvest Moon (USA).sfc
+
+# --- Genesis (.md)
+Genesis|Sonic The Hedgehog (USA, Europe).md
+Genesis|Sonic The Hedgehog 2 (World).md
+Genesis|Sonic The Hedgehog 3 (USA, Europe).md
+Genesis|Sonic & Knuckles (World).md
+Genesis|Streets of Rage (USA, Europe).md
+Genesis|Streets of Rage 2 (USA).md
+Genesis|Streets of Rage 3 (Europe).md
+Genesis|Golden Axe (World).md
+Genesis|Golden Axe II (World).md
+Genesis|Gunstar Heroes (USA).md
+Genesis|Ristar (USA, Europe).md
+Genesis|Rocket Knight Adventures (USA).md
+Genesis|Castlevania - Bloodlines (USA).md
+Genesis|Contra - Hard Corps (USA).md
+Genesis|Shinobi III - Return of the Ninja Master (USA).md
+Genesis|Revenge of Shinobi, The (USA, Europe).md
+Genesis|Alien Soldier (Europe).md
+Genesis|Comix Zone (USA, Europe).md
+Genesis|Vectorman (USA, Europe).md
+Genesis|Vectorman 2 (USA).md
+Genesis|ToeJam & Earl (USA, Europe).md
+Genesis|Phantasy Star II (USA, Europe).md
+Genesis|Phantasy Star III - Generations of Doom (USA, Europe).md
+Genesis|Phantasy Star IV (USA).md
+Genesis|Shining Force (USA).md
+Genesis|Shining Force II (USA).md
+Genesis|Landstalker (USA).md
+Genesis|Beyond Oasis (USA).md
+Genesis|Light Crusader (USA, Europe).md
+Genesis|Thunder Force III (USA).md
+Genesis|Thunder Force IV (Europe).md
+Genesis|Gaiares (USA).md
+Genesis|Zero Wing (Europe).md
+Genesis|Ecco the Dolphin (USA, Europe).md
+Genesis|Altered Beast (World).md
+Genesis|Kid Chameleon (USA, Europe).md
+Genesis|Dynamite Headdy (USA, Europe).md
+Genesis|Earthworm Jim (USA, Europe).md
+Genesis|Aladdin (USA).md
+Genesis|Castle of Illusion Starring Mickey Mouse (USA, Europe).md
+Genesis|World of Illusion Starring Mickey Mouse and Donald Duck (USA, Europe).md
+Genesis|Road Rash (USA, Europe).md
+Genesis|Road Rash II (USA, Europe).md
+Genesis|Road Rash 3 (USA, Europe).md
+Genesis|Micro Machines 2 - Turbo Tournament (Europe).md
+Genesis|Mortal Kombat (World).md
+Genesis|Mortal Kombat II (World).md
+Genesis|Virtua Racing (USA).md
+Genesis|Herzog Zwei (USA, Europe).md
+Genesis|Ranger X (USA).md
+
+# --- Game Boy (.gb)
+GAMEBOY|Tetris (World) (Rev 1).gb
+GAMEBOY|Super Mario Land (World).gb
+GAMEBOY|Super Mario Land 2 - 6 Golden Coins (USA, Europe).gb
+GAMEBOY|Wario Land - Super Mario Land 3 (World).gb
+GAMEBOY|Legend of Zelda, The - Link's Awakening (USA, Europe).gb
+GAMEBOY|Metroid II - Return of Samus (World).gb
+GAMEBOY|Kirby's Dream Land (USA, Europe).gb
+GAMEBOY|Kirby's Dream Land 2 (USA, Europe).gb
+GAMEBOY|Donkey Kong (World).gb
+GAMEBOY|Donkey Kong Land (USA, Europe).gb
+GAMEBOY|Mega Man - Dr. Wily's Revenge (USA).gb
+GAMEBOY|Castlevania - The Adventure (USA).gb
+GAMEBOY|Castlevania II - Belmont's Revenge (USA, Europe).gb
+GAMEBOY|Final Fantasy Adventure (USA).gb
+GAMEBOY|Gargoyle's Quest (USA, Europe).gb
+GAMEBOY|Kid Icarus - Of Myths and Monsters (USA, Europe).gb
+GAMEBOY|Bionic Commando (USA).gb
+GAMEBOY|Bubble Bobble (USA, Europe).gb
+GAMEBOY|Operation C (USA).gb
+GAMEBOY|Pokemon - Red Version (USA, Europe).gb
+GAMEBOY|Pokemon - Blue Version (USA, Europe).gb
+GAMEBOY|Pokemon - Yellow Version (USA, Europe).gb
+GAMEBOY|Tetris 2 (USA, Europe).gb
+GAMEBOY|Dr. Mario (World).gb
+GAMEBOY|Game & Watch Gallery (USA, Europe).gb
+GAMEBOY|Mole Mania (USA, Europe).gb
+GAMEBOY|Balloon Kid (USA, Europe).gb
+
+# --- Game Boy Color (.gbc)
+GAMEBOY|Legend of Zelda, The - Oracle of Ages (USA).gbc
+GAMEBOY|Legend of Zelda, The - Oracle of Seasons (USA).gbc
+GAMEBOY|Pokemon - Gold Version (USA, Europe).gbc
+GAMEBOY|Pokemon - Silver Version (USA, Europe).gbc
+GAMEBOY|Pokemon - Crystal Version (USA, Europe).gbc
+GAMEBOY|Wario Land 3 (World).gbc
+GAMEBOY|Wario Land II (USA, Europe).gbc
+GAMEBOY|Metal Gear Solid (USA).gbc
+GAMEBOY|Shantae (USA).gbc
+GAMEBOY|Dragon Warrior III (USA).gbc
+GAMEBOY|Harvest Moon 2 GBC (USA).gbc
+GAMEBOY|Mario Tennis (USA).gbc
+GAMEBOY|Perfect Dark (USA, Europe).gbc
+GAMEBOY|Resident Evil Gaiden (USA).gbc
+GAMEBOY|Survival Kids (USA).gbc
+
+# --- Game Boy Advance (.gba)
+GBA|Metroid Fusion (USA, Europe).gba
+GBA|Metroid - Zero Mission (USA, Europe).gba
+GBA|Legend of Zelda, The - The Minish Cap (USA, Europe).gba
+GBA|Legend of Zelda, The - A Link to the Past & Four Swords (USA, Europe).gba
+GBA|Super Mario Advance (USA).gba
+GBA|Super Mario Advance 2 - Super Mario World (USA).gba
+GBA|Super Mario Advance 3 - Yoshi's Island (USA).gba
+GBA|Super Mario Advance 4 - Super Mario Bros. 3 (USA).gba
+GBA|Mario Kart - Super Circuit (USA, Europe).gba
+GBA|Advance Wars (USA).gba
+GBA|Advance Wars 2 - Black Hole Rising (USA).gba
+GBA|Fire Emblem (USA, Australia).gba
+GBA|Fire Emblem - The Sacred Stones (USA, Europe).gba
+GBA|Golden Sun (USA, Europe).gba
+GBA|Golden Sun - The Lost Age (USA, Europe).gba
+GBA|Castlevania - Circle of the Moon (USA).gba
+GBA|Castlevania - Harmony of Dissonance (USA).gba
+GBA|Castlevania - Aria of Sorrow (USA).gba
+GBA|Mega Man Zero (USA).gba
+GBA|Mega Man Zero 2 (USA).gba
+GBA|Mega Man Zero 3 (USA).gba
+GBA|Mega Man Battle Network (USA).gba
+GBA|Kirby - Nightmare in Dream Land (USA).gba
+GBA|Kirby & the Amazing Mirror (USA).gba
+GBA|WarioWare, Inc. - Mega Microgame$! (USA).gba
+GBA|Wario Land 4 (USA, Europe).gba
+GBA|Pokemon - Ruby Version (USA, Europe).gba
+GBA|Pokemon - Sapphire Version (USA, Europe).gba
+GBA|Pokemon - Emerald Version (USA, Europe).gba
+GBA|Pokemon - FireRed Version (USA, Europe).gba
+GBA|Pokemon - LeafGreen Version (USA, Europe).gba
+GBA|Final Fantasy Tactics Advance (USA).gba
+GBA|Final Fantasy VI Advance (USA).gba
+GBA|Astro Boy - Omega Factor (USA).gba
+GBA|Drill Dozer (USA).gba
+GBA|Gunstar Super Heroes (USA).gba
+GBA|Sonic Advance (USA).gba
+GBA|Sonic Advance 2 (USA).gba
+GBA|Klonoa - Empire of Dreams (USA).gba
+GBA|Rhythm Tengoku (Japan).gba
+
+# --- Nintendo 64 (.z64)
+N64|Super Mario 64 (USA).z64
+N64|Legend of Zelda, The - Ocarina of Time (USA).z64
+N64|Legend of Zelda, The - Majora's Mask (USA).z64
+N64|GoldenEye 007 (USA).z64
+N64|Perfect Dark (USA).z64
+N64|Banjo-Kazooie (USA).z64
+N64|Banjo-Tooie (USA).z64
+N64|Donkey Kong 64 (USA).z64
+N64|Mario Kart 64 (USA).z64
+N64|Star Fox 64 (USA).z64
+N64|F-Zero X (USA).z64
+N64|Wave Race 64 (USA).z64
+N64|Diddy Kong Racing (USA).z64
+N64|Super Smash Bros. (USA).z64
+N64|Paper Mario (USA).z64
+N64|Conker's Bad Fur Day (USA).z64
+N64|Jet Force Gemini (USA).z64
+N64|Mario Party (USA).z64
+N64|Mario Party 2 (USA).z64
+N64|Mario Party 3 (USA).z64
+N64|Pokemon Snap (USA).z64
+N64|Pokemon Stadium (USA).z64
+N64|Kirby 64 - The Crystal Shards (USA).z64
+N64|Mario Tennis (USA).z64
+N64|Mario Golf (USA).z64
+N64|1080 Snowboarding (USA, Europe).z64
+N64|Star Wars - Rogue Squadron (USA).z64
+N64|Turok - Dinosaur Hunter (USA).z64
+N64|Resident Evil 2 (USA).z64
+N64|Sin and Punishment (Japan).z64
+
+# --- TurboGrafx-16 (.pce)
+TGFX16|Bonk's Adventure (USA).pce
+TGFX16|Bonk's Revenge (USA).pce
+TGFX16|Blazing Lazers (USA).pce
+TGFX16|R-Type (USA).pce
+TGFX16|Devil's Crush (USA).pce
+TGFX16|Dragon Spirit (USA).pce
+TGFX16|Splatterhouse (USA).pce
+TGFX16|Ninja Spirit (USA).pce
+TGFX16|Legendary Axe, The (USA).pce
+TGFX16|Legendary Axe II, The (USA).pce
+TGFX16|Military Madness (USA).pce
+TGFX16|Neutopia (USA).pce
+TGFX16|Neutopia II (USA).pce
+TGFX16|Alien Crush (USA).pce
+TGFX16|Air Zonk (USA).pce
+TGFX16|Bloody Wolf (USA).pce
+TGFX16|China Warrior (USA).pce
+TGFX16|Chase H.Q. (USA).pce
+TGFX16|Keith Courage in Alpha Zones (USA).pce
+TGFX16|Galaga '90 (USA).pce
+TGFX16|New Adventure Island (USA).pce
+TGFX16|Parasol Stars - The Story of Bubble Bobble III (Europe).pce
+TGFX16|Soldier Blade (USA).pce
+TGFX16|Super Star Soldier (USA).pce
+TGFX16|Ordyne (USA).pce
+TGFX16|Psychosis (USA).pce
+TGFX16|Raiden (USA).pce
+TGFX16|Sidearms (USA).pce
+TGFX16|Vigilante (USA).pce
+TGFX16|Ys Book I & II (USA).pce
+
+# --- Master System (.sms)
+SMS|Sonic The Hedgehog (Europe).sms
+SMS|Sonic The Hedgehog 2 (Europe).sms
+SMS|Alex Kidd in Miracle World (USA, Europe).sms
+SMS|Wonder Boy (Europe).sms
+SMS|Wonder Boy III - The Dragon's Trap (USA, Europe).sms
+SMS|Wonder Boy in Monster Land (Europe).sms
+SMS|Phantasy Star (USA, Europe).sms
+SMS|Golden Axe (USA, Europe).sms
+SMS|Shinobi (USA, Europe).sms
+SMS|Master of Darkness (Europe).sms
+SMS|Castle of Illusion Starring Mickey Mouse (Europe).sms
+SMS|Land of Illusion Starring Mickey Mouse (Europe).sms
+SMS|Asterix (Europe).sms
+SMS|Lucky Dime Caper Starring Donald Duck, The (Europe).sms
+SMS|Psycho Fox (USA, Europe).sms
+SMS|R-Type (USA, Europe).sms
+SMS|Fantasy Zone (Europe).sms
+SMS|Ys - The Vanished Omens (USA).sms
+SMS|Aztec Adventure (USA, Europe).sms
+SMS|Zillion (USA, Europe).sms
+SMS|Alien Syndrome (USA, Europe).sms
+SMS|California Games (USA, Europe).sms
+SMS|Ghouls 'n Ghosts (Europe).sms
+SMS|Rastan (USA, Europe).sms
+SMS|Space Harrier (Europe).sms
+
+# --- Game Gear (.gg)
+SMS|Sonic The Hedgehog (USA, Europe).gg
+SMS|Sonic Chaos (USA, Europe).gg
+SMS|Sonic Drift 2 (USA, Europe).gg
+SMS|Shinobi (USA, Europe).gg
+SMS|Shinobi II - The Silent Fury (USA, Europe).gg
+SMS|Streets of Rage (USA, Europe).gg
+SMS|Streets of Rage 2 (USA, Europe).gg
+SMS|Defenders of Oasis (USA, Europe).gg
+SMS|Land of Illusion Starring Mickey Mouse (USA, Europe).gg
+SMS|Ristar (USA, Europe).gg
+SMS|Gunstar Heroes (Japan).gg
+SMS|Columns (USA, Europe).gg
+SMS|Dragon Crystal (USA, Europe).gg
+SMS|Wonder Boy (Japan).gg
+SMS|Tails Adventure (USA, Europe).gg
+
+# --- PlayStation (.chd)
+PSX|Final Fantasy VII (USA).chd
+PSX|Final Fantasy VIII (USA).chd
+PSX|Final Fantasy IX (USA).chd
+PSX|Final Fantasy Tactics (USA).chd
+PSX|Metal Gear Solid (USA).chd
+PSX|Resident Evil 2 (USA).chd
+PSX|Resident Evil 3 - Nemesis (USA).chd
+PSX|Silent Hill (USA).chd
+PSX|Castlevania - Symphony of the Night (USA).chd
+PSX|Crash Bandicoot (USA).chd
+PSX|Crash Bandicoot 2 - Cortex Strikes Back (USA).chd
+PSX|Crash Bandicoot 3 - Warped (USA).chd
+PSX|Spyro the Dragon (USA).chd
+PSX|Spyro 2 - Ripto's Rage! (USA).chd
+PSX|Gran Turismo (USA).chd
+PSX|Gran Turismo 2 (USA).chd
+PSX|Tekken 3 (USA).chd
+PSX|Ridge Racer Type 4 (USA).chd
+PSX|Tony Hawk's Pro Skater 2 (USA).chd
+PSX|Chrono Cross (USA).chd
+PSX|Xenogears (USA).chd
+PSX|Suikoden (USA).chd
+PSX|Suikoden II (USA).chd
+PSX|Vagrant Story (USA).chd
+PSX|Parasite Eve (USA).chd
+PSX|Legend of Mana (USA).chd
+PSX|Tactics Ogre - Let Us Cling Together (USA).chd
+PSX|Einhander (USA).chd
+PSX|Klonoa - Door to Phantomile (USA).chd
+PSX|Mega Man Legends (USA).chd
+
+# --- Arcade (.mra) - launched by descriptor, so no region tag
+_Arcade|Street Fighter II - The World Warrior.mra
+_Arcade|Street Fighter II' - Champion Edition.mra
+_Arcade|Metal Slug.mra
+_Arcade|Metal Slug 2.mra
+_Arcade|Metal Slug 3.mra
+_Arcade|Bubble Bobble.mra
+_Arcade|Rainbow Islands.mra
+_Arcade|Pac-Man.mra
+_Arcade|Ms. Pac-Man.mra
+_Arcade|Galaga.mra
+_Arcade|Galaxian.mra
+_Arcade|Donkey Kong.mra
+_Arcade|Donkey Kong Jr..mra
+_Arcade|Dig Dug.mra
+_Arcade|Mr. Do!.mra
+_Arcade|Frogger.mra
+_Arcade|Defender.mra
+_Arcade|Robotron 2084.mra
+_Arcade|Joust.mra
+_Arcade|Q-bert.mra
+_Arcade|Rally-X.mra
+_Arcade|Time Pilot.mra
+_Arcade|Gyruss.mra
+_Arcade|1942.mra
+_Arcade|1943 - The Battle of Midway.mra
+_Arcade|Ghosts 'n Goblins.mra
+_Arcade|Black Tiger.mra
+_Arcade|Commando.mra
+_Arcade|Gun.Smoke.mra
+_Arcade|Mercs.mra
+_Arcade|Final Fight.mra
+_Arcade|Golden Axe.mra
+_Arcade|Altered Beast.mra
+_Arcade|Shinobi.mra
+_Arcade|Rastan.mra
+_Arcade|R-Type.mra
+
+# --- Amiga (.adf) - computer, reached through the file browser
+Amiga|Turrican.adf
+Amiga|Turrican II - The Final Fight.adf
+Amiga|Lemmings.adf
+Amiga|Oh No! More Lemmings.adf
+Amiga|Another World.adf
+Amiga|Shadow of the Beast.adf
+Amiga|Shadow of the Beast II.adf
+Amiga|Speedball 2 - Brutal Deluxe.adf
+Amiga|Sensible Soccer.adf
+Amiga|Cannon Fodder.adf
+Amiga|Superfrog.adf
+Amiga|Zool.adf
+Amiga|Project-X.adf
+Amiga|Agony.adf
+Amiga|Apidya.adf
+Amiga|Banshee.adf
+Amiga|Chaos Engine, The.adf
+Amiga|Gods.adf
+Amiga|Alien Breed.adf
+Amiga|Alien Breed II - The Horror Continues.adf
+Amiga|Body Blows.adf
+Amiga|Deluxe Galaga.adf
+Amiga|Defender of the Crown.adf
+Amiga|Pinball Dreams.adf
+Amiga|Pinball Fantasies.adf
+Amiga|It Came from the Desert.adf
+Amiga|Monkey Island 2 - LeChuck's Revenge.adf
+Amiga|Settlers, The.adf
+Amiga|Syndicate.adf
+Amiga|Wings.adf
+
+# --- Commodore 64 (.d64)
+C64|Last Ninja, The.d64
+C64|Last Ninja 2, The.d64
+C64|Turrican.d64
+C64|Turrican II.d64
+C64|Impossible Mission.d64
+C64|Boulder Dash.d64
+C64|Bubble Bobble.d64
+C64|Commando.d64
+C64|Wizball.d64
+C64|Paradroid.d64
+C64|Uridium.d64
+C64|Armalyte.d64
+C64|Creatures.d64
+C64|Mayhem in Monsterland.d64
+C64|Katakis.d64
+C64|Delta.d64
+C64|Sanxion.d64
+C64|IK+.d64
+C64|Summer Games.d64
+C64|Winter Games.d64
+C64|Maniac Mansion.d64
+C64|Zak McKracken and the Alien Mindbenders.d64
+C64|Elite.d64
+C64|Head over Heels.d64
+C64|Ghosts 'n Goblins.d64
+
+# --- ZX Spectrum (.tap)
+Spectrum|Manic Miner.tap
+Spectrum|Jet Set Willy.tap
+Spectrum|Knight Lore.tap
+Spectrum|Head over Heels.tap
+Spectrum|Chaos.tap
+Spectrum|Great Escape, The.tap
+Spectrum|Dizzy.tap
+Spectrum|Treasure Island Dizzy.tap
+Spectrum|R-Type.tap
+Spectrum|Rainbow Islands.tap
+Spectrum|Target Renegade.tap
+Spectrum|Saboteur.tap
+Spectrum|Elite.tap
+Spectrum|Exolon.tap
+Spectrum|Cybernoid.tap
+Spectrum|Nebulus.tap
+Spectrum|Skool Daze.tap
+Spectrum|Back to Skool.tap
+Spectrum|Chuckie Egg.tap
+Spectrum|Lords of Midnight.tap
+
+# --- Atari Lynx (.lnx)
+AtariLynx|Chip's Challenge (USA, Europe).lnx
+AtariLynx|California Games (USA, Europe).lnx
+AtariLynx|Blue Lightning (USA, Europe).lnx
+AtariLynx|Electrocop (USA, Europe).lnx
+AtariLynx|Gates of Zendocon (USA, Europe).lnx
+AtariLynx|Klax (USA, Europe).lnx
+AtariLynx|Ms. Pac-Man (USA, Europe).lnx
+AtariLynx|Paperboy (USA, Europe).lnx
+AtariLynx|Rampage (USA, Europe).lnx
+AtariLynx|Rygar (USA, Europe).lnx
+AtariLynx|Shadow of the Beast (USA, Europe).lnx
+AtariLynx|Todd's Adventures in Slime World (USA, Europe).lnx
+AtariLynx|Warbirds (USA, Europe).lnx
+AtariLynx|Xenophobe (USA, Europe).lnx
+AtariLynx|Zarlor Mercenary (USA, Europe).lnx
+
+# --- WonderSwan (.ws) and WonderSwan Color (.wsc)
+WonderSwan|Gunpey (Japan).ws
+WonderSwan|Rainbow Islands - Putty's Party (Japan).ws
+WonderSwan|Klonoa - Moonlight Museum (Japan).ws
+WonderSwan|Langrisser Millennium (Japan).ws
+WonderSwan|Terrors (Japan).ws
+WonderSwan|Digimon Adventure - Anode Tamer (Japan).ws
+WonderSwan|Beatmania for WonderSwan (Japan).ws
+WonderSwan|Rockman EXE - WS (Japan).wsc
+WonderSwan|Final Fantasy (Japan).wsc
+WonderSwan|Final Fantasy II (Japan).wsc
+WonderSwan|Guilty Gear Petit (Japan).wsc
+WonderSwan|Judgement Silversword - Rebirth Edition (Japan).wsc
+WonderSwan|Makaimura for WonderSwan (Japan).wsc
+WonderSwan|Riviera - The Promised Land (Japan).wsc
+
+# --- Neo Geo Pocket Color (.ngp)
+NGP|SNK vs. Capcom - Match of the Millennium (USA).ngp
+NGP|King of Fighters R-2 (USA).ngp
+NGP|Metal Slug - 1st Mission (USA).ngp
+NGP|Metal Slug - 2nd Mission (USA).ngp
+NGP|Samurai Shodown! (USA).ngp
+NGP|Samurai Shodown! 2 (USA).ngp
+NGP|Sonic the Hedgehog Pocket Adventure (USA).ngp
+NGP|Puzzle Bobble Mini (USA).ngp
+NGP|Dark Arms - Beast Buster 1999 (USA).ngp
+NGP|Faselei! (USA).ngp
+
+# --- Atari 7800 (.a78)
+A7800|Ms. Pac-Man (USA).a78
+A7800|Galaga (USA).a78
+A7800|Joust (USA).a78
+A7800|Robotron 2084 (USA).a78
+A7800|Food Fight (USA).a78
+A7800|Centipede (USA).a78
+A7800|Dig Dug (USA).a78
+A7800|Asteroids (USA).a78
+A7800|Xevious (USA).a78
+A7800|Kung-Fu Master (USA).a78
+A7800|Ballblazer (USA).a78
+A7800|Rescue on Fractalus! (USA).a78
+A7800|Choplifter! (USA).a78
+A7800|Desert Falcon (USA).a78
+A7800|One-on-One Basketball (USA).a78

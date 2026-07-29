@@ -148,6 +148,11 @@ static const ini_var_t ini_vars[] =
 	{ "SPD_QUIRK", (void*)(&(cfg.spd_quirk)), UINT8, 0, 3 },
 	{ "HDMI_OFF", (void*)(&(cfg.hdmi_off)), UINT16, 0, 1440 },
 	{ "KEYBOARD_AS_JOYSTICK", (void*)(cfg.keyboard_as_joystick), HEX32ARR, 0, 0xFFFFFFFF },
+	{ "CLASSICUI", (void*)(&(cfg.classicui)), UINT8, 0, 1 },
+	{ "CLASSICUI_PROFILE", (void*)(&(cfg.classicui_profile)), UINT8, 0, 3 },
+	{ "CLASSICUI_ARTDIR", (void*)(&(cfg.classicui_artdir)), STRING, 0, sizeof(cfg.classicui_artdir) - 1 },
+	{ "CLASSICUI_ARTFETCH", (void*)(&(cfg.classicui_artfetch)), UINT8, 0, 1 },
+	{ "CLASSICUI_ARTURL", (void*)(&(cfg.classicui_arturl)), STRING, 0, sizeof(cfg.classicui_arturl) - 1 },
 };
 
 static const int nvars = (int)(sizeof(ini_vars) / sizeof(ini_var_t));
@@ -612,6 +617,8 @@ void cfg_parse()
 	cfg.video_saturation = 100;
 	strcpy(cfg.video_gain_offset, "1, 0, 1, 0, 1, 0");
 	strcpy(cfg.main, "MiSTer");
+	strcpy(cfg.classicui_artdir, "boxart");
+	strcpy(cfg.classicui_arturl, "https://thumbnails.libretro.com");
 	has_video_sections = false;
 	using_video_section = false;
 	cfg_error_count = 0;
