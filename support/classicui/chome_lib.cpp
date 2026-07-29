@@ -4,6 +4,7 @@
 #include <strings.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "chome_lib.h"
 #include "chome_video.h"
@@ -463,6 +464,194 @@ void lib_refresh_slots(chome_item *it)
 	}
 }
 
+/* -------------------------------------------------------- index cache ----- */
+
+/*
+  The index is cached on the SD card so opening the menu inside a game core does
+  not cost a rescan. Every core switch re-execs the binary, so without this the
+  first open after each switch would walk the whole library again.
+
+  Validation records the mtime of every directory the scan visited. Adding or
+  removing a file changes its parent directory's mtime, so stat()ing those
+  directories catches library changes at a fraction of the cost of re-reading them
+  (one stat per directory, versus a readdir of every entry). What it cannot catch
+  is a change deeper than the recorded set when that set overflowed - hence the cap
+  below is generous, and Options > Rescan Library forces a fresh scan regardless.
+*/
+
+#define IDX_MAGIC   0x58494843u        // "CHIX"
+#define IDX_VERSION 1
+#define IDX_MAX_DIRS 2048
+#define IDX_PATH_LEN 304
+
+struct idx_dir
+{
+	char     path[IDX_PATH_LEN];
+	uint64_t mtime;
+};
+
+struct idx_header
+{
+	uint32_t magic;
+	uint32_t version;
+	uint32_t item_size;      // reject a cache written by a different layout
+	uint32_t sys_sig;        // systems table signature
+	uint32_t nitems;
+	uint32_t ndirs;
+	uint32_t truncated;      // 1 when the directory set overflowed
+	uint32_t reserved;
+};
+
+static idx_dir idx_dirs[IDX_MAX_DIRS];
+static int idx_ndirs = 0;
+static int idx_truncated = 0;
+static int idx_from_cache = 0;
+
+int lib_index_cached() { return idx_from_cache; }
+
+static void idx_note_dir(const char *full)
+{
+	if (idx_ndirs >= IDX_MAX_DIRS) { idx_truncated = 1; return; }
+	if (strlen(full) >= IDX_PATH_LEN) { idx_truncated = 1; return; }
+
+	struct stat st;
+	if (stat(full, &st)) return;
+
+	snprintf(idx_dirs[idx_ndirs].path, IDX_PATH_LEN, "%s", full);
+	idx_dirs[idx_ndirs].mtime = (uint64_t)st.st_mtime;
+	idx_ndirs++;
+}
+
+// Signature of the systems table: editing classicui_systems.txt invalidates.
+static uint32_t idx_sys_sig()
+{
+	uint32_t h = 2166136261u;
+	for (int i = 0; i < nsys; i++)
+	{
+		const char *parts[4] = { systems[i].id, systems[i].dir, systems[i].ext, systems[i].rbf };
+		for (int k = 0; k < 4; k++)
+			for (const char *p = parts[k]; *p; p++) { h ^= (unsigned char)*p; h *= 16777619u; }
+		h ^= (uint32_t)systems[i].computer + 1u;
+		h *= 16777619u;
+	}
+	h ^= (uint32_t)nsys;
+	return h * 16777619u;
+}
+
+static const char *idx_path()
+{
+	static char p[1024];
+	snprintf(p, sizeof(p), "%s/classicui/index.bin", getRootDir());
+	return p;
+}
+
+static void idx_save()
+{
+	char dir[1024];
+	snprintf(dir, sizeof(dir), "%s/classicui", getRootDir());
+	mkdir(dir, 0777);
+
+	FILE *f = fopen(idx_path(), "wb");
+	if (!f) { printf("ClassicUI: cannot write the index cache\n"); return; }
+
+	idx_header h = {};
+	h.magic = IDX_MAGIC;
+	h.version = IDX_VERSION;
+	h.item_size = (uint32_t)sizeof(chome_item);
+	h.sys_sig = idx_sys_sig();
+	h.nitems = (uint32_t)nitems;
+	h.ndirs = (uint32_t)idx_ndirs;
+	h.truncated = (uint32_t)idx_truncated;
+
+	int ok = (fwrite(&h, sizeof(h), 1, f) == 1);
+	if (ok && nitems) ok = (fwrite(items, sizeof(chome_item), nitems, f) == (size_t)nitems);
+	if (ok && idx_ndirs) ok = (fwrite(idx_dirs, sizeof(idx_dir), idx_ndirs, f) == (size_t)idx_ndirs);
+	fclose(f);
+
+	if (!ok) { unlink(idx_path()); printf("ClassicUI: index cache write failed\n"); return; }
+
+	printf("ClassicUI: cached %d items and %d directories%s\n",
+		nitems, idx_ndirs, idx_truncated ? " (directory set truncated)" : "");
+}
+
+// Returns 1 when a still-valid cache was loaded into the index.
+static int idx_load()
+{
+	FILE *f = fopen(idx_path(), "rb");
+	if (!f) return 0;
+
+	idx_header h = {};
+	if (fread(&h, sizeof(h), 1, f) != 1) { fclose(f); return 0; }
+
+	if (h.magic != IDX_MAGIC || h.version != IDX_VERSION ||
+		h.item_size != sizeof(chome_item) ||
+		h.nitems > CH_MAX_ITEMS || h.ndirs > IDX_MAX_DIRS)
+	{
+		fclose(f);
+		printf("ClassicUI: index cache is from another build, rescanning\n");
+		return 0;
+	}
+
+	if (h.sys_sig != idx_sys_sig())
+	{
+		fclose(f);
+		printf("ClassicUI: systems table changed, rescanning\n");
+		return 0;
+	}
+
+	if (fread(items, sizeof(chome_item), h.nitems, f) != h.nitems) { fclose(f); return 0; }
+	if (fread(idx_dirs, sizeof(idx_dir), h.ndirs, f) != h.ndirs) { fclose(f); return 0; }
+	fclose(f);
+
+	// Every recorded directory must still be there, unchanged.
+	for (uint32_t i = 0; i < h.ndirs; i++)
+	{
+		struct stat st;
+		if (stat(idx_dirs[i].path, &st) || (uint64_t)st.st_mtime != idx_dirs[i].mtime)
+		{
+			printf("ClassicUI: %s changed, rescanning\n", idx_dirs[i].path);
+			return 0;
+		}
+	}
+
+	/*
+	  A system whose folder exists now must have been walked then, otherwise the
+	  user has just added a whole system and the cache predates it. Directory
+	  mtimes cannot catch that on their own: the new folder has no record to check.
+	*/
+	for (int i = 0; i < nsys; i++)
+	{
+		char root[1024];
+		if (!lib_sys_games_dir(i, root, sizeof(root))) continue;
+
+		int seen = 0;
+		for (uint32_t k = 0; k < h.ndirs && !seen; k++) if (!strcmp(idx_dirs[k].path, root)) seen = 1;
+		if (!seen)
+		{
+			printf("ClassicUI: %s appeared since the cache, rescanning\n", systems[i].name);
+			return 0;
+		}
+	}
+
+	nitems = (int)h.nitems;
+	idx_ndirs = (int)h.ndirs;
+	idx_truncated = (int)h.truncated;
+
+	/*
+	  The state file is authoritative for favourites and play counts, and savestate
+	  slots are re-read per selection, so neither is trusted from the cache.
+	*/
+	for (int i = 0; i < nitems; i++)
+	{
+		items[i].slots = 0;
+		state_apply(&items[i]);
+	}
+
+	printf("ClassicUI: index cache hit, %d items%s\n",
+		nitems, idx_truncated ? " (validation incomplete: use Rescan if a game is missing)" : "");
+	return 1;
+}
+
 /* --------------------------------------------------------------- scan ----- */
 
 static int scan_sys = 0;
@@ -478,6 +667,8 @@ static void scan_dir(int sysidx, const char *root, const char *rel, int depth)
 
 	DIR *d = opendir(full);
 	if (!d) return;
+
+	idx_note_dir(full);
 
 	struct dirent *de;
 	while ((de = readdir(d)))
@@ -518,6 +709,7 @@ int lib_scan_step()
 		scanning = 0;
 		for (int i = 0; i < nitems; i++) state_apply(&items[i]);
 		printf("ClassicUI: scan complete, %d items\n", nitems);
+		idx_save();
 		return 0;
 	}
 
@@ -548,16 +740,40 @@ void lib_load_systems()
 	state_load();
 }
 
-void lib_init()
+static void lib_init_common(int use_cache)
 {
 	if (!items) items = (chome_item*)calloc(CH_MAX_ITEMS, sizeof(chome_item));
 	if (!items) { printf("ClassicUI: out of memory for the index\n"); return; }
 
 	nitems = 0;
+	idx_ndirs = 0;
+	idx_truncated = 0;
+	idx_from_cache = 0;
+
 	lib_load_systems();
+
+	if (use_cache && idx_load())
+	{
+		idx_from_cache = 1;
+		scanning = 0;
+		scan_sys = nsys;
+		return;
+	}
 
 	scan_sys = 0;
 	scanning = 1;
+}
+
+void lib_init()
+{
+	lib_init_common(1);
+}
+
+void lib_rescan()
+{
+	printf("ClassicUI: rescanning the library\n");
+	unlink(idx_path());
+	lib_init_common(0);
 }
 
 /* --------------------------------------------------------------- views ---- */

@@ -223,6 +223,34 @@ feature and the first thing to tune on hardware.** A full aperture grille masks 
 of three channels per pixel; stacked with scanlines it can get dark. The shipped
 depth is moderate (dimming to about 73% at the darkest point).
 
+## The index cache
+
+Every core switch re-execs the binary, so without a cache the first menu open
+after each switch would walk the whole library again - which matters most exactly
+where it is least welcome, opening the menu from inside a game.
+
+So a completed scan writes `classicui/index.bin`: a header, the item array, and
+the mtime of every directory the scan visited. `lib_init()` loads it and skips
+scanning when it is still valid.
+
+Validation is deliberately cheap. Adding or removing a file changes its parent
+directory's mtime, so stat()ing the recorded directories catches library changes at
+a fraction of the cost of re-reading them - one stat per directory, versus a
+readdir of every entry. The cache is rejected when:
+
+- a recorded directory is gone or its mtime moved (a game was added or removed)
+- a system's folder exists now but was not walked then (a whole system appeared,
+  which mtimes cannot catch on their own since the new folder has no record)
+- the systems table signature changed (`classicui_systems.txt` was edited)
+- the build changed: version, or `sizeof(chome_item)`, no longer match
+
+Favourites and play counts are re-read from the state file rather than trusted from
+the cache, and savestate slots are zeroed on load since they are re-read per
+selection anyway.
+
+`lib_rescan()` (Options > Rescan Library) deletes the cache and scans from scratch,
+which is the escape hatch for the one case validation can miss.
+
 ## Cover art
 
 Local lookup order, all under `classicui_artdir` (default `boxart`):
@@ -314,5 +342,6 @@ whether a core accepts the MGL.
   selection can jump for a second or two.
 - The index caps at 6000 games and the browser at 512 entries per directory; both
   log when they truncate rather than silently hiding games.
-- No persisted index yet: the scan re-runs each boot. It is incremental and off
-  the UI thread, but a cached `index.bin` is the obvious next win on slow cards.
+- The index cache's validation cannot see a change deeper than the directories it
+  recorded, if that set overflowed its 2048 cap. Options > Rescan Library forces a
+  fresh scan, and says so when validation was incomplete.

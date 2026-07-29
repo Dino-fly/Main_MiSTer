@@ -1032,6 +1032,86 @@ static void assert_ingame()
 	gfx_shutdown();
 }
 
+static void assert_index_cache()
+{
+	printf("\n== index cache ==\n");
+
+	// A fresh scan writes the cache.
+	lib_rescan();
+	for (int i = 0; i < 400 && lib_scanning(); i++) lib_scan_step();
+	int scanned = lib_item_count();
+	check(!lib_index_cached(), "a rescan does not come from the cache");
+	check(scanned > 0, "the scan found games");
+
+	{
+		char p[1024];
+		snprintf(p, sizeof(p), "%s/classicui/index.bin", ROOT);
+		struct stat st;
+		check(!stat(p, &st) && st.st_size > 0, "the scan wrote an index cache");
+		printf("  cache is %ld bytes for %d items\n", (long)st.st_size, scanned);
+	}
+
+	// Loading it again must skip scanning entirely and agree item for item.
+	lib_init();
+	check(lib_index_cached(), "the cache is used on the next init");
+	check(!lib_scanning(), "and no scan is needed");
+	check(lib_item_count() == scanned, "the cached index has the same item count");
+
+	{
+		int same = 1;
+		for (int i = 0; i < lib_item_count(); i++)
+		{
+			chome_item *it = lib_item(i);
+			if (!it || !it->title[0] || !it->path[0]) { same = 0; break; }
+		}
+		check(same, "cached items carry their titles and paths");
+	}
+
+	// Adding a game must invalidate it: the parent directory's mtime moves.
+	sleep(1);                       // filesystem mtime granularity
+	touch(ROOT "/games/SNES", "Super Turrican (Europe).sfc", 2048);
+
+	lib_init();
+	check(!lib_index_cached(), "adding a game invalidates the cache");
+	for (int i = 0; i < 400 && lib_scanning(); i++) lib_scan_step();
+	check(lib_item_count() == scanned + 1, "and the rescan picks the new game up");
+	int grown = lib_item_count();
+
+	// Editing the systems table must invalidate it too.
+	lib_init();
+	check(lib_index_cached(), "cache valid again after that rescan");
+
+	{
+		char p[1024];
+		snprintf(p, sizeof(p), "%s/classicui_systems.txt", ROOT);
+		FILE *f = fopen(p, "wt");
+		if (f)
+		{
+			fprintf(f, "snes | Super Nintendo | SNES | _Console/SNES | SNES | sfc,smc | "
+			           "Nintendo - Super Nintendo Entertainment System | f | 0 | 2 | 0 | 5B4B8A\n");
+			fclose(f);
+		}
+	}
+
+	lib_init();
+	check(!lib_index_cached(), "changing the systems table invalidates the cache");
+	for (int i = 0; i < 400 && lib_scanning(); i++) lib_scan_step();
+	printf("  with one system declared: %d items (was %d)\n", lib_item_count(), grown);
+	check(lib_item_count() < grown, "and only the declared system is indexed");
+
+	// Put the fake SD back the way the rest of the run expects it.
+	{
+		char p[1024];
+		snprintf(p, sizeof(p), "%s/classicui_systems.txt", ROOT);
+		unlink(p);
+		snprintf(p, sizeof(p), "%s/games/SNES/Super Turrican (Europe).sfc", ROOT);
+		unlink(p);
+	}
+	lib_rescan();
+	for (int i = 0; i < 400 && lib_scanning(); i++) lib_scan_step();
+	check(lib_item_count() == scanned, "restored to the original library");
+}
+
 /* ------------------------------------------------------------------ main -- */
 
 int main()
@@ -1058,6 +1138,7 @@ int main()
 	assert_slots();
 	assert_art();
 	assert_video();
+	assert_index_cache();
 
 	walk_profile("hd", 1, 1280, 720);
 	walk_profile("sd", 2, 640, 480);
