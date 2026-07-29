@@ -24,6 +24,7 @@ g++ -std=gnu++14 -O1 -g -Wall -Wextra -Wno-unused-parameter -Wno-format-truncati
     support/classicui/test/stubs.cpp \
     support/classicui/test/harness.cpp \
     charrom.cpp \
+    lib/miniz/miniz.c \
     -lImlib2
 
 echo "--- running ---"
