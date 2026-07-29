@@ -192,6 +192,17 @@ static void build_sd()
 	make_zip(ROOT "/games/NEOGEO", "neogeo.zip", "sfix.sfix", 1024);
 	touch(ROOT "/games/NEOGEO", "sfix.sfix", 1024);          // system file, not a game
 
+	// A Darksoft-style romset: a folder of member files, which is the game itself
+	// rather than a folder to walk into.
+	mkpath(ROOT "/games/NEOGEO/samsho2");
+	touch(ROOT "/games/NEOGEO/samsho2", "prom", 2048);
+	touch(ROOT "/games/NEOGEO/samsho2", "crom0", 4096);
+	touch(ROOT "/games/NEOGEO/samsho2", "srom", 1024);
+
+	// ...and a folder that is not one, so it is still walked into as usual.
+	mkpath(ROOT "/games/NEOGEO/Homebrew");
+	make_zip(ROOT "/games/NEOGEO/Homebrew", "lasthope.zip", "251-p1.p1", 2048);
+
 	// A computer system: should not appear on the shelf, only under Computers.
 	mkpath(ROOT "/games/Amiga");
 	touch(ROOT "/games/Amiga", "Turrican II.adf", 2048);
@@ -522,6 +533,21 @@ static void assert_index()
 	check(!neo_hidden, "a romset marked hidden is left out");
 	check(!neo_sysfile, "BIOS and system files are not listed as games");
 	check(!alts, "arcade _alternatives are skipped");
+
+	int neo_dir = 0, neo_dir_walked = 0, neo_nested = 0;
+	for (int i = 0; i < lib_item_count(); i++)
+	{
+		chome_item *it = lib_item(i);
+		const chome_sys *s2 = lib_sys(it->sysidx);
+		if (!s2 || strcmp(s2->id, "neogeo")) continue;
+
+		if (!strcmp(it->path, "samsho2")) neo_dir = 1;
+		if (strcasestr(it->path, "samsho2/")) neo_dir_walked = 1;
+		if (strcasestr(it->path, "Homebrew/lasthope.zip")) neo_nested = 1;
+	}
+	check(neo_dir, "a folder romset is listed as one game (Darksoft layout)");
+	check(!neo_dir_walked, "and is not walked into as though it held games");
+	check(neo_nested, "a folder that is not a romset is still walked into");
 }
 
 static void assert_views()
