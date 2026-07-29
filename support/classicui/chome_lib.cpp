@@ -267,6 +267,43 @@ static int zip_playables(const char *zippath, const char *extlist,
 	return n;
 }
 
+/*
+  Romsets. The set is named for the board, so the shelf would otherwise read like a
+  MAME listing; romsets.xml carries the real titles and the firmware already knows
+  how to read it. Same convention as the classic browser (file_io.cpp): the key
+  going in is the name without its extension, and the reply is the title, NULL when
+  the set is unlisted - the board name then has to do - or -1 when the file marks it
+  as one to hide, which is how the BIOS set stays off the shelf.
+
+  Returns 0 for the hidden case, meaning "do not list this at all".
+*/
+static const char *romset_title(const char *dir, const char *name, char *buf, int len)
+{
+	snprintf(buf, len, "%s", name);
+	char *dot = strrchr(buf, '.');
+	if (dot && !strcasecmp(dot, ".zip")) *dot = 0;
+
+	char *alt = neogeo_get_altname((char*)dir, (char*)name, buf);
+	if (alt == (char*)-1) return 0;
+	return alt ? alt : buf;
+}
+
+// Is this folder a romset rather than a folder of games? A Darksoft set is loose
+// member files, and the loader asks for these two first (neogeo_loader.cpp).
+static int dir_is_romset(const char *path)
+{
+	static const char *const member[] = { "prom", "p1rom", "romset.xml" };
+
+	for (size_t i = 0; i < sizeof(member) / sizeof(member[0]); i++)
+	{
+		char p[1200];
+		snprintf(p, sizeof(p), "%s/%s", path, member[i]);
+		struct stat st;
+		if (!stat(p, &st) && S_ISREG(st.st_mode)) return 1;
+	}
+	return 0;
+}
+
 static int ext_matches(const char *name, const char *list)
 {
 	const char *dot = strrchr(name, '.');
@@ -771,28 +808,29 @@ static void scan_dir(int sysidx, const char *root, const char *rel, int depth)
 			*/
 			if (systems[sysidx].mra && de->d_name[0] == '_') continue;
 
+			/*
+			  A romset can be a folder of member files rather than an archive of them -
+			  that is how the Darksoft packs ship - and then the folder is the game, not
+			  something to walk into. The loader takes either: file_io opens
+			  "romset/prom" and "romset.zip/prom" alike.
+			*/
+			if (systems[sysidx].romset && dir_is_romset(childfull))
+			{
+				char buf[CH_TITLE_LEN];
+				const char *title = romset_title(full, de->d_name, buf, sizeof(buf));
+				if (title) add_item(sysidx, childrel, title);
+				continue;
+			}
+
 			scan_dir(sysidx, root, childrel, depth + 1);
 		}
 		else if (ext_matches(de->d_name, systems[sysidx].ext))
 		{
-			/*
-			  A romset is named for the board - mslug.zip - so the shelf would read like a
-			  MAME set without this. Same convention as the classic browser
-			  (file_io.cpp): the key going in is the name without its extension, and the
-			  reply is the real title, NULL when the set is unknown, or -1 when
-			  romsets.xml marks it as one to hide.
-			*/
 			if (systems[sysidx].romset)
 			{
-				char key[CH_TITLE_LEN];
-				snprintf(key, sizeof(key), "%s", de->d_name);
-				char *dot = strrchr(key, '.');
-				if (dot && !strcasecmp(dot, ".zip")) *dot = 0;
-
-				char *alt = neogeo_get_altname(full, de->d_name, key);
-				if (alt == (char*)-1) continue;
-
-				add_item(sysidx, childrel, alt ? alt : key);
+				char buf[CH_TITLE_LEN];
+				const char *title = romset_title(full, de->d_name, buf, sizeof(buf));
+				if (title) add_item(sysidx, childrel, title);
 			}
 			else add_item(sysidx, childrel, de->d_name);
 		}
