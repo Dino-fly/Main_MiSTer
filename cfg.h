@@ -80,6 +80,7 @@ typedef struct {
 	char player_controller[6][8][256];
 	char controller_deadzone[32][256];
 	uint8_t rumble;
+	uint8_t snac_pad;
 	uint8_t wheel_force;
 	uint16_t wheel_range;
 	uint8_t hdmi_game_mode;
