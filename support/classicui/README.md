@@ -298,19 +298,30 @@ Key repeat for the shelf needs `chome_active()` in `menu_key_get()` - without it
 ## Running it on a laptop
 
 ```
-support/classicui/test/play.sh          # 1280x720
-support/classicui/test/play.sh --sd     # 640x480
-support/classicui/test/play.sh --lo     # 320x240
+support/classicui/test/play.sh              # 1280x720
+support/classicui/test/play.sh --sd         # 640x480
+support/classicui/test/play.sh --lo         # 320x240
+support/classicui/test/play.sh --no-fetch   # stay offline
 ```
 
-Then open <http://localhost:8080>. Arrow keys move, Enter is A, Esc is B, Tab is X,
+Then open <http://localhost:8099> (`PORT=9000 play.sh` if that clashes). Arrow keys move, Enter is A, Esc is B, Tab is X,
 Backspace is Y, backtick is Select, `-`/`=` are L/R, and **M is the OSD/menu
 button**.
 
-It runs the real front-end against a fake SD card of ~25 placeholder games across
-a dozen systems, some with generated cover art so both real covers and the
-fallback card are on screen at once, plus a couple of suspend points with
-thumbnails. Nothing is installed on the host: the container already has imlib2, and
+It runs the real front-end against a fake SD card built from
+`test/placeholder_games.txt`: **528 placeholder games** across 19 system and
+extension groups, in **No-Intro / Redump naming**. That naming is the point - it is
+what the libretro thumbnail server keys covers on, so cover fetching is exercised
+for real rather than simulated. A spot check of 18 random entries resolved 15
+against the live server; the rest are name variants that fall back to the generated
+card, which is useful too since it puts all three states on screen at once.
+
+Only two covers are planted locally, so you can watch the rest arrive lazily as
+cards come into view. Fetching is **on** here (unlike the product default) because
+testing it is the point; `--no-fetch` turns it off, and the container gets `curl`
+because that is what the fetcher forks.
+
+Nothing is installed on the host: the container already has imlib2, and
 `linux/input.h` is the only Linux-specific header the project pulls in, so building
 natively would need a shim that this avoids.
 
