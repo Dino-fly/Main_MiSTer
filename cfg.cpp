@@ -148,6 +148,7 @@ static const ini_var_t ini_vars[] =
 	{ "KEYBOARD_AS_JOYSTICK", (void*)(cfg.keyboard_as_joystick), HEX32ARR, 0, 0xFFFFFFFF },
 	{ "CLASSICUI", (void*)(&(cfg.classicui)), UINT8, 0, 1 },
 	{ "CLASSICUI_PROFILE", (void*)(&(cfg.classicui_profile)), UINT8, 0, 3 },
+	{ "CLASSICUI_OVERSCAN", (void*)(&(cfg.classicui_overscan)), UINT8, 0, 15 },
 	{ "CLASSICUI_ARTDIR", (void*)(&(cfg.classicui_artdir)), STRING, 0, sizeof(cfg.classicui_artdir) - 1 },
 	{ "CLASSICUI_ARTFETCH", (void*)(&(cfg.classicui_artfetch)), UINT8, 0, 1 },
 	{ "CLASSICUI_ARTURL", (void*)(&(cfg.classicui_arturl)), STRING, 0, sizeof(cfg.classicui_arturl) - 1 },
@@ -615,6 +616,7 @@ void cfg_parse()
 	cfg.video_saturation = 100;
 	strcpy(cfg.video_gain_offset, "1, 0, 1, 0, 1, 0");
 	strcpy(cfg.main, "MiSTer");
+	cfg.classicui_overscan = 6;
 	strcpy(cfg.classicui_artdir, "boxart");
 	strcpy(cfg.classicui_arturl, "https://thumbnails.libretro.com");
 	has_video_sections = false;

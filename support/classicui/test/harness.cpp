@@ -1112,6 +1112,66 @@ static void assert_index_cache()
 	check(lib_item_count() == scanned, "restored to the original library");
 }
 
+// Bright pixels in the top or bottom overscan margin. The wallpaper is dark and
+// every panel is the light ink-on-panel pair, so brightness means furniture.
+static int margin_bright(const chome_profile *p, int top)
+{
+	uint32_t *fb = harness_fb_shown();
+	int y0 = top ? 0 : p->h - p->safe_y;
+	int y1 = top ? p->safe_y : p->h;
+	int n = 0;
+
+	for (int y = y0; y < y1; y++)
+	{
+		for (int x = 0; x < p->w; x++)
+		{
+			uint32_t c = fb[y * p->w + x];
+			int lum = ((c >> 16 & 0xff) + (c >> 8 & 0xff) + (c & 0xff)) / 3;
+			if (lum > 0x60) n++;
+		}
+	}
+	return n;
+}
+
+/*
+  A TV keeps the outermost few percent of the picture behind its bezel. The menu
+  bar is the one that bites: it is only reachable by pressing up, so it slid to y=0
+  and into the part of a CRT that is not there without anyone noticing.
+
+  Checked on pixels rather than metrics, because the bug was in a draw call and not
+  in the profile. The save-state strip is deliberately not checked the same way: its
+  panel is extended down into the margin so the bottom of the screen stays filled,
+  and only its text is held inside.
+*/
+static void assert_overscan()
+{
+	printf("\n== overscan safe area (240p) ==\n");
+
+	cfg.classicui_profile = 3;
+	harness_set_fb(320, 240);
+	gfx_shutdown();
+	theme_update(320, 240, 3);
+	chome_leave();
+	press(KEY_MENU, 20);
+	frame(10);
+
+	const chome_profile *p = theme_get();
+	check(p->safe_y > 0 && p->safe_x > 0, "the 240p profile keeps a margin");
+	check(margin_bright(p, 0) == 0, "the button legend clears the bottom margin");
+
+	press(KEY_UP, 18);                      // bring the menu bar fully out
+	dump("overscan-menubar");
+	check(margin_bright(p, 1) == 0, "the menu bar clears the top margin");
+	press(KEY_ESC, 12);
+
+	// Hand the canvas back as it was found: this section is the only one that pins
+	// a small one, and what follows should not have to know that.
+	cfg.classicui_profile = 0;
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 0);
+}
+
 static void assert_input_labels()
 {
 	printf("\n== button prompts follow the device ==\n");
@@ -1157,6 +1217,7 @@ int main()
 
 	cfg.classicui = 1;
 	cfg.classicui_artfetch = 0;                       // no network in tests
+	cfg.classicui_overscan = 6;                       // as cfg_parse() defaults it
 	snprintf(cfg.classicui_artdir, sizeof(cfg.classicui_artdir), "boxart");
 	cfg.osd_timeout = 0;
 
@@ -1185,6 +1246,7 @@ int main()
 	assert_launch();
 	assert_ingame();
 	assert_input_labels();
+	assert_overscan();
 
 	// Display must vanish entirely when the scaler output is not what is on screen.
 	printf("\n== analog output ==\n");
