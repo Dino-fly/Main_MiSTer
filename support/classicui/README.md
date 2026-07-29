@@ -278,19 +278,32 @@ opt-in because it necessarily sends ROM names to a third party.
 
 ## Keys
 
-Gamepad mapping follows `input.cpp`'s OSD translation, so pads work exactly as
-they do in the classic menu.
+Gamepad mapping follows `input.cpp`'s OSD translation, so pads work exactly as they
+do in the classic menu, and the keyboard column below *is* that translation read
+backwards - what the legend shows is what the key does.
 
-| Input | Key | Action |
+| Gamepad | Keyboard | Action |
 |---|---|---|
 | D-pad | arrows | move / reveal menu bar (up) / suspend points (down) |
-| A | Enter | start, open folder, confirm |
-| B | Esc | back, leave folder |
+| A | Enter | start, resume, open folder, confirm |
+| B | Esc | back, leave folder, resume |
 | X | Tab | delete a suspend point (two presses) |
-| Y | Backspace | toggle favourite |
-| Select | ` | sort |
+| Y | Backspace | favourite, or save into a slot in-game |
+| Select | ` (backtick) | sort |
 | L / R | - / = | jump one screenful |
-| OSD / menu | F12 | hand off to the classic menu, and come back |
+| OSD / menu | F12 | open the front-end over a running game, or hand to the classic menu |
+
+**The legend relabels itself to match whichever device you last touched** - `A START`
+on a pad, `ENTER START` on a keyboard - and switches back the moment you touch the
+other one. The 240p profile uses shortened keyboard names (`ENT`, `BSP`) since the
+legend is tight there.
+
+That needs a signal from outside: a gamepad's buttons reach the menu as *synthetic
+key events carrying the same codes a keyboard sends*, because `joy_digital()` builds
+an `input_event` and pushes it through `input_cb()` with `menu_event` set. The codes
+are therefore identical and cannot be told apart. `input_cb()` already knew the
+difference, so `input.cpp` now records it at the single point where a key is handed
+on (`user_io_kbd()`), and exposes it as `input_menu_key_from_pad()`.
 
 Key repeat for the shelf needs `chome_active()` in `menu_key_get()` - without it
 `menu_key_get()` only repeats for ASCII keys and the file browser.

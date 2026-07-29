@@ -814,6 +814,41 @@ static void draw_position(const chome_profile *p)
 	if (sel < n - 1) gfx_text(CH_RIGHT, p->w / 2 + half, p->y_pos, p->ts_tiny, COL_DIM, 0);
 }
 
+/*
+  Button prompts follow whatever the user last touched. A gamepad's buttons reach
+  the menu as synthetic key events carrying the same codes a keyboard sends
+  (input.cpp translates them for the OSD), so the code alone cannot tell them
+  apart - input_menu_key_from_pad() is what does.
+
+  The keyboard column is exactly that translation read backwards, so what the
+  legend shows is what the key actually does:
+      A = Enter    B = Esc    X = Tab    Y = Backspace
+      Select = `   L / R = - and =       OSD button = F12
+*/
+// Named LBL_* rather than BTN_*: linux/input.h already owns BTN_A, BTN_X and
+// friends as gamepad event codes.
+#define LBL_A      0
+#define LBL_B      1
+#define LBL_X      2
+#define LBL_Y      3
+#define LBL_SELECT 4
+#define LBL_COUNT  5
+
+static const char *btn_pad[LBL_COUNT]      = { "A", "B", "X", "Y", "SEL" };
+static const char *btn_kbd[LBL_COUNT]      = { "ENTER", "ESC", "TAB", "BKSP", "`" };
+static const char *btn_kbd_lo[LBL_COUNT]   = { "ENT", "ESC", "TAB", "BSP", "`" };
+
+static int using_pad = 1;
+
+static const char *btn(int which)
+{
+	if (which < 0 || which >= LBL_COUNT) return "?";
+	if (using_pad) return btn_pad[which];
+
+	// The 240p legend is tight, so the keyboard names get shorter forms there.
+	return (theme_get()->id == PROF_LO) ? btn_kbd_lo[which] : btn_kbd[which];
+}
+
 struct legend_pair { const char *key; const char *label; const char *shortl; };
 
 static int build_legend(legend_pair *out, int max)
@@ -827,55 +862,55 @@ static int build_legend(legend_pair *out, int max)
 	{
 		// Inside that very game the slots become live: A restores, Y writes.
 		int here = ig_is_running(cur_game());
-		if (here && ss_can_load() && n < max) { out[n++] = { "A", "Load", "Load" }; }
-		else if (n < max) { out[n++] = { "A", "Resume", "Play" }; }
-		if (here && ss_can_save() && n < max) { out[n++] = { "Y", "Save", "Save" }; }
+		if (here && ss_can_load() && n < max) { out[n++] = { btn(LBL_A), "Load", "Load" }; }
+		else if (n < max) { out[n++] = { btn(LBL_A), "Resume", "Play" }; }
+		if (here && ss_can_save() && n < max) { out[n++] = { btn(LBL_Y), "Save", "Save" }; }
 		else if (n < max) { out[n++] = { CH_DOWN, "Lock", "Lock" }; }
-		if (n < max) { out[n++] = { "X", "Delete", "Del" }; }
-		if (n < max) { out[n++] = { "B", "Back", "Back" }; }
+		if (n < max) { out[n++] = { btn(LBL_X), "Delete", "Del" }; }
+		if (n < max) { out[n++] = { btn(LBL_B), "Back", "Back" }; }
 		break;
 	}
 	case SCR_SORT:
 	case SCR_LANG:
-		if (n < max) { out[n++] = { "A", "Apply", "OK" }; }
-		if (n < max) { out[n++] = { "B", "Back", "Back" }; }
+		if (n < max) { out[n++] = { btn(LBL_A), "Apply", "OK" }; }
+		if (n < max) { out[n++] = { btn(LBL_B), "Back", "Back" }; }
 		break;
 	case SCR_DISPLAY:
 		if (n < max) { out[n++] = { CH_LEFT CH_RIGHT, "Choose", "Sel" }; }
-		if (n < max) { out[n++] = { "A", "Apply", "OK" }; }
-		if (n < max) { out[n++] = { "B", "Back", "Back" }; }
+		if (n < max) { out[n++] = { btn(LBL_A), "Apply", "OK" }; }
+		if (n < max) { out[n++] = { btn(LBL_B), "Back", "Back" }; }
 		break;
 	case SCR_OPTIONS:
 		if (n < max) { out[n++] = { CH_LEFT CH_RIGHT, "Change", "Chg" }; }
-		if (n < max) { out[n++] = { "A", "Select", "OK" }; }
-		if (n < max) { out[n++] = { "B", "Back", "Back" }; }
+		if (n < max) { out[n++] = { btn(LBL_A), "Select", "OK" }; }
+		if (n < max) { out[n++] = { btn(LBL_B), "Back", "Back" }; }
 		break;
 	case SCR_ABOUT:
-		if (n < max) { out[n++] = { "B", "Back", "Back" }; }
+		if (n < max) { out[n++] = { btn(LBL_B), "Back", "Back" }; }
 		break;
 	case SCR_MENUBAR:
-		if (n < max) { out[n++] = { "A", "Open", "Open" }; }
+		if (n < max) { out[n++] = { btn(LBL_A), "Open", "Open" }; }
 		if (n < max) { out[n++] = { CH_LEFT CH_RIGHT, "Move", "Move" }; }
-		if (n < max) { out[n++] = { "B", "Back", "Back" }; }
+		if (n < max) { out[n++] = { btn(LBL_B), "Back", "Back" }; }
 		break;
 	case SCR_BROWSE:
-		if (n < max) { out[n++] = { "A", "Open", "Open" }; }
-		if (n < max) { out[n++] = { "B", "Back", "Back" }; }
+		if (n < max) { out[n++] = { btn(LBL_A), "Open", "Open" }; }
+		if (n < max) { out[n++] = { btn(LBL_B), "Back", "Back" }; }
 		break;
 	default:
 		if (e && e->kind != ENT_GAME)
 		{
-			if (n < max) { out[n++] = { "A", "Open", "Open" }; }
+			if (n < max) { out[n++] = { btn(LBL_A), "Open", "Open" }; }
 			if (n < max) { out[n++] = { CH_UP, "Menu", "Menu" }; }
-			if (n < max) { out[n++] = { "SEL", "Sort", "Sort" }; }
+			if (n < max) { out[n++] = { btn(LBL_SELECT), "Sort", "Sort" }; }
 		}
 		else
 		{
 			int running = ig_is_running(cur_game());
-			if (n < max) { out[n++] = { "A", running ? "Resume" : "Start", running ? "Play" : "Start" }; }
+			if (n < max) { out[n++] = { btn(LBL_A), running ? "Resume" : "Start", running ? "Play" : "Start" }; }
 			if (n < max) { out[n++] = { CH_DOWN, "Suspend Points", "Saves" }; }
-			if (n < max) { out[n++] = { "SEL", "Sort", "Sort" }; }
-			if (n < max) { out[n++] = { "Y", "Favourite", "Fav" }; }
+			if (n < max) { out[n++] = { btn(LBL_SELECT), "Sort", "Sort" }; }
+			if (n < max) { out[n++] = { btn(LBL_Y), "Favourite", "Fav" }; }
 		}
 		break;
 	}
@@ -2634,6 +2669,10 @@ int chome_handle(uint32_t key)
 
 	if (press)
 	{
+		// Relabel the prompts for whichever device this came from.
+		int pad = input_menu_key_from_pad();
+		if (pad != using_pad) { using_pad = pad; mark_dirty(); }
+
 		if (k == last_key) key_run++;
 		else { key_run = 0; last_key = k; }
 

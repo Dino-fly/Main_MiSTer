@@ -2016,6 +2016,10 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 
 static int kbd_toggle = 0;
 
+// 1 when the last key handed to the menu came from a gamepad, 0 from a keyboard.
+static int menu_key_from_pad = 1;
+int input_menu_key_from_pad() { return menu_key_from_pad; }
+
 static uint32_t crtgun_timeout[NUMDEV] = {};
 
 static unsigned char mouse_btn = 0; //emulated mouse
@@ -3891,6 +3895,14 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 				}
 
 				if (ev->code == KEY_HOMEPAGE) ev->code = KEY_MENU;
+				/*
+				  Remember which kind of device produced this, so a UI can label
+				  its prompts to match. Pad buttons arrive here as synthetic key
+				  events (joy_digital -> input_cb with menu_event set), and they
+				  carry the same codes a keyboard would, so the flag is the only
+				  thing that tells the two apart.
+				*/
+				if (send_key) menu_key_from_pad = menu_event ? 1 : 0;
 				if (send_key) user_io_kbd(ev->code, ev->value);
 				return;
 			}

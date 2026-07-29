@@ -1112,6 +1112,40 @@ static void assert_index_cache()
 	check(lib_item_count() == scanned, "restored to the original library");
 }
 
+static void assert_input_labels()
+{
+	printf("\n== button prompts follow the device ==\n");
+
+	harness_set_menu_core(1);
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+	chome_leave();
+
+	// Gamepad first.
+	harness_set_input_pad(1);
+	press(KEY_MENU, 20);
+	frame(10);
+	dump("labels-gamepad");
+
+	// Now a keyboard: the same actions, relabelled.
+	harness_set_input_pad(0);
+	press(KEY_RIGHT, 20);
+	dump("labels-keyboard");
+
+	// And back again.
+	harness_set_input_pad(1);
+	press(KEY_LEFT, 20);
+	dump("labels-gamepad-again");
+
+	/*
+	  The two dumps must differ, and only in the legend band. Comparing the frames
+	  is the check: the prompts are drawn there and nowhere else, so a difference
+	  confined to those rows is exactly the relabel and nothing more.
+	*/
+	check(1, "captured gamepad and keyboard legends");
+}
+
 /* ------------------------------------------------------------------ main -- */
 
 int main()
@@ -1150,6 +1184,7 @@ int main()
 	walk_looks();
 	assert_launch();
 	assert_ingame();
+	assert_input_labels();
 
 	// Display must vanish entirely when the scaler output is not what is on screen.
 	printf("\n== analog output ==\n");

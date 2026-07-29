@@ -317,6 +317,11 @@ void OsdMenuCtl(int) {}
 
 void open_joystick_setup() { printf("  [stub] open_joystick_setup()\n"); }
 
+// Which device the harness/viewer is pretending to be.
+static int from_pad = 1;
+void harness_set_input_pad(int v) { from_pad = v; }
+int input_menu_key_from_pad() { return from_pad; }
+
 // The real one reads the FPGA scaler buffer; the harness has no core running.
 int screenshot_thumbnail(const char *fullpath, int max_w)
 {

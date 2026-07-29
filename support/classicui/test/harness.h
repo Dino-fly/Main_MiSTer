@@ -12,6 +12,7 @@ void harness_set_root(const char *r);
 void harness_set_fb(int w, int h);
 void harness_set_scaler_visible(int v);
 void harness_set_menu_core(int v);
+void harness_set_input_pad(int v);
 void harness_set_fb_supported(int v);
 void harness_set_confstr(int v);
 const char *harness_last_status_opt();
