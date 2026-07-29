@@ -7,6 +7,9 @@ with this framework change — not just the PSX core.
 > **Unofficial build.** This is not part of official MiSTer. It changes the
 > main firmware and requires cores rebuilt against a modified framework.
 > Back up what you replace.
+>
+> Developed with **Claude Code** assistance, and tested on a
+> **SuperStation One**.
 
 ## Why this didn't work before
 
@@ -145,11 +148,18 @@ without the firmware, so they can be left in place.
 Cores are built by copying that `sys/` change into each core's own `sys/`
 folder and compiling with Quartus 17.0.2 — no per-core source changes.
 
-## Status
+## Status and provenance
 
-The design is simulated and compiles cleanly, and cores are built and timing-
-clean, but it is **new and lightly tested on real hardware**. Most useful
-things to report:
+The RTL and firmware were written with **Claude Code** assistance: the pad
+protocol engine passes a simulation testbench, the cores build with zero
+errors and meet timing, and the whole feature costs about 118 logic modules
+(~0.3% of the FPGA). It has been **tested on a SuperStation One**.
+
+It remains new, and has seen far less hardware exposure than anything in
+official MiSTer — one board, a limited set of cores. Treat it accordingly, and
+keep the backups.
+
+Most useful things to report:
 
 1. Does the pad appear and drive the **menu**?
 2. Which cores did you try, and did input work in-game?
