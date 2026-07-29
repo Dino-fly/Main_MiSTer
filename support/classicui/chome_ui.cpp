@@ -43,6 +43,7 @@ static uint32_t *ig_bg = 0;           // capture scaled to the canvas and dimmed
 static int ig_bg_w = 0, ig_bg_h = 0;
 
 static int ig_paused = 0;                    // the core is actually halted
+static int ig_frozen = 0;                    // held still by a state instead of a pause
 static int ig_selected_running = 0;          // shelf parked on the running game
 static unsigned long ig_close_until = 0;     // "press A again to close the game"
 
@@ -2013,7 +2014,9 @@ static void accept()
 		// the OSD pulses, and drop straight back into play.
 		if (ig_is_running(it) && ss_can_load())
 		{
-			if (ss_do_load(slot_idx)) ig_close(1);
+			// Loading a slot by hand replaces the moment we froze, so the freeze
+			// must not be put back over the top of it on the way out.
+			if (ss_do_load(slot_idx)) { ig_frozen = 0; ig_close(1); }
 			else nudge();
 			return;
 		}
@@ -2119,6 +2122,7 @@ struct ss_hooks
 	*/
 	int  found_pause;
 	int  pause_is_option;         // O/o entry (set a value) vs T/R (pulse)
+	int  pause_needs_osd;         // gated on OSD_STATUS, so useless to us
 	char pause_opt[32];
 	int  pause_ex;
 	uint32_t pause_on_val;        // which value of that option means "paused"
@@ -2208,6 +2212,7 @@ static void ss_scan_hooks()
 				ss_copy_opt(spec, ss_hk.pause_opt, sizeof(ss_hk.pause_opt));
 				ss_hk.pause_ex = ex;
 				ss_hk.pause_is_option = option;
+				ss_hk.pause_needs_osd = label_has(label, "osd");
 				ss_hk.pause_on_val = 1;
 
 				if (option)
@@ -2380,6 +2385,37 @@ static int susp_write()
 }
 
 /*
+  Holding a game still when the core cannot be paused.
+
+  Most cores only pause while the OSD is on screen, and the OSD draws over this UI,
+  so that route is closed (see ss_pause_engage). What is left is what he suggested:
+  write a state on the way in and put it back on the way out. The game does keep
+  running behind the still, but nothing that happens to it survives, so from the
+  player's side the moment is kept - which is the point.
+
+  Uses the same slot as a suspend point, because both mean the same thing: where you
+  were when you left.
+*/
+static int freeze_engage()
+{
+	if (ig_paused) return 0;                       // a real pause is better
+	if (!ss_can_save() || !ss_can_load()) return 0;
+
+	if (!ss_do_save(susp_slot())) return 0;
+
+	printf("ClassicUI: no pause in this core, holding it still with a state\n");
+	return 1;
+}
+
+static void freeze_release(int engaged)
+{
+	if (!engaged) return;
+
+	if (ss_do_load(susp_slot())) printf("ClassicUI: put the game back where it was\n");
+	else printf("ClassicUI: could not put the game back\n");
+}
+
+/*
   Leaving a game for Classic Home. Suspending first where the core allows it, so
   closing a game is not the same as losing it.
 */
@@ -2404,6 +2440,19 @@ static int ss_pause_engage()
 {
 	const ss_hooks *h = ss_get();
 	if (!h->found_pause) return 0;
+
+	/*
+	  A pause the core only honours while the OSD is on screen is no use here: the
+	  OSD draws over this UI, so holding it open to win the pause would put stale
+	  menu rows on top of everything. Setting the option alone changes nothing,
+	  since OSD_STATUS stays low - so say so rather than claim a pause that did not
+	  happen.
+	*/
+	if (h->pause_needs_osd)
+	{
+		printf("ClassicUI: this core only pauses while the OSD is open, so it keeps running\n");
+		return 0;
+	}
 
 	if (h->pause_is_option)
 	{
@@ -2617,6 +2666,11 @@ static void ig_close(int restore_video)
 
 	ss_pause_release(ig_paused);
 	ig_paused = 0;
+
+	// Only when going back into the game: quitting keeps the state as the suspend
+	// point instead, and loading a different slot has already moved things on.
+	if (restore_video) freeze_release(ig_frozen);
+	ig_frozen = 0;
 	ig_selected_running = 0;
 
 	free(ig_shot); ig_shot = 0; ig_shot_w = ig_shot_h = 0;
@@ -2686,10 +2740,10 @@ static int ig_open()
 		return 0;
 	}
 
-	// As in the menu core: input keeps arriving, the overlay is cleared, and
-	// OSD_CMD_ENABLE goes last so OSD_STATUS stays high for the core to pause on.
-	OsdMenuCtl(0);
+	// As in the menu core: input keeps arriving and the overlay ends up off, because
+	// it draws over this UI rather than under it.
 	OsdEnable(DISABLE_KEYBOARD);
+	OsdMenuCtl(0);
 
 	ss_hk_valid = 0;              // re-read CONF_STR: it may not have been ready before
 	ig_load_item();
@@ -2711,6 +2765,7 @@ static int ig_open()
 	art_init(theme_get()->sel_w, theme_get()->sel_h);
 
 	ig_paused = ss_pause_engage();
+	ig_frozen = freeze_engage();
 
 	ig_active = 1;
 	screen = SCR_HOME;
@@ -2891,17 +2946,18 @@ static void enter()
 
 	/*
 	  Keep osd_is_visible set so keyboard and gamepad input keeps arriving here
-	  (input.cpp routes pad buttons to the menu only when the OSD is "visible"), and
-	  clear whatever the classic menu left in the overlay.
+	  (input.cpp routes pad buttons to the menu only when the OSD is "visible"), then
+	  switch the overlay itself off.
 
-	  Order matters: OsdMenuCtl(0) sends OSD_CMD_DISABLE and OsdEnable sends
-	  OSD_CMD_ENABLE, which is what sys_top turns into OSD_STATUS for the core. Doing
-	  it the other way round left OSD_STATUS low, so a core set to pause while the OSD
-	  is open never did. The stale overlay content is not a problem: the framebuffer
-	  replaces core video, so the core's own overlay is not on screen.
+	  The overlay has to end up off: the classic OSD is composited over the
+	  framebuffer, not replaced by it - that is how it appears over the menu core's
+	  wallpaper - so leaving it enabled paints stale OSD rows on top of this UI.
+	  Which is a shame, because OSD_CMD_ENABLE is also what sys_top turns into
+	  OSD_STATUS, and that is the only thing a core's "pause when the OSD is open"
+	  option watches. The two cannot both be had: see ss_pause_engage().
 	*/
-	OsdMenuCtl(0);
 	OsdEnable(DISABLE_KEYBOARD);
+	OsdMenuCtl(0);
 
 	theme_update(video_menu_fb_width(), video_menu_fb_height(), cfg.classicui_profile);
 
@@ -3096,7 +3152,7 @@ int chome_handle(uint32_t key)
 				  next poll, so resume immediately: it needs to run those frames.
 				  The slot and its thumbnail are there next time the menu opens.
 				*/
-				if (ss_do_save(slot_idx)) ig_close(1);
+				if (ss_do_save(slot_idx)) { ig_frozen = 0; ig_close(1); }
 				else nudge();
 				break;
 			}
