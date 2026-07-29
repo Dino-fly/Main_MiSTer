@@ -1251,10 +1251,15 @@ int main()
 	// Display must vanish entirely when the scaler output is not what is on screen.
 	printf("\n== analog output ==\n");
 	{
-		// Back to automatic: an earlier section pinned the profile to HD, and a
-		// forced profile deliberately outranks the canvas, which would mask what
-		// this section is about.
+		/*
+		  Start from a known HD canvas on automatic. Earlier sections pin both the
+		  profile and the canvas, and a forced profile deliberately outranks the
+		  canvas - either one would mask what this section is about.
+		*/
 		cfg.classicui_profile = 0;
+		harness_set_fb(1280, 720);
+		gfx_shutdown();
+		theme_update(1280, 720, 0);
 
 		harness_set_scaler_visible(0);
 		chome_leave();
