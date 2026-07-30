@@ -1654,6 +1654,9 @@ int main()
 		press(KEY_BACKSPACE, 6);
 		check(!strcmp(osk_text(), "he-"), "and its backspace deletes");
 		dump("osk-5-typed");
+		press(KEY_ENTER, 6);
+		check(!osk_active(), "and its Enter finishes rather than typing a digit");
+		check(!strcmp(osk_text(), "he-"), "keeping what was typed");
 		harness_set_input_pad(1);
 
 		/*
