@@ -141,6 +141,24 @@ int get_volume()
 	return vol_att & 0x17;
 }
 
+/*
+  Mute without the popup. set_volume() shows an on-screen "Mute" message, which an
+  alternative front-end cannot have: it draws its own screen, and the OSD is
+  composited on top of it. It also leaves vol_set_timeout alone, so the user's saved
+  volume is not rewritten by something they did not ask for - this is a temporary
+  mute for as long as a menu is up, not a preference.
+*/
+void audio_mute(int on)
+{
+	vol_att = (vol_att & 0x7) | (on ? 0x10 : 0);
+	send_volume();
+}
+
+int audio_is_muted()
+{
+	return (vol_att & 0x10) ? 1 : 0;
+}
+
 int get_core_volume()
 {
 	int boost = corevol_att & 0x60;

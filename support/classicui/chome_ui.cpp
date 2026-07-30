@@ -25,6 +25,7 @@
 #include "../../menu.h"
 #include "../arcade/mra_loader.h"
 #include "../../scaler.h"
+#include "../../audio.h"
 #include "../../fpga_io.h"
 
 #define CURRENT_FILE "/tmp/classicui_current"
@@ -46,6 +47,8 @@ static int ig_paused = 0;                    // the core is actually halted
 static int ig_frozen = 0;                    // held still by a state instead of a pause
 static int ig_selected_running = 0;          // shelf parked on the running game
 static unsigned long ig_close_until = 0;     // "press A again to close the game"
+static int ig_muted = 0;                     // game silenced while the menu is up
+static int ig_mute_was = 0;                  // ...and what it was before, so his own mute survives
 
 #define REF_DELAY_MS 20000
 // Long enough for the core to have the ROM in before a state lands on top of it.
@@ -2409,6 +2412,36 @@ static int susp_write()
 }
 
 /*
+  Silencing the game while the menu is up.
+
+  The core keeps running behind the still (see freeze_engage), and a game you can
+  hear playing on without you reads as "something is wrong" in a way that a frozen
+  frame does not. Muting costs nothing and removes the whole question.
+
+  Not set_volume(): that draws an on-screen "Mute" popup, and the OSD composites over
+  this UI. audio_mute() is the same register write without the message, and it leaves
+  the saved volume alone - this lasts as long as the menu, it is not a preference.
+*/
+static void ig_mute_engage()
+{
+	ig_mute_was = audio_is_muted();
+	if (ig_mute_was) return;                       // his own mute; nothing for us to undo
+
+	audio_mute(1);
+	ig_muted = 1;
+	printf("ClassicUI: game muted\n");
+}
+
+static void ig_mute_release()
+{
+	if (!ig_muted) return;
+
+	ig_muted = 0;
+	audio_mute(0);
+	printf("ClassicUI: sound back\n");
+}
+
+/*
   Holding a game still when the core cannot be paused.
 
   Most cores only pause while the OSD is on screen, and the OSD draws over this UI,
@@ -2449,6 +2482,7 @@ static void quit_to_home(int suspend)
 
 	ss_pause_release(ig_paused);
 	ig_paused = 0;
+	ig_mute_release();
 	lib_state_save();
 	ig_active = 0;
 	unlink(CURRENT_FILE);
@@ -2719,6 +2753,7 @@ static void ig_close(int restore_video)
 	// Only when going back into the game: quitting keeps the state as the suspend
 	// point instead, and loading a different slot has already moved things on.
 	if (restore_video) freeze_release(ig_frozen);
+	ig_mute_release();            // after the reload, so its audio glitch is not heard
 	ig_frozen = 0;
 	ig_selected_running = 0;
 
@@ -2815,6 +2850,8 @@ static int ig_open()
 	// it draws over this UI rather than under it.
 	OsdEnable(DISABLE_KEYBOARD);
 	OsdMenuCtl(0);
+
+	ig_mute_engage();             // before the freeze state, which takes a moment to write
 
 	ss_hk_valid = 0;              // re-read CONF_STR: it may not have been ready before
 	ig_load_item();

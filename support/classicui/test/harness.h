@@ -27,6 +27,10 @@ void harness_set_opt(const char *opt, uint32_t v);
 void harness_reset_status();
 
 uint32_t *harness_fb_shown();
+int harness_muted();
+int harness_mute_changes();
+void harness_set_muted(int v);
+
 int harness_present_count();
 int harness_fb_analog();
 int harness_neogeo_scanned();

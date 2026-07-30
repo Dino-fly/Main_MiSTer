@@ -3,6 +3,8 @@
 
 void set_volume(int cmd);
 int  get_volume();
+void audio_mute(int on);
+int  audio_is_muted();
 int  get_core_volume();
 void set_core_volume(int cmd);
 void send_volume();
