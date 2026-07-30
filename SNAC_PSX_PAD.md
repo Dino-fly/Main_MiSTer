@@ -8,8 +8,9 @@ with this framework change — not just the PSX core.
 > main firmware and requires cores rebuilt against a modified framework.
 > Back up what you replace.
 >
-> Developed with **Claude Code** assistance, and tested on a
-> **SuperStation One**.
+> Developed with **Claude Code** assistance. Confirmed working on a
+> **SuperStation One** with a PSX pad over SNAC: menu navigation plus the
+> NES, SNES, Game Boy, GBA and MegaDrive cores.
 
 ## Why this didn't work before
 
@@ -153,11 +154,26 @@ folder and compiling with Quartus 17.0.2 — no per-core source changes.
 The RTL and firmware were written with **Claude Code** assistance: the pad
 protocol engine passes a simulation testbench, the cores build with zero
 errors and meet timing, and the whole feature costs about 118 logic modules
-(~0.3% of the FPGA). It has been **tested on a SuperStation One**.
+(~0.3% of the FPGA).
 
-It remains new, and has seen far less hardware exposure than anything in
-official MiSTer — one board, a limited set of cores. Treat it accordingly, and
-keep the backups.
+**Confirmed on hardware** (SuperStation One, PSX pad via a SNAC adapter):
+
+| Tested | Result |
+|---|---|
+| Menu core — OSD navigation | works |
+| NES | works |
+| SNES | works |
+| Game Boy | works |
+| GBA | works |
+| MegaDrive | works |
+
+That covers the headline capability — driving the MiSTer menu with a PSX pad,
+which was not possible with SNAC before — and in-game input across five cores.
+
+It remains far less exercised than anything in official MiSTer: one board, one
+adapter, six of the 274 cores here. The rest are built the same way from the
+same framework change, so they are expected to behave identically, but they
+have not each been verified. Keep the backups.
 
 Most useful things to report:
 
