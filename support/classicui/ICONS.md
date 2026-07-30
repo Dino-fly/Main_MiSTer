@@ -1,8 +1,14 @@
 # Icons in Classic Home
 
-The per-system icons in `chome_icons32.h` are **not original artwork**. They are
-other people's icons, scaled down and reduced to one bit per pixel by
-`tools/icons32.py`, which is the only thing that should ever write that header.
+The icons in `chome_icons32.h` (32x32, one per system) and `chome_icons16.h` (16x16
+pictograms) are **not original artwork**. They are other people's icons, scaled down
+and reduced to one bit per pixel by `tools/icons32.py`, which is the only thing that
+should ever write those headers.
+
+Nothing pictorial in the front-end is drawn by hand. Where an icon was wanted and
+neither set had one, the answer was MiSTer's own OSD font ROM, which already carries
+a closed padlock at 0x17 and an open one at 0x18 - used for locked savestate slots
+and for secured networks in the Wi-Fi list.
 
 Both sources are licensed **CC BY 4.0**
 (<https://creativecommons.org/licenses/by/4.0/>), which is one-way compatible with
@@ -14,11 +20,12 @@ the licence be named, and that changes be stated.
 - **RetroArch monochrome icons** — the `xmb/monochrome/png` set from
   [libretro/retroarch-assets](https://github.com/libretro/retroarch-assets),
   © the libretro/RetroArch contributors, CC BY 4.0.
-  22 of the 23 icons.
+  All the system icons but one, plus the favourite star (its `add-favorite`) and the
+  folder a card falls back to.
 - **Twemoji** — [jdecked/twemoji](https://github.com/jdecked/twemoji),
   © 2020 Twitter, Inc and other contributors; graphics CC BY 4.0.
-  One icon: the joystick used for Arcade. Twemoji's own README names an "About"
-  section as acceptable attribution, which is where this appears on screen.
+  The joystick used for Arcade. Twemoji's own README names an "About" section as
+  acceptable attribution, which is where this appears on screen.
 
 Both commits are pinned in `tools/icons32.py`, and every icon in the generated
 header records the sha256 of the file it came from, so what shipped can always be
@@ -36,6 +43,13 @@ colour of its own.
 
 On the About screen, in the front-end itself. If the icon set changes, that screen
 has to change with it.
+
+## What is deliberately not an icon
+
+Signal-strength bars in the Wi-Fi list, the radio dots on the Display screen and the
+text caret on the keyboard are drawn from rectangles here. They are gauges and
+controls whose *state* is the whole point - a four-level bar cannot be a fixed
+picture - not pictures of things.
 
 ## Why these two
 
