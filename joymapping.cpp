@@ -12,6 +12,7 @@ This file contains lookup information on known controllers
 #include "input.h"
 #include "user_io.h"
 #include "cfg.h"
+#include "support/classicui/chome.h"
 
 #define DPAD_COUNT 4
 
@@ -271,5 +272,8 @@ void map_joystick_show(uint32_t *map, uint32_t *mmap, int num)
 		}
 	}
 
-	if(strlen(list) && cfg.controller_info) Info(mapinfo, cfg.controller_info * 1000);
+	// Not while Classic Home owns the screen: the map is a classic-OSD panel the
+	// FPGA composites over the front-end, and it is pure technical information.
+	// In a core, where the classic OSD is genuinely the UI, it still shows.
+	if(strlen(list) && cfg.controller_info && !chome_active()) Info(mapinfo, cfg.controller_info * 1000);
 }
