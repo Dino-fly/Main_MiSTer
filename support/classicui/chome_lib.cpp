@@ -542,6 +542,18 @@ int lib_delete_slot(chome_item *it, int slot)
 	snprintf(full, sizeof(full), "%s/%s", getRootDir(), rel);
 	printf("ClassicUI: deleting %s\n", full);
 	int ok = (remove(full) == 0);
+
+	/*
+	  The state's screenshot goes with it. MiSTer writes it beside the state as a .png
+	  and the shelf shows it as the slot's picture, so leaving it behind means a slot
+	  that reads as empty while its thumbnail lingers on the card - noticed when a
+	  deleted slot 2 left Adventure Island 3 (USA)_2.png sitting there.
+	*/
+	char png[1200];
+	snprintf(png, sizeof(png), "%s", full);
+	char *dot = strrchr(png, '.');
+	if (dot) { strcpy(dot, ".png"); remove(png); }
+
 	lib_refresh_slots(it);
 	return ok;
 }

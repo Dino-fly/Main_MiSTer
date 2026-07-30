@@ -484,3 +484,22 @@ int xml_load(const char *xml)
 	}
 	return 0;
 }
+
+/* ------------------------------------------------------------------ audio ---
+  The volume register, only as far as mute: enough to tell whether the menu
+  silenced the core and gave the sound back afterwards.
+*/
+static int muted = 0;
+static int mute_changes = 0;
+
+void audio_mute(int on)
+{
+	if (muted != !!on) mute_changes++;
+	muted = !!on;
+}
+
+int audio_is_muted() { return muted; }
+
+int harness_muted() { return muted; }
+int harness_mute_changes() { return mute_changes; }
+void harness_set_muted(int v) { muted = !!v; mute_changes = 0; }

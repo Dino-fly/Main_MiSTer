@@ -1079,6 +1079,11 @@ static void assert_ingame()
 	*/
 	check(harness_pause_val() == 0, "an OSD-gated pause option is left alone");
 	check(harness_pulses_on("S") >= 1, "and the game is held still with a state");
+	/*
+	  ...and it is silenced while it runs on behind the still, because a game you can
+	  hear but not play reads as a fault.
+	*/
+	check(harness_muted(), "the game is muted while the menu is up");
 
 	// The full shelf, parked on the game that is running.
 	for (int i = 0; i < 40 && lib_scanning(); i++) frame(2);
@@ -1161,6 +1166,19 @@ static void assert_ingame()
 	press(KEY_ENTER, 12);
 	check(!chome_ingame_active(), "A on the running game resumes it");
 	check(harness_last_launch()[0] == 0, "and does not relaunch the core");
+	check(!harness_muted(), "and hands the sound back");
+
+	/*
+	  A mute the player set for themselves is theirs to keep: the menu must not
+	  helpfully turn the sound on for them on the way out.
+	*/
+	harness_set_muted(1);
+	press(KEY_MENU, 20);
+	check(harness_muted(), "his own mute survives the menu opening");
+	press(KEY_ENTER, 12);
+	check(harness_muted(), "and is still there when the game comes back");
+	check(harness_mute_changes() == 0, "with the volume register left untouched");
+	harness_set_muted(0);
 
 	// Close Game: Options, last row, two presses.
 	press(KEY_MENU, 20);
