@@ -36,6 +36,7 @@
 #include "frame_timer.h"
 #include "scaler.h"
 #include "file_io.h"
+#include "support/classicui/chome.h"
 
 #define NUMDEV 30
 #define UINPUT_NAME "MiSTer virtual input"
@@ -2439,9 +2440,18 @@ static void joy_digital(int jnum, uint32_t mask, uint32_t code, char press, int 
 
 		// clear OSD button state if not in the OSD.  this avoids problems where buttons are still held
 		// on OSD exit and causes combinations to match when partial buttons are pressed.
-		if (!user_io_osd_is_visible()) osdbtn = 0;
+		// The front-end counts as being in a menu here too, or the held-button state
+		// it needs for A+B would be wiped on every event while it is up.
+		if (!user_io_osd_is_visible() && !chome_active()) osdbtn = 0;
 
-		if (user_io_osd_is_visible() || (bnum == BTN_OSD))
+		/*
+		  The front-end reads its keys the way the OSD menu does, so a pad button has
+		  to become a synthetic key event here rather than falling through to the
+		  video_fb_state() branch (that one is the fb terminal, which the front-end
+		  does not use) or to the core (jnum is 0 for menu input, so that branch drops
+		  the press on the floor). Same reason as the gate in input_cb().
+		*/
+		if (user_io_osd_is_visible() || chome_active() || (bnum == BTN_OSD))
 		{
 			mask &= ~JOY_BTN3;
 			if (press)
@@ -3643,7 +3653,15 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 					if (osd_event == 2) joy_digital(input[dev].num, 0, 0, 0, BTN_OSD);
 				}
 
-				if (user_io_osd_is_visible() || video_fb_state())
+				/*
+				  ...or while the Classic Home front-end owns the screen. Neither of
+				  the other two is true then: it blanks the OSD overlay so its own
+				  drawing is not painted over and osd_is_visible follows the overlay,
+				  and it takes the menu framebuffer, which is not the fb terminal
+				  video_fb_state() reports. Without this a pad's buttons went straight
+				  to the game while its menu was up, so the front-end looked frozen.
+				*/
+				if (user_io_osd_is_visible() || video_fb_state() || chome_active())
 				{
 					if (ev->value <= 1)
 					{
