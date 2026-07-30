@@ -1196,6 +1196,19 @@ static void assert_ingame()
 	press(KEY_ESC, 16);
 	check(harness_pulses_on("T") == 1, "and closing restores it, so nothing advanced");
 
+	/*
+	  Both halves of the menu button belong to the front-end. The classic menu opens on
+	  the release of it (menu.cpp: case KEY_F12 | UPSTROKE), so leaving that half
+	  unclaimed put MiSTer's own menu on screen the moment the in-game menu closed.
+	*/
+	press(KEY_MENU, 20);
+	check(chome_ingame_active(), "the menu is up");
+	check(chome_handle(KEY_MENU) == 1, "the menu button closes it, and is consumed");
+	check(!chome_ingame_active(), "so the game is back");
+	harness_advance(16);
+	check(chome_handle(KEY_MENU | UPSTROKE) == 1, "and its release is consumed too");
+	frame(8);
+
 	press(KEY_MENU, 20);
 	press(KEY_DOWN, 18);
 	harness_reset_status();

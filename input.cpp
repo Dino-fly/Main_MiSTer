@@ -36,6 +36,7 @@
 #include "frame_timer.h"
 #include "scaler.h"
 #include "file_io.h"
+#include "support/classicui/chome.h"
 
 #define NUMDEV 30
 #define UINPUT_NAME "MiSTer virtual input"
@@ -2022,6 +2023,19 @@ static int menu_key_dev = -1;
 int input_menu_key_from_pad() { return menu_key_from_pad; }
 
 /*
+  The device an event really came from.
+
+  A pad's buttons do not reach the menu as themselves: joy_digital() turns them into
+  synthetic key events and hands them back to input_cb() with a hardcoded dev of 0 -
+  a slot belonging to whichever device happens to be first in the pool, which is not
+  the pad and on some pools is not open at all. So the last real device to be handed
+  an event is remembered here. joy_digital() is called from inside that device's own
+  input_cb(), and the synthetic event it makes is dispatched before that call
+  returns, so this is the pad in question and not merely a recent one.
+*/
+static int menu_key_src_dev = -1;
+
+/*
   The name of the device that produced the most recent menu key. A front-end that
   wants to label its prompts for the controller actually in someone's hands has to
   know which one that was, and the name is what identifies it - a SNAC pad is not a
@@ -2439,9 +2453,18 @@ static void joy_digital(int jnum, uint32_t mask, uint32_t code, char press, int 
 
 		// clear OSD button state if not in the OSD.  this avoids problems where buttons are still held
 		// on OSD exit and causes combinations to match when partial buttons are pressed.
-		if (!user_io_osd_is_visible()) osdbtn = 0;
+		// The front-end counts as being in a menu here too, or the held-button state
+		// it needs for A+B would be wiped on every event while it is up.
+		if (!user_io_osd_is_visible() && !chome_active()) osdbtn = 0;
 
-		if (user_io_osd_is_visible() || (bnum == BTN_OSD))
+		/*
+		  The front-end reads its keys the way the OSD menu does, so a pad button has
+		  to become a synthetic key event here rather than falling through to the
+		  video_fb_state() branch (that one is the fb terminal, which the front-end
+		  does not use) or to the core (jnum is 0 for menu input, so that branch drops
+		  the press on the floor). Same reason as the gate in input_cb().
+		*/
+		if (user_io_osd_is_visible() || chome_active() || (bnum == BTN_OSD))
 		{
 			mask &= ~JOY_BTN3;
 			if (press)
@@ -2979,6 +3002,9 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 
 	//check if device is a part of multifunctional device
 	if (!JOYCON_COMBINED(dev) && input[dev].bind >= 0) dev = input[dev].bind;
+
+	// After the bind, so this is the slot that carries the name and the mapping.
+	if (!menu_event) menu_key_src_dev = dev;
 
 	if (ev->type == EV_KEY)
 	{
@@ -3643,7 +3669,15 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 					if (osd_event == 2) joy_digital(input[dev].num, 0, 0, 0, BTN_OSD);
 				}
 
-				if (user_io_osd_is_visible() || video_fb_state())
+				/*
+				  ...or while the Classic Home front-end owns the screen. Neither of
+				  the other two is true then: it blanks the OSD overlay so its own
+				  drawing is not painted over and osd_is_visible follows the overlay,
+				  and it takes the menu framebuffer, which is not the fb terminal
+				  video_fb_state() reports. Without this a pad's buttons went straight
+				  to the game while its menu was up, so the front-end looked frozen.
+				*/
+				if (user_io_osd_is_visible() || video_fb_state() || chome_active())
 				{
 					if (ev->value <= 1)
 					{
@@ -3930,7 +3964,7 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 				if (send_key)
 				{
 					menu_key_from_pad = menu_event ? 1 : 0;
-					menu_key_dev = dev;
+					menu_key_dev = menu_event ? menu_key_src_dev : dev;
 				}
 				if (send_key) user_io_kbd(ev->code, ev->value);
 				return;
