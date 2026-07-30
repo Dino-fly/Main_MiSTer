@@ -25,6 +25,7 @@
 #include "../chome_gfx.h"
 #include "../chome_video.h"
 #include "../chome_osk.h"
+#include "../chome_net.h"
 #include "../../../lib/imlib2/Imlib2.h"
 #include "../../../lib/miniz/miniz.h"
 
@@ -248,6 +249,55 @@ static void build_sd()
 }
 
 /* --------------------------------------------------------------- driving -- */
+
+/*
+  Real `iw dev wlan0 scan` shape, with the four things that actually turn up in it:
+  the same network on two radios, an entry whose name is blank, one whose name is
+  padding bytes printed as \x00, and one whose encryption is only visible in the
+  capability line. The names are invented; the layout is not.
+*/
+static const char *SCAN_TEXT =
+	"BSS 11:22:33:44:55:66(on wlan0)\n"
+	"\tTSF: 62859829328 usec (0d, 17:27:39)\n"
+	"\tfreq: 2412\n"
+	"\tcapability: ESS ShortSlotTime (0x0411)\n"
+	"\tsignal: -82.00 dBm\n"
+	"\tSSID: Cafe Guest\n"
+	"\tSupported rates: 1.0* 2.0* 5.5* 11.0*\n"
+	"BSS aa:bb:cc:dd:ee:f0(on wlan0) -- associated\n"
+	"\tfreq: 2462\n"
+	"\tcapability: ESS Privacy ShortSlotTime (0x1411)\n"
+	"\tsignal: -60.00 dBm\n"
+	"\tSSID: BrainDamage\n"
+	"\tRSN:\t * Version: 1\n"
+	"\t\t * Group cipher: CCMP\n"
+	"BSS aa:bb:cc:dd:ee:f1(on wlan0)\n"
+	"\tfreq: 5180\n"
+	"\tsignal: -48.00 dBm\n"
+	"\tSSID: BrainDamage\n"
+	"\tRSN:\t * Version: 1\n"
+	"BSS 00:22:6c:05:cb:a5(on wlan0)\n"
+	"\tfreq: 2462\n"
+	"\tsignal: -74.00 dBm\n"
+	"\tSSID: \n"
+	"\tRSN:\t * Version: 1\n"
+	"BSS 6a:6c:9a:1e:32:db(on wlan0)\n"
+	"\tfreq: 2462\n"
+	"\tsignal: -77.00 dBm\n"
+	"\tSSID: \\x00\\x00\\x00\\x00\\x00\n"
+	"\tRSN:\t * Version: 1\n"
+	"BSS 12:12:12:12:12:12(on wlan0)\n"
+	"\tfreq: 2437\n"
+	"\tcapability: ESS Privacy (0x1431)\n"
+	"\tsignal: -70.00 dBm\n"
+	"\tSSID: Neighbour 2.4\n";
+
+static const char *LINK_TEXT =
+	"Connected to ec:6c:9a:1e:32:d9 (on wlan0)\n"
+	"\tSSID: BrainDamage\n"
+	"\tfreq: 2462\n"
+	"\tsignal: -76 dBm\n"
+	"\ttx bitrate: 72.2 MBit/s\n";
 
 static void frame(int n = 1)
 {
@@ -1182,12 +1232,14 @@ static void assert_ingame()
 	check(harness_mute_changes() == 0, "with the volume register left untouched");
 	harness_set_muted(0);
 
-	// Close Game: Options, last row, two presses.
+	// Close Game: Options, last row, two presses. Reached by wrapping upwards off the
+	// first row, so adding a row to the panel does not silently point this somewhere
+	// else - which is exactly what happened when Wi-Fi was added.
 	press(KEY_MENU, 20);
 	press(KEY_UP, 14);
 	press(KEY_RIGHT, 10);
 	press(KEY_ENTER, 16);                     // Options
-	for (int i = 0; i < 5; i++) press(KEY_DOWN, 6);
+	press(KEY_UP, 8);
 	press(KEY_ENTER, 8);
 	dump("ingame-5-close-armed");
 	check(chome_ingame_active(), "one press does not close the game");
@@ -1650,6 +1702,90 @@ int main()
 			theme_update(1280, 720, 1);
 			frame(6);
 		}
+	}
+
+	/*
+	  Wi-Fi. There is no radio in the container, so what is checked here is everything
+	  up to the radio: reading what the tools say, building the config file, and the
+	  screen a person drives. Bringing an interface up cannot be tested without an
+	  interface and is verified on the hardware instead.
+	*/
+	printf("\n== wi-fi ==\n");
+	{
+		net_ap list[NET_MAX];
+		int n = net_parse_scan(SCAN_TEXT, list, NET_MAX);
+		printf("  parsed %d networks\n", n);
+		check(n == 3, "hidden and null-padded names are left out of the list");
+		check(!strcmp(list[0].ssid, "BrainDamage"), "the network we are on comes first");
+		check(list[0].current, "and is marked as the current one");
+		check(list[0].signal == -48, "a network on two radios is one row, at its best signal");
+		check(list[0].secure, "RSN means it wants a password");
+		check(!strcmp(list[1].ssid, "Neighbour 2.4"), "then the strongest of the rest");
+		check(list[1].secure, "Privacy in the capability line also means a password");
+		check(!strcmp(list[2].ssid, "Cafe Guest") && !list[2].secure, "an open network is not marked");
+
+		net_link l;
+		check(net_parse_link(LINK_TEXT, &l) == 1, "the link reads as connected");
+		check(!strcmp(l.ssid, "BrainDamage"), "and says which network");
+		check(net_parse_link("Not connected.\n", &l) == 0, "and reads not-connected as not connected");
+
+		// The config file. Getting this wrong takes the machine off the network, so
+		// the shape of it is worth pinning down.
+		char conf[1024], country[32];
+		check(net_conf_country("country=CH\nnetwork={\n\tssid=\"x\"\n}\n", country, sizeof(country))
+			&& !strcmp(country, "CH"), "the country setting is read back out of the old file");
+
+		check(net_conf_build(conf, sizeof(conf), "country=CH", "MyNet", "hunter2hunter", 1) > 0,
+			"a secured network builds a config");
+		check(strstr(conf, "country=CH") && strstr(conf, "ssid=\"MyNet\"") && strstr(conf, "psk=\"hunter2hunter\""),
+			"which keeps the country and names the network");
+		check(net_conf_build(conf, sizeof(conf), "", "MyNet", "", 0) > 0 && strstr(conf, "key_mgmt=NONE"),
+			"an open network builds one with no key");
+		check(net_conf_build(conf, sizeof(conf), "", "MyNet", "short", 1) < 0,
+			"a password WPA would reject is refused before anything is touched");
+		check(net_conf_build(conf, sizeof(conf), "", "", "hunter2hunter", 1) < 0,
+			"and so is a nameless network");
+		check(net_conf_build(conf, sizeof(conf), "", "He said \"hi\"", "hunter2hunter", 1) > 0
+			&& strstr(conf, "ssid=\"He said \\\"hi\\\"\""),
+			"a quote in the name is escaped, not left to end the value early");
+
+		/*
+		  The screen. Fed with the same captured output, through the function the scan
+		  child's result goes through, so this is the list a person would really see.
+		*/
+		net_ingest_scan(SCAN_TEXT);
+		net_ingest_link(LINK_TEXT);
+
+		harness_set_menu_core(1);
+		chome_leave();
+		press(KEY_MENU, 20);
+		frame(8);
+
+		press(KEY_UP, 10);                    // the menu bar
+		press(KEY_RIGHT, 10);                 // Options
+		press(KEY_ENTER, 14);
+		press(KEY_UP, 8);                     // wrap to the last row
+		press(KEY_UP, 8);                     // and up to Wi-Fi
+		press(KEY_ENTER, 14);
+		frame(8);
+		dump("wifi-1-list");
+
+		// A on a secured network asks for the password - which also proves the row,
+		// the screen and the keyboard are all wired to each other.
+		press(KEY_ENTER, 10);
+		check(osk_active(), "picking a secured network asks for its password");
+		dump("wifi-2-password");
+		press(KEY_ESC, 10);
+		check(!osk_active(), "and B backs out of it");
+
+		press(KEY_DOWN, 8);
+		press(KEY_DOWN, 8);                   // the open one
+		press(KEY_ENTER, 10);
+		check(!osk_active(), "an open network does not ask for a password");
+
+		press(KEY_ESC, 10);
+		press(KEY_ESC, 10);
+		frame(6);
 	}
 
 	printf("\n== presents ==\n");
