@@ -20,6 +20,7 @@
 #include "fpga_io.h"
 #include "file_io.h"
 #include "menu.h"
+#include "support/classicui/chome.h"
 #include "DiskImage.h"
 #include "brightness.h"
 #include "sxmlc.h"
@@ -4255,9 +4256,19 @@ void user_io_kbd(uint16_t key, int press)
 				if (key != KEY_F12 || !is_menu_event)
 				{
 
-					if (osd_is_visible) menu_key_set(UPSTROKE | key);
+					/*
+					  ...or while the Classic Home front-end owns the screen. It blanks the
+					  OSD overlay so its own drawing is not painted over, and osd_is_visible
+					  follows the overlay - so in a game core every key except the menu
+					  button was going to the game and its menu could be opened but not
+					  used. The pad path already allows for this (input.cpp: it also accepts
+					  video_fb_state), so this only brings keyboards into line.
+					*/
+					int to_menu = osd_is_visible || chome_active();
+
+					if (to_menu) menu_key_set(UPSTROKE | key);
 					// these modifiers should be passed to core even if OSD is open or they will get stuck!
-					if (!osd_is_visible || key == KEY_LEFTALT || key == KEY_RIGHTALT || key == KEY_LEFTMETA || key == KEY_RIGHTMETA) {send_keycode(key, press);}
+					if (!to_menu || key == KEY_LEFTALT || key == KEY_RIGHTALT || key == KEY_LEFTMETA || key == KEY_RIGHTMETA) {send_keycode(key, press);}
 				}
 				if (is_menu_event) menu_key_set(KEY_F12 | UPSTROKE);
 			}
@@ -4269,7 +4280,7 @@ void user_io_kbd(uint16_t key, int press)
 				{
 				  if (press == 1) menu_key_set(KEY_F12);
 				}
-				else if (osd_is_visible)
+				else if (osd_is_visible || chome_active())
 				{
 					if (key == KEY_MENU) key = KEY_F12;
 					if (press == 1) menu_key_set(key);
