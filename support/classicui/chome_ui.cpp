@@ -14,6 +14,7 @@
 #include "chome_art.h"
 #include "chome_video.h"
 #include "chome_icons32.h"
+#include "chome_osk.h"
 
 #include "../../cfg.h"
 #include "../../user_io.h"
@@ -1774,10 +1775,28 @@ static void render()
 	default: break;
 	}
 
+	// Last, and over everything: while the keyboard is up it is the only thing the
+	// player can act on.
+	if (osk_active()) osk_draw(p, using_pad);
+
 	gfx_end();
 }
 
 /* ---------------------------------------------------------------- input --- */
+
+/*
+  Hands a finished entry back to whoever opened the keyboard. Nothing opens it yet -
+  the Wi-Fi screen is the reason it exists - so for now this only clears the result
+  so a cancelled entry is not seen twice.
+*/
+static void osk_settle()
+{
+	int r = osk_result();
+	if (!r) return;
+
+	osk_clear_result();
+	mark_dirty();
+}
 
 static void go_screen(int s)
 {
@@ -2973,6 +2992,12 @@ int chome_active()
 	return active || ig_active;
 }
 
+void chome_text_entry(const char *title, const char *prompt, const char *initial, int mask)
+{
+	osk_open(title, prompt, initial, mask);
+	mark_dirty();
+}
+
 int chome_ingame_active()
 {
 	return ig_active;
@@ -3183,6 +3208,18 @@ int chome_handle(uint32_t key)
 		// Relabel the prompts for whichever device this came from.
 		int pad = input_menu_key_from_pad();
 		if (pad != using_pad) { using_pad = pad; mark_dirty(); }
+
+		/*
+		  The keyboard is modal: while it is up every key belongs to it, including
+		  MENU, which cancels the entry rather than closing the front-end.
+		*/
+		if (osk_active())
+		{
+			osk_key(k, pad);
+			osk_settle();
+			mark_dirty();
+			return 1;
+		}
 
 		if (k == last_key) key_run++;
 		else { key_run = 0; last_key = k; }
