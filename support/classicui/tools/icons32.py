@@ -1,0 +1,340 @@
+#!/usr/bin/env python3
+"""
+Generates support/classicui/chome_icons32.h from RetroArch's "monochrome" icon set.
+
+    python3 support/classicui/tools/icons32.py            # fetch and generate
+    python3 support/classicui/tools/icons32.py --keep      # ...and leave the PNGs
+
+Why this set: they are already flat single-colour silhouettes with the details cut
+out of them as negative space, drawn to read at small sizes. Reducing one to a 32x32
+1-bit mask keeps the shape and the cut-outs, which is what a system needs to be
+recognisable on a shelf. Nothing here is drawn by hand.
+
+    Sources: libretro/retroarch-assets (xmb/monochrome), and jdecked/twemoji for
+             the one icon the first set has no equivalent for.
+    Licence: both CC BY 4.0, https://creativecommons.org/licenses/by/4.0/
+    Changes: cropped, scaled to 32x32, reduced to one bit per pixel.
+
+The source commit is pinned, so re-running this produces the same icons rather than
+whatever upstream looks like today, and every icon records the sha256 of the file it
+came from. See support/classicui/ICONS.md for the attribution that ships.
+
+Only the alpha channel is read: the art is one flat colour on transparency, so alpha
+*is* the drawing. Coverage is area-averaged over each 8x8 block and thresholded; the
+threshold was picked by eye against the icons where the cut-outs are finest (the Neo
+Geo's ring, the Game Boy's screen, every d-pad). Higher and the holes fill in.
+"""
+
+import argparse, hashlib, os, struct, sys, urllib.parse, urllib.request, zlib
+
+# Both sets are CC BY 4.0, and both commits are pinned so that re-running this
+# produces the same icons rather than whatever upstream looks like today.
+SOURCES = {
+    "retroarch": dict(
+        who="RetroArch monochrome icons, libretro/retroarch-assets",
+        commit="0959892093bdf85d96206993685a7450b26a1732",
+        base="https://raw.githubusercontent.com/libretro/retroarch-assets/"
+             "{commit}/xmb/monochrome/png/{name}.png"),
+    "twemoji": dict(
+        who="Twemoji, jdecked/twemoji",
+        commit="b6b55fef1e8636b540a6d016a4729ca8cdf2e60b",
+        base="https://raw.githubusercontent.com/jdecked/twemoji/"
+             "{commit}/assets/72x72/{name}.png"),
+}
+
+N = 32
+THRESHOLD = 0.42
+FIT = 30                # the icon is scaled to fit this box, leaving a pixel of air
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+OUT = os.path.join(HERE, "..", "chome_icons32.h")
+CACHE = os.path.join(HERE, ".icons-cache")
+
+# Classic Home's system ids, from the table in chome_lib.cpp, against the source and
+# the file in it that depicts that machine.
+MAP = [
+    ("nes", "retroarch", "Nintendo - Nintendo Entertainment System"),
+    ("snes", "retroarch", "Nintendo - Super Nintendo Entertainment System"),
+    ("gb", "retroarch", "Nintendo - Game Boy"),
+    ("gba", "retroarch", "Nintendo - Game Boy Advance"),
+    ("n64", "retroarch", "Nintendo - Nintendo 64"),
+    ("md", "retroarch", "Sega - Mega Drive - Genesis"),
+    ("sms", "retroarch", "Sega - Master System - Mark III"),
+    ("tg16", "retroarch", "NEC - PC Engine - TurboGrafx 16"),
+    ("a7800", "retroarch", "Atari - 7800"),
+    ("psx", "retroarch", "Sony - PlayStation"),
+    ("neogeo", "retroarch", "SNK - Neo Geo"),
+    # Arcade needed a second source. There is no cabinet anywhere in the RetroArch
+    # set; FBNeo's own icon is a light gun, which reads as "shooter", and the input
+    # glyph that looked like a joystick turns out to be a stick being pressed - at
+    # this size, a download arrow. Twemoji's joystick is a ball-top on a base, which
+    # is the symbol everyone knows, and is under the same licence.
+    ("arcade", "twemoji", "1f579"),
+    ("lynx", "retroarch", "Atari - Lynx"),
+    ("ws", "retroarch", "Bandai - WonderSwan"),
+    ("ngp", "retroarch", "SNK - Neo Geo Pocket Color"),
+    ("amiga", "retroarch", "Commodore - Amiga"),
+    ("st", "retroarch", "Atari - ST"),
+    ("c64", "retroarch", "Commodore - 64"),
+    ("spec", "retroarch", "Sinclair - ZX Spectrum"),
+    ("cpc", "retroarch", "Amstrad - CPC"),
+    ("msx", "retroarch", "Microsoft - MSX"),
+    # The "DOS" icon is a wordmark that turns to mush at this size; the IBM PC is a
+    # monitor with a command prompt on it, which survives and says the same thing.
+    ("ao486", "retroarch", "IBM - PC and Compatibles"),
+    ("apple2", "retroarch", "Apple - II"),
+]
+
+
+def fetch(source, name):
+    src = SOURCES[source]
+    os.makedirs(CACHE, exist_ok=True)
+    path = os.path.join(CACHE, source + "_" + name + ".png")
+    if not os.path.exists(path):
+        url = src["base"].format(commit=src["commit"], name=urllib.parse.quote(name))
+        with urllib.request.urlopen(url, timeout=60) as r:
+            body = r.read()
+        with open(path, "wb") as f:
+            f.write(body)
+    return path
+
+
+def read_alpha(path):
+    """(w, h, alpha bytes) for a non-interlaced 8-bit PNG, palette or RGBA."""
+    data = open(path, "rb").read()
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise SystemExit(path + ": not a png")
+
+    idat, trns = b"", b""
+    w = h = ctype = None
+    i = 8
+    while i < len(data):
+        n = struct.unpack(">I", data[i:i + 4])[0]
+        tag = data[i + 4:i + 8]
+        body = data[i + 8:i + 8 + n]
+        if tag == b"IHDR":
+            w, h, depth, ctype, _c, _f, inter = struct.unpack(">IIBBBBB", body)
+            if inter:
+                raise SystemExit(f"{path}: interlaced")
+            # Part of the set is stored 4 bits per pixel, some of it 1 or 2: a
+            # palette of a handful of colours does not need a whole byte.
+            if depth not in (1, 2, 4, 8) or (depth != 8 and ctype != 3):
+                raise SystemExit(f"{path}: depth {depth}, colour type {ctype}")
+        elif tag == b"tRNS":
+            trns = body
+        elif tag == b"IDAT":
+            idat += body
+        i += 12 + n
+
+    bpp = {3: 1, 4: 2, 6: 4}.get(ctype)
+    if not bpp:
+        raise SystemExit(f"{path}: colour type {ctype}")
+
+    raw = zlib.decompress(idat)
+    # The filters work on bytes: one byte per pixel at most, and whole rows rounded
+    # up when several pixels share a byte.
+    if depth == 8:
+        stride = w * bpp
+    else:
+        stride = (w * depth + 7) // 8
+        bpp = 1
+    rows = bytearray(stride * h)
+    prev = bytearray(stride)
+    pos = 0
+
+    for y in range(h):
+        f = raw[pos]
+        pos += 1
+        line = bytearray(raw[pos:pos + stride])
+        pos += stride
+
+        if f == 1:
+            for x in range(bpp, stride):
+                line[x] = (line[x] + line[x - bpp]) & 0xff
+        elif f == 2:
+            for x in range(stride):
+                line[x] = (line[x] + prev[x]) & 0xff
+        elif f == 3:
+            for x in range(stride):
+                a = line[x - bpp] if x >= bpp else 0
+                line[x] = (line[x] + ((a + prev[x]) >> 1)) & 0xff
+        elif f == 4:
+            for x in range(stride):
+                a = line[x - bpp] if x >= bpp else 0
+                b = prev[x]
+                c = prev[x - bpp] if x >= bpp else 0
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                pr = a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
+                line[x] = (line[x] + pr) & 0xff
+        elif f != 0:
+            raise SystemExit(f"{path}: filter {f}")
+
+        rows[y * stride:(y + 1) * stride] = line
+        prev = line
+
+    alpha = bytearray(w * h)
+    if ctype == 3:
+        tab = bytes(trns) + b"\xff" * (256 - len(trns))
+        if depth == 8:
+            for k in range(w * h):
+                alpha[k] = tab[rows[k]]
+        else:
+            per = 8 // depth
+            mask = (1 << depth) - 1
+            for y in range(h):
+                base = y * stride
+                for x in range(w):
+                    byte = rows[base + x // per]
+                    shift = 8 - depth * (x % per + 1)
+                    alpha[y * w + x] = tab[(byte >> shift) & mask]
+    elif ctype == 6:
+        for k in range(w * h):
+            alpha[k] = rows[k * 4 + 3]
+    else:
+        for k in range(w * h):
+            alpha[k] = rows[k * 2 + 1]
+
+    return w, h, alpha
+
+
+def bbox(w, h, alpha):
+    """The drawing's own bounds, ignoring the transparent border around it."""
+    x0, y0, x1, y1 = w, h, -1, -1
+    for y in range(h):
+        base = y * w
+        for x in range(w):
+            if alpha[base + x] > 8:
+                if x < x0: x0 = x
+                if x > x1: x1 = x
+                if y < y0: y0 = y
+                if y > y1: y1 = y
+    if x1 < 0:
+        return 0, 0, w - 1, h - 1
+    return x0, y0, x1, y1
+
+
+def to_grid(w, h, alpha):
+    """
+    Crops to the drawing, scales it to fit, and thresholds to one bit.
+
+    Cropping first is what makes the set look like a set. The system icons are drawn
+    filling their frame but the input glyphs sit in a lot of air, so anything taken
+    from those would arrive on the shelf half the size of its neighbours. Aspect is
+    preserved - a Game Boy is taller than it is wide and has to stay that way.
+    """
+    x0, y0, x1, y1 = bbox(w, h, alpha)
+    bw, bh = x1 - x0 + 1, y1 - y0 + 1
+
+    if bw >= bh:
+        tw = FIT
+        th = max(1, round(bh * FIT / bw))
+    else:
+        th = FIT
+        tw = max(1, round(bw * FIT / bh))
+
+    ox, oy = (N - tw) // 2, (N - th) // 2
+
+    out = []
+    for gy in range(N):
+        row = ""
+        for gx in range(N):
+            tx, ty = gx - ox, gy - oy
+            if tx < 0 or ty < 0 or tx >= tw or ty >= th:
+                row += "."
+                continue
+
+            sx0 = x0 + tx * bw // tw
+            sx1 = x0 + (tx + 1) * bw // tw
+            sy0 = y0 + ty * bh // th
+            sy1 = y0 + (ty + 1) * bh // th
+            if sx1 <= sx0: sx1 = sx0 + 1
+            if sy1 <= sy0: sy1 = sy0 + 1
+
+            s = 0
+            for y in range(sy0, sy1):
+                base = y * w
+                for x in range(sx0, sx1):
+                    s += alpha[base + x]
+            cnt = (sy1 - sy0) * (sx1 - sx0)
+            cov = s / (255.0 * cnt) if cnt else 0.0
+            row += "#" if cov >= THRESHOLD else "."
+        out.append(row)
+    return out
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--keep", action="store_true", help="keep the downloaded PNGs")
+    args = ap.parse_args()
+
+    icons = []
+    for sid, source, name in MAP:
+        path = fetch(source, name)
+        digest = hashlib.sha256(open(path, "rb").read()).hexdigest()
+        w, h, alpha = read_alpha(path)
+        grid = to_grid(w, h, alpha)
+
+        ink = sum(r.count("#") for r in grid)
+        if ink < 40:
+            raise SystemExit(f"{sid}: only {ink} pixels of ink - wrong file?")
+
+        icons.append((sid, source, name, digest, grid))
+        print(f"  {sid:7s} {ink:4d} px  {source}: {name}")
+
+    with open(os.path.normpath(OUT), "w") as f:
+        f.write(f'''/*
+  Per-system icons: {N}x{N}, one bit per pixel, drawn in a single flat colour.
+
+  GENERATED by support/classicui/tools/icons32.py - do not edit. Re-run that script
+  to change the mapping or the threshold; it explains both.
+
+  Not drawn here: they are somebody else's artwork, scaled down and reduced to one
+  bit. Each icon below names the file it came from.
+
+      RetroArch monochrome icons - https://github.com/libretro/retroarch-assets
+        xmb/monochrome/png at commit {SOURCES["retroarch"]["commit"][:12]}
+      Twemoji - https://github.com/jdecked/twemoji
+        assets/72x72 at commit {SOURCES["twemoji"]["commit"][:12]}
+
+      Licence: both are Creative Commons Attribution 4.0 International (CC BY 4.0)
+               https://creativecommons.org/licenses/by/4.0/
+      Changes: cropped to the drawing, scaled to fit {FIT}x{FIT} with its aspect
+               kept, and reduced to one bit per pixel at a coverage threshold
+               of {THRESHOLD}.
+
+  The attribution that ships with the firmware is in support/classicui/ICONS.md and
+  on the About screen. A system with no entry here falls back to the generic set.
+*/
+
+#ifndef CHOME_ICONS32_H
+#define CHOME_ICONS32_H
+
+#define ICON32 {N}
+
+struct sysicon_def {{ const char *id; const char *rows[ICON32]; }};
+
+static const sysicon_def sysicons[] =
+{{
+''')
+        for sid, source, name, digest, grid in icons:
+            f.write(f'\t// {name}  ({source}, sha256 {digest[:16]})\n')
+            f.write(f'\t{{ "{sid}", {{\n')
+            for r in grid:
+                f.write(f'\t\t"{r}",\n')
+            f.write("\t} },\n")
+        f.write("};\n\n#endif\n")
+
+    if not args.keep:
+        for _sid, source, name, _d, _g in icons:
+            p = os.path.join(CACHE, source + "_" + name + ".png")
+            if os.path.exists(p):
+                os.remove(p)
+        if os.path.isdir(CACHE) and not os.listdir(CACHE):
+            os.rmdir(CACHE)
+
+    print(f"wrote {os.path.normpath(OUT)} with {len(icons)} icons")
+
+
+if __name__ == "__main__":
+    main()
