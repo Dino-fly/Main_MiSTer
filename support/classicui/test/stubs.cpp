@@ -149,6 +149,32 @@ void harness_set_fb(int w, int h)
 }
 
 uint32_t *harness_fb_shown() { return fb[presented]; }
+
+/*
+  A hash of some rows of the frame that was last shown. Used to tell "the legend
+  changed" from "the legend did not", which is the only way to check a prompt from
+  outside: there is no way to read the strings back out of the front-end. Rows rather
+  than the whole frame, because the shelf is still easing things about.
+*/
+unsigned long harness_fb_hash(int y0, int y1)
+{
+	const uint32_t *p = fb[presented];
+	if (!p) return 0;
+
+	if (y0 < 0) y0 = 0;
+	if (y1 > fbh) y1 = fbh;
+
+	unsigned long h = 1469598103934665603UL;
+	for (int y = y0; y < y1; y++)
+	{
+		for (int x = 0; x < fbw; x++)
+		{
+			h ^= p[(size_t)y * fbw + x];
+			h *= 1099511628211UL;
+		}
+	}
+	return h;
+}
 int harness_present_count() { return present_count; }
 
 uint32_t *video_menu_fb(int n) { return (n >= 1 && n <= 2) ? fb[n] : 0; }
@@ -499,6 +525,31 @@ void audio_mute(int on)
 }
 
 int audio_is_muted() { return muted; }
+
+/* ------------------------------------------------------- the input device ---
+  Which controller the last menu key came from, and what it has mapped to the menu
+  buttons. Enough of it to check that the prompts follow the controller.
+*/
+static char pad_name[128] = "Generic USB Gamepad";
+static uint16_t pad_mmap[12] = { 0, 0, 0, 0, 0x131, 0x130, 0x133, 0x134, 0x136, 0x137, 0x13A, 0x13B };
+
+const char *input_menu_key_devname() { return pad_name; }
+
+uint16_t input_menu_key_btn(int sys_btn)
+{
+	if (sys_btn < 0 || sys_btn >= (int)(sizeof(pad_mmap) / sizeof(pad_mmap[0]))) return 0;
+	return pad_mmap[sys_btn];
+}
+
+void harness_set_pad_name(const char *n) { snprintf(pad_name, sizeof(pad_name), "%s", n ? n : ""); }
+
+void harness_swap_pad_faces()
+{
+	// A pad the player has remapped: circle and cross the other way round.
+	uint16_t t = pad_mmap[4];
+	pad_mmap[4] = pad_mmap[5];
+	pad_mmap[5] = t;
+}
 
 int harness_muted() { return muted; }
 int harness_mute_changes() { return mute_changes; }
