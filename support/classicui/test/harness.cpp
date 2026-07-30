@@ -1776,10 +1776,17 @@ int main()
 		check(net_conf_country("country=CH\nnetwork={\n\tssid=\"x\"\n}\n", country, sizeof(country))
 			&& !strcmp(country, "CH"), "the country setting is read back out of the old file");
 
-		check(net_conf_build(conf, sizeof(conf), "country=CH", "MyNet", "hunter2hunter", 1) > 0,
+		/*
+		  The country goes in as the code, exactly as net_conf_country() hands it
+		  back, and comes out as a line wpa_supplicant will accept. Passing the two
+		  through each other is the whole point: the first thing a join does is read
+		  the country out of the old file and put it into the new one.
+		*/
+		check(net_conf_build(conf, sizeof(conf), country, "MyNet", "hunter2hunter", 1) > 0,
 			"a secured network builds a config");
-		check(strstr(conf, "country=CH") && strstr(conf, "ssid=\"MyNet\"") && strstr(conf, "psk=\"hunter2hunter\""),
-			"which keeps the country and names the network");
+		check(strstr(conf, "country=CH\n") && strstr(conf, "ssid=\"MyNet\"") && strstr(conf, "psk=\"hunter2hunter\""),
+			"which keeps the country as a line of its own and names the network");
+		check(!strstr(conf, "\nCH"), "and not as a bare code that would not parse");
 		check(net_conf_build(conf, sizeof(conf), "", "MyNet", "", 0) > 0 && strstr(conf, "key_mgmt=NONE"),
 			"an open network builds one with no key");
 		check(net_conf_build(conf, sizeof(conf), "", "MyNet", "short", 1) < 0,
