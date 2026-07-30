@@ -3367,16 +3367,35 @@ static void animate()
 	if (!CheckTimer(ig_close_until)) mark_dirty();
 }
 
+/*
+  The classic menu opens on the *release* of the menu button, not the press
+  (menu.cpp: case KEY_F12 | UPSTROKE), and it only skips that when the press before
+  it was the one that opened it. So a press this front-end took for itself leaves
+  its release behind to open the classic OSD - which is what closing the in-game
+  menu did: back into the game, with MiSTer's own menu on top of it.
+
+  Set when a menu-button press is consumed inside a game core, so the release that
+  belongs to it can be consumed as well.
+*/
+static int eat_menu_release = 0;
+
 int chome_handle(uint32_t key)
 {
 	uint32_t igk = key & ~UPSTROKE;
 	int igpress = key && !(key & UPSTROKE);
+	int igmenu = (igk == KEY_MENU || igk == KEY_F12);
+
+	if (eat_menu_release && igmenu && (key & UPSTROKE))
+	{
+		eat_menu_release = 0;
+		return 1;
+	}
 
 	/*
 	  Inside a game core the whole front-end runs, not a cut-down pause panel: the
 	  shelf, folders, Display, Options, everything, drawn over a still of the
 	  running game. Taking the HPS framebuffer also routes pad input here
-	  (input.cpp gates on video_fb_state()); the OSD stays enabled but blanked so
+	  (input.cpp gates on chome_active()); the OSD stays enabled but blanked so
 	  the keyboard reaches us instead of the game.
 
 	  From there it shares the menu core's frame loop below - same screens, same
@@ -3386,8 +3405,9 @@ int chome_handle(uint32_t key)
 	{
 		if (!ig_active)
 		{
-			if (igpress && (igk == KEY_MENU || igk == KEY_F12))
+			if (igpress && igmenu)
 			{
+				eat_menu_release = 1;
 				if (ig_open()) return 1;
 
 				/*
@@ -3561,7 +3581,9 @@ int chome_handle(uint32_t key)
 
 		case KEY_MENU:
 		case KEY_F12:
-			if (ig_active) ig_close(1);         // straight back into the game
+			// Only in a game core: the handoff in the menu core wants the classic
+			// menu, and there the release is what asks for it.
+			if (ig_active) { eat_menu_release = 1; ig_close(1); }
 			else chome_leave();
 			return 1;
 
