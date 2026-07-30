@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <signal.h>
 #include <ifaddrs.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -45,6 +46,7 @@ static char join_detail[96];
 
 static int watching = 0;
 static unsigned long link_due = 0;
+static unsigned long child_kill = 0;    // when to give up on a read-only child
 
 /* --------------------------------------------------------------- interface --- */
 
@@ -428,18 +430,27 @@ void net_ingest_link(const char *text)
 
 /* ------------------------------------------------------------------- scan --- */
 
+/*
+  Trigger, wait, read the table - not `iw scan`, which does all three and blocks
+  until the driver feels like answering. On this hardware, associated, that call sat
+  there for a minute with nothing to show, which on screen is a front-end stuck on
+  "looking for networks" forever.
+
+  `scan trigger` returns as soon as the driver has accepted the request (or refuses,
+  if one is already running, which is just as good for us), and `scan dump` reads the
+  table the kernel keeps. Bounded by construction.
+*/
 static pid_t spawn_scan()
 {
 	pid_t p = fork();
 	if (p) return p;
 
-	const char *sc[] = { "iw", "dev", net_iface(), "scan", 0 };
+	const char *tr[] = { "iw", "dev", net_iface(), "scan", "trigger", 0 };
 	const char *dp[] = { "iw", "dev", net_iface(), "scan", "dump", 0 };
 
-	// A scan can be refused while another one is in flight, or while the driver is
-	// busy associating. The cached list is out of date but it is not empty, and an
-	// empty list reads as "there is no Wi-Fi here".
-	if (run_to(sc, SCAN_OUT) != 0) run_to(dp, SCAN_OUT);
+	run_quiet(tr);
+	sleep(4);                       // long enough for a pass over the 2.4 GHz channels
+	run_to(dp, SCAN_OUT);
 	_exit(0);
 }
 
@@ -450,6 +461,7 @@ void net_scan_start()
 	scanning = 1;
 	child = spawn_scan();
 	kind = K_SCAN;
+	child_kill = GetTimer(20000);
 	if (child < 0) { child = -1; scanning = 0; kind = K_NONE; }
 }
 
@@ -596,6 +608,13 @@ void net_join(const char *ssid, const char *psk, int secure)
 
 	child = p;
 	kind = K_JOIN;
+	/*
+	  No deadline on a join. It is the one child that must be allowed to finish: it
+	  is holding the only copy of the old configuration and is the thing that puts it
+	  back. Killing it half way is how a machine ends up off the network for good. Its
+	  own waits bound it to about a minute.
+	*/
+	child_kill = 0;
 	printf("ClassicUI: joining %s\n", join_ssid);
 }
 
@@ -630,11 +649,23 @@ static void link_refresh_start()
 
 	child = p;
 	kind = K_LINK;
+	child_kill = GetTimer(10000);
 }
 
 void net_poll()
 {
 	if (!net_present()) return;
+
+	/*
+	  Give up on a child that is taking too long - but only on the read-only ones. A
+	  driver that will not answer a scan should not leave the screen waiting for it.
+	*/
+	if (child > 0 && child_kill && CheckTimer(child_kill))
+	{
+		printf("ClassicUI: %s took too long, dropping it\n", kind == K_SCAN ? "scan" : "link read");
+		kill(child, SIGKILL);
+		child_kill = 0;
+	}
 
 	if (child > 0)
 	{
@@ -655,6 +686,7 @@ void net_poll()
 
 			child = -1;
 			kind = K_NONE;
+			child_kill = 0;
 
 			if (was == K_SCAN)
 			{
