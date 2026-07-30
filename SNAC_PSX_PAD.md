@@ -149,6 +149,10 @@ without the firmware, so they can be left in place.
 Cores are built by copying that `sys/` change into each core's own `sys/`
 folder and compiling with Quartus 17.0.2 — no per-core source changes.
 
+**Want to build it yourself?** [BUILDING.md](BUILDING.md) is a step-by-step
+guide for people who have never compiled an FPGA core, including the patch
+script (`tools/patch_sys.py`) that applies the change to any core.
+
 ## Status and provenance
 
 The RTL and firmware were written with **Claude Code** assistance: the pad
