@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <linux/input.h>
@@ -23,6 +24,7 @@
 #include "../chome_theme.h"
 #include "../chome_gfx.h"
 #include "../chome_video.h"
+#include "../chome_osk.h"
 #include "../../../lib/imlib2/Imlib2.h"
 #include "../../../lib/miniz/miniz.h"
 
@@ -1500,6 +1502,154 @@ int main()
 		press(KEY_ESC, 10);
 		printf("  captured the bar with Display removed\n");
 		harness_set_scaler_visible(1);
+	}
+
+	/*
+	  The on-screen keyboard. Driven through press() rather than by calling osk_key()
+	  directly, so this covers the modal routing in the dispatcher as well as the
+	  keyboard itself: if a key stopped reaching it, the text would not change.
+
+	  Each part starts from a fresh open, which puts the cursor on the first key of
+	  the top row. From there UP wraps to the function row and lands on its first key,
+	  so a count of RIGHTs names a function key exactly. Which column a *letter* ends
+	  up in after a vertical move is layout rather than behaviour, so where that is
+	  unavoidable the assertion is about the kind of character typed, not which one.
+	*/
+	printf("\n== on-screen keyboard ==\n");
+	{
+		harness_set_menu_core(1);
+		chome_leave();
+		press(KEY_MENU, 20);
+		frame(6);
+
+		chome_text_entry("Wi-Fi password", "Enter the password for HOME-WIFI", "", 1);
+		frame(4);
+		check(osk_active(), "the keyboard opens");
+		dump("osk-1-empty");
+
+		press(KEY_ENTER, 8);                  // the cursor starts on '1'
+		check(!strcmp(osk_text(), "1"), "A types the key under the cursor");
+
+		// Capitals.
+		chome_text_entry("Wi-Fi password", "Enter the password", "", 1);
+		frame(4);
+		press(KEY_UP, 8);                     // wraps to the function row: CAPS
+		press(KEY_ENTER, 8);
+		press(KEY_DOWN, 8);                   // the digits
+		press(KEY_DOWN, 8);                   // the letters
+		press(KEY_ENTER, 8);
+		check(!strcmp(osk_text(), "Q"), "CAPS gives capitals");
+		dump("osk-2-caps");
+
+		// The symbol page. A Wi-Fi password that needs one is the whole reason it
+		// is there, so what matters is that the page types something not on the
+		// letter pages at all.
+		chome_text_entry("Wi-Fi password", "Enter the password", "", 1);
+		frame(4);
+		press(KEY_UP, 8);
+		press(KEY_RIGHT, 8);                  // CAPS -> the symbols page
+		press(KEY_ENTER, 8);
+		dump("osk-3-symbols");
+		press(KEY_DOWN, 8);
+		press(KEY_DOWN, 8);
+		press(KEY_ENTER, 8);
+		{
+			const char *t = osk_text();
+			check(strlen(t) == 1 && !isalnum((unsigned char)t[0]),
+				"the symbol page types symbols");
+		}
+
+		// The two shortcuts, so a space or a correction does not mean walking the
+		// cursor down to the function row and back.
+		chome_text_entry("Wi-Fi password", "Enter the password", "ab", 1);
+		frame(4);
+		press(KEY_TAB, 8);                    // pad X
+		check(!strcmp(osk_text(), "ab "), "X types a space without leaving the letters");
+		press(KEY_BACKSPACE, 8);              // pad Y
+		check(!strcmp(osk_text(), "ab"), "Y deletes");
+
+		// ...and the same two as keys on the row, for the player who never finds out
+		// about the shortcuts.
+		chome_text_entry("Wi-Fi password", "Enter the password", "ab", 1);
+		frame(4);
+		press(KEY_UP, 8);
+		press(KEY_RIGHT, 8);
+		press(KEY_RIGHT, 8);                  // CAPS, page, SPACE
+		press(KEY_ENTER, 8);
+		check(!strcmp(osk_text(), "ab "), "the SPACE key types a space");
+		press(KEY_RIGHT, 8);                  // DEL
+		press(KEY_ENTER, 8);
+		check(!strcmp(osk_text(), "ab"), "the DEL key deletes");
+
+		press(KEY_RIGHT, 8);                  // HIDE: it is a password field
+		press(KEY_ENTER, 8);
+		dump("osk-4-hidden");
+
+		press(KEY_RIGHT, 8);                  // DONE
+		press(KEY_ENTER, 8);
+		check(!osk_active(), "DONE closes the keyboard");
+		check(!strcmp(osk_text(), "ab"), "and keeps what was typed");
+
+		// A real keyboard types itself rather than driving the cursor.
+		harness_set_input_pad(0);
+		chome_text_entry("Wi-Fi password", "Enter the password", "", 1);
+		frame(4);
+		press(KEY_H, 6);
+		press(KEY_E, 6);
+		press(KEY_MINUS, 6);
+		press(KEY_9, 6);
+		check(!strcmp(osk_text(), "he-9"), "a plugged-in keyboard types straight into the field");
+		press(KEY_BACKSPACE, 6);
+		check(!strcmp(osk_text(), "he-"), "and its backspace deletes");
+		dump("osk-5-typed");
+		harness_set_input_pad(1);
+
+		/*
+		  Accepted and cancelled have to be told apart by whoever opened it, and the
+		  dispatcher consumes the result as soon as it appears - so this one asserts
+		  against the keyboard directly.
+		*/
+		osk_open("Test", "", "keep", 0);
+		osk_key(KEY_ESC, 1);
+		check(osk_result() == -1, "B reports the entry as cancelled");
+		check(!osk_active(), "and closes it");
+		check(!strcmp(osk_text(), "keep"), "a cancelled entry leaves the text alone to be discarded");
+		osk_clear_result();
+
+		osk_open("Test", "", "keep", 0);
+		osk_key(KEY_UP, 1);
+		for (int i = 0; i < 8 && osk_active(); i++)
+		{
+			osk_key(KEY_ENTER, 1);
+			if (!osk_active()) break;
+			osk_key(KEY_RIGHT, 1);
+		}
+		check(osk_result() == 1, "walking the function row reaches DONE and accepts");
+		osk_clear_result();
+		osk_close();
+		frame(4);
+
+		/*
+		  240p over SCART is the tightest canvas there is, and the one his CRT
+		  actually shows: if the keyboard does not fit there it does not work. A fresh
+		  open after the resize, because the front-end only redraws when something
+		  happened and a resize on its own is not something happening.
+		*/
+		{
+			harness_set_fb(320, 240);
+			gfx_shutdown();
+			theme_update(320, 240, 3);
+			chome_text_entry("Wi-Fi password", "Enter the password for HOME-WIFI", "hunter2", 1);
+			frame(8);
+			dump("osk-6-240p");
+			check(gfx_w() == 320, "the keyboard lays out on a 240p canvas");
+			osk_close();
+
+			harness_set_fb(1280, 720);
+			gfx_shutdown();
+			theme_update(1280, 720, 1);
+			frame(6);
+		}
 	}
 
 	printf("\n== presents ==\n");
