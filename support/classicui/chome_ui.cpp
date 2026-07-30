@@ -14,6 +14,8 @@
 #include "chome_art.h"
 #include "chome_video.h"
 #include "chome_icons32.h"
+#include "chome_osk.h"
+#include "chome_net.h"
 
 #include "../../cfg.h"
 #include "../../user_io.h"
@@ -47,6 +49,17 @@ static int ig_paused = 0;                    // the core is actually halted
 static int ig_frozen = 0;                    // held still by a state instead of a pause
 static int ig_selected_running = 0;          // shelf parked on the running game
 static unsigned long ig_close_until = 0;     // "press A again to close the game"
+static int wifi_row = 0;                     // which network is picked
+static int wifi_top = 0;                     // first one on screen
+static char wifi_pick[NET_SSID];             // ...and its name, kept across the keyboard
+static int wifi_pick_secure = 0;
+static int wifi_join_seen = JOIN_IDLE;       // to notice the child finishing
+
+// Which screen is waiting for the text the keyboard is collecting.
+#define OSKD_NONE 0
+#define OSKD_WIFI 1
+static int osk_dest = OSKD_NONE;
+
 static int ig_muted = 0;                     // game silenced while the menu is up
 static int ig_mute_was = 0;                  // ...and what it was before, so his own mute survives
 
@@ -83,6 +96,10 @@ static void ref_shot_path(const char *sysid, const char *rompath, char *out, int
 #define SCR_ABOUT   6
 #define SCR_BROWSE  8
 #define SCR_LAUNCH  9
+#define SCR_WIFI    10
+
+// Rows on the Options panel. Several places step over them.
+#define OPT_ROWS    7
 
 #define MB_DISPLAY  0
 #define MB_OPTIONS  1
@@ -1009,6 +1026,16 @@ static int build_legend(legend_pair *out, int max)
 		if (n < max) { out[n++] = { btn(LBL_A), "Apply", "OK" }; }
 		if (n < max) { out[n++] = { btn(LBL_B), "Back", "Back" }; }
 		break;
+	case SCR_WIFI:
+		if (net_join_state() != JOIN_IDLE)
+		{
+			if (net_join_state() != JOIN_WORK && n < max) { out[n++] = { btn(LBL_A), "OK", "OK" }; }
+			break;
+		}
+		if (net_count() && n < max) { out[n++] = { btn(LBL_A), "Join", "Join" }; }
+		if (n < max) { out[n++] = { btn(LBL_X), "Look Again", "Scan" }; }
+		if (n < max) { out[n++] = { btn(LBL_B), "Back", "Back" }; }
+		break;
 	case SCR_DISPLAY:
 		if (n < max) { out[n++] = { CH_LEFT CH_RIGHT, "Choose", "Sel" }; }
 		if (n < max) { out[n++] = { btn(LBL_A), "Apply", "OK" }; }
@@ -1436,14 +1463,25 @@ static void draw_options_panel(const chome_profile *p)
 {
 	panel_box b = draw_panel(p, "Options");
 
-	static const char *rows_menu[] = { "Cover Art", "Rescan Library", "Reinstall Looks", "Menu Layout", "Controllers", "Advanced Settings" };
-	static const char *rows_game[] = { "Cover Art", "Rescan Library", "Reinstall Looks", "Menu Layout", "Controllers", "Close Game" };
+	static const char *rows_menu[] = { "Cover Art", "Rescan Library", "Reinstall Looks", "Menu Layout", "Controllers", "Wi-Fi", "Advanced Settings" };
+	static const char *rows_game[] = { "Cover Art", "Rescan Library", "Reinstall Looks", "Menu Layout", "Controllers", "Wi-Fi", "Close Game" };
 	const char *const *rows = ig_active ? rows_game : rows_menu;
 	char v1[32];
 	if (lib_scanning()) snprintf(v1, sizeof(v1), "%d...", lib_scan_progress());
 	else snprintf(v1, sizeof(v1), "%d games", lib_item_count());
 
-	int closing = (ig_active && opt_row == 5 && !CheckTimer(ig_close_until));
+	int closing = (ig_active && opt_row == OPT_ROWS - 1 && !CheckTimer(ig_close_until));
+
+	// What the Wi-Fi row says without being opened: the network name is the one
+	// piece of it anybody wants to check in passing.
+	char v2[40];
+	if (!net_present()) snprintf(v2, sizeof(v2), "No Adapter");
+	else
+	{
+		const net_link *l = net_link_now();
+		if (l->up && l->ssid[0]) snprintf(v2, sizeof(v2), "%s", l->ssid);
+		else snprintf(v2, sizeof(v2), "Set Up >");
+	}
 
 	const char *vals[] = {
 		cfg.classicui_artfetch ? "Fetch Missing" : "Local Only",
@@ -1451,10 +1489,11 @@ static void draw_options_panel(const chome_profile *p)
 		"Write Files",
 		cfg.classicui_profile == 0 ? "Auto" : theme_get()->name,
 		"Classic Menu >",
+		v2,
 		ig_active ? (closing ? "PRESS A AGAIN" : "Back To Menu") : "Classic Menu >"
 	};
 
-	draw_rows(&b, rows, vals, 6, opt_row);
+	draw_rows(&b, rows, vals, OPT_ROWS, opt_row);
 
 	if (ig_active)
 	{
@@ -1463,6 +1502,166 @@ static void draw_options_panel(const chome_profile *p)
 		                          : "THE GAME STAYS LOADED UNTIL YOU CLOSE IT",
 			s2, b.w - 12 * s2), b.x + 6 * s2, b.y + b.h - 11 * s2, s2,
 			closing ? COL_RED : COL_PANELLO, 0);
+	}
+}
+
+/*
+  Signal as four bars rather than a number. -67 dBm means nothing to the person
+  standing in the room; three bars out of four does.
+*/
+static void draw_bars(int x, int y, int s, int dbm, uint32_t on, uint32_t off)
+{
+	int lv = 1;
+	if (dbm >= -55) lv = 4;
+	else if (dbm >= -65) lv = 3;
+	else if (dbm >= -75) lv = 2;
+
+	for (int i = 0; i < 4; i++)
+	{
+		int bh = (i + 1) * 2 * s;
+		gfx_fill(x + i * 3 * s, y + 8 * s - bh, 2 * s, bh, i < lv ? on : off);
+	}
+}
+
+// A padlock, drawn: the OSD font has no glyph for one, and "(secured)" after every
+// name is noise on a list where almost everything is secured.
+static void draw_lock(int x, int y, int s, uint32_t col)
+{
+	gfx_fill(x, y + 4 * s, 6 * s, 4 * s, col);
+	gfx_frame_rect(x + s, y + s, 4 * s, 4 * s, col, s);
+}
+
+#define WIFI_VIS 6                           // rows on screen; the panel is sized for them
+
+static void draw_wifi(const chome_profile *p)
+{
+	int s = p->ts_ui;
+	int rowh = 14 * s;                       // a list aimed at with a pad, not a mouse
+
+	/*
+	  Sized for a fixed number of rows rather than for the screen or for however many
+	  networks turned up. Filling four fifths of a 720p canvas to list three networks
+	  looks broken, and a panel that changes size as more are found is worse.
+	*/
+	int w = p->w - 2 * p->inset;
+	if (w > 44 * 8 * s) w = 44 * 8 * s;
+
+	int h = (10 * s + 6) + 16 * s + WIFI_VIS * rowh + 6 * s;
+	if (h > p->h - 2 * p->safe_y) h = p->h - 2 * p->safe_y;
+
+	panel_box b = draw_panel_ex(p, w, h, "Wi-Fi");
+
+	const net_link *l = net_link_now();
+	char st[96];
+	if (l->up && l->ip[0]) snprintf(st, sizeof(st), "On %s   %s", l->ssid, l->ip);
+	else if (l->up) snprintf(st, sizeof(st), "On %s   getting an address", l->ssid);
+	else if (!net_present()) snprintf(st, sizeof(st), "No Wi-Fi adapter is plugged in");
+	else snprintf(st, sizeof(st), "Not connected");
+	gfx_text(gfx_clip(st, s, b.w - 12 * s), b.x + 6 * s, b.y + 3 * s, s, COL_INK, 0);
+	gfx_fill(b.x + 6 * s, b.y + 13 * s, b.w - 12 * s, s, COL_PANELLO);
+
+	int y0 = b.y + 18 * s;
+	int foot = 12 * s;
+	int vis = (b.y + b.h - 4 * s - y0) / rowh;
+	if (vis > WIFI_VIS) vis = WIFI_VIS;
+	if (vis < 1) vis = 1;
+
+	// While a join is running, or as soon as it has finished, that is the only thing
+	// worth saying: the list underneath is about to be wrong either way.
+	int js = net_join_state();
+	if (js != JOIN_IDLE)
+	{
+		const char *head;
+		uint32_t col = COL_INK;
+
+		if (js == JOIN_WORK) head = "Connecting";
+		else if (js == JOIN_OK) { head = "Connected"; col = COL_GREEN; }
+		else { head = "Could not connect"; col = COL_RED; }
+
+		char body[128];
+		if (js == JOIN_WORK)
+			snprintf(body, sizeof(body), "Joining %s. This can take a minute.", net_join_detail());
+		else if (js == JOIN_OK)
+			snprintf(body, sizeof(body), "This MiSTer is on %s.", net_join_detail());
+		else if (js == JOIN_LOST)
+			snprintf(body, sizeof(body), "%s", net_join_detail());
+		else
+			snprintf(body, sizeof(body), "%s Your old network was put back.", net_join_detail());
+
+		int cy = b.y + b.h / 2 - 12 * s;
+		gfx_text_c(head, b.x + b.w / 2, cy, s, col, 0);
+
+		char lines[4][64];
+		int nl = wrap_text(body, (b.w - 16 * s) / (8 * s), lines, 3);
+		for (int i = 0; i < nl; i++)
+			gfx_text_c(lines[i], b.x + b.w / 2, cy + (i + 2) * 10 * s, s, COL_INK, 0);
+
+		if (js != JOIN_WORK)
+			gfx_text_c(using_pad ? "A - OK" : "ENTER - OK", b.x + b.w / 2,
+				b.y + b.h - foot, s, COL_PANELLO, 0);
+		return;
+	}
+
+	// Nothing to show *and* no adapter is the only case worth explaining hardware
+	// for; a list on screen is proof enough that there is one.
+	if (!net_present() && !net_count())
+	{
+		char lines[4][64];
+		int nl = wrap_text("Plug a USB Wi-Fi adapter into the MiSTer and come back to this screen.",
+			(b.w - 16 * s) / (8 * s), lines, 3);
+		for (int i = 0; i < nl; i++)
+			gfx_text_c(lines[i], b.x + b.w / 2, b.y + b.h / 2 + i * 10 * s, s, COL_INK, 0);
+		return;
+	}
+
+	int n = net_count();
+	if (!n)
+	{
+		gfx_text_c(net_scanning() ? "Looking for networks" : "No networks found",
+			b.x + b.w / 2, b.y + b.h / 2, s, COL_INK, 0);
+		if (!net_scanning())
+			gfx_text_c(using_pad ? "X - LOOK AGAIN" : "TAB - LOOK AGAIN", b.x + b.w / 2,
+				b.y + b.h - foot, s, COL_PANELLO, 0);
+		return;
+	}
+
+	if (wifi_row >= n) wifi_row = n - 1;
+	if (wifi_row < 0) wifi_row = 0;
+	if (wifi_row < wifi_top) wifi_top = wifi_row;
+	if (wifi_row >= wifi_top + vis) wifi_top = wifi_row - vis + 1;
+
+	int bx = b.x + b.w - 8 * s - 12 * s;         // the bars
+	int lx = bx - 11 * s;                        // the padlock
+
+	for (int i = 0; i < vis && wifi_top + i < n; i++)
+	{
+		const net_ap *a = net_at(wifi_top + i);
+		if (!a) break;
+
+		int on = (wifi_top + i == wifi_row);
+		int y = y0 + i * rowh;
+
+		if (on) gfx_fill(b.x + 4 * s, y - 3 * s, b.w - 8 * s, rowh - 2 * s, COL_BLUE);
+
+		uint32_t ink = on ? COL_WHITE : COL_INK;
+
+		// A dot marks the one we are on, rather than the word "connected" competing
+		// with the name for the same row.
+		if (a->current) gfx_fill(b.x + 8 * s, y + 2 * s, 4 * s, 4 * s, ink);
+
+		gfx_text(gfx_clip(a->ssid, s, lx - (b.x + 16 * s) - 2 * s), b.x + 16 * s, y, s, ink, 0);
+
+		if (a->secure) draw_lock(lx, y, s, ink);
+		draw_bars(bx, y, s, a->signal, ink, on ? COL_PANELLO : COL_PANELHI);
+	}
+
+	if (net_scanning())
+		gfx_text_c("Looking for more", b.x + b.w / 2, b.y + b.h - foot, s, COL_PANELLO, 0);
+	else if (n > vis)
+	{
+		char more[48];
+		snprintf(more, sizeof(more), "%d of %d", wifi_row + 1, n);
+		gfx_text_c(more, b.x + b.w / 2, b.y + b.h - foot, s, COL_PANELLO, 0);
 	}
 }
 
@@ -1761,7 +1960,7 @@ static void render()
 	draw_position(p);
 
 	int overlay = (screen == SCR_SORT || screen == SCR_DISPLAY || screen == SCR_OPTIONS ||
-		screen == SCR_ABOUT);
+		screen == SCR_ABOUT || screen == SCR_WIFI);
 	if (overlay) gfx_scrim(0, 0, p->w, p->h, COL_BGDARK, 2);
 
 	draw_suspend(p);
@@ -1774,18 +1973,45 @@ static void render()
 	case SCR_DISPLAY: draw_display_screen(p); break;
 	case SCR_OPTIONS: draw_options_panel(p); break;
 	case SCR_ABOUT:   draw_about_panel(p); break;
+	case SCR_WIFI:    draw_wifi(p); break;
 	case SCR_LAUNCH:  draw_launch(p); break;
 	default: break;
 	}
+
+	// Last, and over everything: while the keyboard is up it is the only thing the
+	// player can act on.
+	if (osk_active()) osk_draw(p, using_pad);
 
 	gfx_end();
 }
 
 /* ---------------------------------------------------------------- input --- */
 
+/*
+  Hands a finished entry back to whoever opened the keyboard. Nothing opens it yet -
+  the Wi-Fi screen is the reason it exists - so for now this only clears the result
+  so a cancelled entry is not seen twice.
+*/
+static void osk_settle()
+{
+	int r = osk_result();
+	if (!r) return;
+
+	int dest = osk_dest;
+	osk_dest = OSKD_NONE;
+	osk_clear_result();
+	mark_dirty();
+
+	if (r < 0) return;                    // cancelled: the text is thrown away
+
+	if (dest == OSKD_WIFI) net_join(wifi_pick, osk_text(), wifi_pick_secure);
+}
+
 static void go_screen(int s)
 {
 	screen = s;
+	// Reading the link costs a process, so only do it while something is showing it.
+	net_watch(s == SCR_OPTIONS || s == SCR_WIFI);
 	mark_dirty();
 }
 
@@ -1903,9 +2129,23 @@ static void move_v(int dir)
 		break;
 
 	case SCR_OPTIONS:
-		opt_row = (opt_row + dir + 6) % 6;
+		opt_row = (opt_row + dir + OPT_ROWS) % OPT_ROWS;
 		mark_dirty();
 		break;
+
+	case SCR_WIFI:
+	{
+		if (net_join_state() != JOIN_IDLE) { nudge(); return; }
+
+		int n = net_count();
+		if (!n) { nudge(); return; }
+
+		wifi_row += dir;
+		if (wifi_row < 0) wifi_row = 0;
+		if (wifi_row >= n) wifi_row = n - 1;
+		mark_dirty();
+		break;
+	}
 
 	case SCR_BROWSE:
 		if (!nbent) { nudge(); return; }
@@ -2006,6 +2246,13 @@ static void accept()
 			break;
 
 		case 5:
+			wifi_row = 0;
+			wifi_top = 0;
+			go_screen(SCR_WIFI);
+			if (net_present() && !net_count()) net_scan_start();
+			break;
+
+		case 6:
 			if (!ig_active) { chome_leave(); break; }
 
 			// Closing the game loses unsaved progress, so it takes two presses.
@@ -2021,6 +2268,34 @@ static void accept()
 			break;
 		}
 		break;
+
+	case SCR_WIFI:
+	{
+		int js = net_join_state();
+		if (js == JOIN_WORK) { nudge(); break; }
+		if (js != JOIN_IDLE) { net_join_ack(); mark_dirty(); break; }
+
+		const net_ap *a = net_at(wifi_row);
+		if (!a) { nudge(); break; }
+
+		snprintf(wifi_pick, sizeof(wifi_pick), "%s", a->ssid);
+		wifi_pick_secure = a->secure;
+
+		if (!a->secure)
+		{
+			// An open network needs nothing typed, so do not make them type nothing.
+			net_join(wifi_pick, "", 0);
+			mark_dirty();
+			break;
+		}
+
+		char pr[128];
+		snprintf(pr, sizeof(pr), "Enter the password for %s", wifi_pick);
+		osk_dest = OSKD_WIFI;
+		osk_open("Wi-Fi password", pr, "", 1);
+		mark_dirty();
+		break;
+	}
 
 	case SCR_ABOUT:
 		go_screen(SCR_MENUBAR);
@@ -2088,6 +2363,13 @@ static void back()
 	case SCR_OPTIONS:
 	case SCR_ABOUT:
 		go_screen(SCR_MENUBAR);
+		break;
+
+	case SCR_WIFI:
+		// A join in flight is not cancellable - the child is already reconfiguring
+		// the interface - so B acknowledges the result instead of abandoning it.
+		if (net_join_state() != JOIN_IDLE && net_join_state() != JOIN_WORK) net_join_ack();
+		go_screen(SCR_OPTIONS);
 		break;
 
 	case SCR_BROWSE:
@@ -2999,6 +3281,12 @@ int chome_active()
 	return active || ig_active;
 }
 
+void chome_text_entry(const char *title, const char *prompt, const char *initial, int mask)
+{
+	osk_open(title, prompt, initial, mask);
+	mark_dirty();
+}
+
 int chome_ingame_active()
 {
 	return ig_active;
@@ -3017,6 +3305,7 @@ void chome_leave()
 	video_menu_fb_analog(0);
 
 	lib_state_save();
+	net_watch(0);
 	OsdMenuCtl(1);            // OSD overlay back on for the classic menu
 
 	// Repaint the wallpaper over our UI: the classic menu only draws the
@@ -3222,6 +3511,18 @@ int chome_handle(uint32_t key)
 		int pad = input_menu_key_from_pad();
 		if (pad != using_pad) { using_pad = pad; mark_dirty(); }
 
+		/*
+		  The keyboard is modal: while it is up every key belongs to it, including
+		  MENU, which cancels the entry rather than closing the front-end.
+		*/
+		if (osk_active())
+		{
+			osk_key(k, pad);
+			osk_settle();
+			mark_dirty();
+			return 1;
+		}
+
 		if (k == last_key) key_run++;
 		else { key_run = 0; last_key = k; }
 
@@ -3272,6 +3573,14 @@ int chome_handle(uint32_t key)
 
 		case KEY_TAB:            // pad X
 		{
+			if (screen == SCR_WIFI)
+			{
+				if (net_join_state() != JOIN_IDLE || net_scanning()) { nudge(); break; }
+				net_scan_start();
+				mark_dirty();
+				break;
+			}
+
 			// Deleting a suspend point removes a real savestate file, so it takes
 			// two presses: the first arms it and says so on screen.
 			if (screen != SCR_SUSPEND) { nudge(); break; }
@@ -3324,6 +3633,19 @@ int chome_handle(uint32_t key)
 		// Reset the hold counter on release as well as on idle, otherwise a run of
 		// discrete taps looks like a held key and triggers the screenful jump.
 		if (!key || k == last_key) key_run = 0;
+	}
+
+	/*
+	  Networking. Cheap unless something is in flight: it reaps the child that runs
+	  iw or ifup, and asks for the link again every few seconds while a screen is
+	  showing it. The state has to be picked up even after leaving the screen,
+	  because the child is still out there either way.
+	*/
+	net_poll();
+	if (net_join_state() != wifi_join_seen)
+	{
+		wifi_join_seen = net_join_state();
+		mark_dirty();
 	}
 
 	// Background work: one scan slice and one art decode per frame.

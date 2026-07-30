@@ -47,4 +47,15 @@ void chome_core_poll();
 */
 int chome_ingame_active();
 
+/*
+  Opens the on-screen keyboard over whatever is on screen. The screens inside the
+  front-end that need text call this; it is public because the harness drives it the
+  same way, and because text entry is a front-end-wide facility rather than the
+  property of one screen.
+
+  mask marks the field as a password: see chome_osk.h for what that does and does
+  not do.
+*/
+void chome_text_entry(const char *title, const char *prompt, const char *initial, int mask);
+
 #endif

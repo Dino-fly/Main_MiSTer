@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <linux/input.h>
@@ -23,6 +24,8 @@
 #include "../chome_theme.h"
 #include "../chome_gfx.h"
 #include "../chome_video.h"
+#include "../chome_osk.h"
+#include "../chome_net.h"
 #include "../../../lib/imlib2/Imlib2.h"
 #include "../../../lib/miniz/miniz.h"
 
@@ -246,6 +249,55 @@ static void build_sd()
 }
 
 /* --------------------------------------------------------------- driving -- */
+
+/*
+  Real `iw dev wlan0 scan` shape, with the four things that actually turn up in it:
+  the same network on two radios, an entry whose name is blank, one whose name is
+  padding bytes printed as \x00, and one whose encryption is only visible in the
+  capability line. The names are invented; the layout is not.
+*/
+static const char *SCAN_TEXT =
+	"BSS 11:22:33:44:55:66(on wlan0)\n"
+	"\tTSF: 62859829328 usec (0d, 17:27:39)\n"
+	"\tfreq: 2412\n"
+	"\tcapability: ESS ShortSlotTime (0x0411)\n"
+	"\tsignal: -82.00 dBm\n"
+	"\tSSID: Cafe Guest\n"
+	"\tSupported rates: 1.0* 2.0* 5.5* 11.0*\n"
+	"BSS aa:bb:cc:dd:ee:f0(on wlan0) -- associated\n"
+	"\tfreq: 2462\n"
+	"\tcapability: ESS Privacy ShortSlotTime (0x1411)\n"
+	"\tsignal: -60.00 dBm\n"
+	"\tSSID: BrainDamage\n"
+	"\tRSN:\t * Version: 1\n"
+	"\t\t * Group cipher: CCMP\n"
+	"BSS aa:bb:cc:dd:ee:f1(on wlan0)\n"
+	"\tfreq: 5180\n"
+	"\tsignal: -48.00 dBm\n"
+	"\tSSID: BrainDamage\n"
+	"\tRSN:\t * Version: 1\n"
+	"BSS 00:22:6c:05:cb:a5(on wlan0)\n"
+	"\tfreq: 2462\n"
+	"\tsignal: -74.00 dBm\n"
+	"\tSSID: \n"
+	"\tRSN:\t * Version: 1\n"
+	"BSS 6a:6c:9a:1e:32:db(on wlan0)\n"
+	"\tfreq: 2462\n"
+	"\tsignal: -77.00 dBm\n"
+	"\tSSID: \\x00\\x00\\x00\\x00\\x00\n"
+	"\tRSN:\t * Version: 1\n"
+	"BSS 12:12:12:12:12:12(on wlan0)\n"
+	"\tfreq: 2437\n"
+	"\tcapability: ESS Privacy (0x1431)\n"
+	"\tsignal: -70.00 dBm\n"
+	"\tSSID: Neighbour 2.4\n";
+
+static const char *LINK_TEXT =
+	"Connected to ec:6c:9a:1e:32:d9 (on wlan0)\n"
+	"\tSSID: BrainDamage\n"
+	"\tfreq: 2462\n"
+	"\tsignal: -76 dBm\n"
+	"\ttx bitrate: 72.2 MBit/s\n";
 
 static void frame(int n = 1)
 {
@@ -1180,12 +1232,14 @@ static void assert_ingame()
 	check(harness_mute_changes() == 0, "with the volume register left untouched");
 	harness_set_muted(0);
 
-	// Close Game: Options, last row, two presses.
+	// Close Game: Options, last row, two presses. Reached by wrapping upwards off the
+	// first row, so adding a row to the panel does not silently point this somewhere
+	// else - which is exactly what happened when Wi-Fi was added.
 	press(KEY_MENU, 20);
 	press(KEY_UP, 14);
 	press(KEY_RIGHT, 10);
 	press(KEY_ENTER, 16);                     // Options
-	for (int i = 0; i < 5; i++) press(KEY_DOWN, 6);
+	press(KEY_UP, 8);
 	press(KEY_ENTER, 8);
 	dump("ingame-5-close-armed");
 	check(chome_ingame_active(), "one press does not close the game");
@@ -1538,6 +1592,238 @@ int main()
 		frame(6);
 		check(harness_fb_analog() == 0, "HDMI attached: the analog output is left alone");
 		check(theme_get()->w == 1280, "and the UI keeps the full canvas");
+	}
+
+	/*
+	  The on-screen keyboard. Driven through press() rather than by calling osk_key()
+	  directly, so this covers the modal routing in the dispatcher as well as the
+	  keyboard itself: if a key stopped reaching it, the text would not change.
+
+	  Each part starts from a fresh open, which puts the cursor on the first key of
+	  the top row. From there UP wraps to the function row and lands on its first key,
+	  so a count of RIGHTs names a function key exactly. Which column a *letter* ends
+	  up in after a vertical move is layout rather than behaviour, so where that is
+	  unavoidable the assertion is about the kind of character typed, not which one.
+	*/
+	printf("\n== on-screen keyboard ==\n");
+	{
+		harness_set_menu_core(1);
+		chome_leave();
+		press(KEY_MENU, 20);
+		frame(6);
+
+		chome_text_entry("Wi-Fi password", "Enter the password for HOME-WIFI", "", 1);
+		frame(4);
+		check(osk_active(), "the keyboard opens");
+		dump("osk-1-empty");
+
+		press(KEY_ENTER, 8);                  // the cursor starts on '1'
+		check(!strcmp(osk_text(), "1"), "A types the key under the cursor");
+
+		// Capitals.
+		chome_text_entry("Wi-Fi password", "Enter the password", "", 1);
+		frame(4);
+		press(KEY_UP, 8);                     // wraps to the function row: CAPS
+		press(KEY_ENTER, 8);
+		press(KEY_DOWN, 8);                   // the digits
+		press(KEY_DOWN, 8);                   // the letters
+		press(KEY_ENTER, 8);
+		check(!strcmp(osk_text(), "Q"), "CAPS gives capitals");
+		dump("osk-2-caps");
+
+		// The symbol page. A Wi-Fi password that needs one is the whole reason it
+		// is there, so what matters is that the page types something not on the
+		// letter pages at all.
+		chome_text_entry("Wi-Fi password", "Enter the password", "", 1);
+		frame(4);
+		press(KEY_UP, 8);
+		press(KEY_RIGHT, 8);                  // CAPS -> the symbols page
+		press(KEY_ENTER, 8);
+		dump("osk-3-symbols");
+		press(KEY_DOWN, 8);
+		press(KEY_DOWN, 8);
+		press(KEY_ENTER, 8);
+		{
+			const char *t = osk_text();
+			check(strlen(t) == 1 && !isalnum((unsigned char)t[0]),
+				"the symbol page types symbols");
+		}
+
+		// The two shortcuts, so a space or a correction does not mean walking the
+		// cursor down to the function row and back.
+		chome_text_entry("Wi-Fi password", "Enter the password", "ab", 1);
+		frame(4);
+		press(KEY_TAB, 8);                    // pad X
+		check(!strcmp(osk_text(), "ab "), "X types a space without leaving the letters");
+		press(KEY_BACKSPACE, 8);              // pad Y
+		check(!strcmp(osk_text(), "ab"), "Y deletes");
+
+		// ...and the same two as keys on the row, for the player who never finds out
+		// about the shortcuts.
+		chome_text_entry("Wi-Fi password", "Enter the password", "ab", 1);
+		frame(4);
+		press(KEY_UP, 8);
+		press(KEY_RIGHT, 8);
+		press(KEY_RIGHT, 8);                  // CAPS, page, SPACE
+		press(KEY_ENTER, 8);
+		check(!strcmp(osk_text(), "ab "), "the SPACE key types a space");
+		press(KEY_RIGHT, 8);                  // DEL
+		press(KEY_ENTER, 8);
+		check(!strcmp(osk_text(), "ab"), "the DEL key deletes");
+
+		press(KEY_RIGHT, 8);                  // HIDE: it is a password field
+		press(KEY_ENTER, 8);
+		dump("osk-4-hidden");
+
+		press(KEY_RIGHT, 8);                  // DONE
+		press(KEY_ENTER, 8);
+		check(!osk_active(), "DONE closes the keyboard");
+		check(!strcmp(osk_text(), "ab"), "and keeps what was typed");
+
+		// A real keyboard types itself rather than driving the cursor.
+		harness_set_input_pad(0);
+		chome_text_entry("Wi-Fi password", "Enter the password", "", 1);
+		frame(4);
+		press(KEY_H, 6);
+		press(KEY_E, 6);
+		press(KEY_MINUS, 6);
+		press(KEY_9, 6);
+		check(!strcmp(osk_text(), "he-9"), "a plugged-in keyboard types straight into the field");
+		press(KEY_BACKSPACE, 6);
+		check(!strcmp(osk_text(), "he-"), "and its backspace deletes");
+		dump("osk-5-typed");
+		harness_set_input_pad(1);
+
+		/*
+		  Accepted and cancelled have to be told apart by whoever opened it, and the
+		  dispatcher consumes the result as soon as it appears - so this one asserts
+		  against the keyboard directly.
+		*/
+		osk_open("Test", "", "keep", 0);
+		osk_key(KEY_ESC, 1);
+		check(osk_result() == -1, "B reports the entry as cancelled");
+		check(!osk_active(), "and closes it");
+		check(!strcmp(osk_text(), "keep"), "a cancelled entry leaves the text alone to be discarded");
+		osk_clear_result();
+
+		osk_open("Test", "", "keep", 0);
+		osk_key(KEY_UP, 1);
+		for (int i = 0; i < 8 && osk_active(); i++)
+		{
+			osk_key(KEY_ENTER, 1);
+			if (!osk_active()) break;
+			osk_key(KEY_RIGHT, 1);
+		}
+		check(osk_result() == 1, "walking the function row reaches DONE and accepts");
+		osk_clear_result();
+		osk_close();
+		frame(4);
+
+		/*
+		  240p over SCART is the tightest canvas there is, and the one his CRT
+		  actually shows: if the keyboard does not fit there it does not work. A fresh
+		  open after the resize, because the front-end only redraws when something
+		  happened and a resize on its own is not something happening.
+		*/
+		{
+			harness_set_fb(320, 240);
+			gfx_shutdown();
+			theme_update(320, 240, 3);
+			chome_text_entry("Wi-Fi password", "Enter the password for HOME-WIFI", "hunter2", 1);
+			frame(8);
+			dump("osk-6-240p");
+			check(gfx_w() == 320, "the keyboard lays out on a 240p canvas");
+			osk_close();
+
+			harness_set_fb(1280, 720);
+			gfx_shutdown();
+			theme_update(1280, 720, 1);
+			frame(6);
+		}
+	}
+
+	/*
+	  Wi-Fi. There is no radio in the container, so what is checked here is everything
+	  up to the radio: reading what the tools say, building the config file, and the
+	  screen a person drives. Bringing an interface up cannot be tested without an
+	  interface and is verified on the hardware instead.
+	*/
+	printf("\n== wi-fi ==\n");
+	{
+		net_ap list[NET_MAX];
+		int n = net_parse_scan(SCAN_TEXT, list, NET_MAX);
+		printf("  parsed %d networks\n", n);
+		check(n == 3, "hidden and null-padded names are left out of the list");
+		check(!strcmp(list[0].ssid, "BrainDamage"), "the network we are on comes first");
+		check(list[0].current, "and is marked as the current one");
+		check(list[0].signal == -48, "a network on two radios is one row, at its best signal");
+		check(list[0].secure, "RSN means it wants a password");
+		check(!strcmp(list[1].ssid, "Neighbour 2.4"), "then the strongest of the rest");
+		check(list[1].secure, "Privacy in the capability line also means a password");
+		check(!strcmp(list[2].ssid, "Cafe Guest") && !list[2].secure, "an open network is not marked");
+
+		net_link l;
+		check(net_parse_link(LINK_TEXT, &l) == 1, "the link reads as connected");
+		check(!strcmp(l.ssid, "BrainDamage"), "and says which network");
+		check(net_parse_link("Not connected.\n", &l) == 0, "and reads not-connected as not connected");
+
+		// The config file. Getting this wrong takes the machine off the network, so
+		// the shape of it is worth pinning down.
+		char conf[1024], country[32];
+		check(net_conf_country("country=CH\nnetwork={\n\tssid=\"x\"\n}\n", country, sizeof(country))
+			&& !strcmp(country, "CH"), "the country setting is read back out of the old file");
+
+		check(net_conf_build(conf, sizeof(conf), "country=CH", "MyNet", "hunter2hunter", 1) > 0,
+			"a secured network builds a config");
+		check(strstr(conf, "country=CH") && strstr(conf, "ssid=\"MyNet\"") && strstr(conf, "psk=\"hunter2hunter\""),
+			"which keeps the country and names the network");
+		check(net_conf_build(conf, sizeof(conf), "", "MyNet", "", 0) > 0 && strstr(conf, "key_mgmt=NONE"),
+			"an open network builds one with no key");
+		check(net_conf_build(conf, sizeof(conf), "", "MyNet", "short", 1) < 0,
+			"a password WPA would reject is refused before anything is touched");
+		check(net_conf_build(conf, sizeof(conf), "", "", "hunter2hunter", 1) < 0,
+			"and so is a nameless network");
+		check(net_conf_build(conf, sizeof(conf), "", "He said \"hi\"", "hunter2hunter", 1) > 0
+			&& strstr(conf, "ssid=\"He said \\\"hi\\\"\""),
+			"a quote in the name is escaped, not left to end the value early");
+
+		/*
+		  The screen. Fed with the same captured output, through the function the scan
+		  child's result goes through, so this is the list a person would really see.
+		*/
+		net_ingest_scan(SCAN_TEXT);
+		net_ingest_link(LINK_TEXT);
+
+		harness_set_menu_core(1);
+		chome_leave();
+		press(KEY_MENU, 20);
+		frame(8);
+
+		press(KEY_UP, 10);                    // the menu bar
+		press(KEY_RIGHT, 10);                 // Options
+		press(KEY_ENTER, 14);
+		press(KEY_UP, 8);                     // wrap to the last row
+		press(KEY_UP, 8);                     // and up to Wi-Fi
+		press(KEY_ENTER, 14);
+		frame(8);
+		dump("wifi-1-list");
+
+		// A on a secured network asks for the password - which also proves the row,
+		// the screen and the keyboard are all wired to each other.
+		press(KEY_ENTER, 10);
+		check(osk_active(), "picking a secured network asks for its password");
+		dump("wifi-2-password");
+		press(KEY_ESC, 10);
+		check(!osk_active(), "and B backs out of it");
+
+		press(KEY_DOWN, 8);
+		press(KEY_DOWN, 8);                   // the open one
+		press(KEY_ENTER, 10);
+		check(!osk_active(), "an open network does not ask for a password");
+
+		press(KEY_ESC, 10);
+		press(KEY_ESC, 10);
+		frame(6);
 	}
 
 	printf("\n== presents ==\n");
