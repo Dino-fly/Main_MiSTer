@@ -368,18 +368,26 @@ int net_conf_build(char *buf, size_t len, const char *country,
 		if (!quote_into(qp, sizeof(qp), psk)) return -1;
 	}
 
+	// country is the two-letter code, the way net_conf_country() hands it back - the
+	// line around it belongs here, with the rest of the file's syntax.
+	char cl[48] = "";
+	if (country && *country)
+	{
+		char qc[32];
+		if (!quote_into(qc, sizeof(qc), country)) return -1;
+		snprintf(cl, sizeof(cl), "country=%s\n", qc);
+	}
+
 	int n;
 	if (secure)
 	{
 		n = snprintf(buf, len,
-			"%s%snetwork={\n\tssid=\"%s\"\n\tpsk=\"%s\"\n}\n",
-			country && *country ? country : "", country && *country ? "\n" : "", qs, qp);
+			"%snetwork={\n\tssid=\"%s\"\n\tpsk=\"%s\"\n}\n", cl, qs, qp);
 	}
 	else
 	{
 		n = snprintf(buf, len,
-			"%s%snetwork={\n\tssid=\"%s\"\n\tkey_mgmt=NONE\n}\n",
-			country && *country ? country : "", country && *country ? "\n" : "", qs);
+			"%snetwork={\n\tssid=\"%s\"\n\tkey_mgmt=NONE\n}\n", cl, qs);
 	}
 
 	if (n < 0 || (size_t)n >= len) return -1;
