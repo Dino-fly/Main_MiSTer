@@ -26,6 +26,7 @@
 #include "../chome_video.h"
 #include "../chome_osk.h"
 #include "../chome_net.h"
+#include "../chome_icons32.h"
 #include "../../../lib/imlib2/Imlib2.h"
 #include "../../../lib/miniz/miniz.h"
 
@@ -1834,6 +1835,71 @@ int main()
 		press(KEY_ESC, 10);
 		press(KEY_ESC, 10);
 		frame(6);
+	}
+
+	/*
+	  The icons. Two things worth failing over: a system that has lost its icon
+	  because an id was renamed on one side and not the other - which shows up on
+	  screen as a system quietly falling back to the generic art - and any icon that
+	  came out empty or nearly solid, which is what a bad source file or a bad
+	  threshold looks like.
+	*/
+	printf("\n== system icons ==\n");
+	{
+		int missing = 0;
+		for (int i = 0; i < lib_sys_count(); i++)
+		{
+			const chome_sys *sy = lib_sys(i);
+			if (!sy) continue;
+
+			int found = 0;
+			for (size_t k = 0; k < sizeof(sysicons) / sizeof(sysicons[0]); k++)
+				if (!strcasecmp(sysicons[k].id, sy->id)) { found = 1; break; }
+
+			if (!found) { printf("  no icon for system \"%s\"\n", sy->id); missing++; }
+		}
+		check(!missing, "every system in the table has an icon");
+
+		int bad = 0;
+		for (size_t k = 0; k < sizeof(sysicons) / sizeof(sysicons[0]); k++)
+		{
+			int ink = 0;
+			for (int r = 0; r < ICON32; r++)
+				for (const char *q = sysicons[k].rows[r]; *q; q++) if (*q == '#') ink++;
+
+			// A recognisable silhouette in a 1024-pixel grid is somewhere in the
+			// middle. All ink or almost none means the reduction went wrong.
+			if (ink < 80 || ink > 850) { printf("  %s: %d px of ink\n", sysicons[k].id, ink); bad++; }
+		}
+		check(!bad, "and every icon has a plausible amount of ink in it");
+
+		// A sheet of the lot, to be looked at: the only real test of an icon is
+		// whether a person recognises the machine.
+		{
+			harness_set_fb(1280, 720);
+			gfx_shutdown();
+			theme_update(1280, 720, 1);
+			if (gfx_begin())
+			{
+				gfx_fill(0, 0, 1280, 720, COL_BGDARK);
+				int n = (int)(sizeof(sysicons) / sizeof(sysicons[0]));
+				int cols = 8, zoom = 3, cell = ICON32 * zoom + 24;
+				for (int k = 0; k < n; k++)
+				{
+					int cx = 20 + (k % cols) * cell, cy = 20 + (k / cols) * cell;
+					for (int oy = 0; oy < ICON32 * zoom; oy++)
+					{
+						const char *row = sysicons[k].rows[oy / zoom];
+						for (int ox = 0; ox < ICON32 * zoom; ox++)
+							if (row[ox / zoom] == '#')
+								gfx_fill(cx + ox, cy + oy, 1, 1, COL_WHITE);
+					}
+					gfx_text(sysicons[k].id, cx, cy + ICON32 * zoom + 2, 1, COL_DIM, 0);
+				}
+				gfx_end();
+				dump("icons-sheet");
+			}
+		}
 	}
 
 	printf("\n== presents ==\n");

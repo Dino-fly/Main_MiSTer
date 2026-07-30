@@ -1670,7 +1670,7 @@ static void draw_about_panel(const chome_profile *p)
 	panel_box b = draw_panel(p, "About");
 	int s = b.s, rowh = 11 * s, y = b.y + 5 * s;
 
-	char l[8][80];
+	char l[10][80];
 	int n = 0;
 	snprintf(l[n++], 80, "Classic Home for MiSTer");
 	snprintf(l[n++], 80, "Profile %s  %dx%d", theme_get()->name, p->w, p->h);
@@ -1678,7 +1678,15 @@ static void draw_about_panel(const chome_profile *p)
 	snprintf(l[n++], 80, "Art cached %d  %d KB", art_cache_count(), art_cache_bytes() / 1024);
 	snprintf(l[n++], 80, "Art fetch %s", cfg.classicui_artfetch ? "on" : "off");
 	snprintf(l[n++], 80, "Font: MiSTer OSD 8x8 ROM");
-	snprintf(l[n++], 80, "GPL v3. No third-party assets.");
+	snprintf(l[n++], 80, "GPL v3.");
+	/*
+	  The icons are somebody else's work under CC BY 4.0, which asks to be credited
+	  where a person can see it. Both sets name an About screen as the right place,
+	  so this is the attribution, not a nicety - see ICONS.md. If the icon set
+	  changes, these two lines change with it.
+	*/
+	snprintf(l[n++], 80, "Icons: RetroArch monochrome,");
+	snprintf(l[n++], 80, "Twemoji. CC BY 4.0.");
 
 	for (int i = 0; i < n; i++)
 	{
