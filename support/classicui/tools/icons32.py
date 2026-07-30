@@ -105,6 +105,14 @@ PICTOS = [
     # The favourite badge. RetroArch's "favorites" is a star inside a rounded
     # square, too busy for the corner of a cover; "add-favorite" is the star alone.
     ("star", "retroarch", "add-favorite"),
+
+    # PlayStation face buttons, for prompts shown while a PSX pad is the thing in
+    # someone's hands. The cross is not here: the OSD font's own X is a clean one at
+    # eight pixels, where every emoji cross falls apart into dots. Twemoji has no
+    # hollow triangle, so that one is filled; it still reads as a triangle.
+    ("psx_circle",   "twemoji", "2b55"),
+    ("psx_triangle", "twemoji", "1f53a"),
+    ("psx_square",   "twemoji", "2b1b"),
 ]
 
 

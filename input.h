@@ -136,6 +136,8 @@ void input_switch(int grab);
   produces, so this is the only way to tell which device the user is holding.
 */
 int input_menu_key_from_pad();
+const char *input_menu_key_devname();
+uint16_t input_menu_key_btn(int sys_btn);
 int input_state();
 void input_uinp_destroy();
 

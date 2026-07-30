@@ -2018,7 +2018,32 @@ static int kbd_toggle = 0;
 
 // 1 when the last key handed to the menu came from a gamepad, 0 from a keyboard.
 static int menu_key_from_pad = 1;
+static int menu_key_dev = -1;
 int input_menu_key_from_pad() { return menu_key_from_pad; }
+
+/*
+  The name of the device that produced the most recent menu key. A front-end that
+  wants to label its prompts for the controller actually in someone's hands has to
+  know which one that was, and the name is what identifies it - a SNAC pad is not a
+  USB device with a vid/pid of its own, it is a uinput device snacpad.cpp creates.
+*/
+const char *input_menu_key_devname()
+{
+	if (menu_key_dev < 0 || menu_key_dev >= NUMDEV) return "";
+	return input[menu_key_dev].name;
+}
+
+/*
+  Which physical button that device has mapped to one of the SYS_BTN_* menu buttons.
+  A front-end labelling its prompts needs this rather than a convention: the mapping
+  is the user's, and a pad they have remapped must still be described correctly.
+*/
+uint16_t input_menu_key_btn(int sys_btn)
+{
+	if (menu_key_dev < 0 || menu_key_dev >= NUMDEV) return 0;
+	if (sys_btn < 0 || sys_btn >= (int)(sizeof(input[0].mmap) / sizeof(input[0].mmap[0]))) return 0;
+	return input[menu_key_dev].mmap[sys_btn];
+}
 
 static uint32_t crtgun_timeout[NUMDEV] = {};
 
@@ -3902,7 +3927,11 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 				  carry the same codes a keyboard would, so the flag is the only
 				  thing that tells the two apart.
 				*/
-				if (send_key) menu_key_from_pad = menu_event ? 1 : 0;
+				if (send_key)
+				{
+					menu_key_from_pad = menu_event ? 1 : 0;
+					menu_key_dev = dev;
+				}
 				if (send_key) user_io_kbd(ev->code, ev->value);
 				return;
 			}

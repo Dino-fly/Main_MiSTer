@@ -1882,6 +1882,64 @@ int main()
 		}
 	}
 
+	/*
+	  Prompts that follow the controller. A PlayStation pad has no A or B written on
+	  it, so the legend names the shapes instead. There is no way to read the legend
+	  back out of the front-end, so this is checked the way a person would: the same
+	  screen photographed with each controller, and the pictures have to differ.
+	*/
+	printf("\n== playstation prompts ==\n");
+	{
+		harness_set_menu_core(1);
+		harness_set_fb(1280, 720);
+		gfx_shutdown();
+		theme_update(1280, 720, 1);
+		harness_set_input_pad(1);
+		chome_leave();
+
+		harness_set_pad_name("Generic USB Gamepad");
+		press(KEY_MENU, 20);
+		frame(10);
+		dump("prompts-1-generic");
+		unsigned long generic = harness_fb_hash(660, 720);
+
+		harness_set_pad_name("MiSTer SNAC Pad 1");
+		press(KEY_DOWN, 10);                  // any key, so the legend is redrawn
+		press(KEY_UP, 10);
+		frame(10);
+		dump("prompts-2-psx");
+		unsigned long psx = harness_fb_hash(660, 720);
+		check(psx != generic, "a SNAC pad changes the prompts");
+
+		// ...and back again when they pick the other controller up.
+		harness_set_pad_name("Generic USB Gamepad");
+		press(KEY_DOWN, 10);
+		press(KEY_UP, 10);
+		frame(10);
+		check(harness_fb_hash(660, 720) == generic, "and another controller changes them back");
+
+		/*
+		  A remapped pad. Circle and cross swapped over means the confirm prompt has
+		  to swap with it - the shape is looked up, not assumed.
+		*/
+		harness_set_pad_name("MiSTer SNAC Pad 1");
+		press(KEY_DOWN, 10);
+		press(KEY_UP, 10);
+		frame(10);
+		unsigned long before = harness_fb_hash(660, 720);
+		harness_swap_pad_faces();
+		press(KEY_DOWN, 10);
+		press(KEY_UP, 10);
+		frame(10);
+		dump("prompts-3-remapped");
+		check(harness_fb_hash(660, 720) != before, "a remapped pad is described as remapped");
+
+		harness_swap_pad_faces();
+		harness_set_pad_name("Generic USB Gamepad");
+		press(KEY_ESC, 10);
+		frame(6);
+	}
+
 	printf("\n== presents ==\n");
 	printf("  page flips: %d\n", harness_present_count());
 	check(harness_present_count() > 10, "the framebuffer was actually flipped");
