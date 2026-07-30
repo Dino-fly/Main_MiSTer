@@ -914,7 +914,69 @@ static const char *btn(int which)
 	return (theme_get()->id == PROF_LO) ? btn_kbd_lo[which] : btn_kbd[which];
 }
 
-struct legend_pair { const char *key; const char *label; const char *shortl; };
+/*
+  Prompts that match the controller in the player's hands.
+
+  A PlayStation pad has no A or B on it, so telling somebody to "press A" is asking
+  them to translate. Naming the shape they can see is the whole point of a prompt.
+
+  Which shape goes with which menu button is looked up, not assumed: SYS_BTN_A is
+  whatever button that pad has mapped to it, and the PSX pad reports its faces as the
+  four positional codes (snacpad.cpp: Triangle north, Circle east, Cross south,
+  Square west). With MiSTer's default map that lands on circle to confirm and cross
+  to go back - the Japanese convention, and the one the physical layout implies,
+  since A sits where the circle does. Remap the pad and this follows.
+
+  The cross comes from the OSD font's own X: every drawn cross we tried breaks into
+  dots at the eight pixels a 240p legend has for it, and an X is what people type for
+  that button anyway.
+*/
+#define BTN_CODE_SOUTH 0x130
+#define BTN_CODE_EAST  0x131
+#define BTN_CODE_NORTH 0x133
+#define BTN_CODE_WEST  0x134
+
+static int pad_is_psx()
+{
+	const char *n = input_menu_key_devname();
+	if (!n || !*n) return 0;
+
+	// A SNAC pad is a uinput device snacpad.cpp names; a USB Sony pad says so too,
+	// and the same labels are right for it.
+	return strcasestr(n, "SNAC") || strcasestr(n, "PlayStation")
+		|| strcasestr(n, "DualShock") || strcasestr(n, "DualSense")
+		|| strcasestr(n, "Sony") ? 1 : 0;
+}
+
+struct prompt { const char *text; const char *pic; };
+
+static prompt btn_prompt(int which)
+{
+	prompt out = { btn(which), 0 };
+	if (which < 0 || which >= LBL_COUNT || !using_pad || !pad_is_psx()) return out;
+
+	static const int sysbtn[LBL_COUNT] =
+		{ SYS_BTN_A, SYS_BTN_B, SYS_BTN_X, SYS_BTN_Y, SYS_BTN_SELECT };
+
+	switch (input_menu_key_btn(sysbtn[which]))
+	{
+	case BTN_CODE_EAST:  out.pic = "psx_circle";   break;
+	case BTN_CODE_NORTH: out.pic = "psx_triangle"; break;
+	case BTN_CODE_WEST:  out.pic = "psx_square";   break;
+	case BTN_CODE_SOUTH: out.text = "X";           break;
+	default: break;                                // Select keeps its own name
+	}
+	return out;
+}
+
+struct legend_pair { const char *key; const char *pic; const char *label; const char *shortl; };
+
+// A prompt for one of the face buttons, whatever it is called on this controller.
+static legend_pair lp(int which, const char *label, const char *shortl)
+{
+	prompt pr = btn_prompt(which);
+	return { pr.text, pr.pic, label, shortl };
+}
 
 static int build_legend(legend_pair *out, int max)
 {
@@ -927,69 +989,69 @@ static int build_legend(legend_pair *out, int max)
 	{
 		// Inside that very game the slots become live: A restores, Y writes.
 		int here = ig_is_running(cur_game());
-		if (here && ss_can_load() && n < max) { out[n++] = { btn(LBL_A), "Load", "Load" }; }
-		else if (n < max) { out[n++] = { btn(LBL_A), "Resume", "Play" }; }
-		if (here && ss_can_save() && n < max) { out[n++] = { btn(LBL_Y), "Save", "Save" }; }
-		else if (n < max) { out[n++] = { CH_DOWN, "Lock", "Lock" }; }
-		if (n < max) { out[n++] = { btn(LBL_X), "Delete", "Del" }; }
-		if (n < max) { out[n++] = { btn(LBL_B), "Back", "Back" }; }
+		if (here && ss_can_load() && n < max) { out[n++] = lp(LBL_A, "Load", "Load"); }
+		else if (n < max) { out[n++] = lp(LBL_A, "Resume", "Play"); }
+		if (here && ss_can_save() && n < max) { out[n++] = lp(LBL_Y, "Save", "Save"); }
+		else if (n < max) { out[n++] = { CH_DOWN, 0, "Lock", "Lock" }; }
+		if (n < max) { out[n++] = lp(LBL_X, "Delete", "Del"); }
+		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
 		break;
 	}
 	case SCR_SORT:
-		if (n < max) { out[n++] = { btn(LBL_A), "Apply", "OK" }; }
-		if (n < max) { out[n++] = { btn(LBL_B), "Back", "Back" }; }
+		if (n < max) { out[n++] = lp(LBL_A, "Apply", "OK"); }
+		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
 		break;
 	case SCR_WIFI:
 		if (net_join_state() != JOIN_IDLE)
 		{
-			if (net_join_state() != JOIN_WORK && n < max) { out[n++] = { btn(LBL_A), "OK", "OK" }; }
+			if (net_join_state() != JOIN_WORK && n < max) { out[n++] = lp(LBL_A, "OK", "OK"); }
 			break;
 		}
-		if (net_count() && n < max) { out[n++] = { btn(LBL_A), "Join", "Join" }; }
-		if (n < max) { out[n++] = { btn(LBL_X), "Look Again", "Scan" }; }
-		if (n < max) { out[n++] = { btn(LBL_B), "Back", "Back" }; }
+		if (net_count() && n < max) { out[n++] = lp(LBL_A, "Join", "Join"); }
+		if (n < max) { out[n++] = lp(LBL_X, "Look Again", "Scan"); }
+		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
 		break;
 	case SCR_DISPLAY:
-		if (n < max) { out[n++] = { CH_LEFT CH_RIGHT, "Choose", "Sel" }; }
-		if (n < max) { out[n++] = { btn(LBL_A), "Apply", "OK" }; }
-		if (n < max) { out[n++] = { btn(LBL_B), "Back", "Back" }; }
+		if (n < max) { out[n++] = { CH_LEFT CH_RIGHT, 0, "Choose", "Sel" }; }
+		if (n < max) { out[n++] = lp(LBL_A, "Apply", "OK"); }
+		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
 		break;
 	case SCR_OPTIONS:
-		if (n < max) { out[n++] = { CH_LEFT CH_RIGHT, "Change", "Chg" }; }
-		if (n < max) { out[n++] = { btn(LBL_A), "Select", "OK" }; }
-		if (n < max) { out[n++] = { btn(LBL_B), "Back", "Back" }; }
+		if (n < max) { out[n++] = { CH_LEFT CH_RIGHT, 0, "Change", "Chg" }; }
+		if (n < max) { out[n++] = lp(LBL_A, "Select", "OK"); }
+		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
 		break;
 	case SCR_ABOUT:
-		if (n < max) { out[n++] = { btn(LBL_B), "Back", "Back" }; }
+		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
 		break;
 	case SCR_MENUBAR:
-		if (n < max) { out[n++] = { btn(LBL_A), "Open", "Open" }; }
-		if (n < max) { out[n++] = { CH_LEFT CH_RIGHT, "Move", "Move" }; }
-		if (n < max) { out[n++] = { btn(LBL_B), "Back", "Back" }; }
+		if (n < max) { out[n++] = lp(LBL_A, "Open", "Open"); }
+		if (n < max) { out[n++] = { CH_LEFT CH_RIGHT, 0, "Move", "Move" }; }
+		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
 		break;
 	case SCR_BROWSE:
-		if (n < max) { out[n++] = { btn(LBL_A), "Open", "Open" }; }
-		if (n < max) { out[n++] = { btn(LBL_B), "Back", "Back" }; }
+		if (n < max) { out[n++] = lp(LBL_A, "Open", "Open"); }
+		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
 		break;
 	default:
 		if (e && e->kind != ENT_GAME)
 		{
-			if (n < max) { out[n++] = { btn(LBL_A), "Open", "Open" }; }
-			if (n < max) { out[n++] = { CH_UP, "Menu", "Menu" }; }
-			if (n < max) { out[n++] = { btn(LBL_SELECT), "Sort", "Sort" }; }
+			if (n < max) { out[n++] = lp(LBL_A, "Open", "Open"); }
+			if (n < max) { out[n++] = { CH_UP, 0, "Menu", "Menu" }; }
+			if (n < max) { out[n++] = lp(LBL_SELECT, "Sort", "Sort"); }
 		}
 		else
 		{
 			int running = ig_is_running(cur_game()) || susp_matches(cur_game());
-			if (n < max) { out[n++] = { btn(LBL_A), running ? "Resume" : "Start", running ? "Play" : "Start" }; }
+			if (n < max) { out[n++] = lp(LBL_A, running ? "Resume" : "Start", running ? "Play" : "Start"); }
 			/*
 			  Order is priority: the 240p legend keeps only the first three, and
 			  favouriting a game is worth more there than re-sorting the shelf. The
 			  action itself was always here - it just never appeared on a CRT.
 			*/
-			if (n < max) { out[n++] = { CH_DOWN, "Suspend Points", "Saves" }; }
-			if (n < max) { out[n++] = { btn(LBL_Y), "Favourite", "Fav" }; }
-			if (n < max) { out[n++] = { btn(LBL_SELECT), "Sort", "Sort" }; }
+			if (n < max) { out[n++] = { CH_DOWN, 0, "Suspend Points", "Saves" }; }
+			if (n < max) { out[n++] = lp(LBL_Y, "Favourite", "Fav"); }
+			if (n < max) { out[n++] = lp(LBL_SELECT, "Sort", "Sort"); }
 		}
 		break;
 	}
@@ -1013,7 +1075,9 @@ static void draw_legend(const chome_profile *p)
 	for (int i = 0; i < n; i++)
 	{
 		labels[i] = lo ? pairs[i].shortl : pairs[i].label;
-		widths[i] = gfx_text_w(pairs[i].key, s) + 5 * s + gfx_text_w(labels[i], s);
+		// A pictogram occupies one glyph cell, so the row measures the same either way.
+		widths[i] = (pairs[i].pic ? 8 * s : gfx_text_w(pairs[i].key, s))
+			+ 5 * s + gfx_text_w(labels[i], s);
 		total += widths[i];
 	}
 
@@ -1032,9 +1096,11 @@ static void draw_legend(const chome_profile *p)
 
 	for (int i = 0; i < n; i++)
 	{
-		int kw = gfx_text_w(pairs[i].key, s);
+		int kw = pairs[i].pic ? 8 * s : gfx_text_w(pairs[i].key, s);
 		gfx_fill(x - 2 * s, p->y_legend - 2 * s, kw + 4 * s, 8 * s + 4 * s, COL_PANEL);
-		gfx_text(pairs[i].key, x, p->y_legend, s, COL_INK, 0);
+
+		if (pairs[i].pic) picto(pairs[i].pic, x, p->y_legend, 8 * s, COL_INK);
+		else gfx_text(pairs[i].key, x, p->y_legend, s, COL_INK, 0);
 
 		char up[64];
 		snprintf(up, sizeof(up), "%s", labels[i]);

@@ -27,6 +27,10 @@ void harness_set_opt(const char *opt, uint32_t v);
 void harness_reset_status();
 
 uint32_t *harness_fb_shown();
+unsigned long harness_fb_hash(int y0, int y1);
+void harness_set_pad_name(const char *n);
+void harness_swap_pad_faces();
+
 int harness_muted();
 int harness_mute_changes();
 void harness_set_muted(int v);
