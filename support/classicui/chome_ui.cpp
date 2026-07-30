@@ -283,6 +283,7 @@ static void ig_close(int restore_video);
 static void ig_select_running();
 static int ss_can_save();
 static int susp_matches(const chome_item *it);
+static int ig_load_item();
 static void quit_to_home(int suspend);
 static int ss_can_load();
 static int ss_do_save(int slot);
@@ -1653,7 +1654,20 @@ static void do_launch(int sysidx, const char *relpath, chome_item *it)
 		FILE *f = fopen(CURRENT_FILE, "wt");
 		if (f)
 		{
-			fprintf(f, "%s\n%s\n", s->id, relpath);
+			/*
+			  Third line: the core this launch expects. Anything can load a core behind
+			  our back - the classic menu, a script, /dev/MiSTer_cmd, a bootcore - and
+			  then this file describes a game that is not running, which is how the
+			  in-game menu ended up captioned with a game from a previous session.
+			  Arcade writes "*" because an .mra picks its own core name.
+			*/
+			const char *core = "*";
+			if (!s->mra && s->rbf[0])
+			{
+				const char *slash = strrchr(s->rbf, '/');
+				core = slash ? slash + 1 : s->rbf;
+			}
+			fprintf(f, "%s\n%s\n%s\n", s->id, relpath, core);
 			fclose(f);
 		}
 	}
@@ -2364,6 +2378,12 @@ static int susp_slot()
 // still has to work.
 static int susp_write()
 {
+	/*
+	  Quitting from a core that cannot host the menu never got as far as reading the
+	  launch record, so it did not know which game it was putting away. Read it here:
+	  it is the same record, and it now names its core so a stale one cannot mislead.
+	*/
+	if (!ig_have_item) ig_load_item();
 	if (!ig_have_item || !ss_can_save()) return 0;
 
 	int slot = susp_slot();
@@ -2542,21 +2562,46 @@ static int ss_do_load(int slot)
 /* ------------------------------------------------------- in-game screens --- */
 
 // Identity of the running game, written by do_launch() before the core switch.
-static int ig_load_item()
+/*
+  What is running, according to the launch that started it - and only if that is
+  still true. A record naming a core other than the one loaded is stale: something
+  else changed cores since, so it is dropped rather than believed.
+*/
+static int cur_read(char *sysid, int syslen, char *rompath, int pathlen)
 {
-	ig_have_item = 0;
-
 	FILE *f = fopen(CURRENT_FILE, "rt");
 	if (!f) return 0;
 
-	char sysid[64] = {}, rompath[CH_PATH_LEN] = {};
-	int ok = (fgets(sysid, sizeof(sysid), f) && fgets(rompath, sizeof(rompath), f));
+	char core[64] = {};
+	int ok = (fgets(sysid, syslen, f) && fgets(rompath, pathlen, f));
+	int have_core = (fgets(core, sizeof(core), f) != 0);
 	fclose(f);
 	if (!ok) return 0;
 
 	for (char *q = sysid; *q; q++) if (*q == '\n') { *q = 0; break; }
 	for (char *q = rompath; *q; q++) if (*q == '\n') { *q = 0; break; }
+	for (char *q = core; *q; q++) if (*q == '\n') { *q = 0; break; }
 	if (!sysid[0] || !rompath[0]) return 0;
+
+	if (have_core && core[0] && strcmp(core, "*"))
+	{
+		const char *running = user_io_get_core_name();
+		if (running && running[0] && strcasecmp(running, core))
+		{
+			printf("ClassicUI: ignoring a launch record for %s while %s is running\n", core, running);
+			unlink(CURRENT_FILE);
+			return 0;
+		}
+	}
+	return 1;
+}
+
+static int ig_load_item()
+{
+	ig_have_item = 0;
+
+	char sysid[64] = {}, rompath[CH_PATH_LEN] = {};
+	if (!cur_read(sysid, sizeof(sysid), rompath, sizeof(rompath))) return 0;
 
 	lib_load_systems();
 
@@ -2848,16 +2893,8 @@ static void resume_poll()
 	if (!susp_read(sysid, sizeof(sysid), relpath, sizeof(relpath), &slot)) return;
 
 	// Only for the game this core actually booted.
-	FILE *f = fopen(CURRENT_FILE, "rt");
-	if (!f) return;
-
 	char cur_sys[64] = {}, cur_path[CH_PATH_LEN] = {};
-	int ok = (fgets(cur_sys, sizeof(cur_sys), f) && fgets(cur_path, sizeof(cur_path), f));
-	fclose(f);
-	if (!ok) return;
-
-	for (char *q = cur_sys; *q; q++) if (*q == '\n') { *q = 0; break; }
-	for (char *q = cur_path; *q; q++) if (*q == '\n') { *q = 0; break; }
+	if (!cur_read(cur_sys, sizeof(cur_sys), cur_path, sizeof(cur_path))) return;
 	if (strcmp(cur_sys, sysid) || strcmp(cur_path, relpath)) return;
 
 	if (!ss_hk_valid) ss_scan_hooks();
@@ -2888,17 +2925,8 @@ void chome_core_poll()
 
 	done = 1;
 
-	FILE *f = fopen(CURRENT_FILE, "rt");
-	if (!f) return;
-
 	char sysid[64] = {}, rompath[CH_PATH_LEN] = {};
-	int ok = (fgets(sysid, sizeof(sysid), f) && fgets(rompath, sizeof(rompath), f));
-	fclose(f);
-	if (!ok) return;
-
-	for (char *q = sysid; *q; q++) if (*q == '\n') { *q = 0; break; }
-	for (char *q = rompath; *q; q++) if (*q == '\n') { *q = 0; break; }
-	if (!sysid[0] || !rompath[0]) return;
+	if (!cur_read(sysid, sizeof(sysid), rompath, sizeof(rompath))) return;
 
 	char path[1024];
 	ref_shot_path(sysid, rompath, path, sizeof(path));
