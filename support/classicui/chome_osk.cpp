@@ -445,6 +445,23 @@ int osk_key(int k, int pad)
 
 	case KEY_ENTER:
 	case KEY_KPENTER:
+		/*
+		  On a keyboard Enter finishes the entry rather than pressing the key under
+		  the cursor. Nothing is lost by that: every key in the grid is also a key on
+		  their keyboard, so they never needed to point at one - the grid is for the
+		  pad. Having Enter type a "1" after they have carefully typed a password is
+		  just baffling.
+		*/
+		if (!pad)
+		{
+			result = 1;
+			active = 0;
+			printf("ClassicUI: keyboard done, %d characters\n", (int)strlen(text));
+			break;
+		}
+		activate(p);
+		break;
+
 	case KEY_SPACE:                 // some pads map A here; X is the literal space
 		activate(p);
 		break;
