@@ -14,6 +14,7 @@
 #include "chome_art.h"
 #include "chome_video.h"
 #include "chome_icons32.h"
+#include "chome_icons16.h"
 #include "chome_osk.h"
 #include "chome_net.h"
 
@@ -112,7 +113,6 @@ static void ref_shot_path(const char *sysid, const char *rompath, char *out, int
   the front-end is not supposed to do on its own.
 */
 static const char *mb_label[MB_COUNT] = { "Display", "Options", "About" };
-static const char *mb_icon[MB_COUNT]  = { "screen", "gear", "info" };
 
 /*
   Every Display option lives in the scaler - filters, shadow mask, gamma - so the
@@ -465,104 +465,41 @@ static int nav_pop()
 /* ------------------------------------------------------------ pictograms -- */
 
 /*
-  8x8 pictograms as row strings, which is far easier to read and adjust than
-  packed rectangles: '#' draws in the foreground colour, 'o' in the hole colour
-  (what sits behind a cut-out), '.' leaves the background alone.
+  Badges and prompts. Not drawn here either: see chome_icons16.h, which is generated
+  from the same licensed sets as the system icons.
+
+  Sampled rather than scaled by whole pixels, for the same reason as draw_sysicon:
+  the box available differs between profiles and an integer scale would be too small
+  on one and clipped on the other.
 */
-struct icon_def { const char *name; const char *rows[8]; };
-
-static const icon_def icons[] =
+static void picto(const char *name, int x, int y, int box, uint32_t col)
 {
-	{ "star", {
-		"...##...",
-		"...##...",
-		".######.",
-		"########",
-		".#####..",
-		"..####..",
-		".##..##.",
-		"........" } },
+	if (box < 4) return;
 
-	{ "stack", {
-		"..####..",
-		".######.",
-		"........",
-		"..####..",
-		".######.",
-		"........",
-		"..####..",
-		".######." } },
+	const picto_def *d = 0;
+	for (size_t i = 0; i < sizeof(pictos) / sizeof(pictos[0]); i++)
+	{
+		if (!strcmp(pictos[i].name, name)) { d = &pictos[i]; break; }
+	}
+	if (!d) return;
 
-	{ "disk", {
-		"########",
-		"#.oooo.#",
-		"#.oooo.#",
-		"#.oooo.#",
-		"#......#",
-		"#.####.#",
-		"#.####.#",
-		"########" } },
+	for (int oy = 0; oy < box; oy++)
+	{
+		const char *row = d->rows[oy * ICON16 / box];
+		for (int ox = 0; ox < box; ox++)
+		{
+			if (row[ox * ICON16 / box] == '#') gfx_fill(x + ox, y + oy, 1, 1, col);
+		}
+	}
+}
 
-	{ "screen", {
-		"########",
-		"#oooooo#",
-		"#oooooo#",
-		"#oooooo#",
-		"########",
-		"...##...",
-		"...##...",
-		"..####.." } },
-
-	{ "gear", {
-		"..#..#..",
-		"..####..",
-		".######.",
-		"##o..o##",
-		"##o..o##",
-		".######.",
-		"..####..",
-		"..#..#.." } },
-
-	{ "globe", {
-		"..####..",
-		".#o##o#.",
-		"#oo##oo#",
-		"########",
-		"#oo##oo#",
-		"#oo##oo#",
-		".#o##o#.",
-		"..####.." } },
-
-	{ "info", {
-		"...##...",
-		"...##...",
-		"........",
-		"..###...",
-		"...##...",
-		"...##...",
-		"..####..",
-		"........" } },
-
-	{ "book", {
-		"###..###",
-		"#.#..#.#",
-		"#.#..#.#",
-		"#.#..#.#",
-		"#.#..#.#",
-		"#.#..#.#",
-		"###..###",
-		"........" } },
-
-	{ "pads", {
-		"........",
-		"........",
-		"###..###",
-		"#o#..#o#",
-		"#.#..#.#",
-		"###..###",
-		"........",
-		"........" } },
-};
+/*
+  A padlock, from MiSTer's own OSD font rather than from rectangles: the ROM has a
+  closed one at 0x17 and an open one at 0x18, and using them means one less drawing
+  of mine on screen.
+*/
+#define CH_LOCK   "\x17"
+#define CH_UNLOCK "\x18"
 
 /*
   Per-system icon, if this system has one. Sampled rather than scaled by whole
@@ -591,34 +528,6 @@ static void draw_sysicon(const sysicon_def *d, int x, int y, int box, uint32_t c
 			if (row[ox * ICON32 / box] == '#') gfx_fill(x + ox, y + oy, 1, 1, col);
 		}
 	}
-}
-
-static void icon(const char *kind, int x, int y, int s, uint32_t col, uint32_t hole)
-{
-	const icon_def *d = 0;
-	for (size_t i = 0; i < sizeof(icons) / sizeof(icons[0]); i++)
-	{
-		if (!strcmp(icons[i].name, kind)) { d = &icons[i]; break; }
-	}
-	if (!d) return;
-
-	for (int row = 0; row < 8; row++)
-	{
-		const char *r = d->rows[row];
-		for (int c = 0; c < 8 && r[c]; c++)
-		{
-			if (r[c] == '#') gfx_fill(x + c * s, y + row * s, s, s, col);
-			else if (r[c] == 'o') gfx_fill(x + c * s, y + row * s, s, s, hole);
-		}
-	}
-}
-
-static void padlock(int x, int y, int s, uint32_t col)
-{
-	gfx_fill(x + s, y, 3 * s, s, col);
-	gfx_fill(x, y + s, s, 2 * s, col);
-	gfx_fill(x + 4 * s, y + s, s, 2 * s, col);
-	gfx_fill(x, y + 3 * s, 5 * s, 4 * s, col);
 }
 
 /* ------------------------------------------------------------- the card --- */
@@ -735,10 +644,14 @@ static void draw_card(const chome_entry *e, int cx, int bottom, int w, int h, in
 		}
 		else
 		{
-			icon(e->icon ? e->icon : "stack",
-				x + (w - 8 * is) / 2,
-				icon_top + (icon_space - 8 * is) / 2,
-				is, COL_INK, COL_PANEL);
+			// A folder, or a system this build has never heard of.
+			const sysicon_def *fb = sysicon_find("folder");
+			if (fb)
+			{
+				int box = icon_space;
+				if (box > w / 2) box = w / 2;
+				draw_sysicon(fb, x + (w - box) / 2, icon_top + (icon_space - box) / 2, box, COL_INK);
+			}
 		}
 
 		char up[CH_TITLE_LEN];
@@ -785,9 +698,9 @@ static void draw_card(const chome_entry *e, int cx, int bottom, int w, int h, in
 
 		if (it->fav)
 		{
-			int is = 2;
-			gfx_fill(x + w - 12 * is, y + 2 * is, 10 * is, 10 * is, COL_SHADOW);
-			icon("star", x + w - 11 * is, y + 3 * is, is, COL_YELLOW, COL_SHADOW);
+			int box = 16;
+			gfx_fill(x + w - box - 6, y + 4, box + 4, box + 4, COL_SHADOW);
+			picto("star", x + w - box - 4, y + 6, box, COL_YELLOW);
 		}
 	}
 
@@ -1145,7 +1058,6 @@ static void draw_menubar(const chome_profile *p, int focused)
 	gfx_fill(0, y + h - 2, p->w, 2, COL_PANELLO);
 
 	int s = (p->id == PROF_HD) ? 2 : 1;
-	int is = (p->id == PROF_HD) ? 3 : (p->id == PROF_SD) ? 2 : 1;
 	int nvis = mb_count_visible();
 	if (nvis < 1) nvis = 1;
 	int cellw = (p->w - p->inset * 2) / nvis;
@@ -1156,18 +1068,18 @@ static void draw_menubar(const chome_profile *p, int focused)
 		int cx = p->inset + cellw * slot + cellw / 2;
 		int on = focused && slot == mb_idx;
 
+		/*
+		  The word, and nothing else. There used to be a pictogram beside it, drawn
+		  by hand; the room it took is why this said "OPTI" at 240p rather than
+		  "OPTIONS". The name is the clearer label of the two anyway.
+		*/
 		char up[32];
 		snprintf(up, sizeof(up), "%s", mb_label[i]);
-		if (p->id == PROF_LO) up[4] = 0;
 		for (char *q = up; *q; q++) *q = (char)toupper((unsigned char)*q);
 
-		int lw = gfx_text_w(up, s);
-		int blockw = 8 * is + 4 * is + lw;
-		int bx = cx - blockw / 2;
-
 		if (on) gfx_fill(cx - cellw / 2 + 2, y + 2, cellw - 4, h - 6, COL_BLUE);
-		icon(mb_icon[i], bx, y + (h - 8 * is) / 2, is, on ? COL_WHITE : COL_INK, on ? COL_BLUE : COL_PANEL);
-		gfx_text(up, bx + 8 * is + 4 * is, y + (h - 8 * s) / 2, s, on ? COL_WHITE : COL_INK, 0);
+		gfx_text_c(gfx_clip(up, s, cellw - 8), cx, y + (h - 8 * s) / 2, s,
+			on ? COL_WHITE : COL_INK, 0);
 	}
 }
 
@@ -1317,7 +1229,8 @@ static void draw_suspend(const chome_profile *p)
 			else gfx_fill(x, ty, tw, th, COL_BG);
 
 			if (!shot) gfx_scrim(x, ty, tw, th, COL_SHADOW, 4);
-			if (st == 2) padlock(x + tw - 8 * p->ts_tiny, ty + 3, p->ts_tiny, COL_YELLOW);
+			if (st == 2)
+				gfx_text(CH_LOCK, x + tw - 9 * p->ts_tiny, ty + 3, p->ts_tiny, COL_YELLOW, 0);
 			gfx_frame_rect(x, ty, tw, th, st == 2 ? COL_YELLOW : COL_GREEN, 2);
 		}
 
@@ -1523,14 +1436,6 @@ static void draw_bars(int x, int y, int s, int dbm, uint32_t on, uint32_t off)
 	}
 }
 
-// A padlock, drawn: the OSD font has no glyph for one, and "(secured)" after every
-// name is noise on a list where almost everything is secured.
-static void draw_lock(int x, int y, int s, uint32_t col)
-{
-	gfx_fill(x, y + 4 * s, 6 * s, 4 * s, col);
-	gfx_frame_rect(x + s, y + s, 4 * s, 4 * s, col, s);
-}
-
 #define WIFI_VIS 6                           // rows on screen; the panel is sized for them
 
 static void draw_wifi(const chome_profile *p)
@@ -1651,7 +1556,7 @@ static void draw_wifi(const chome_profile *p)
 
 		gfx_text(gfx_clip(a->ssid, s, lx - (b.x + 16 * s) - 2 * s), b.x + 16 * s, y, s, ink, 0);
 
-		if (a->secure) draw_lock(lx, y, s, ink);
+		if (a->secure) gfx_text(CH_LOCK, lx, y, s, ink, 0);
 		draw_bars(bx, y, s, a->signal, ink, on ? COL_PANELLO : COL_PANELHI);
 	}
 

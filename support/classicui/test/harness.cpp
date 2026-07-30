@@ -1835,6 +1835,24 @@ int main()
 		}
 		check(!bad, "and every icon has a plausible amount of ink in it");
 
+		/*
+		  The favourite badge, which is the one pictogram that appears over artwork
+		  rather than on a panel. Toggled on, photographed, toggled back off so the
+		  rest of the run sees the library it expects.
+		*/
+		{
+			harness_set_menu_core(1);
+			harness_set_fb(1280, 720);
+			gfx_shutdown();
+			theme_update(1280, 720, 1);
+			chome_leave();
+			press(KEY_MENU, 20);
+			frame(10);
+			press(KEY_BACKSPACE, 12);
+			dump("icons-favourite");
+			press(KEY_BACKSPACE, 12);
+		}
+
 		// A sheet of the lot, to be looked at: the only real test of an icon is
 		// whether a person recognises the machine.
 		{
