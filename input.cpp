@@ -2023,6 +2023,19 @@ static int menu_key_dev = -1;
 int input_menu_key_from_pad() { return menu_key_from_pad; }
 
 /*
+  The device an event really came from.
+
+  A pad's buttons do not reach the menu as themselves: joy_digital() turns them into
+  synthetic key events and hands them back to input_cb() with a hardcoded dev of 0 -
+  a slot belonging to whichever device happens to be first in the pool, which is not
+  the pad and on some pools is not open at all. So the last real device to be handed
+  an event is remembered here. joy_digital() is called from inside that device's own
+  input_cb(), and the synthetic event it makes is dispatched before that call
+  returns, so this is the pad in question and not merely a recent one.
+*/
+static int menu_key_src_dev = -1;
+
+/*
   The name of the device that produced the most recent menu key. A front-end that
   wants to label its prompts for the controller actually in someone's hands has to
   know which one that was, and the name is what identifies it - a SNAC pad is not a
@@ -2990,6 +3003,9 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 	//check if device is a part of multifunctional device
 	if (!JOYCON_COMBINED(dev) && input[dev].bind >= 0) dev = input[dev].bind;
 
+	// After the bind, so this is the slot that carries the name and the mapping.
+	if (!menu_event) menu_key_src_dev = dev;
+
 	if (ev->type == EV_KEY)
 	{
 		if (input[dev].timeout > 0) input[dev].timeout = cfg.bt_auto_disconnect * 10;
@@ -3948,7 +3964,7 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 				if (send_key)
 				{
 					menu_key_from_pad = menu_event ? 1 : 0;
-					menu_key_dev = dev;
+					menu_key_dev = menu_event ? menu_key_src_dev : dev;
 				}
 				if (send_key) user_io_kbd(ev->code, ev->value);
 				return;
