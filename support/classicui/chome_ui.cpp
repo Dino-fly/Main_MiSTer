@@ -53,7 +53,7 @@ static int wifi_row = 0;                     // which network is picked
 static int wifi_top = 0;                     // first one on screen
 static char wifi_pick[NET_SSID];             // ...and its name, kept across the keyboard
 static int wifi_pick_secure = 0;
-static int wifi_join_seen = JOIN_IDLE;       // to notice the child finishing
+static unsigned wifi_seen = 0;               // signature of the network state on screen
 
 // Which screen is waiting for the text the keyboard is collecting.
 #define OSKD_NONE 0
@@ -3604,10 +3604,27 @@ int chome_handle(uint32_t key)
 	  because the child is still out there either way.
 	*/
 	net_poll();
-	if (net_join_state() != wifi_join_seen)
+
+	/*
+	  Nothing about the network arrives on a keypress: the scan finishes, an address
+	  turns up, a join ends. The screen only repaints when something marks it dirty,
+	  so fold what is on it into one number and repaint when that changes - otherwise
+	  a finished scan sits behind a "looking for networks" that never goes away.
+	*/
 	{
-		wifi_join_seen = net_join_state();
-		mark_dirty();
+		const net_link *nl = net_link_now();
+		unsigned sig = (unsigned)net_count()
+			| ((unsigned)net_scanning() << 8)
+			| ((unsigned)net_join_state() << 9)
+			| ((unsigned)nl->up << 12)
+			| ((unsigned)(nl->ip[0] ? 1 : 0) << 13)
+			| ((unsigned)(strlen(nl->ssid) & 63) << 14);
+
+		if (sig != wifi_seen)
+		{
+			wifi_seen = sig;
+			mark_dirty();
+		}
 	}
 
 	// Background work: one scan slice and one art decode per frame.
