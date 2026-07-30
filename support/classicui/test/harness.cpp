@@ -1201,6 +1201,30 @@ static void assert_ingame()
 	  on its own; now it puts the game away and goes back to Classic Home, taking a
 	  suspend point on the way so the session is not lost.
 	*/
+	/*
+	  A launch record left by something else must not be believed. Anything can change
+	  cores behind the front-end's back - the classic menu, a script, /dev/MiSTer_cmd -
+	  and the in-game menu was then captioned with whatever game was launched last,
+	  which is what he saw: the shelf on one game, the caption on another.
+	*/
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "snes\nSuper Metroid (Europe).sfc\nSNES\n"); fclose(f); }
+		harness_set_core_name("GAMEBOY");         // ...but a Game Boy core is running
+		harness_set_menu_core(0);
+		chome_handle(KEY_MENU);
+		frame(8);
+		struct stat st;
+		check(stat("/tmp/classicui_current", &st) != 0,
+			"a launch record naming another core is dropped, not believed");
+		press(KEY_ESC, 10);
+
+		// Leave it in a game, as this section found it, and put back a record that does
+		// match the running core - what follows needs a running game to put away.
+		FILE *g = fopen("/tmp/classicui_current", "wt");
+		if (g) { fprintf(g, "gb\nTetris (World).gb\nGameboy\n"); fclose(g); }
+	}
+
 	harness_set_fb_supported(0);
 	harness_reset_status();
 	harness_clear_launch();

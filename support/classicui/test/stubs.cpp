@@ -220,6 +220,10 @@ void video_loadPreset(char *name, bool save)
 
 /* -------------------------------------------------------------- fake io --- */
 
+static char core_name[64] = "GAMEBOY";
+void harness_set_core_name(const char *n) { snprintf(core_name, sizeof(core_name), "%s", n ? n : ""); }
+char *user_io_get_core_name(int) { return core_name; }
+
 static int in_menu_core = 1;
 void harness_set_menu_core(int v) { in_menu_core = v; }
 char is_menu() { return (char)in_menu_core; }
