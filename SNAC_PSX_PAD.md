@@ -78,7 +78,13 @@ them unless the filenames collide.
 |---|---|
 | Menu (`menu.rbf`) | `/media/fat/menu.rbf` — back up the existing one first |
 | Console cores | wherever you keep them (`/media/fat/_Console/`, `_Computer/`, or the root) |
-| Arcade cores | `/media/fat/_Arcade/cores/` — your existing `.mra` files find them automatically |
+| Arcade cores | `/media/fat/_Arcade/cores/` — your existing `.mra` files find them by name |
+
+> **Replacing rather than adding:** MiSTer matches a core by the part of the
+> filename before the datecode, so `NES_20260731.rbf` and an older
+> `NES_20240101.rbf` both appear. Delete or move the old file if you want the
+> new one to be the only choice. Arcade cores must keep the plain name the
+> `.mra` refers to (`ActFancer.rbf`, not `Arcade-ActFancer.rbf`).
 
 **4. Enable it** in `/media/fat/MiSTer.ini`:
 
