@@ -858,8 +858,13 @@ static void vga_nag()
 	*/
 	if (chome_active() || chome_ingame_active()) { OsdDisable(); return; }
 
+	/*
+	  video_fb_terminal(), not video_fb_state(): in a game core the latter is true for any
+	  framebuffer, so with Classic Home holding one this nagged about a misconfiguration
+	  that was not there - over the running game, after loading a state.
+	*/
 	// no nag if the framebuffer is routed to the analog output (direct_video or fb_terminal_vga)
-	if (video_fb_state() && !get_vga_fb())
+	if (video_fb_terminal() && !get_vga_fb())
 	{
 		EnableOsd_on(OSD_VGA);
 		OsdSetSize(16);

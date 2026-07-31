@@ -262,6 +262,13 @@ char * GetMidiLinkSoundfont();
 void user_io_store_filename(char *filename);
 int user_io_use_cheats();
 
+/*
+  Makes one savestate slot be another, in DDR. The .ss files are only a mirror read in at
+  ROM load time, so copying a file does not make the state loadable in the running
+  session - the core reads DDR. Slots are 0-based.
+*/
+int user_io_ss_copy_slot(int from, int to);
+
 int process_ss(const char *rom_name, int enable = 1);
 
 char is_f12_mod_needed();

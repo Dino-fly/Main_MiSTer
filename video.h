@@ -65,6 +65,9 @@ int   hasAPI1_5();
 
 void video_fb_enable(int enable, int n = 0);
 int video_fb_state();
+
+// True only while the console framebuffer (buffer 0) is what is on screen - see video.cpp.
+int video_fb_terminal();
 void video_menu_bg(int n, int idle = 0);
 
 // 1 when an HDMI sink is attached, 0 when not, -1 when unknown.
