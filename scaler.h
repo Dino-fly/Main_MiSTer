@@ -44,6 +44,15 @@ void screenshot_cb(void);
 // scaler is unavailable or a normal screenshot is already in flight.
 int screenshot_thumbnail(const char *fullpath, int max_w);
 
+/*
+  Writes an ARGB buffer straight to disk, format taken from the filename extension,
+  scaled to output_width/height when those are non-zero. Unlike screenshot_thumbnail()
+  this does not read the scaler, so it works when the caller already holds the pixels -
+  which is the only way to capture core video while the HPS framebuffer owns the output.
+*/
+bool write_screenshot(const char *filename, const uint8_t *argb,
+                      int width, int height, int output_width, int output_height);
+
 // Grabs the current core frame straight into a caller-owned ARGB buffer (0xAARRGGBB),
 // for drawing rather than saving. max_px bounds the buffer; returns 0 if the scaler
 // is unavailable, busy, or the frame does not fit.

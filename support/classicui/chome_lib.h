@@ -141,6 +141,12 @@ int  lib_delete_slot(chome_item *it, int slot);
 // Absolute path of a slot's thumbnail PNG, written by process_ss() at save time.
 int  lib_slot_thumb(const chome_item *it, int slot, char *out, int len);
 
+/*
+  Absolute path a slot's state file would occupy, whether or not one is there. For
+  writing, where lib_slot_thumb() and the internal lookup both want an existing file.
+*/
+int  lib_slot_target(const chome_item *it, int slot, char *out, int len);
+
 // Favourites and play counts, persisted in classicui_state.cfg.
 void lib_toggle_fav(chome_item *it);
 void lib_note_play(chome_item *it);
