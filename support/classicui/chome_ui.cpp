@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <time.h>
 
 #include "chome.h"
 #include "chome_gfx.h"
@@ -48,6 +49,7 @@ static int ig_bg_w = 0, ig_bg_h = 0;
 
 static int ig_paused = 0;                    // the core is actually halted
 static int ig_frozen = 0;                    // held still by a state instead of a pause
+static unsigned long ig_freeze_at = 0;       // wall clock when it was, so a stale state is not mistaken for it
 static int ig_selected_running = 0;          // shelf parked on the running game
 static unsigned long ig_close_until = 0;     // "press A again to close the game"
 static int wifi_row = 0;                     // which network is picked
@@ -2776,6 +2778,79 @@ static void freeze_release(int engaged)
 }
 
 /*
+  Saving into a slot the player chose, from the state that is already on disk.
+
+  The reserved slot holds this exact moment - freeze_engage() wrote it when the menu
+  opened - so "save here" is a copy rather than a second save. That is not only
+  cheaper. A save pulse has to be serviced by a running core, so the old path had to
+  resume and close the menu, which stored a moment slightly *after* the one the player
+  was looking at. A copy stores what is on screen and the menu stays up.
+
+  The picture comes from ig_shot, the still this menu is drawn over, so thumbnail and
+  state are the same instant. process_ss() cannot supply one here: it reads through the
+  scaler, which is showing our framebuffer, so it would capture the menu itself.
+*/
+static int copy_file(const char *src, const char *dst)
+{
+	FILE *in = fopen(src, "rb");
+	if (!in) return 0;
+
+	FILE *out = fopen(dst, "wb");
+	if (!out) { fclose(in); return 0; }
+
+	static char buf[64 * 1024];
+	int ok = 1;
+	size_t n;
+	while ((n = fread(buf, 1, sizeof(buf), in)) > 0)
+	{
+		if (fwrite(buf, 1, n, out) != n) { ok = 0; break; }
+	}
+	if (ferror(in)) ok = 0;
+
+	fclose(in);
+	if (fclose(out) && ok) ok = 0;
+	if (!ok) unlink(dst);
+	return ok;
+}
+
+static int ss_copy_from_reserved(chome_item *it, int to_slot)
+{
+	if (!it || !ig_frozen || !ig_freeze_at) return 0;   // never froze: nothing to copy
+	if (to_slot == susp_slot()) return 0;
+
+	char src[1024], dst[1024];
+	if (!lib_slot_target(it, susp_slot(), src, sizeof(src))) return 0;
+	if (!lib_slot_target(it, to_slot, dst, sizeof(dst))) return 0;
+
+	/*
+	  It has to be *this* menu's state. The same game suspended in an earlier session
+	  leaves a file in that slot, and copying it would quietly store the wrong moment.
+	  process_ss() writes it up to a second after the pulse, so allow for that.
+	*/
+	struct stat st;
+	if (stat(src, &st)) return 0;
+	if ((unsigned long)st.st_mtime + 2 < ig_freeze_at) return 0;
+
+	if (!copy_file(src, dst)) { printf("ClassicUI: could not copy the held state into slot %d\n", to_slot + 1); return 0; }
+
+	char png[1024];
+	snprintf(png, sizeof(png), "%s", dst);
+	char *dot = strrchr(png, '.');
+	if (dot && ig_shot && ig_shot_w > 0 && ig_shot_h > 0)
+	{
+		strcpy(dot, ".png");
+		int ow = 256;
+		int oh = (int)(((long long)ow * ig_shot_h) / ig_shot_w);
+		if (oh < 1) oh = 1;
+		write_screenshot(png, (const uint8_t *)ig_shot, ig_shot_w, ig_shot_h, ow, oh);
+	}
+
+	lib_refresh_slots(it);
+	printf("ClassicUI: saved the held moment into slot %d\n", to_slot + 1);
+	return 1;
+}
+
+/*
   Leaving a game for Classic Home. Suspending first where the core allows it, so
   closing a game is not the same as losing it.
 */
@@ -3161,6 +3236,7 @@ static int ig_open()
 
 	ig_paused = ss_pause_engage();
 	ig_frozen = freeze_engage();
+	ig_freeze_at = ig_frozen ? (unsigned long)time(0) : 0;
 
 	ig_active = 1;
 	screen = SCR_HOME;
@@ -3564,10 +3640,16 @@ int chome_handle(uint32_t key)
 			if (screen == SCR_SUSPEND && ig_is_running(it) && ss_can_save())
 			{
 				if (slot_state(it, slot_idx) == 2) { nudge(); break; }   // locked
+
+				// The moment on screen is already in the reserved slot, so copy it and
+				// stay in the menu.
+				if (ss_copy_from_reserved(it, slot_idx)) { mark_dirty(); break; }
+
 				/*
-				  The core writes the state itself and process_ss() notices on its
-				  next poll, so resume immediately: it needs to run those frames.
-				  The slot and its thumbnail are there next time the menu opens.
+				  Nothing held to copy - a core that pauses properly never froze. Ask
+				  the core to save, which means resuming: process_ss() only notices on
+				  its next poll and the core has to run those frames. The slot and its
+				  thumbnail are there next time the menu opens.
 				*/
 				if (ss_do_save(slot_idx)) { ig_frozen = 0; ig_close(1); }
 				else nudge();

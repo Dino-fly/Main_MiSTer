@@ -473,7 +473,8 @@ void lib_note_play(chome_item *it)
 /* -------------------------------------------------------------- slots ----- */
 
 // Builds "savestates/<core>/<rom base>_<n>.ss", matching FileGenerateSavestatePath().
-static int slot_path(const chome_item *it, int n, char *out, int len)
+// Says where the state would live, whether or not anything is there yet.
+static int slot_path_raw(const chome_item *it, int n, char *out, int len)
 {
 	const chome_sys *s = lib_sys(it->sysidx);
 	if (!s) return 0;
@@ -492,15 +493,35 @@ static int slot_path(const chome_item *it, int n, char *out, int len)
 	if (dot) *dot = 0;
 
 	snprintf(out, len, "savestates/%s/%s_%d.ss", core, base, n);
+	return 1;
+}
+
+// The same path, but only when a state is actually there.
+static int slot_path(const chome_item *it, int n, char *out, int len)
+{
+	if (!slot_path_raw(it, n, out, len)) return 0;
 	if (FileExists(out, 0)) return 1;
 
 	if (n == 1)
 	{
-		// Slot 1 also has a legacy suffix-less form.
-		snprintf(out, len, "savestates/%s/%s.ss", core, base);
-		if (FileExists(out, 0)) return 1;
+		// Slot 1 also has a legacy suffix-less form: the same path without the "_1".
+		char *tail = out + strlen(out) - 5;         // "_1.ss"
+		if (tail > out && !strcmp(tail, "_1.ss"))
+		{
+			strcpy(tail, ".ss");
+			if (FileExists(out, 0)) return 1;
+		}
 	}
 	return 0;
+}
+
+int lib_slot_target(const chome_item *it, int slot, char *out, int len)
+{
+	char rel[1024];
+	if (!slot_path_raw(it, slot + 1, rel, sizeof(rel))) return 0;
+
+	snprintf(out, len, "%s/%s", getRootDir(), rel);
+	return 1;
 }
 
 int lib_slot_thumb(const chome_item *it, int slot, char *out, int len)
