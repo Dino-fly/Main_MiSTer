@@ -1957,6 +1957,17 @@ int main()
 		*/
 		bt_ingest_paired(PAIRED_TEXT);
 
+		/*
+		  And the wired pads, which the screen has to show even though there is nothing to
+		  do with them: a Controllers screen that omits the controller in your hands reads
+		  as though it has not noticed it. The DualShock is the case the name table exists
+		  for - it broadcasts "Wireless Controller", which names nothing.
+		*/
+		harness_clear_pads();
+		harness_add_pad(1, PAD_WIRED, 0x054C, 0x09CC, "Sony Computer Entertainment Wireless Controller", "");
+		harness_add_pad(2, PAD_SNAC,  0x0000, 0x0000, "MiSTer SNAC Pad 1", "");
+		harness_add_pad(3, PAD_BT,    0x054C, 0x09CC, "Wireless Controller", "DC:2C:26:1B:9A:71");
+
 		harness_set_menu_core(1);
 		chome_leave();
 		press(KEY_MENU, 20);
@@ -1973,6 +1984,17 @@ int main()
 		dump("pads-1-list");
 
 		check(bt_count() == 3, "the Controllers row opens on the paired list");
+
+		/*
+		  Five rows from two sources: three pads with players, plus the two paired devices
+		  that are not among them. The connected Bluetooth one is joined on its address
+		  rather than listed twice.
+		*/
+		check(bt_pad_label(0x054C, 0x09CC, "Wireless Controller") != 0
+			&& !strcmp(bt_pad_label(0x054C, 0x09CC, "Wireless Controller"), "PlayStation 4 Controller"),
+			"a DualShock is named by its ids, not by what it broadcasts");
+		check(!strcmp(bt_pad_label(0x057E, 0x0330, "Nintendo RVL-CNT-01-UC"), "Nintendo RVL-CNT-01-UC"),
+			"and a pad that names itself properly keeps its own name");
 
 		// X arms a forget and says so rather than doing it.
 		press(KEY_TAB, 10);

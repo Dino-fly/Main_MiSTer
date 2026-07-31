@@ -135,6 +135,28 @@ void input_switch(int grab);
   Pad buttons reach the menu as synthetic key events with the same codes a keyboard
   produces, so this is the only way to tell which device the user is holding.
 */
+/*
+  The controllers MiSTer has assigned to players, for Classic Home's Controllers screen.
+
+  One entry per *player*, not per device: a single pad presents several event devices - a
+  DualShock adds a touchpad and a motion sensor - and the player number is both what
+  collapses them and the only part of this a player cares about.
+*/
+#define PAD_WIRED 0
+#define PAD_BT    1
+#define PAD_SNAC  2
+
+struct pad_info
+{
+	int      player;                // 1-6
+	int      kind;                  // PAD_*
+	uint16_t vid, pid;
+	char     name[128];
+	char     mac[24];               // the Bluetooth address, empty for anything wired
+};
+
+int input_pad_list(pad_info *out, int max);
+
 int input_menu_key_from_pad();
 const char *input_menu_key_devname();
 uint16_t input_menu_key_btn(int sys_btn);

@@ -14,6 +14,8 @@ void harness_set_scaler_visible(int v);
 void harness_set_menu_core(int v);
 void harness_set_core_name(const char *n);
 void harness_set_input_pad(int v);
+void harness_clear_pads();
+void harness_add_pad(int player, int kind, uint16_t vid, uint16_t pid, const char *name, const char *mac);
 void harness_set_fb_supported(int v);
 void harness_set_confstr(int v);
 const char *harness_last_status_opt();

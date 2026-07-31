@@ -27,6 +27,7 @@
 #include "../../../osd.h"
 #include "../../../hardware.h"
 #include "../../../menu.h"
+#include "../../../input.h"
 #include "../../arcade/mra_loader.h"
 
 #include "harness.h"
@@ -500,6 +501,37 @@ void open_joystick_setup() { printf("  [stub] open_joystick_setup()\n"); }
 static int from_pad = 1;
 void harness_set_input_pad(int v) { from_pad = v; }
 int input_menu_key_from_pad() { return from_pad; }
+
+/*
+  The controllers MiSTer would have assigned players to. Settable, because the point of
+  the Controllers screen is that it shows wired pads as well as wireless ones, and a
+  container has neither.
+*/
+static pad_info fake_pads[8];
+static int n_fake_pads = 0;
+
+void harness_clear_pads() { n_fake_pads = 0; }
+
+void harness_add_pad(int player, int kind, uint16_t vid, uint16_t pid, const char *name, const char *mac)
+{
+	if (n_fake_pads >= (int)(sizeof(fake_pads) / sizeof(fake_pads[0]))) return;
+
+	pad_info *p = &fake_pads[n_fake_pads++];
+	memset(p, 0, sizeof(*p));
+	p->player = player;
+	p->kind = kind;
+	p->vid = (uint16_t)vid;
+	p->pid = (uint16_t)pid;
+	snprintf(p->name, sizeof(p->name), "%s", name ? name : "");
+	snprintf(p->mac, sizeof(p->mac), "%s", mac ? mac : "");
+}
+
+int input_pad_list(pad_info *out, int max)
+{
+	int n = 0;
+	for (int i = 0; i < n_fake_pads && n < max; i++) out[n++] = fake_pads[i];
+	return n;
+}
 
 // The real one reads the FPGA scaler buffer; the harness has no core running.
 int screenshot_thumbnail(const char *fullpath, int max_w)
