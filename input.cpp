@@ -3743,6 +3743,21 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 				*/
 				if (user_io_osd_is_visible() || video_fb_state() || chome_active())
 				{
+					/*
+					  ...and only from the controller allowed to drive it. menu_player is
+					  0 by default, which is everybody: whoever picks up a pad can
+					  navigate, which is what a living room wants. Set to a player number
+					  it stops a second pad left under a cushion from nudging the
+					  selection.
+
+					  A pad with no player number yet is always let through - it may be
+					  the only one in the room. The button that *opens* the menu is
+					  handled above and deliberately left unrestricted, so a flat battery
+					  in the chosen pad cannot lock anybody out, and a keyboard never
+					  comes through here at all.
+					*/
+					if (cfg.menu_player && input[dev].num && input[dev].num != cfg.menu_player) return;
+
 					if (ev->value <= 1)
 					{
 						if ((input[dev].mmap[SYS_BTN_MENU_FUNC] & 0xFFFF) ?
