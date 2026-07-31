@@ -1195,6 +1195,13 @@ static void assert_ingame()
 		if (f) { if (fread(held, 1, sizeof(held) - 1, f)) {} fclose(f); }
 	}
 	check(!strcmp(held, "HELD"), "and the held state lands in the slot the player chose");
+	/*
+	  And in memory, which is what the core actually loads. The .ss files are a mirror read
+	  in at ROM load time only, so a file-only copy gave a slot that looked saved and
+	  loaded nothing - which is what he hit.
+	*/
+	check(harness_ss_copy_to() == 0, "the copy reaches the core's memory, not just the file");
+	check(harness_ss_copy_from() == 3, "from the slot the game is held still in");
 
 	press(KEY_ESC, 12);
 	press(KEY_MENU, 12);

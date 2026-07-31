@@ -533,6 +533,24 @@ int input_pad_list(pad_info *out, int max)
 	return n;
 }
 
+/*
+  The real one copies one savestate slot's DDR buffer onto another. There is no DDR here,
+  so it records the pair and succeeds - what the tests care about is that the front-end
+  asks, because copying only the file leaves a slot that loads nothing.
+*/
+static int ss_copy_from = -1, ss_copy_to = -1;
+
+int harness_ss_copy_from() { return ss_copy_from; }
+int harness_ss_copy_to()   { return ss_copy_to; }
+
+int user_io_ss_copy_slot(int from, int to)
+{
+	printf("  [stub] user_io_ss_copy_slot(%d -> %d)\n", from, to);
+	ss_copy_from = from;
+	ss_copy_to = to;
+	return 1;
+}
+
 // The real one reads the FPGA scaler buffer; the harness has no core running.
 int screenshot_thumbnail(const char *fullpath, int max_w)
 {
