@@ -113,6 +113,11 @@ PICTOS = [
     ("psx_circle",   "twemoji", "2b55"),
     ("psx_triangle", "twemoji", "1f53a"),
     ("psx_square",   "twemoji", "2b1b"),
+
+    # The controller-pairing screen. This is the one symbol for "wireless" that a
+    # player already knows from every phone and television, so it is worth more than
+    # any picture of a gamepad - and the set has no gamepad anyway.
+    ("bluetooth", "retroarch", "bluetooth"),
 ]
 
 
