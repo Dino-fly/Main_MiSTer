@@ -57,9 +57,28 @@ static int wifi_row = 0;                     // which network is picked
 static int wifi_top = 0;                     // first one on screen
 static char wifi_pick[NET_SSID];             // ...and its name, kept across the keyboard
 
-static int pads_row = 0;                     // which paired controller is picked
+static int pads_row = 0;                     // which controller is picked
 static int pads_forget_arm = -1;             // ...and whether forgetting it is armed
 static unsigned long pads_forget_until = 0;
+
+/*
+  One row of the Controllers screen, wireless or not. Declared here rather than beside
+  the screen because the legend is built further up the file and asks what is selected.
+*/
+#define PADS_MAX (BT_MAX + 6)
+
+struct pad_row
+{
+	int  player;                     // 0 when paired but not connected
+	int  kind;                       // PAD_*
+	int  connected;
+	char name[64];
+	char mac[24];                    // Bluetooth only
+};
+
+static int pads_build(pad_row *out, int max);
+static int pads_sel(pad_row *out);
+static int pads_count();
 static int wifi_pick_secure = 0;
 static unsigned wifi_seen = 0;               // signature of the network state on screen
 
@@ -1057,12 +1076,18 @@ static int build_legend(legend_pair *out, int max)
 		// Same condition as the panel: a list on screen means there is an adapter.
 		if ((bt_present() || bt_count()) && n < max) { out[n++] = lp(LBL_A, "Add a Controller", "Add"); }
 		{
-			// Only for one that is paired but not connected - which is the only state
-			// where there is anything to wake.
-			const bt_dev *d = bt_at(pads_row);
-			if (d && !d->connected && n < max) { out[n++] = lp(LBL_Y, "Wake It Up", "Wake"); }
+			/*
+			  Both of these are things you can only do to a wireless pad. A wired one is
+			  listed so the player can see it is there, and there is nothing to offer for
+			  it - saying so by offering nothing is the point.
+			*/
+			pad_row sel;
+			if (pads_sel(&sel) && sel.kind == PAD_BT)
+			{
+				if (!sel.connected && n < max) { out[n++] = lp(LBL_Y, "Wake It Up", "Wake"); }
+				if (n < max) { out[n++] = lp(LBL_X, "Forget", "Forget"); }
+			}
 		}
-		if (bt_count() && n < max) { out[n++] = lp(LBL_X, "Forget", "Forget"); }
 		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
 		break;
 	case SCR_DISPLAY:
@@ -1715,6 +1740,77 @@ static void draw_wifi(const chome_profile *p)
 */
 #define PADS_VIS 5
 
+/*
+  Wired pads have nothing to set up, which was the argument for leaving them out - but he
+  was right that it is the wrong call: a screen called Controllers that omits the
+  controller in your hands reads as though it has not noticed it. Being told there is
+  nothing to do is a different thing from being told nothing.
+
+  Two sources, joined on the Bluetooth address: the pads MiSTer has given player numbers
+  to (which is everything actually working, wired or not), and the paired devices that
+  are not among them (which is a wireless pad that is off or has wandered off).
+*/
+static int pads_build(pad_row *out, int max)
+{
+	int n = 0;
+
+	pad_info pads[8];
+	int np = input_pad_list(pads, 8);
+
+	for (int i = 0; i < np && n < max; i++)
+	{
+		pad_row *r = &out[n++];
+		memset(r, 0, sizeof(*r));
+		r->player = pads[i].player;
+		r->kind = pads[i].kind;
+		r->connected = 1;
+		snprintf(r->name, sizeof(r->name), "%s",
+			bt_pad_label(pads[i].vid, pads[i].pid, pads[i].name));
+		snprintf(r->mac, sizeof(r->mac), "%s", pads[i].mac);
+	}
+
+	for (int i = 0; i < bt_count() && n < max; i++)
+	{
+		const bt_dev *d = bt_at(i);
+		if (!d) break;
+
+		// Already above, as a working controller.
+		int seen = 0;
+		for (int j = 0; j < n; j++) if (out[j].mac[0] && !strcasecmp(out[j].mac, d->mac)) { seen = 1; break; }
+		if (seen) continue;
+
+		pad_row *r = &out[n++];
+		memset(r, 0, sizeof(*r));
+		r->kind = PAD_BT;
+		r->connected = d->connected;
+		snprintf(r->name, sizeof(r->name), "%s", d->name[0] ? d->name : "Controller");
+		snprintf(r->mac, sizeof(r->mac), "%s", d->mac);
+	}
+
+	return n;
+}
+
+// The row under the cursor, for the handlers. Rebuilt rather than cached: it is a scan
+// of thirty slots and a dozen paired devices, and a stale copy would act on the wrong pad.
+static int pads_sel(pad_row *out)
+{
+	pad_row rows[PADS_MAX];
+	int n = pads_build(rows, PADS_MAX);
+	if (!n) return 0;
+
+	if (pads_row >= n) pads_row = n - 1;
+	if (pads_row < 0) pads_row = 0;
+
+	*out = rows[pads_row];
+	return 1;
+}
+
+static int pads_count()
+{
+	pad_row rows[PADS_MAX];
+	return pads_build(rows, PADS_MAX);
+}
+
 static void draw_pads(const chome_profile *p)
 {
 	int s = p->ts_ui;
@@ -1796,11 +1892,16 @@ static void draw_pads(const chome_profile *p)
 		return;
 	}
 
-	int n = bt_count();
+	pad_row rows[PADS_MAX];
+	int n = pads_build(rows, PADS_MAX);
+
+	int nplay = 0;
+	for (int i = 0; i < n; i++) if (rows[i].player) nplay++;
 
 	char hdr[96];
-	if (!n) snprintf(hdr, sizeof(hdr), "No wireless controllers yet");
-	else snprintf(hdr, sizeof(hdr), (n == 1) ? "%d wireless controller" : "%d wireless controllers", n);
+	if (!n) snprintf(hdr, sizeof(hdr), "No controllers found");
+	else if (nplay == n) snprintf(hdr, sizeof(hdr), (n == 1) ? "%d controller ready" : "%d controllers ready", n);
+	else snprintf(hdr, sizeof(hdr), "%d ready, %d asleep", nplay, n - nplay);
 	gfx_text(gfx_clip(hdr, s, b.w - 12 * s), b.x + 6 * s, b.y + 3 * s, s, COL_INK, 0);
 	gfx_fill(b.x + 6 * s, b.y + 13 * s, b.w - 12 * s, s, COL_PANELLO);
 
@@ -1809,8 +1910,7 @@ static void draw_pads(const chome_profile *p)
 	if (!n)
 	{
 		char lines[4][64];
-		int nl = wrap_text("Press A to add one. A controller plugged into the USB port needs "
-			"no setting up and is not listed here.",
+		int nl = wrap_text("Plug a controller into the USB port, or press A to add a wireless one.",
 			(b.w - 16 * s) / (8 * s), lines, 3);
 		for (int i = 0; i < nl; i++)
 			gfx_text_c(lines[i], b.x + b.w / 2, b.y + b.h / 2 - 4 * s + i * 10 * s, s, COL_PANELHI, 0);
@@ -1824,29 +1924,49 @@ static void draw_pads(const chome_profile *p)
 	if (pads_row >= n) pads_row = n - 1;
 	if (pads_row < 0) pads_row = 0;
 
+	int top = 0;
+	if (pads_row >= vis) top = pads_row - vis + 1;
+
 	int armed = (pads_forget_arm >= 0 && !CheckTimer(pads_forget_until));
 
-	for (int i = 0; i < vis && i < n; i++)
+	for (int i = 0; i < vis && top + i < n; i++)
 	{
-		const bt_dev *d = bt_at(i);
-		if (!d) break;
+		const pad_row *r = &rows[top + i];
 
-		int on = (i == pads_row);
+		int on = (top + i == pads_row);
 		int y = y0 + i * rowh;
 
 		if (on) gfx_fill(b.x + 4 * s, y - 3 * s, b.w - 8 * s, rowh - 2 * s,
-			(armed && pads_forget_arm == i) ? COL_RED : COL_BLUE);
+			(armed && pads_forget_arm == top + i) ? COL_RED : COL_BLUE);
 
 		uint32_t ink = on ? COL_WHITE : COL_INK;
 
-		// A dot for connected, as on the Wi-Fi list, rather than a word competing with
-		// the name for the same row.
-		if (d->connected) gfx_fill(b.x + 8 * s, y + 2 * s, 4 * s, 4 * s, ink);
+		/*
+		  The player number is the useful thing on the left, not a connected dot: a row
+		  with a number is a controller a game can be played with, and one without is a
+		  pad that is paired and not awake. So it says which player it is, and says
+		  nothing where there is nothing to say.
+		*/
+		if (r->player)
+		{
+			char pl[8];
+			snprintf(pl, sizeof(pl), "P%d", r->player);
+			gfx_text(pl, b.x + 8 * s, y, s, on ? COL_WHITE : COL_GREEN, 0);
+		}
+		else
+		{
+			gfx_text("--", b.x + 8 * s, y, s, on ? COL_WHITE : COL_DIM, 0);
+		}
 
-		const char *name = d->name[0] ? d->name : "Controller";
-		gfx_text(gfx_clip(name, s, b.w - 24 * s - 18 * s), b.x + 16 * s, y, s, ink, 0);
+		int rx = b.x + b.w - 8 * s;          // right edge for the how-connected marker
+		int nx = b.x + 32 * s;               // clear of the player column
+		gfx_text(gfx_clip(r->name, s, (rx - 10 * s) - nx), nx, y, s, ink, 0);
 
-		picto("bluetooth", b.x + b.w - 8 * s - 8 * s, y, 8 * s, on ? COL_WHITE : COL_PANELHI);
+		if (r->kind == PAD_BT)
+			picto("bluetooth", rx - 8 * s, y, 8 * s, on ? COL_WHITE : COL_PANELHI);
+		else
+			gfx_text((r->kind == PAD_SNAC) ? "SNAC" : "USB",
+				rx - ((r->kind == PAD_SNAC) ? 32 * s : 24 * s), y, s, on ? COL_WHITE : COL_PANELHI, 0);
 	}
 
 	if (armed)
@@ -2352,7 +2472,7 @@ static void move_v(int dir)
 		// Nothing to move through while pairing, or when the list is empty.
 		if (bt_pairing() || bt_pair_state() != BTP_IDLE) { nudge(); return; }
 
-		int n = bt_count();
+		int n = pads_count();
 		if (!n) { nudge(); return; }
 
 		/*
@@ -3934,10 +4054,10 @@ int chome_handle(uint32_t key)
 			{
 				if (bt_pairing() || bt_pair_state() != BTP_IDLE) { nudge(); break; }
 
-				const bt_dev *d = bt_at(pads_row);
-				if (!d || d->connected) { nudge(); break; }
+				pad_row sel;
+				if (!pads_sel(&sel) || sel.kind != PAD_BT || sel.connected) { nudge(); break; }
 
-				bt_connect(d->mac);
+				bt_connect(sel.mac);
 				mark_dirty();
 				break;
 			}
@@ -3968,15 +4088,15 @@ int chome_handle(uint32_t key)
 			*/
 			if (screen == SCR_PADS)
 			{
-				if (bt_pairing() || bt_pair_state() == BTP_FAIL || !bt_count()) { nudge(); break; }
+				if (bt_pairing() || bt_pair_state() != BTP_IDLE) { nudge(); break; }
 
-				const bt_dev *d = bt_at(pads_row);
-				if (!d) { nudge(); break; }
+				pad_row sel;
+				if (!pads_sel(&sel) || sel.kind != PAD_BT) { nudge(); break; }
 
 				if (pads_forget_arm == pads_row && !CheckTimer(pads_forget_until))
 				{
 					pads_forget_arm = -1;
-					bt_forget(d->mac);
+					bt_forget(sel.mac);
 					if (pads_row > 0) pads_row--;
 				}
 				else

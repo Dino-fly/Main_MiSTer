@@ -28,6 +28,8 @@
 #ifndef CHOME_BT_H
 #define CHOME_BT_H
 
+#include <inttypes.h>
+
 #define BT_MAX  12
 #define BT_NAME 48
 
@@ -40,6 +42,18 @@ struct bt_dev
 
 // 1 when this machine has a Bluetooth adapter at all. Cheap: no fork, no D-Bus.
 int bt_present();
+
+/*
+  A name a player will recognise, from the pad's USB ids rather than from what it calls
+  itself: a DualShock 4 broadcasts "Wireless Controller", which is true of nearly
+  everything in the room and tells nobody which of their pads this is. Falls back to the
+  reported name for anything not in the table, which is most things and is fine - a
+  Wii U Pro Controller already says what it is.
+
+  Keyed on ids because they are the same over USB and over the air, so a pad reads the
+  same however it is plugged in.
+*/
+const char *bt_pad_label(uint16_t vid, uint16_t pid, const char *reported);
 
 /*
   Called once a frame while a controller screen is open. Reaps finished children,
