@@ -1912,6 +1912,12 @@ int main()
 		bt_ingest_progress("Done.");
 		check(bt_pair_state() == BTP_OK, "\"Done.\" is a paired controller");
 		check(bt_pair_done() == 1, "and is counted");
+		/*
+		  But not a working one yet. btctl's Connect() has returned, which is true and
+		  does not stay true - a pad still registered to a console goes back to it - so
+		  the screen must not claim readiness it has not checked.
+		*/
+		check(!strstr(bt_pair_detail(), "Ready"), "and is not called ready before the link is checked");
 
 		// btctl loops, so the next device's lines follow straight on.
 		bt_ingest_progress("NAME: Some Phone");
@@ -1976,10 +1982,24 @@ int main()
 
 		// Moving off the row disarms it, so a stray press cannot be completed later.
 		press(KEY_DOWN, 10);
-		press(KEY_TAB, 10);
+		press(KEY_TAB, 10);                   // arm row 2
+		press(KEY_UP, 10);                    // ...and off it again
+		press(KEY_UP, 10);                    // a refused move counts too
+		press(KEY_DOWN, 10);
+		press(KEY_TAB, 10);                   // so this arms rather than forgets
 		press(KEY_UP, 10);
 		frame(4);
-		check(bt_count() == 3, "and arming does not follow the selection");
+		check(bt_count() == 3, "moving off an armed row disarms it, refused moves included");
+
+		/*
+		  A paired controller that is not connected is the case worth acting on, so the
+		  legend offers waking it - and only for that one. Row 2 is paired-not-connected
+		  in the fixture; row 1 is connected and must not offer it.
+		*/
+		press(KEY_DOWN, 12);
+		frame(6);
+		dump("pads-4-wake-offered");
+		press(KEY_UP, 10);
 
 		/*
 		  The pairing panel. Its running form needs a radio and a pad, but the state

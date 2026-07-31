@@ -1054,6 +1054,12 @@ static int build_legend(legend_pair *out, int max)
 		}
 		// Same condition as the panel: a list on screen means there is an adapter.
 		if ((bt_present() || bt_count()) && n < max) { out[n++] = lp(LBL_A, "Add a Controller", "Add"); }
+		{
+			// Only for one that is paired but not connected - which is the only state
+			// where there is anything to wake.
+			const bt_dev *d = bt_at(pads_row);
+			if (d && !d->connected && n < max) { out[n++] = lp(LBL_Y, "Wake It Up", "Wake"); }
+		}
 		if (bt_count() && n < max) { out[n++] = lp(LBL_X, "Forget", "Forget"); }
 		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
 		break;
@@ -2254,7 +2260,8 @@ static void move_h(int dir)
 	case SCR_BROWSE:
 		nudge();
 		return;
-	default:
+
+	case SCR_HOME:
 	{
 		int n = lib_view_count();
 		int next = sel + dir;
@@ -2271,6 +2278,18 @@ static void move_h(int dir)
 		slot_idx = 0;
 		break;
 	}
+
+	/*
+	  Anything else on screen is a panel, and a panel is modal: left and right belong to
+	  it, not to the shelf behind it. This used to fall through to moving the shelf, so
+	  Sort, About, Wi-Fi and Controllers all steered the browser behind them while their
+	  own panel sat there - the selection, the title and the pips changing under a dialog
+	  that had nothing to do with them. move_v() already ended at a nudge; this is that,
+	  for the other axis.
+	*/
+	default:
+		nudge();
+		return;
 	}
 	mark_dirty();
 }
@@ -2334,11 +2353,19 @@ static void move_v(int dir)
 		int n = bt_count();
 		if (!n) { nudge(); return; }
 
+		/*
+		  Disarmed before the bounds check, not after: reaching for another row and
+		  finding there isn't one still means the player has stopped meaning to forget
+		  this one. Leaving it armed there left a row sitting red and one press from
+		  being forgotten.
+		*/
+		pads_forget_arm = -1;
+
 		int next = pads_row + dir;
 		if (next < 0 || next >= n) { nudge(); return; }
 
 		pads_row = next;
-		pads_forget_arm = -1;          // moving off a row disarms it
+		mark_dirty();          // move_v() has no trailing repaint; each case does its own
 		break;
 	}
 
@@ -3935,6 +3962,18 @@ int chome_handle(uint32_t key)
 				break;
 			}
 
+			if (screen == SCR_PADS)
+			{
+				if (bt_pairing() || bt_pair_state() == BTP_FAIL) { nudge(); break; }
+
+				const bt_dev *d = bt_at(pads_row);
+				if (!d || d->connected) { nudge(); break; }
+
+				bt_connect(d->mac);
+				mark_dirty();
+				break;
+			}
+
 			if (screen == SCR_HOME && it) { lib_toggle_fav(it); mark_dirty(); }
 			else nudge();
 			break;
@@ -4009,6 +4048,10 @@ int chome_handle(uint32_t key)
 		case KEY_MINUS:
 		case KEY_EQUAL:
 		{
+			// The shoulders page the shelf, so they belong to the shelf. With a panel up
+			// they were still paging it behind the dialog.
+			if (screen != SCR_HOME) { nudge(); break; }
+
 			const chome_profile *p = theme_get();
 			int n = lib_view_count();
 			int next = sel + ((k == KEY_MINUS) ? -p->visible : p->visible);

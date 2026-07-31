@@ -85,6 +85,13 @@ const char *bt_pair_detail();
 */
 void bt_pair_ack();
 
+/*
+  Brings a paired controller's link up. Needed because a pad cannot be relied on to do
+  it: one that is also registered to a console reconnects there when its own button is
+  pressed, so the adapter has to ask.
+*/
+void bt_connect(const char *mac);
+
 // Undoes a pairing. Destructive; the UI confirms first.
 void bt_forget(const char *mac);
 
