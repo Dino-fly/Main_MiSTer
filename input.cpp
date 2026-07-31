@@ -2466,7 +2466,17 @@ static void joy_digital(int jnum, uint32_t mask, uint32_t code, char press, int 
 		*/
 		if (user_io_osd_is_visible() || chome_active() || (bnum == BTN_OSD))
 		{
-			mask &= ~JOY_BTN3;
+			/*
+			  JOY_BTN3 is KEY_BACKSPACE, and in the classic OSD it belongs to the A+B
+			  combo synthesised just below rather than to Y - so a standalone Y is
+			  dropped here. The front-end does bind Y (Save, on the suspend screen), and
+			  dropping it meant the legend named a button that could do nothing: the only
+			  way to produce a backspace from a pad was to press A and B together.
+
+			  So let Y through while the front-end owns the screen. A+B still synthesises
+			  BTN3 below, for the front-end as well, and the classic OSD is unchanged.
+			*/
+			if (!chome_active()) mask &= ~JOY_BTN3;
 			if (press)
 			{
 				osdbtn |= mask;
