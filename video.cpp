@@ -2281,6 +2281,16 @@ static void video_set_mode(vmode_custom_t *v, double Fpix)
 
 	video_fb_config();
 
+	/*
+	  Diagnostic for the front-end's analog takeover. Classic Home draws a correct image
+	  into the menu buffer - read back out of DDR and confirmed - and it still reaches the
+	  screen as black with blue vertical stripes, intermittently. So the question is what
+	  changes the mode underneath it: the core keeps running behind the still and can
+	  change resolution while the menu is up, and that comes through here.
+	*/
+	if (fb_num) printf("video: mode now %dx%d, fb %d at %dx%d, takeover=%d\n",
+		v_cur.item[1], v_cur.item[5], fb_num, fb_width, fb_height, vga_fb_takeover);
+
 	setShadowMask();
 }
 
@@ -3394,6 +3404,10 @@ static int hdmi_present()
 static void vga_fb_takeover_update()
 {
 	if (cfg.direct_video || cfg.vga_scaler) return;
+
+	// Diagnostic: see the note in video_set_mode().
+	printf("video: takeover check - req=%d fb=%d hdmi=%d held=%d\n",
+		menu_fb_analog_req, fb_num, hdmi_present(), vga_fb_takeover);
 
 	int want_term = cfg.fb_terminal_vga && !fb_num;
 
