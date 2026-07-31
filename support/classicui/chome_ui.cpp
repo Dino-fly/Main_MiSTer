@@ -65,6 +65,10 @@ static int wifi_row = 0;                     // which network is picked
 static int wifi_top = 0;                     // first one on screen
 static char wifi_pick[NET_SSID];             // ...and its name, kept across the keyboard
 
+static int pwr_row = 0;                      // Restart / Shut Down
+static int pwr_arm = -1;                     // ...and which one is one press from happening
+static unsigned long pwr_until = 0;
+
 static int pads_row = 0;                     // which controller is picked
 static int pads_forget_arm = -1;             // ...and whether forgetting it is armed
 static unsigned long pads_forget_until = 0;
@@ -133,6 +137,7 @@ static void ref_shot_path(const char *sysid, const char *rompath, char *out, int
 #define SCR_LAUNCH  9
 #define SCR_WIFI    10
 #define SCR_PADS    11
+#define SCR_POWER   12
 
 // Rows on the Options panel. Several places step over them.
 #define OPT_ROWS    7
@@ -155,15 +160,16 @@ static void ref_shot_path(const char *sysid, const char *rompath, char *out, int
 
 #define MB_DISPLAY  0
 #define MB_OPTIONS  1
-#define MB_ABOUT    2
-#define MB_COUNT    3
+#define MB_POWER    2
+#define MB_ABOUT    3
+#define MB_COUNT    4
 
 /*
   Language and Manuals are gone. The first opened a panel with nothing behind it,
   and the second only handed the screen to the classic OSD - which is exactly what
   the front-end is not supposed to do on its own.
 */
-static const char *mb_label[MB_COUNT] = { "Display", "Options", "About" };
+static const char *mb_label[MB_COUNT] = { "Display", "Options", "Power", "About" };
 
 /*
   Every Display option lives in the scaler - filters, shadow mask, gamma - so the
@@ -1042,6 +1048,14 @@ static int build_legend(legend_pair *out, int max)
 	{
 		// Inside that very game the slots become live: A restores, Y writes.
 		int here = ig_is_running(cur_game());
+
+		// Nothing to offer for a core with no savestates - see draw_suspend().
+		if (here && !ss_can_save() && !ss_can_load())
+		{
+			if (n < max) { out[n++] = lp(LBL_A, "Resume", "Play"); }
+			if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
+			break;
+		}
 		if (here && ss_can_load() && n < max) { out[n++] = lp(LBL_A, "Load", "Load"); }
 		else if (n < max) { out[n++] = lp(LBL_A, "Resume", "Play"); }
 		if (here && ss_can_save() && n < max)
@@ -1056,6 +1070,10 @@ static int build_legend(legend_pair *out, int max)
 		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
 		break;
 	}
+	case SCR_POWER:
+		if (n < max) { out[n++] = lp(LBL_A, "Choose", "OK"); }
+		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
+		break;
 	case SCR_SORT:
 		if (n < max) { out[n++] = lp(LBL_A, "Apply", "OK"); }
 		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
@@ -1358,6 +1376,24 @@ static void draw_suspend(const chome_profile *p)
 	for (char *q = hdr; *q; q++) *q = (char)toupper((unsigned char)*q);
 	gfx_text(gfx_clip(hdr, s, p->w - p->inset * 2), p->inset, y + 6 * s, s,
 		armed ? COL_RED : COL_PANELHI, 0);
+
+	/*
+	  A core with no savestate entries at all - most arcade hardware - can never fill
+	  these, and three slots marked EMPTY invite a player to try. Say it plainly instead:
+	  being told there is nothing to do here is a different thing from being told nothing,
+	  and pressing the button and having it silently refuse is the worst of the three.
+	*/
+	if (ig_is_running(it) && !ss_can_save() && !ss_can_load())
+	{
+		int s2 = p->ts_ui;
+		char lines[4][64];
+		int nl = wrap_text("This system cannot save your place. Leave the game running, or "
+			"start it again from the beginning next time.",
+			(p->w - p->inset * 2 - 16 * s2) / (8 * s2), lines, 3);
+		for (int i = 0; i < nl; i++)
+			gfx_text_c(lines[i], p->w / 2, y + 20 * s2 + i * 10 * s2, s2, COL_PANELHI, 0);
+		return;
+	}
 
 	int n = CH_SLOTS_USER, tw = p->thumb_w, th = p->thumb_h, gap = p->thumb_gap;
 	int x0 = (p->w - (n * tw + (n - 1) * gap)) / 2;
@@ -2018,6 +2054,54 @@ static void draw_pads(const chome_profile *p)
 	}
 }
 
+/*
+  Restart and Shut Down.
+
+  A console is turned off by its switch, but a MiSTer is a computer with a card in it and
+  pulling the power mid-write is how a library gets corrupted - so there has to be a way
+  to ask. Two presses, like anything else here that cannot be undone, and it syncs first.
+*/
+#define PWR_ROWS 2
+
+static void draw_power(const chome_profile *p)
+{
+	/*
+	  Sized for its two rows and the line underneath, rather than taking the default panel
+	  and leaving two thirds of it empty grey.
+	*/
+	int ps = p->ts_ui;
+	int pw = p->w - 2 * p->inset;
+	if (pw > 34 * 8 * ps) pw = 34 * 8 * ps;
+	int ph = (10 * ps + 6) + PWR_ROWS * 14 * ps + 30 * ps;
+
+	panel_box b = draw_panel_ex(p, pw, ph, "Power");
+	int s = b.s, rowh = 14 * s, y = b.y + 6 * s;
+
+	static const char *rows[PWR_ROWS] = { "Restart", "Shut Down" };
+	int armed = (pwr_arm >= 0 && !CheckTimer(pwr_until));
+
+	for (int i = 0; i < PWR_ROWS; i++)
+	{
+		int on = (i == pwr_row);
+		int ry = y + i * rowh;
+
+		if (on) gfx_fill(b.x + 4 * s, ry - 3 * s, b.w - 8 * s, rowh - 2 * s,
+			(armed && pwr_arm == i) ? COL_RED : COL_BLUE);
+
+		gfx_text(rows[i], b.x + 10 * s, ry, s, on ? COL_WHITE : COL_INK, 0);
+	}
+
+	const char *note = armed
+		? ((pwr_arm == 0) ? "Press A again to restart" : "Press A again to shut down")
+		: "Always shut down here rather than pulling the plug.";
+
+	char lines[4][64];
+	int nl = wrap_text(note, (b.w - 16 * s) / (8 * s), lines, 2);
+	for (int i = 0; i < nl; i++)
+		gfx_text_c(lines[i], b.x + b.w / 2, y + PWR_ROWS * rowh + 6 * s + i * 10 * s, s,
+			armed ? COL_RED : COL_PANELHI, 0);
+}
+
 static void draw_about_panel(const chome_profile *p)
 {
 	panel_box b = draw_panel(p, "About");
@@ -2321,7 +2405,8 @@ static void render()
 	draw_position(p);
 
 	int overlay = (screen == SCR_SORT || screen == SCR_DISPLAY || screen == SCR_OPTIONS ||
-		screen == SCR_ABOUT || screen == SCR_WIFI || screen == SCR_PADS);
+		screen == SCR_ABOUT || screen == SCR_WIFI || screen == SCR_PADS ||
+		screen == SCR_POWER);
 	if (overlay) gfx_scrim(0, 0, p->w, p->h, COL_BGDARK, 2);
 
 	draw_suspend(p);
@@ -2335,6 +2420,7 @@ static void render()
 	case SCR_OPTIONS: draw_options_panel(p); break;
 	case SCR_ABOUT:   draw_about_panel(p); break;
 	case SCR_WIFI:    draw_wifi(p); break;
+	case SCR_POWER:   draw_power(p); break;
 	case SCR_PADS:    draw_pads(p); break;
 	case SCR_LAUNCH:  draw_launch(p); break;
 	default: break;
@@ -2495,6 +2581,12 @@ static void move_v(int dir)
 		}
 		break;
 
+	case SCR_POWER:
+		pwr_row = (pwr_row + dir + PWR_ROWS) % PWR_ROWS;
+		pwr_arm = -1;                    // moving off disarms, as everywhere else here
+		mark_dirty();
+		break;
+
 	case SCR_SORT:
 		sort_idx = (sort_idx + dir + SORT_COUNT) % SORT_COUNT;
 		mark_dirty();
@@ -2605,6 +2697,7 @@ static void accept()
 			break;
 		}
 		case MB_OPTIONS:  opt_row = 0; go_screen(SCR_OPTIONS); break;
+		case MB_POWER:    pwr_row = 0; pwr_arm = -1; go_screen(SCR_POWER); break;
 		case MB_ABOUT:    go_screen(SCR_ABOUT); break;
 		}
 		break;
@@ -2674,6 +2767,25 @@ static void accept()
 			}
 			break;
 		}
+		break;
+
+	case SCR_POWER:
+		if (pwr_arm == pwr_row && !CheckTimer(pwr_until))
+		{
+			/*
+			  Flush first. The card is mounted sync, but the library index and the state
+			  file are ours and there is no reason to find out the hard way.
+			*/
+			printf("ClassicUI: %s\n", pwr_row ? "shutting down" : "restarting");
+			lib_state_save();
+			sync();
+			system(pwr_row ? "poweroff" : "reboot");
+			break;
+		}
+
+		pwr_arm = pwr_row;
+		pwr_until = GetTimer(3000);
+		mark_dirty();
 		break;
 
 	case SCR_PADS:
@@ -2780,6 +2892,11 @@ static void back()
 	case SCR_DISPLAY:
 	case SCR_OPTIONS:
 	case SCR_ABOUT:
+		go_screen(SCR_MENUBAR);
+		break;
+
+	case SCR_POWER:
+		if (pwr_arm >= 0) { pwr_arm = -1; mark_dirty(); break; }   // first B cancels
 		go_screen(SCR_MENUBAR);
 		break;
 
