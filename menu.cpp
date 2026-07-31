@@ -847,6 +847,17 @@ const char* get_rbf_name_bootcore(char *str)
 
 static void vga_nag()
 {
+	/*
+	  Never over the front-end. It is a classic-OSD panel, and its advice is wrong there
+	  anyway: Classic Home takes the framebuffer deliberately and routes it to the analog
+	  output itself, so "disable framebuffer" or "enable scaler on VGA" describes the
+	  thing that is working rather than a misconfiguration.
+
+	  It reaches here from MenuHide(), which process_ss() calls on every savestate write -
+	  so without this a state save painted it over the game.
+	*/
+	if (chome_active() || chome_ingame_active()) { OsdDisable(); return; }
+
 	// no nag if the framebuffer is routed to the analog output (direct_video or fb_terminal_vga)
 	if (video_fb_state() && !get_vga_fb())
 	{
