@@ -3812,6 +3812,12 @@ static int ig_open()
 	screen = SCR_HOME;
 	slot_idx = 0;
 	del_arm_slot = -1;
+	/*
+	  A save that gave up marks its slot NOT SAVED, which is worth seeing once and not
+	  worth seeing forever: it is only a slot number, so without this it would still be
+	  there on the next visit, and on a different game's strip at that.
+	*/
+	pend_failed = -1;
 	ig_close_until = 0;
 	bar_y = 0;
 	strip_y = 0;
