@@ -58,4 +58,17 @@ int chome_ingame_active();
 */
 void chome_text_entry(const char *title, const char *prompt, const char *initial, int mask);
 
+/*
+  The suspend point's savestate slot, which is the front-end's plumbing and not a save
+  the player made: it is how a game is held still while this menu is up, because the
+  core cannot really be paused then.
+
+  The firmware asks about it so it can keep it out of sight. chome_hidden_slot() gives
+  the 0-based slot, or -1 when nothing is reserved, and chome_ss_quiet() is true for a
+  moment around a write to it - long enough to cover the polls on which the core's own
+  "Save to state N" message and the state's thumbnail would otherwise arrive.
+*/
+int chome_hidden_slot();
+int chome_ss_quiet();
+
 #endif

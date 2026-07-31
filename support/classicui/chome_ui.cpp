@@ -102,6 +102,22 @@ static void ref_shot_path(const char *sysid, const char *rompath, char *out, int
 // Rows on the Options panel. Several places step over them.
 #define OPT_ROWS    7
 
+/*
+  Savestate slots.
+
+  The framework in sys/ gives a core four, and the last one is not the player's: it
+  is where suspend and freeze put the moment you walked away from, because the core
+  cannot really be paused while this menu is up (see freeze_engage). That slot is
+  plumbing, so the strip, the shelf pips and the slot numbering stop at three and it
+  is never drawn, counted or offered.
+
+  A core declaring fewer than four slots reserves its own last one - susp_slot() -
+  which is what actually gets written; the strip is a fixed four wide and has always
+  shown slots such a core does not have, which is cosmetic and predates this.
+*/
+#define CH_SLOTS      4
+#define CH_SLOTS_USER 3
+
 #define MB_DISPLAY  0
 #define MB_OPTIONS  1
 #define MB_ABOUT    2
@@ -845,7 +861,7 @@ static void draw_pips(const chome_profile *p)
 	if (!it) return;
 
 	int s = (p->id == PROF_HD) ? 2 : 1;
-	int d = 6 * s, gap = 5 * s, n = 4;
+	int d = 6 * s, gap = 5 * s, n = CH_SLOTS_USER;
 	int x0 = p->w / 2 - (n * d + (n - 1) * gap) / 2;
 
 	for (int i = 0; i < n; i++)
@@ -1261,7 +1277,7 @@ static void draw_suspend(const chome_profile *p)
 	gfx_text(gfx_clip(hdr, s, p->w - p->inset * 2), p->inset, y + 6 * s, s,
 		armed ? COL_RED : COL_PANELHI, 0);
 
-	int n = 4, tw = p->thumb_w, th = p->thumb_h, gap = p->thumb_gap;
+	int n = CH_SLOTS_USER, tw = p->thumb_w, th = p->thumb_h, gap = p->thumb_gap;
 	int x0 = (p->w - (n * tw + (n - 1) * gap)) / 2;
 	int ty = y + 18 * s + 6;
 
@@ -2010,7 +2026,7 @@ static void move_h(int dir)
 	case SCR_SUSPEND:
 	{
 		int n = slot_idx + dir;
-		if (n < 0 || n > 3) { nudge(); return; }
+		if (n < 0 || n >= CH_SLOTS_USER) { nudge(); return; }
 		slot_idx = n;
 		break;
 	}
@@ -2581,10 +2597,10 @@ static int ss_can_save() { return ss_get()->found_save; }
   that without keeping the moment would throw the session out, which is the one
   thing a shelf full of games must not do.
 
-  The state itself is an ordinary savestate in the core's last slot, so the pips and
-  thumbnails already show it. This file only records which game the last suspend
-  belongs to, so the shelf can offer Resume and the core can restore itself once the
-  ROM is up.
+  The state itself is an ordinary savestate in the core's reserved last slot, which
+  the player is never shown (see CH_SLOTS_USER). This file only records which game the
+  last suspend belongs to, so the shelf can offer Resume and the core can restore
+  itself once the ROM is up.
 */
 #define SUSPEND_FILE "classicui/suspend.txt"
 
@@ -2636,6 +2652,36 @@ static int susp_slot()
 	const ss_hooks *h = ss_get();
 	int n = h->found_slot ? h->slot_count : 1;
 	return (n > 0) ? n - 1 : 0;
+}
+
+/*
+  Keeping the suspend slot quiet.
+
+  A player who never asked for a save should not be told one happened, and two things
+  in the firmware announce every state anyway: the core lists its own messages in
+  CONF_STR ("Save to state 4") and raises one for the firmware to pop up as a
+  classic-OSD panel, and process_ss() captures a thumbnail beside each state file so
+  the strip has a picture. Neither belongs to a slot the player cannot see.
+
+  Both arrive a poll or two after the pulse rather than during it - the core writes
+  the state on its own schedule and the firmware only notices on its next poll - so
+  this is a window opened around the write, not a flag held across it. Its width only
+  has to cover those polls; over-suppressing costs nothing, because everything it can
+  swallow is an OSD panel that would have been drawn over the front-end.
+*/
+#define SS_QUIET_MS 4000
+static unsigned long ss_quiet_until = 0;
+
+int chome_ss_quiet()
+{
+	return (ss_quiet_until && !CheckTimer(ss_quiet_until));
+}
+
+// Which slot the firmware should keep quiet about, or -1 when we have reserved none.
+int chome_hidden_slot()
+{
+	if (!cfg.classicui) return -1;
+	return susp_slot();
 }
 
 // Best effort: a core with no savestates just cannot be suspended, and quitting
@@ -2808,6 +2854,10 @@ static int ss_do_save(int slot)
 	if (!h->found_save) { printf("ClassicUI: this core declares no save-state entry\n"); return 0; }
 	if (!ss_select_slot(slot)) { printf("ClassicUI: cannot select slot %d\n", slot + 1); return 0; }
 
+	// Armed here rather than at the four suspend and freeze call sites, so a slot the
+	// player chose by hand keeps its feedback and the reserved one never gets any.
+	if (slot == susp_slot()) ss_quiet_until = GetTimer(SS_QUIET_MS);
+
 	/*
 	  Two things have to be true for the core to actually write a file.
 
@@ -2848,6 +2898,8 @@ static int ss_do_load(int slot)
 {
 	const ss_hooks *h = ss_get();
 	if (!h->found_load || !ss_select_slot(slot)) return 0;
+
+	if (slot == susp_slot()) ss_quiet_until = GetTimer(SS_QUIET_MS);
 
 	printf("ClassicUI: restore state <- slot %d\n", slot + 1);
 	ss_pulse(h->load_opt, h->load_ex);

@@ -3219,7 +3219,10 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 		if (JOYCON_COMBINED(dev)) input[input[dev].bind].map_shown = 1;
 		store_player(input[dev].num, dev);
 
-		if (cfg.controller_info)
+		// Nothing is announced over the front-end: both branches below draw a
+		// classic-OSD panel, and "P1 paddle/spinner" tells a player nothing they
+		// asked for. In a core that OSD is the UI, so it still shows there.
+		if (cfg.controller_info && !chome_active())
 		{
 			if (input[dev].quirk == QUIRK_PDSP || input[dev].quirk == QUIRK_MSSP)
 			{
@@ -3807,7 +3810,11 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 
 					if (input[dev].has_map >= 2)
 					{
-						if (input[dev].has_map == 3) Info("This joystick is not defined");
+						// Same reasoning as the button map above: an unrecognised pad
+						// still works well enough to drive the front-end, so telling a
+						// player it "is not defined" in a classic-OSD panel only alarms
+						// them. The message stays inside a core.
+						if (input[dev].has_map == 3 && !chome_active()) Info("This joystick is not defined");
 						input[dev].has_map = 1;
 					}
 
