@@ -13,6 +13,8 @@
 #include <string.h>
 #include <ctype.h>
 #include <sys/stat.h>
+#include <sys/time.h>
+#include <time.h>
 #include <unistd.h>
 #include <linux/input.h>
 
@@ -1320,6 +1322,93 @@ static void assert_ingame()
 	check(harness_pulses_on("S") == 1, "and suspends the game on the way out");
 	check(!chome_ingame_active(), "and the menu does not open");
 	harness_set_fb_supported(1);
+
+	/*
+	  Saving into a slot on a core that cannot pause.
+
+	  The moment is already in the reserved slot - that is what holding the game still
+	  means - so the slot the player picked is filled by copying it. Nothing is asked of
+	  the core, so no frames are needed and the menu can stay up, and the stored moment
+	  is the still on screen rather than one a few frames later.
+
+	  Needs the no-pause core: the one used above pauses, so it never freezes and there
+	  is nothing to copy. That is also the fallback path, covered by the pulse
+	  assertions earlier in this section.
+	*/
+	harness_set_confstr(2);
+	{
+		// A destination left over from an earlier run would pass for a copy.
+		unlink(ROOT "/savestates/Gameboy/Tetris (World)_2.ss");
+		unlink(ROOT "/savestates/Gameboy/Tetris (World)_2.png");
+
+		/*
+		  Put a game back in front of us: the block above suspended one and returned to
+		  Classic Home, which consumes the launch record, and without it nothing counts
+		  as running - so the save would be refused for that reason rather than tested.
+		*/
+		{
+			FILE *rec = fopen("/tmp/classicui_current", "wt");
+			if (rec) { fprintf(rec, "gb\nTetris (World).gb\nGameboy\n"); fclose(rec); }
+		}
+		harness_set_core_name("GAMEBOY");
+		harness_set_menu_core(0);
+
+		press(KEY_MENU, 20);
+		check(chome_ingame_active(), "the menu opens on a core that cannot pause");
+		check(harness_pause_val() == 0, "and does not pause it, because it cannot");
+
+		/*
+		  The core writes the reserved state itself and there is no core here, so stand
+		  one in - with contents that can be recognised, so a copy can be told from a
+		  file that merely exists. It has to be written after the menu opened, which is
+		  exactly the freshness the copy insists on.
+		*/
+		FILE *held = fopen(ROOT "/savestates/Gameboy/Tetris (World)_4.ss", "wb");
+		if (held) { fprintf(held, "HELD-MOMENT"); fclose(held); }
+
+		press(KEY_DOWN, 20);                  // into the suspend strip
+		press(KEY_RIGHT, 12);                 // onto slot 2
+		harness_reset_status();
+		press(KEY_BACKSPACE, 12);             // Y saves
+
+		char got[32] = {};
+		FILE *g = fopen(ROOT "/savestates/Gameboy/Tetris (World)_2.ss", "rb");
+		if (g) { if (fread(got, 1, sizeof(got) - 1, g)) {} fclose(g); }
+
+		check(!strcmp(got, "HELD-MOMENT"), "the held moment is copied into the chosen slot");
+		check(harness_status_pulses() == 0, "without asking the core to save again");
+		check(chome_ingame_active(), "and the menu stays up, since no frames are needed");
+
+		struct stat ts;
+		check(!stat(ROOT "/savestates/Gameboy/Tetris (World)_2.png", &ts),
+			"and the still it is drawn over becomes the slot's picture");
+
+		/*
+		  A stale reserved state must not be passed off as the current moment. Still on
+		  the suspend screen and still the same menu, so backdating the held state to
+		  before it opened is enough - no need to reopen anything, and pressing the menu
+		  button here would close it.
+		*/
+		unlink(ROOT "/savestates/Gameboy/Tetris (World)_2.ss");
+		unlink(ROOT "/savestates/Gameboy/Tetris (World)_2.png");
+		{
+			struct timeval tv[2];
+			tv[0].tv_sec = tv[1].tv_sec = (long)time(0) - 3600;
+			tv[0].tv_usec = tv[1].tv_usec = 0;
+			utimes(ROOT "/savestates/Gameboy/Tetris (World)_4.ss", tv);
+		}
+		harness_reset_status();
+		press(KEY_BACKSPACE, 12);
+
+		struct stat ss;
+		check(stat(ROOT "/savestates/Gameboy/Tetris (World)_2.ss", &ss) != 0,
+			"a state older than this menu is not copied as if it were now");
+		check(harness_status_pulses() >= 1, "it falls back to asking the core instead");
+		check(!chome_ingame_active(), "which resumes, because that save needs frames");
+
+		unlink(ROOT "/savestates/Gameboy/Tetris (World)_4.ss");
+	}
+	harness_set_confstr(1);
 
 	// A core with no savestate or pause entries is left completely alone.
 	harness_set_confstr(0);
