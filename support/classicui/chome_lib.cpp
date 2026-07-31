@@ -192,8 +192,25 @@ int lib_sys_games_dir(int sysidx, char *out, int len)
 	snprintf(dir, sizeof(dir), "%s", s->dir);
 	if (findGamesDir(dir, sizeof(dir)))
 	{
-		snprintf(out, len, "%s", dir);
-		return 1;
+		/*
+		  findGamesDir() answers relative to the SD root - "games/SNES", or "../usb0/..."
+		  for a stick - because MiSTer's own file helpers prepend the root themselves.
+		  Everything here hands the result to stat() and opendir(), which resolve against
+		  the process working directory instead.
+
+		  So it only ever worked when the firmware happened to have been started from
+		  /media/fat. init starts it from / (`::sysinit:/media/fat/MiSTer &`), which is
+		  why a real boot found every ROM system empty while Arcade - the branch above,
+		  which builds an absolute path - was fine. Every apparently working scan was a
+		  manual `cd /media/fat && ./MiSTer` restart.
+
+		  Prepending the root also resolves the USB form correctly:
+		  /media/fat/../usb0/games/SNES is /media/usb0/games/SNES.
+		*/
+		if (dir[0] == '/') snprintf(out, len, "%s", dir);
+		else snprintf(out, len, "%s/%s", getRootDir(), dir);
+
+		return is_dir_abs(out);
 	}
 	return 0;
 }
