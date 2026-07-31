@@ -224,15 +224,23 @@ int bt_parse_paired(const char *text, bt_dev *out, int max)
 */
 static int  pg_state = BTP_IDLE;
 static char pg_name[BT_NAME] = {};
+static char pg_mac[18] = {};
 static char pg_detail[96] = {};
 static int  pg_done = 0;
+
+// Checking that a pairing turned into a working link, and nudging it if it did not.
+static unsigned long pg_verify = 0;
+static int pg_tries = 0;
 
 void bt_progress_reset()
 {
 	pg_state = BTP_LOOKING;
 	pg_name[0] = 0;
+	pg_mac[0] = 0;
 	pg_detail[0] = 0;
 	pg_done = 0;
+	pg_verify = 0;
+	pg_tries = 0;
 }
 
 static void pg_say(const char *s) { snprintf(pg_detail, sizeof(pg_detail), "%s", s); }
@@ -259,8 +267,18 @@ int bt_ingest_progress(const char *line)
 		return pg_state;
 	}
 
-	// The address is deliberately not shown: it means nothing to the player.
-	if (!strncmp(t, "MAC:", 4)) return pg_state;
+	/*
+	  Kept, though never shown - the address means nothing to a player, but it is the
+	  only handle for connecting the pad afterwards, which is not something the pad can
+	  be relied on to do itself.
+	*/
+	if (!strncmp(t, "MAC:", 4))
+	{
+		const char *v = t + 4;
+		while (*v == ' ') v++;
+		if (is_mac(v)) { memcpy(pg_mac, v, 17); pg_mac[17] = 0; }
+		return pg_state;
+	}
 
 	if (!strncmp(t, "Skipping:", 9))
 	{
@@ -292,9 +310,18 @@ int bt_ingest_progress(const char *line)
 
 	if (!strcmp(t, "Done."))
 	{
+		/*
+		  btctl says "Done." once its Connect() has returned, which is true but does not
+		  stay true. A DS4 keeps its console's registration, and the first press of its
+		  home button reconnects it there instead - which is how a pad that had just
+		  paired ended up waking a PS4 in the next room. So this is "paired", not "ready",
+		  and whether it is really usable is checked rather than announced.
+		*/
 		pg_state = BTP_OK;
 		pg_done++;
-		pg_say("Ready to play");
+		pg_say("Paired - checking it is awake");
+		pg_verify = GetTimer(1500);
+		pg_tries = 0;
 		return pg_state;
 	}
 
@@ -340,6 +367,13 @@ static long  pair_off = 0;          // how much of its log has been read
 static int   pairing = 0;
 
 int bt_count() { return ndev; }
+
+static const bt_dev *dev_by_mac(const char *mac)
+{
+	if (!mac || !*mac) return 0;
+	for (int i = 0; i < ndev; i++) if (!strcasecmp(devs[i].mac, mac)) return &devs[i];
+	return 0;
+}
 
 const bt_dev *bt_at(int i)
 {
@@ -507,6 +541,35 @@ static void pair_drain()
 
 /* ------------------------------------------------------------------ forget --- */
 
+/*
+  Asks the adapter to bring the link up. bluetoothctl rather than btctl, which has no
+  connect; harmless when the link is already up, so it is never conditional.
+
+  This exists because a paired pad cannot be relied on to connect itself. A DS4 that is
+  also registered to a console reconnects *there* when its home button is pressed, so
+  waiting for the player to wake it is waiting for the wrong host to answer.
+*/
+void bt_connect(const char *mac)
+{
+	if (!bt_present() || !mac || !*mac) return;
+
+	pid_t p = fork();
+	if (p < 0) return;
+
+	if (!p)
+	{
+		if (fork()) _exit(0);            // orphaned, so init reaps it - see bt_forget
+
+		const char *argv[] = { "bluetoothctl", "connect", mac, 0 };
+		run_to(argv, "/dev/null");
+		_exit(0);
+	}
+
+	int st = 0;
+	waitpid(p, &st, 0);
+	printf("ClassicUI: asking %s to connect\n", mac);
+}
+
 void bt_forget(const char *mac)
 {
 	if (!bt_present() || !mac || !*mac) return;
@@ -554,9 +617,46 @@ void bt_watch(int on)
 	if (!on && pairing) bt_pair_stop();
 }
 
+/*
+  Did the pairing actually leave a usable controller? Runs whether or not pairing mode is
+  still on, because the player may well have pressed Done the moment it said "Paired".
+*/
+static void verify_link()
+{
+	if (!pg_verify || !CheckTimer(pg_verify)) return;
+	pg_verify = 0;
+
+	const bt_dev *d = dev_by_mac(pg_mac);
+	if (d && d->connected)
+	{
+		pg_say("Ready to play");
+		return;
+	}
+
+	// Two attempts: enough for a pad that is merely slow, few enough that a pad which
+	// has gone back to its console does not leave the screen trying forever.
+	if (pg_mac[0] && pg_tries < 2)
+	{
+		pg_tries++;
+		bt_connect(pg_mac);
+		pg_say("Waking it up");
+		pg_verify = GetTimer(5000);
+		bt_refresh();
+		return;
+	}
+
+	/*
+	  Said plainly, because the reason is not the player's fault and not guessable: a pad
+	  still registered to a console goes back to it.
+	*/
+	pg_say("Paired, but it went elsewhere - turn the console off and try Add again");
+}
+
 void bt_poll()
 {
 	if (!watching || !bt_present()) return;
+
+	verify_link();
 
 	if (pairing)
 	{
