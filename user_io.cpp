@@ -1996,7 +1996,19 @@ int process_ss(const char *rom_name, int enable)
 					// the slot, so it gets no message and no picture - just the file.
 					int hidden = (i == chome_hidden_slot());
 
-					MenuHide();
+					/*
+					  MenuHide() is not just a hide: it sets menustate and calls
+					  HandleUI(), so it re-enters the whole menu state machine from
+					  inside user_io_poll() - and lands on MENU_NONE1, which runs
+					  vga_nag(), which turns the OSD on and resizes it.
+
+					  While Classic Home owns the screen that is re-entrancy into the
+					  front-end's own frame, and it is what left a state save with a
+					  classic-OSD "modify MiSTer.ini" panel over the game and the
+					  framebuffer in a state the next menu open drew garbage from. The
+					  front-end hides the OSD itself; there is nothing here to hide.
+					*/
+					if (!chome_active() && !chome_ingame_active()) MenuHide();
 					if (!hidden) Info("Saving the state", 500);
 
 					*ss_sufx = i + '1';
