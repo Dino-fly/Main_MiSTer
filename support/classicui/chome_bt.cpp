@@ -338,12 +338,14 @@ int bt_ingest_progress(const char *line)
 
 void bt_pair_ack()
 {
-	if (pg_state == BTP_OK || pg_state == BTP_FAIL || pg_state == BTP_PIN)
-	{
-		pg_state = BTP_IDLE;
-		pg_detail[0] = 0;
-		pg_name[0] = 0;
-	}
+	// Anything but idle, not just the three finished states: pairing mode now stops
+	// itself, so leaving any other state uncleared would strand the panel on screen.
+	if (pg_state == BTP_IDLE) return;
+
+	pg_state = BTP_IDLE;
+	pg_detail[0] = 0;
+	pg_name[0] = 0;
+	pg_verify = 0;
 }
 
 int bt_pair_state() { return pg_state; }
@@ -474,7 +476,17 @@ void bt_pair_start()
 	printf("ClassicUI: pairing mode on (btctl pair, pid %d)\n", (int)p);
 }
 
-void bt_pair_stop()
+/*
+  Stops the discovery without touching what the screen is saying.
+
+  Split out because stopping is no longer only something the player asks for: pairing
+  mode has to end the moment a controller is working, and for a reason worth spelling
+  out. `btctl pair` loops, and on re-discovering a device it has already paired it calls
+  RemoveDevice to pair it again from scratch. If that second attempt then fails - which
+  it will for a pad that has gone back to its console - the pairing it had just made is
+  destroyed. Leaving discovery running after a success is therefore a way to lose it.
+*/
+static void pair_child_stop()
 {
 	if (!pairing) return;
 
@@ -487,11 +499,20 @@ void bt_pair_stop()
 	if (pair_child > 0) kill(-pair_child, SIGINT);
 
 	pairing = 0;
-	pg_state = BTP_IDLE;
 	printf("ClassicUI: pairing mode off\n");
 
 	// Whatever paired is worth showing straight away.
 	bt_refresh();
+}
+
+// What the player asks for: stop, and clear the panel back to the list.
+void bt_pair_stop()
+{
+	pair_child_stop();
+	pg_state = BTP_IDLE;
+	pg_detail[0] = 0;
+	pg_name[0] = 0;
+	pg_verify = 0;
 }
 
 // Reads whatever btctl has written since last time and advances the conversation.
@@ -630,6 +651,7 @@ static void verify_link()
 	if (d && d->connected)
 	{
 		pg_say("Ready to play");
+		pair_child_stop();               // before the loop can un-pair it
 		return;
 	}
 
@@ -650,6 +672,7 @@ static void verify_link()
 	  still registered to a console goes back to it.
 	*/
 	pg_say("Paired, but it went elsewhere - turn the console off and try Add again");
+	pair_child_stop();
 }
 
 void bt_poll()
