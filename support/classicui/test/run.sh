@@ -22,6 +22,7 @@ g++ -std=gnu++14 -O1 -g -Wall -Wextra -Wno-unused-parameter -Wno-format-truncati
     support/classicui/chome_ui.cpp \
     support/classicui/chome_osk.cpp \
     support/classicui/chome_net.cpp \
+    support/classicui/chome_bt.cpp \
     support/classicui/chome_video.cpp \
     support/classicui/test/stubs.cpp \
     support/classicui/test/harness.cpp \
