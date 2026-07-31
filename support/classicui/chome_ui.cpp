@@ -1385,13 +1385,17 @@ static void draw_suspend(const chome_profile *p)
 	*/
 	if (ig_is_running(it) && !ss_can_save() && !ss_can_load())
 	{
+		/*
+		  Two lines, not three: the strip is only as tall as the row of slot tiles it
+		  normally holds, and a third line fell past the bottom of it - where the shelf
+		  card behind showed through and put a stray game title under the message.
+		*/
 		int s2 = p->ts_ui;
 		char lines[4][64];
-		int nl = wrap_text("This system cannot save your place. Leave the game running, or "
-			"start it again from the beginning next time.",
-			(p->w - p->inset * 2 - 16 * s2) / (8 * s2), lines, 3);
+		int nl = wrap_text("This system cannot save your place - it has no save states.",
+			(p->w - p->inset * 2 - 16 * s2) / (8 * s2), lines, 2);
 		for (int i = 0; i < nl; i++)
-			gfx_text_c(lines[i], p->w / 2, y + 20 * s2 + i * 10 * s2, s2, COL_PANELHI, 0);
+			gfx_text_c(lines[i], p->w / 2, y + 22 * s2 + i * 11 * s2, s2, COL_PANELHI, 0);
 		return;
 	}
 
