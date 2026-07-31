@@ -1905,20 +1905,53 @@ static void kbd_fifo_poll()
 	kbd_fifo_r = (kbd_fifo_r + 1)&(KBD_FIFO_SIZE - 1);
 }
 
+/*
+  The four savestate slots as the core sees them: buffers in DDR. The .ss files are only
+  a mirror, read in once by the setup branch below at ROM load time and written back out
+  when the core reports a save. Nothing reads a file into DDR again afterwards - which is
+  why copying a .ss on disk does not make it loadable in the running session, and why
+  user_io_ss_copy_slot() exists.
+
+  File-scope rather than function-static so that copy can reach them.
+*/
+static char ss_name[1024] = {};
+static char *ss_sufx = 0;
+static uint32_t ss_cnt[4] = {};
+static void *ss_slot[4] = {};
+static int ss_enabled = 0;
+
+/*
+  Makes one slot's state be another's, in DDR, so the core can load it now. Classic Home
+  uses it to turn the state it holds a game still with into the slot the player picked.
+*/
+int user_io_ss_copy_slot(int from, int to)
+{
+	if (!ss_base || !ss_enabled) return 0;
+	if (from < 0 || from > 3 || to < 0 || to > 3 || from == to) return 0;
+	if (!ss_slot[from] || !ss_slot[to]) return 0;
+
+	memcpy(ss_slot[to], ss_slot[from], ss_size);
+
+	/*
+	  The first word is the counter process_ss() watches to notice the core saving. It has
+	  just been overwritten with the source's, which would read as a save the core had
+	  made - so move the destination's last-seen value with it. The caller writes the file
+	  itself, with a picture of the right moment.
+	*/
+	ss_cnt[to] = ((uint32_t*)(ss_slot[to]))[0];
+
+	printf("Copied savestate slot %d onto slot %d in memory\n", from + 1, to + 1);
+	return 1;
+}
+
 int process_ss(const char *rom_name, int enable)
 {
-	static char ss_name[1024] = {};
-	static char *ss_sufx = 0;
-	static uint32_t ss_cnt[4] = {};
-	static void *base[4] = {};
-	static int enabled = 0;
-
 	if (!ss_base) return 0;
 
 	if (rom_name)
 	{
-		enabled = enable;
-		if (!enabled) return 0;
+		ss_enabled = enable;
+		if (!ss_enabled) return 0;
 
 		uint32_t len = ss_size;
 		uint32_t map_addr = ss_base;
@@ -1926,15 +1959,15 @@ int process_ss(const char *rom_name, int enable)
 
 		for (int i = 0; i < 4; i++)
 		{
-			if (!base[i]) base[i] = shmem_map(map_addr, len);
-			if (!base[i])
+			if (!ss_slot[i]) ss_slot[i] = shmem_map(map_addr, len);
+			if (!ss_slot[i])
 			{
 				printf("Unable to mmap (0x%X, %d)!\n", map_addr, len);
 			}
 			else
 			{
 				ss_cnt[i] = 0xFFFFFFFF;
-				memset(base[i], 0, len);
+				memset(ss_slot[i], 0, len);
 
 				if (!i)
 				{
@@ -1955,12 +1988,12 @@ int process_ss(const char *rom_name, int enable)
 					}
 					else
 					{
-						int ret = FileReadAdv(&f, base[i], len);
+						int ret = FileReadAdv(&f, ss_slot[i], len);
 						FileClose(&f);
 						printf("process_ss: read %d bytes from file: %s\n", ret, ss_name);
 					}
 				}
-				*(uint32_t*)(base[i]) = 0xFFFFFFFF;
+				*(uint32_t*)(ss_slot[i]) = 0xFFFFFFFF;
 			}
 
 			map_addr += len;
@@ -1971,7 +2004,7 @@ int process_ss(const char *rom_name, int enable)
 		return 1;
 	}
 
-	if (!enabled) return 0;
+	if (!ss_enabled) return 0;
 
 	static unsigned long ss_timer = 0;
 	if (ss_timer && !CheckTimer(ss_timer)) return 0;
@@ -1980,10 +2013,10 @@ int process_ss(const char *rom_name, int enable)
 	fileTYPE f = {};
 	for (int i = 0; i < 4; i++)
 	{
-		if (base[i])
+		if (ss_slot[i])
 		{
-			uint32_t curcnt = ((uint32_t*)(base[i]))[0];
-			uint32_t size = ((uint32_t*)(base[i]))[1];
+			uint32_t curcnt = ((uint32_t*)(ss_slot[i]))[0];
+			uint32_t size = ((uint32_t*)(ss_slot[i]))[1];
 
 			if (curcnt != ss_cnt[i])
 			{
@@ -2014,7 +2047,7 @@ int process_ss(const char *rom_name, int enable)
 					*ss_sufx = i + '1';
 					if (FileOpenEx(&f, ss_name, O_CREAT | O_TRUNC | O_RDWR | O_SYNC))
 					{
-						int ret = FileWriteAdv(&f, base[i], size);
+						int ret = FileWriteAdv(&f, ss_slot[i], size);
 						FileClose(&f);
 						printf("Wrote %d bytes to file: %s\n", ret, ss_name);
 

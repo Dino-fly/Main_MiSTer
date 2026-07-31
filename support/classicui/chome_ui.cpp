@@ -3309,6 +3309,15 @@ static int ss_copy_state(const chome_item *it, int to_slot)
 		return 0;
 	}
 
+	/*
+	  And in memory, which is the part that makes it loadable *now*. The slots the core
+	  reads are buffers in DDR; the .ss files are a mirror read in once at ROM load time
+	  and never read again. Copying only the file left a slot that looked saved on the
+	  shelf and loaded nothing, because the core's buffer for it was still empty.
+	*/
+	if (!user_io_ss_copy_slot(susp_slot(), to_slot))
+		printf("ClassicUI: slot %d has the file but not the memory - it will load next time\n", to_slot + 1);
+
 	printf("ClassicUI: saved the held moment into slot %d\n", to_slot + 1);
 	return 1;
 }
@@ -3341,6 +3350,7 @@ static char pend_src[1024];
 static char pend_dst[1024];
 static char pend_png[1024];
 static unsigned long pend_after = 0;     // the state must be newer than this
+static int pend_reserved = -1;           // which slot holds it, for the copy in DDR
 
 static void pend_start(const chome_item *it, int slot)
 {
@@ -3349,6 +3359,7 @@ static void pend_start(const chome_item *it, int slot)
 	if (!slot_png_path(it, slot, pend_png, sizeof(pend_png))) pend_png[0] = 0;
 
 	pend_slot = slot;
+	pend_reserved = susp_slot();
 	pend_after = ig_freeze_at;
 	pend_until = GetTimer(8000);
 	pend_failed = -1;
@@ -3369,6 +3380,10 @@ void chome_pend_poll()
 	{
 		if (copy_file(pend_src, pend_dst))
 		{
+			// See ss_copy_state(): the file is the mirror, DDR is what the core loads.
+			if (!user_io_ss_copy_slot(pend_reserved, pend_slot))
+				printf("ClassicUI: slot %d has the file but not the memory\n", pend_slot + 1);
+
 			printf("ClassicUI: saved the held moment into slot %d\n", pend_slot + 1);
 
 			chome_item *sel = cur_game();
@@ -4234,7 +4249,7 @@ int chome_handle(uint32_t key)
 				if (slot_state(it, slot_idx) == 2) { nudge(); break; }   // locked
 				if (pend_slot >= 0) { nudge(); break; }                  // one at a time
 
-				// Already on disk: the whole thing is a file copy and a picture.
+				// Already on disk: a memory copy, a file copy and a picture.
 				if (ss_copy_state(it, slot_idx))
 				{
 					ss_write_thumb(it, slot_idx);
