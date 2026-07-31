@@ -3523,6 +3523,17 @@ void video_fb_enable(int enable, int n)
 	}
 }
 
+/*
+  Only the Linux console framebuffer, which is always buffer 0. video_fb_state() answers
+  for *any* framebuffer in a game core, including the front-end's own - so anything that
+  means "the terminal is on screen" has to ask this instead, or it fires whenever Classic
+  Home has the screen.
+*/
+int video_fb_terminal()
+{
+	return fb_enabled && !fb_num;
+}
+
 int video_fb_state()
 {
 	if (is_menu())
