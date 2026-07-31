@@ -80,16 +80,28 @@ int FileExists(const char *name, int)
 	return (!stat(p, &st) && S_ISREG(st.st_mode)) ? 1 : 0;
 }
 
+/*
+  Answers *relative to the root*, as the real one does - it returns "games/SNES" and
+  leaves prepending to the caller. Modelling that matters: while this returned absolute
+  paths the harness could not see that the front-end was handing a root-relative path to
+  opendir(), which made every ROM system empty on a real boot.
+*/
 int findGamesDir(char *dir, size_t dir_len)
 {
 	char probe[1024];
 	struct stat st;
 
 	snprintf(probe, sizeof(probe), "%s/games/%s", fake_root, dir);
-	if (!stat(probe, &st) && S_ISDIR(st.st_mode)) { snprintf(dir, dir_len, "%s", probe); return 1; }
+	if (!stat(probe, &st) && S_ISDIR(st.st_mode))
+	{
+		char rel[1024];
+		snprintf(rel, sizeof(rel), "games/%s", dir);
+		snprintf(dir, dir_len, "%s", rel);
+		return 1;
+	}
 
 	snprintf(probe, sizeof(probe), "%s/%s", fake_root, dir);
-	if (!stat(probe, &st) && S_ISDIR(st.st_mode)) { snprintf(dir, dir_len, "%s", probe); return 1; }
+	if (!stat(probe, &st) && S_ISDIR(st.st_mode)) return 1;   // already the relative form
 
 	return 0;
 }
