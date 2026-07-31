@@ -28,6 +28,7 @@
 #include "../chome_video.h"
 #include "../chome_osk.h"
 #include "../chome_net.h"
+#include "../chome_bt.h"
 #include "../chome_icons32.h"
 #include "../../../lib/imlib2/Imlib2.h"
 #include "../../../lib/miniz/miniz.h"
@@ -1808,6 +1809,161 @@ int main()
 			theme_update(1280, 720, 1);
 			frame(6);
 		}
+	}
+
+	/*
+	  Controllers. No adapter in the container either, so what is checked is the part
+	  that reads what the tools say: bluetoothctl's paired list and btctl's running
+	  commentary on a pairing. The pairing itself needs a radio and a pad in pairing
+	  mode, and is verified on the hardware.
+	*/
+	printf("\n== controllers ==\n");
+	{
+		/*
+		  bluetoothctl 5.61 verbatim, plus the "== <mac>" markers the refresh child
+		  writes before each device's info - 5.61 rejects `devices Paired`, so the
+		  connected ones have to be asked for one at a time.
+		*/
+		static const char *PAIRED_TEXT =
+			"Device DC:2C:26:1B:9A:71 Wireless Controller\n"
+			"Device E4:17:D8:22:0B:5C 8BitDo SN30 Pro\n"
+			"Device 00:1B:DC:0F:AA:12 00-1B-DC-0F-AA-12\n"
+			"== DC:2C:26:1B:9A:71\n"
+			"\tConnected: yes\n"
+			"== E4:17:D8:22:0B:5C\n"
+			"\tConnected: no\n";
+
+		bt_dev list[BT_MAX];
+		int n = bt_parse_paired(PAIRED_TEXT, list, BT_MAX);
+		printf("  parsed %d controllers\n", n);
+
+		check(n == 3, "every paired controller is listed");
+		check(!strcmp(list[0].name, "Wireless Controller"), "with the name bluetoothctl gives it");
+		check(list[0].connected, "the connected one is marked");
+		check(!list[1].connected, "and one that is merely paired is not");
+		/*
+		  A device bluetoothctl has no name for is listed by its own address with the
+		  colons swapped for dashes. Echoing that as a name would put the address on the
+		  row twice, so it is left empty for the screen to caption.
+		*/
+		check(!list[2].name[0], "a device with no name of its own is left unnamed");
+		check(!list[2].connected, "and a device with no marker is not connected");
+
+		// A second run must not accumulate: bluetoothctl repeats devices across calls.
+		int again = bt_parse_paired(PAIRED_TEXT, list, BT_MAX);
+		check(again == 3, "parsing the same list twice does not duplicate it");
+
+		/*
+		  btctl's commentary, in the order it actually arrives. The state machine is what
+		  turns it into something to put on a screen.
+		*/
+		bt_progress_reset();
+		check(bt_pair_state() == BTP_LOOKING, "pairing mode starts out looking");
+
+		bt_ingest_progress("NAME: Wireless Controller");
+		bt_ingest_progress("MAC:  DC:2C:26:1B:9A:71");
+		check(bt_pair_state() == BTP_WORKING, "a discovered controller is being worked on");
+		check(!strcmp(bt_pair_name(), "Wireless Controller"), "and is named on screen");
+		check(!strstr(bt_pair_detail(), "DC:2C"), "the address is never shown to the player");
+
+		bt_ingest_progress("Pairing...");
+		bt_ingest_progress("Trusting...");
+		bt_ingest_progress("Connecting...");
+		check(bt_pair_state() == BTP_WORKING, "and stays so through the whole handshake");
+
+		bt_ingest_progress("Done.");
+		check(bt_pair_state() == BTP_OK, "\"Done.\" is a paired controller");
+		check(bt_pair_done() == 1, "and is counted");
+
+		// btctl loops, so the next device's lines follow straight on.
+		bt_ingest_progress("NAME: Some Phone");
+		bt_ingest_progress("Skipping: non-input device");
+		check(bt_pair_state() == BTP_LOOKING, "a non-input device is skipped, not adopted");
+		check(bt_pair_done() == 1, "and does not count as paired");
+		check(!bt_pair_name()[0], "nor is it left named on screen");
+
+		bt_ingest_progress("NAME: Wireless Controller");
+		bt_ingest_progress("Pairing...");
+		bt_ingest_progress("Failed!");
+		check(bt_pair_state() == BTP_FAIL, "a failure is a failure");
+		check(bt_pair_done() == 1, "and is not counted as a success");
+
+		bt_pair_ack();
+		check(bt_pair_state() == BTP_IDLE, "acknowledging a result clears it");
+
+		// The other two ways btctl reports a pairing that did not happen.
+		bt_progress_reset();
+		bt_ingest_progress("Timed out.");
+		check(bt_pair_state() == BTP_FAIL, "a timeout is reported as a failure too");
+
+		bt_progress_reset();
+		bt_ingest_progress("org.bluez.Error.AuthenticationFailed");
+		bt_ingest_progress("Pair error!");
+		check(bt_pair_state() == BTP_FAIL, "and so is a D-Bus pair error");
+
+		bt_progress_reset();
+		bt_ingest_progress("Type 0000 and <Enter>");
+		check(bt_pair_state() == BTP_PIN, "a controller asking for a code says so");
+
+		bt_pair_ack();
+
+		/*
+		  And the screen itself, driven the way a person gets to it: Options, then the
+		  Controllers row - which used to hand them to MiSTer's own joystick setup.
+		*/
+		bt_ingest_paired(PAIRED_TEXT);
+
+		harness_set_menu_core(1);
+		chome_leave();
+		press(KEY_MENU, 20);
+		frame(8);
+
+		press(KEY_UP, 10);                    // the menu bar
+		press(KEY_RIGHT, 10);                 // Options
+		press(KEY_ENTER, 14);
+		press(KEY_UP, 8);                     // wrap to the last row
+		press(KEY_UP, 8);                     // Wi-Fi
+		press(KEY_UP, 8);                     // Controllers
+		press(KEY_ENTER, 14);
+		frame(8);
+		dump("pads-1-list");
+
+		check(bt_count() == 3, "the Controllers row opens on the paired list");
+
+		// X arms a forget and says so rather than doing it.
+		press(KEY_TAB, 10);
+		frame(4);
+		dump("pads-2-forget-armed");
+		check(bt_count() == 3, "one press of X does not forget anything");
+
+		// Moving off the row disarms it, so a stray press cannot be completed later.
+		press(KEY_DOWN, 10);
+		press(KEY_TAB, 10);
+		press(KEY_UP, 10);
+		frame(4);
+		check(bt_count() == 3, "and arming does not follow the selection");
+
+		/*
+		  The pairing panel. Its running form needs a radio and a pad, but the state
+		  machine drives the same layout, so a finished result draws it without either -
+		  which is enough to see that the icon, the headline and the footer land where
+		  they should.
+		*/
+		bt_progress_reset();
+		bt_ingest_progress("NAME: 8BitDo SN30 Pro");
+		bt_ingest_progress("Pairing...");
+		bt_ingest_progress("Failed!");
+		frame(6);
+		dump("pads-3-pairing-failed");
+		check(bt_pair_state() == BTP_FAIL, "a finished pairing keeps the panel up until acknowledged");
+
+		bt_pair_ack();
+		frame(6);
+
+		press(KEY_ESC, 10);
+		press(KEY_ESC, 10);
+		press(KEY_ESC, 10);
+		frame(6);
 	}
 
 	/*

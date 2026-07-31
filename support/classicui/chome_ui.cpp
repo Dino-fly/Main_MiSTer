@@ -18,6 +18,7 @@
 #include "chome_icons16.h"
 #include "chome_osk.h"
 #include "chome_net.h"
+#include "chome_bt.h"
 
 #include "../../cfg.h"
 #include "../../user_io.h"
@@ -55,6 +56,10 @@ static unsigned long ig_close_until = 0;     // "press A again to close the game
 static int wifi_row = 0;                     // which network is picked
 static int wifi_top = 0;                     // first one on screen
 static char wifi_pick[NET_SSID];             // ...and its name, kept across the keyboard
+
+static int pads_row = 0;                     // which paired controller is picked
+static int pads_forget_arm = -1;             // ...and whether forgetting it is armed
+static unsigned long pads_forget_until = 0;
 static int wifi_pick_secure = 0;
 static unsigned wifi_seen = 0;               // signature of the network state on screen
 
@@ -100,6 +105,7 @@ static void ref_shot_path(const char *sysid, const char *rompath, char *out, int
 #define SCR_BROWSE  8
 #define SCR_LAUNCH  9
 #define SCR_WIFI    10
+#define SCR_PADS    11
 
 // Rows on the Options panel. Several places step over them.
 #define OPT_ROWS    7
@@ -1029,6 +1035,28 @@ static int build_legend(legend_pair *out, int max)
 		if (n < max) { out[n++] = lp(LBL_X, "Look Again", "Scan"); }
 		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
 		break;
+	case SCR_PADS:
+		/*
+		  While pairing is running there is exactly one thing to offer: stopping. The
+		  pad in the player's hands is busy being paired, and a second action here
+		  would be a second thing to explain.
+		*/
+		if (bt_pairing())
+		{
+			if (n < max) { out[n++] = lp(LBL_B, "Done", "Done"); }
+			break;
+		}
+		if (bt_pair_state() == BTP_FAIL)
+		{
+			if (n < max) { out[n++] = lp(LBL_A, "Try Again", "Retry"); }
+			if (n < max) { out[n++] = lp(LBL_B, "Done", "Done"); }
+			break;
+		}
+		// Same condition as the panel: a list on screen means there is an adapter.
+		if ((bt_present() || bt_count()) && n < max) { out[n++] = lp(LBL_A, "Add a Controller", "Add"); }
+		if (bt_count() && n < max) { out[n++] = lp(LBL_X, "Forget", "Forget"); }
+		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
+		break;
 	case SCR_DISPLAY:
 		if (n < max) { out[n++] = { CH_LEFT CH_RIGHT, 0, "Choose", "Sel" }; }
 		if (n < max) { out[n++] = lp(LBL_A, "Apply", "OK"); }
@@ -1480,12 +1508,22 @@ static void draw_options_panel(const chome_profile *p)
 		else snprintf(v2, sizeof(v2), "Set Up >");
 	}
 
+	/*
+	  And what the Controllers row says: how many are paired, the same way the Wi-Fi row
+	  names the network. "USB Only" rather than "No Adapter" because a wired pad is a
+	  complete answer to the question this row is about - nothing is missing.
+	*/
+	char v3[32];
+	if (!bt_present()) snprintf(v3, sizeof(v3), "USB Only");
+	else if (!bt_count()) snprintf(v3, sizeof(v3), "Set Up >");
+	else snprintf(v3, sizeof(v3), "%d Wireless", bt_count());
+
 	const char *vals[] = {
 		cfg.classicui_artfetch ? "Fetch Missing" : "Local Only",
 		v1,
 		"Write Files",
 		cfg.classicui_profile == 0 ? "Auto" : theme_get()->name,
-		"Classic Menu >",
+		v3,
 		v2,
 		ig_active ? (closing ? "PRESS A AGAIN" : "Back To Menu") : "Classic Menu >"
 	};
@@ -1650,6 +1688,162 @@ static void draw_wifi(const chome_profile *p)
 	{
 		char more[48];
 		snprintf(more, sizeof(more), "%d of %d", wifi_row + 1, n);
+		gfx_text_c(more, b.x + b.w / 2, b.y + b.h - foot, s, COL_PANELLO, 0);
+	}
+}
+
+/*
+  The Controllers screen: what is paired, and a way to pair something new.
+
+  Deliberately not a list of things found nearby. `btctl pair` adopts any input device
+  that appears while it is running, so the flow a player already knows from a console -
+  hold the buttons on the pad until it pairs - works without anyone reading a list of
+  names, and there is no moment where they have to recognise their own controller among
+  the neighbours'. Which means this screen has one action, not two.
+
+  Wired pads are not listed. They need no setting up, they are not in bluetoothctl's
+  paired list, and a screen that showed them would invite the question of what to do
+  about them - which is nothing.
+*/
+#define PADS_VIS 5
+
+static void draw_pads(const chome_profile *p)
+{
+	int s = p->ts_ui;
+	int rowh = 14 * s;
+
+	int w = p->w - 2 * p->inset;
+	if (w > 44 * 8 * s) w = 44 * 8 * s;
+
+	int h = (10 * s + 6) + 16 * s + PADS_VIS * rowh + 6 * s;
+	if (h > p->h - 2 * p->safe_y) h = p->h - 2 * p->safe_y;
+
+	panel_box b = draw_panel_ex(p, w, h, "Controllers");
+	int foot = 12 * s;
+
+	// Nothing to show *and* no adapter is the only case worth explaining hardware for;
+	// a list on screen is proof enough that there is one. Same as the Wi-Fi panel.
+	if (!bt_present() && !bt_count())
+	{
+		char lines[4][64];
+		int nl = wrap_text("This MiSTer has no Bluetooth adapter. A controller plugged into "
+			"the USB port works without any setting up.",
+			(b.w - 16 * s) / (8 * s), lines, 3);
+		for (int i = 0; i < nl; i++)
+			gfx_text_c(lines[i], b.x + b.w / 2, b.y + b.h / 2 - 10 * s + i * 10 * s, s, COL_INK, 0);
+		return;
+	}
+
+	// Pairing mode owns the screen while it is on: the list underneath is what this is
+	// about to change, and the player is holding a button down waiting to be told.
+	if (bt_pairing() || bt_pair_state() == BTP_FAIL)
+	{
+		int st = bt_pair_state();
+
+		const char *head = "Hold the buttons on your controller";
+		uint32_t col = COL_INK;
+
+		if (st == BTP_WORKING || st == BTP_PIN) { head = bt_pair_name()[0] ? bt_pair_name() : "Found a controller"; }
+		else if (st == BTP_OK) { head = "Paired"; col = COL_GREEN; }
+		else if (st == BTP_FAIL) { head = "Not paired"; col = COL_RED; }
+
+		int cy = b.y + 16 * s;
+		picto("bluetooth", b.x + b.w / 2 - 8 * s, cy, 16 * s,
+			(st == BTP_OK) ? COL_GREEN : (st == BTP_FAIL) ? COL_RED : COL_PANELHI);
+
+		cy += 22 * s;
+		gfx_text_c(gfx_clip(head, s, b.w - 12 * s), b.x + b.w / 2, cy, s, col, 0);
+
+		/*
+		  Which buttons, per pad, is a table this does not have - so it says the thing
+		  that is true of all of them rather than guessing at one. The detail line
+		  underneath is btctl's own progress, in words a player can act on.
+		*/
+		const char *body = bt_pair_detail();
+		if (!body[0]) body = "Most controllers pair by holding two buttons until the light flashes quickly.";
+
+		cy += 18 * s;
+		char lines[4][64];
+		int nl = wrap_text(body, (b.w - 16 * s) / (8 * s), lines, 3);
+		for (int i = 0; i < nl; i++)
+			gfx_text_c(lines[i], b.x + b.w / 2, cy + i * 10 * s, s, COL_PANELHI, 0);
+
+		/*
+		  No footer repeating the buttons: the legend along the bottom of the screen is up
+		  the whole time this panel is, and three wrapped lines plus a count plus a footer
+		  do not fit in a panel sized for a list. The Wi-Fi panel can afford one because
+		  its message is shorter.
+		*/
+		if (bt_pair_done() > 0)
+		{
+			char done[64];
+			snprintf(done, sizeof(done), (bt_pair_done() == 1) ? "%d controller ready" : "%d controllers ready",
+				bt_pair_done());
+			gfx_text_c(done, b.x + b.w / 2, b.y + b.h - 9 * s, s, COL_GREEN, 0);
+		}
+		return;
+	}
+
+	int n = bt_count();
+
+	char hdr[96];
+	if (!n) snprintf(hdr, sizeof(hdr), "No wireless controllers yet");
+	else snprintf(hdr, sizeof(hdr), (n == 1) ? "%d wireless controller" : "%d wireless controllers", n);
+	gfx_text(gfx_clip(hdr, s, b.w - 12 * s), b.x + 6 * s, b.y + 3 * s, s, COL_INK, 0);
+	gfx_fill(b.x + 6 * s, b.y + 13 * s, b.w - 12 * s, s, COL_PANELLO);
+
+	int y0 = b.y + 18 * s;
+
+	if (!n)
+	{
+		char lines[4][64];
+		int nl = wrap_text("Press A to add one. A controller plugged into the USB port needs "
+			"no setting up and is not listed here.",
+			(b.w - 16 * s) / (8 * s), lines, 3);
+		for (int i = 0; i < nl; i++)
+			gfx_text_c(lines[i], b.x + b.w / 2, b.y + b.h / 2 - 4 * s + i * 10 * s, s, COL_PANELHI, 0);
+		return;
+	}
+
+	int vis = (b.y + b.h - 4 * s - y0) / rowh;
+	if (vis > PADS_VIS) vis = PADS_VIS;
+	if (vis < 1) vis = 1;
+
+	if (pads_row >= n) pads_row = n - 1;
+	if (pads_row < 0) pads_row = 0;
+
+	int armed = (pads_forget_arm >= 0 && !CheckTimer(pads_forget_until));
+
+	for (int i = 0; i < vis && i < n; i++)
+	{
+		const bt_dev *d = bt_at(i);
+		if (!d) break;
+
+		int on = (i == pads_row);
+		int y = y0 + i * rowh;
+
+		if (on) gfx_fill(b.x + 4 * s, y - 3 * s, b.w - 8 * s, rowh - 2 * s,
+			(armed && pads_forget_arm == i) ? COL_RED : COL_BLUE);
+
+		uint32_t ink = on ? COL_WHITE : COL_INK;
+
+		// A dot for connected, as on the Wi-Fi list, rather than a word competing with
+		// the name for the same row.
+		if (d->connected) gfx_fill(b.x + 8 * s, y + 2 * s, 4 * s, 4 * s, ink);
+
+		const char *name = d->name[0] ? d->name : "Controller";
+		gfx_text(gfx_clip(name, s, b.w - 24 * s - 18 * s), b.x + 16 * s, y, s, ink, 0);
+
+		picto("bluetooth", b.x + b.w - 8 * s - 8 * s, y, 8 * s, on ? COL_WHITE : COL_PANELHI);
+	}
+
+	if (armed)
+		gfx_text_c(using_pad ? "PRESS X AGAIN TO FORGET IT" : "PRESS TAB AGAIN TO FORGET IT",
+			b.x + b.w / 2, b.y + b.h - foot, s, COL_RED, 0);
+	else if (n > vis)
+	{
+		char more[48];
+		snprintf(more, sizeof(more), "%d of %d", pads_row + 1, n);
 		gfx_text_c(more, b.x + b.w / 2, b.y + b.h - foot, s, COL_PANELLO, 0);
 	}
 }
@@ -1953,7 +2147,7 @@ static void render()
 	draw_position(p);
 
 	int overlay = (screen == SCR_SORT || screen == SCR_DISPLAY || screen == SCR_OPTIONS ||
-		screen == SCR_ABOUT || screen == SCR_WIFI);
+		screen == SCR_ABOUT || screen == SCR_WIFI || screen == SCR_PADS);
 	if (overlay) gfx_scrim(0, 0, p->w, p->h, COL_BGDARK, 2);
 
 	draw_suspend(p);
@@ -1967,6 +2161,7 @@ static void render()
 	case SCR_OPTIONS: draw_options_panel(p); break;
 	case SCR_ABOUT:   draw_about_panel(p); break;
 	case SCR_WIFI:    draw_wifi(p); break;
+	case SCR_PADS:    draw_pads(p); break;
 	case SCR_LAUNCH:  draw_launch(p); break;
 	default: break;
 	}
@@ -2005,6 +2200,7 @@ static void go_screen(int s)
 	screen = s;
 	// Reading the link costs a process, so only do it while something is showing it.
 	net_watch(s == SCR_OPTIONS || s == SCR_WIFI);
+	bt_watch(s == SCR_OPTIONS || s == SCR_PADS);
 	mark_dirty();
 }
 
@@ -2126,6 +2322,22 @@ static void move_v(int dir)
 		mark_dirty();
 		break;
 
+	case SCR_PADS:
+	{
+		// Nothing to move through while pairing, or when the list is empty.
+		if (bt_pairing() || bt_pair_state() == BTP_FAIL) { nudge(); return; }
+
+		int n = bt_count();
+		if (!n) { nudge(); return; }
+
+		int next = pads_row + dir;
+		if (next < 0 || next >= n) { nudge(); return; }
+
+		pads_row = next;
+		pads_forget_arm = -1;          // moving off a row disarms it
+		break;
+	}
+
 	case SCR_WIFI:
 	{
 		if (net_join_state() != JOIN_IDLE) { nudge(); return; }
@@ -2234,8 +2446,15 @@ static void accept()
 		case 2: vp_install(); mark_dirty(); break;
 		case 3: nudge(); break;                       // Layout changes with left/right
 		case 4:
-			if (ig_active) { ig_close(1); open_joystick_setup(); }
-			else { chome_leave(); open_joystick_setup(); }
+			/*
+			  This used to hand the player to MiSTer's own joystick setup, which meant
+			  leaving the front-end for a classic-OSD panel that names buttons by
+			  number. Pairing a controller is the one setup job a console cannot ask a
+			  keyboard to do, so it belongs here.
+			*/
+			pads_row = 0;
+			pads_forget_arm = -1;
+			go_screen(SCR_PADS);
 			break;
 
 		case 5:
@@ -2260,6 +2479,17 @@ static void accept()
 			}
 			break;
 		}
+		break;
+
+	case SCR_PADS:
+		if (!bt_present()) { nudge(); break; }
+
+		// While it is running, A is not the way out - B is, and the legend says so.
+		if (bt_pairing()) { nudge(); break; }
+
+		bt_pair_start();
+		if (!bt_pairing()) nudge();
+		mark_dirty();
 		break;
 
 	case SCR_WIFI:
@@ -2356,6 +2586,17 @@ static void back()
 	case SCR_OPTIONS:
 	case SCR_ABOUT:
 		go_screen(SCR_MENUBAR);
+		break;
+
+	case SCR_PADS:
+		/*
+		  B out of pairing mode stops it and stays here, so the controller that has just
+		  paired is visible in the list rather than the player being returned to Options
+		  wondering whether it worked. A second B leaves.
+		*/
+		if (bt_pairing()) { bt_pair_stop(); mark_dirty(); break; }
+		if (bt_pair_state() == BTP_FAIL) { bt_pair_ack(); mark_dirty(); break; }
+		go_screen(SCR_OPTIONS);
 		break;
 
 	case SCR_WIFI:
@@ -3676,6 +3917,32 @@ int chome_handle(uint32_t key)
 				break;
 			}
 
+			/*
+			  Forgetting a controller means it stops working until it is paired again, so
+			  it takes two presses like deleting a suspend point does.
+			*/
+			if (screen == SCR_PADS)
+			{
+				if (bt_pairing() || bt_pair_state() == BTP_FAIL || !bt_count()) { nudge(); break; }
+
+				const bt_dev *d = bt_at(pads_row);
+				if (!d) { nudge(); break; }
+
+				if (pads_forget_arm == pads_row && !CheckTimer(pads_forget_until))
+				{
+					pads_forget_arm = -1;
+					bt_forget(d->mac);
+					if (pads_row > 0) pads_row--;
+				}
+				else
+				{
+					pads_forget_arm = pads_row;
+					pads_forget_until = GetTimer(2500);
+				}
+				mark_dirty();
+				break;
+			}
+
 			// Deleting a suspend point removes a real savestate file, so it takes
 			// two presses: the first arms it and says so on screen.
 			if (screen != SCR_SUSPEND) { nudge(); break; }
@@ -3739,6 +4006,7 @@ int chome_handle(uint32_t key)
 	  because the child is still out there either way.
 	*/
 	net_poll();
+	bt_poll();
 
 	/*
 	  Nothing about the network arrives on a keypress: the scan finishes, an address
@@ -3758,6 +4026,31 @@ int chome_handle(uint32_t key)
 		if (sig != wifi_seen)
 		{
 			wifi_seen = sig;
+			mark_dirty();
+		}
+	}
+
+	/*
+	  The controller screen needs the same treatment, and needs it more: a pairing is a
+	  running commentary from a child, so none of it arrives on a keypress at all. The
+	  message text is folded in rather than its length, because the interesting changes
+	  are between messages of similar length ("Pairing" to "Connecting"), and without it
+	  a pairing in progress sits behind whatever the screen said when it started.
+	*/
+	{
+		static unsigned bt_seen = 0;
+
+		unsigned sig = (unsigned)bt_count()
+			| ((unsigned)bt_pairing() << 8)
+			| ((unsigned)bt_pair_state() << 9)
+			| ((unsigned)bt_pair_done() << 12);
+
+		for (const char *q = bt_pair_detail(); *q; q++) sig = sig * 31u + (unsigned char)*q;
+		for (const char *q = bt_pair_name(); *q; q++) sig = sig * 31u + (unsigned char)*q;
+
+		if (sig != bt_seen)
+		{
+			bt_seen = sig;
 			mark_dirty();
 		}
 	}

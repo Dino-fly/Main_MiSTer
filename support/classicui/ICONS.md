@@ -20,8 +20,8 @@ the licence be named, and that changes be stated.
 - **RetroArch monochrome icons** — the `xmb/monochrome/png` set from
   [libretro/retroarch-assets](https://github.com/libretro/retroarch-assets),
   © the libretro/RetroArch contributors, CC BY 4.0.
-  All the system icons but one, plus the favourite star (its `add-favorite`) and the
-  folder a card falls back to.
+  All the system icons but one, plus the favourite star (its `add-favorite`), the
+  Bluetooth rune on the controller-pairing screen, and the folder a card falls back to.
 - **Twemoji** — [jdecked/twemoji](https://github.com/jdecked/twemoji),
   © 2020 Twitter, Inc and other contributors; graphics CC BY 4.0.
   The joystick used for Arcade. Twemoji's own README names an "About" section as
