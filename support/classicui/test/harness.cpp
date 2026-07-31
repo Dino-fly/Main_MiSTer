@@ -1165,32 +1165,52 @@ static void assert_ingame()
 	press(KEY_DOWN, 20);
 	dump("ingame-2-suspend");
 
+	/*
+	  This core pauses only on an OSD-gated option, which is unusable here, so the menu
+	  held it still with a state instead - and that means the moment the player wants is
+	  already being written. Saving is therefore a copy of it, not a second save: the core
+	  is not asked for anything, and the menu stays up.
+	*/
+	unlink(ROOT "/savestates/Gameboy/Tetris (World)_4.ss");
 	harness_reset_status();
 	press(KEY_BACKSPACE, 10);                 // Y saves into the slot
 	printf("  after save: pulsed=%s\n", harness_last_pulse_opt());
-	// Specifically the save bit, not just any bit: the pause option also moves here.
-	check(harness_pulses_on("S") == 1, "saving pulses the core's save bit");
-	check(!chome_ingame_active(), "saving resumes so the core can run those frames");
-	check(harness_pause_val() == 0, "and the pause is released");
+	check(harness_pulses_on("S") == 0, "saving does not ask the core to save again");
+	check(chome_ingame_active(), "and the menu stays up, because no frames are needed");
+
+	// What the player sees while it waits: the slot says so, and Save greys out.
+	frame(6);
+	dump("ingame-6-save-waiting");
+
+	// The core gets round to writing the held state, and the copy follows.
+	{
+		FILE *f = fopen(ROOT "/savestates/Gameboy/Tetris (World)_4.ss", "wb");
+		if (f) { fprintf(f, "HELD"); fclose(f); }
+	}
+	frame(30);
+
+	char held[16] = {};
+	{
+		FILE *f = fopen(ROOT "/savestates/Gameboy/Tetris (World)_1.ss", "rb");
+		if (f) { if (fread(held, 1, sizeof(held) - 1, f)) {} fclose(f); }
+	}
+	check(!strcmp(held, "HELD"), "and the held state lands in the slot the player chose");
+
+	press(KEY_ESC, 12);
+	press(KEY_MENU, 12);
+	check(!chome_ingame_active(), "back in the game");
 
 	/*
-	  The core this models pauses only on its "Pause when OSD is open" option, behind
-	  a P3 page prefix. Both of those defeated the scanner before, so assert the
-	  option itself moved rather than just that something was pulsed.
-	*/
-	/*
 	  "Savestates to SDCard" set to Off means the core keeps the state in memory and
-	  writes no file - indistinguishable, from the outside, from saving being broken.
-	  Saving has to turn it on for the write and hand it back afterwards.
+	  writes no file - indistinguishable, from the outside, from saving being broken. The
+	  freeze at menu open has to turn it on for the write and hand it back afterwards.
 	*/
 	harness_set_opt("V", 1);                  // 1 = Off in this core's value order
 	harness_reset_status();
 	press(KEY_MENU, 20);
-	press(KEY_DOWN, 20);
-	press(KEY_BACKSPACE, 12);
-	// >= 1 because opening the menu also freezes the game with a save of its own.
-	check(harness_pulses_on("S") >= 1, "saving still reaches the save bit with SD off");
+	check(harness_pulses_on("S") >= 1, "the freeze still reaches the save bit with SD off");
 	check(harness_opt_val("V") == 1, "and puts the SD-card option back where it was");
+	press(KEY_ESC, 16);
 
 	harness_set_opt("V", 0);
 	harness_reset_status();
@@ -1404,8 +1424,28 @@ static void assert_ingame()
 		struct stat ss;
 		check(stat(ROOT "/savestates/Gameboy/Tetris (World)_2.ss", &ss) != 0,
 			"a state older than this menu is not copied as if it were now");
-		check(harness_status_pulses() >= 1, "it falls back to asking the core instead");
-		check(!chome_ingame_active(), "which resumes, because that save needs frames");
+
+		/*
+		  Instead the request is registered and waits for the state the core is about to
+		  write. Asking the core to save a second time is what this replaced: that path
+		  resumes, stores a slightly later moment, and is the one that re-entered
+		  HandleUI() through process_ss().
+		*/
+		check(harness_status_pulses() == 0, "and the core is not asked to save again");
+		check(chome_ingame_active(), "the menu stays up with the request registered");
+		check(!stat(ROOT "/savestates/Gameboy/Tetris (World)_2.png", &ss),
+			"and the picture is taken when the button is pressed, not when the state lands");
+
+		// Now the core writes it, as it does a moment after the menu opens.
+		FILE *fresh = fopen(ROOT "/savestates/Gameboy/Tetris (World)_4.ss", "wb");
+		if (fresh) { fprintf(fresh, "HELD-AGAIN"); fclose(fresh); }
+		frame(30);
+
+		char got2[32] = {};
+		FILE *h = fopen(ROOT "/savestates/Gameboy/Tetris (World)_2.ss", "rb");
+		if (h) { if (fread(got2, 1, sizeof(got2) - 1, h)) {} fclose(h); }
+		check(!strcmp(got2, "HELD-AGAIN"), "and the copy happens the moment the state lands");
+		check(harness_status_pulses() == 0, "still without asking the core for anything");
 
 		unlink(ROOT "/savestates/Gameboy/Tetris (World)_4.ss");
 	}

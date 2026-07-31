@@ -51,6 +51,14 @@ static int ig_bg_w = 0, ig_bg_h = 0;
 static int ig_paused = 0;                    // the core is actually halted
 static int ig_frozen = 0;                    // held still by a state instead of a pause
 static unsigned long ig_freeze_at = 0;       // wall clock when it was, so a stale state is not mistaken for it
+
+/*
+  A save the player has asked for that is waiting on the core to write the held state.
+  Declared here because the legend and the slot strip are drawn further up the file and
+  both have to say so - see chome_pend_poll() for what it is waiting on.
+*/
+static int pend_slot = -1;
+static int pend_failed = -1;                 // slot whose save gave up, for one message
 static int ig_selected_running = 0;          // shelf parked on the running game
 static unsigned long ig_close_until = 0;     // "press A again to close the game"
 static int wifi_row = 0;                     // which network is picked
@@ -1012,7 +1020,9 @@ static prompt btn_prompt(int which)
 	return out;
 }
 
-struct legend_pair { const char *key; const char *pic; const char *label; const char *shortl; };
+// dim marks a prompt that is on screen but not available - a save already registered and
+// waiting, say. Shown rather than removed, so the row does not reshuffle under the player.
+struct legend_pair { const char *key; const char *pic; const char *label; const char *shortl; int dim; };
 
 // A prompt for one of the face buttons, whatever it is called on this controller.
 static legend_pair lp(int which, const char *label, const char *shortl)
@@ -1034,7 +1044,13 @@ static int build_legend(legend_pair *out, int max)
 		int here = ig_is_running(cur_game());
 		if (here && ss_can_load() && n < max) { out[n++] = lp(LBL_A, "Load", "Load"); }
 		else if (n < max) { out[n++] = lp(LBL_A, "Resume", "Play"); }
-		if (here && ss_can_save() && n < max) { out[n++] = lp(LBL_Y, "Save", "Save"); }
+		if (here && ss_can_save() && n < max)
+		{
+			int busy = (pend_slot >= 0);
+			out[n] = lp(LBL_Y, busy ? "Saving" : "Save", busy ? "Saving" : "Save");
+			out[n].dim = busy;
+			n++;
+		}
 		else if (n < max) { out[n++] = { CH_DOWN, 0, "Lock", "Lock" }; }
 		if (n < max) { out[n++] = lp(LBL_X, "Delete", "Del"); }
 		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
@@ -1178,13 +1194,16 @@ static void draw_legend(const chome_profile *p)
 		int kw = pairs[i].pic ? 8 * s : gfx_text_w(pairs[i].key, s);
 		gfx_fill(x - 2 * s, p->y_legend - 2 * s, kw + 4 * s, 8 * s + 4 * s, COL_PANEL);
 
-		if (pairs[i].pic) picto(pairs[i].pic, x, p->y_legend, 8 * s, COL_INK);
-		else gfx_text(pairs[i].key, x, p->y_legend, s, COL_INK, 0);
+		uint32_t kcol = pairs[i].dim ? COL_DIM : COL_INK;
+		uint32_t lcol = pairs[i].dim ? COL_DIM : COL_PANELHI;
+
+		if (pairs[i].pic) picto(pairs[i].pic, x, p->y_legend, 8 * s, kcol);
+		else gfx_text(pairs[i].key, x, p->y_legend, s, kcol, 0);
 
 		char up[64];
 		snprintf(up, sizeof(up), "%s", labels[i]);
 		for (char *q = up; *q; q++) *q = (char)toupper((unsigned char)*q);
-		gfx_text(up, x + kw + 5 * s, p->y_legend, s, COL_PANELHI, 0);
+		gfx_text(up, x + kw + 5 * s, p->y_legend, s, lcol, 0);
 
 		x += widths[i] + gap;
 	}
@@ -1355,11 +1374,30 @@ static void draw_suspend(const chome_profile *p)
 
 		gfx_fill(x + 3, ty + 3, tw, th, COL_SHADOW);
 
-		if (!st)
+		if (i == pend_slot)
+		{
+			/*
+			  Waiting on the core. The picture is already there - it was taken when the
+			  button was pressed - so it shows, with the word over it.
+			*/
+			const uint32_t *shot = 0;
+			char tp[1024];
+			if (it && lib_slot_thumb(it, i, tp, sizeof(tp))) shot = art_thumb(tp, tw, th);
+
+			if (shot) gfx_blit(shot, tw, th, x, ty, tw, th);
+			else gfx_fill(x, ty, tw, th, COL_BG);
+
+			gfx_scrim(x, ty, tw, th, COL_SHADOW, 2);
+			gfx_frame_rect(x, ty, tw, th, COL_YELLOW, 2);
+			gfx_text_c("SAVING", x + tw / 2, ty + th / 2 - 4 * p->ts_tiny, p->ts_tiny, COL_YELLOW, 0);
+		}
+		else if (!st)
 		{
 			gfx_fill(x, ty, tw, th, COL_BG);
 			gfx_frame_rect(x, ty, tw, th, COL_DIM, 1);
-			gfx_text_c("EMPTY", x + tw / 2, ty + th / 2 - 4 * p->ts_tiny, p->ts_tiny, COL_DIM, 0);
+			gfx_text_c(i == pend_failed ? "NOT SAVED" : "EMPTY",
+				x + tw / 2, ty + th / 2 - 4 * p->ts_tiny, p->ts_tiny,
+				i == pend_failed ? COL_RED : COL_DIM, 0);
 		}
 		else
 		{
@@ -3207,41 +3245,153 @@ static int copy_file(const char *src, const char *dst)
 	return ok;
 }
 
-static int ss_copy_from_reserved(chome_item *it, int to_slot)
+// Where a slot's picture goes, given where its state goes.
+static int slot_png_path(const chome_item *it, int slot, char *out, int len)
 {
-	if (!it || !ig_frozen || !ig_freeze_at) return 0;   // never froze: nothing to copy
+	if (!lib_slot_target(it, slot, out, len)) return 0;
+
+	char *dot = strrchr(out, '.');
+	if (!dot) return 0;
+
+	strcpy(dot, ".png");
+	return 1;
+}
+
+/*
+  The picture, written the moment the player asks rather than when the state lands.
+
+  ig_shot is the still this menu is drawn over, so it is the exact frame they were
+  looking at - and taking it now means the picture does not depend on how long the core
+  takes to write its state, or on the menu still being open by then.
+*/
+static int ss_write_thumb(const chome_item *it, int slot)
+{
+	if (!it || !ig_shot || ig_shot_w < 1 || ig_shot_h < 1) return 0;
+
+	char png[1024];
+	if (!slot_png_path(it, slot, png, sizeof(png))) return 0;
+
+	int ow = 256;
+	int oh = (int)(((long long)ow * ig_shot_h) / ig_shot_w);
+	if (oh < 1) oh = 1;
+
+	return write_screenshot(png, (const uint8_t *)ig_shot, ig_shot_w, ig_shot_h, ow, oh) ? 1 : 0;
+}
+
+/*
+  Copies the held state into the chosen slot, if it is on disk yet.
+
+  Returns 0 when there is nothing to copy *yet* as well as when there never will be, so
+  the caller decides which it is - see the pending save below. The freshness test is what
+  makes that distinction safe: the same game suspended in an earlier session leaves a file
+  in that slot, and copying it would quietly store the wrong moment.
+*/
+static int ss_copy_state(const chome_item *it, int to_slot)
+{
+	if (!it || !ig_freeze_at) return 0;
 	if (to_slot == susp_slot()) return 0;
 
 	char src[1024], dst[1024];
 	if (!lib_slot_target(it, susp_slot(), src, sizeof(src))) return 0;
 	if (!lib_slot_target(it, to_slot, dst, sizeof(dst))) return 0;
 
-	/*
-	  It has to be *this* menu's state. The same game suspended in an earlier session
-	  leaves a file in that slot, and copying it would quietly store the wrong moment.
-	  process_ss() writes it up to a second after the pulse, so allow for that.
-	*/
 	struct stat st;
 	if (stat(src, &st)) return 0;
 	if ((unsigned long)st.st_mtime + 2 < ig_freeze_at) return 0;
 
-	if (!copy_file(src, dst)) { printf("ClassicUI: could not copy the held state into slot %d\n", to_slot + 1); return 0; }
-
-	char png[1024];
-	snprintf(png, sizeof(png), "%s", dst);
-	char *dot = strrchr(png, '.');
-	if (dot && ig_shot && ig_shot_w > 0 && ig_shot_h > 0)
+	if (!copy_file(src, dst))
 	{
-		strcpy(dot, ".png");
-		int ow = 256;
-		int oh = (int)(((long long)ow * ig_shot_h) / ig_shot_w);
-		if (oh < 1) oh = 1;
-		write_screenshot(png, (const uint8_t *)ig_shot, ig_shot_w, ig_shot_h, ow, oh);
+		printf("ClassicUI: could not copy the held state into slot %d\n", to_slot + 1);
+		return 0;
 	}
 
-	lib_refresh_slots(it);
 	printf("ClassicUI: saved the held moment into slot %d\n", to_slot + 1);
 	return 1;
+}
+
+/*
+  A save the player has asked for and that is waiting on the core.
+
+  The held state is written by the core and noticed by process_ss() on its next poll, so
+  for about a second after the menu opens there is nothing to copy. Asking the player to
+  wait for that, or hiding the option until it lands, both make them deal with an
+  implementation detail. Instead the request is registered: the picture is taken at once,
+  the slot says so, and the copy happens the moment the file appears.
+
+  Falling back to a second save pulse is deliberately *not* done. That path has to resume
+  the core to be serviced, so it closes the menu and stores a slightly later moment - and
+  it is the path that re-entered HandleUI() through process_ss() and left the framebuffer
+  in a state the next menu press drew garbage from.
+*/
+void chome_pend_poll();
+
+static unsigned long pend_until = 0;
+
+/*
+  Held as paths rather than as a slot of the selected game, so the request describes
+  itself. The player may press B a moment after asking - a save is a file copy and has no
+  reason to be lost because the menu closed - and by then the selection, or the running
+  game, may be something else entirely.
+*/
+static char pend_src[1024];
+static char pend_dst[1024];
+static char pend_png[1024];
+static unsigned long pend_after = 0;     // the state must be newer than this
+
+static void pend_start(const chome_item *it, int slot)
+{
+	if (!lib_slot_target(it, susp_slot(), pend_src, sizeof(pend_src))) return;
+	if (!lib_slot_target(it, slot, pend_dst, sizeof(pend_dst))) return;
+	if (!slot_png_path(it, slot, pend_png, sizeof(pend_png))) pend_png[0] = 0;
+
+	pend_slot = slot;
+	pend_after = ig_freeze_at;
+	pend_until = GetTimer(8000);
+	pend_failed = -1;
+
+	// The picture is of now, so it is taken now, whatever the state does.
+	ss_write_thumb(it, slot);
+	printf("ClassicUI: slot %d is waiting for the held state\n", slot + 1);
+}
+
+// Runs every frame in every core, so a registered save finishes whether the menu is
+// still open or not.
+void chome_pend_poll()
+{
+	if (pend_slot < 0) return;
+
+	struct stat st;
+	if (!stat(pend_src, &st) && (unsigned long)st.st_mtime + 2 >= pend_after)
+	{
+		if (copy_file(pend_src, pend_dst))
+		{
+			printf("ClassicUI: saved the held moment into slot %d\n", pend_slot + 1);
+
+			chome_item *sel = cur_game();
+			if (sel) lib_refresh_slots(sel);
+			if (ig_have_item) lib_refresh_slots(&ig_item);
+
+			pend_slot = -1;
+			pend_until = 0;
+			mark_dirty();
+			return;
+		}
+
+		printf("ClassicUI: could not copy the held state into slot %d\n", pend_slot + 1);
+		pend_until = 0;                  // fall through to the give-up below
+	}
+
+	if (!pend_until || CheckTimer(pend_until))
+	{
+		// No state arrived, so the picture would belong to a slot that is not there.
+		if (pend_png[0]) unlink(pend_png);
+		pend_failed = pend_slot;
+		printf("ClassicUI: gave up waiting for the held state for slot %d\n", pend_slot + 1);
+
+		pend_slot = -1;
+		pend_until = 0;
+		mark_dirty();
+	}
 }
 
 /*
@@ -3706,6 +3856,10 @@ void chome_core_poll()
 
 	if (!cfg.classicui || is_menu()) return;
 
+	// Before the early returns below: a registered save has to finish even in a core
+	// whose reference frame was captured long ago.
+	chome_pend_poll();
+
 	resume_poll();
 
 	if (done) return;
@@ -4034,16 +4188,28 @@ int chome_handle(uint32_t key)
 			if (screen == SCR_SUSPEND && ig_is_running(it) && ss_can_save())
 			{
 				if (slot_state(it, slot_idx) == 2) { nudge(); break; }   // locked
+				if (pend_slot >= 0) { nudge(); break; }                  // one at a time
 
-				// The moment on screen is already in the reserved slot, so copy it and
-				// stay in the menu.
-				if (ss_copy_from_reserved(it, slot_idx)) { mark_dirty(); break; }
+				// Already on disk: the whole thing is a file copy and a picture.
+				if (ss_copy_state(it, slot_idx))
+				{
+					ss_write_thumb(it, slot_idx);
+					lib_refresh_slots(it);
+					mark_dirty();
+					break;
+				}
 
 				/*
-				  Nothing held to copy - a core that pauses properly never froze. Ask
-				  the core to save, which means resuming: process_ss() only notices on
-				  its next poll and the core has to run those frames. The slot and its
-				  thumbnail are there next time the menu opens.
+				  Not yet - the core writes the held state on its own schedule. Register
+				  the request and let the slot say so, rather than making the player wait
+				  for something they have no way of knowing about.
+				*/
+				if (ig_frozen) { pend_start(it, slot_idx); mark_dirty(); break; }
+
+				/*
+				  And there are cores that never froze, because they pause properly. For
+				  those no held state is ever coming, so the core has to be asked - which
+				  means resuming, since a save pulse is only serviced by a running core.
 				*/
 				if (ss_do_save(slot_idx)) { ig_frozen = 0; ig_close(1); }
 				else nudge();
@@ -4176,6 +4342,7 @@ int chome_handle(uint32_t key)
 	*/
 	net_poll();
 	bt_poll();
+	chome_pend_poll();
 
 	/*
 	  Nothing about the network arrives on a keypress: the scan finishes, an address
