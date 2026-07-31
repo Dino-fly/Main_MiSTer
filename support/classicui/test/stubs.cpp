@@ -308,15 +308,40 @@ static const char *fake_confstr[] =
 	"R0,Reset",
 	0
 };
+/*
+  The same core with its pause option removed - a NES or SNES, in other words. Those
+  are the cores the front-end has to hold still with a state instead of pausing
+  (freeze_engage), and so the only ones a copy-save can happen on. The table above
+  pauses, so nothing using it reaches that path.
+*/
+static const char *fake_confstr_nopause[] =
+{
+	"GAMEBOY",
+	"FS1,GBCGB BIN,Load ROM",
+	"OEF,System,Auto,Gameboy,Gameboy Color,MegaDuck",
+	"-",
+	"OV,Savestates to SDCard,On,Off",
+	"o01,Savestate Slot,1,2,3,4",
+	"h3RS,Save state (Alt-F1)",
+	"h3RT,Restore state (F1)",
+	"-",
+	"R0,Reset",
+	0
+};
+
 static int confstr_on = 1;
 void harness_set_confstr(int v) { confstr_on = v; }
 
 char *user_io_get_confstr(int index)
 {
 	if (!confstr_on) return 0;
-	int n = (int)(sizeof(fake_confstr) / sizeof(fake_confstr[0])) - 1;
+
+	const char **tbl = (confstr_on == 2) ? fake_confstr_nopause : fake_confstr;
+	int n = 0;
+	while (tbl[n]) n++;
+
 	if (index < 0 || index >= n) return 0;
-	return (char *)fake_confstr[index];
+	return (char *)tbl[index];
 }
 
 int substrcpy(char *d, const char *s, char idx)
@@ -483,13 +508,24 @@ int screenshot_thumbnail(const char *fullpath, int max_w)
 	return 0;
 }
 
-// This one is handed the pixels, so the harness only has to record the call.
+/*
+  This one is handed the pixels rather than reading the scaler, so the harness can do
+  the real thing minus the encoding: it writes a file, so a test can tell "a thumbnail
+  was written" from "was not", and records the geometry it was asked for.
+*/
 bool write_screenshot(const char *filename, const uint8_t *argb,
 	int width, int height, int output_width, int output_height)
 {
 	printf("  [stub] write_screenshot(\"%s\", %p, %dx%d -> %dx%d)\n",
 		filename ? filename : "", (const void *)argb, width, height, output_width, output_height);
-	return argb && width > 0 && height > 0;
+
+	if (!filename || !argb || width < 1 || height < 1) return false;
+
+	FILE *f = fopen(filename, "wb");
+	if (!f) return false;
+	fprintf(f, "STUB-PNG %dx%d -> %dx%d\n", width, height, output_width, output_height);
+	fclose(f);
+	return true;
 }
 
 static char last_launch[1024] = {};
