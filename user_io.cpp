@@ -1988,8 +1988,13 @@ int process_ss(const char *rom_name, int enable)
 				if (size) size = (size + 2) * 4;
 				if (size > 0 && size <= ss_size)
 				{
+					// Classic Home reserves one slot to hold a game still while its
+					// menu is up. The player did not ask for that save and cannot see
+					// the slot, so it gets no message and no picture - just the file.
+					int hidden = (i == chome_hidden_slot());
+
 					MenuHide();
-					Info("Saving the state", 500);
+					if (!hidden) Info("Saving the state", 500);
 
 					*ss_sufx = i + '1';
 					if (FileOpenEx(&f, ss_name, O_CREAT | O_TRUNC | O_RDWR | O_SYNC))
@@ -2002,7 +2007,7 @@ int process_ss(const char *rom_name, int enable)
 						// point strip. The core wrote the state itself and we only
 						// notice on the next poll, so this frame is up to a second
 						// later than the save - close enough for a thumbnail.
-						if (cfg.classicui)
+						if (cfg.classicui && !hidden)
 						{
 							char png[1024];
 							snprintf(png, sizeof(png), "%s", ss_name);
@@ -2620,6 +2625,10 @@ static void check_status_change()
 
 static void show_core_info(int info_n)
 {
+	// The core announces its own savestates through this list ("Save to state 4").
+	// Classic Home's suspend slot is not the player's, so it says nothing about it.
+	if (chome_ss_quiet()) return;
+
 	int i = 2;
 	user_io_read_confstr();
 
