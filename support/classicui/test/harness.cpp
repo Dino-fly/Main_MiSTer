@@ -1897,6 +1897,37 @@ int main()
 	}
 
 	/*
+	  Power. Restart and Shut Down, two presses each, on the menu bar next to Options -
+	  a MiSTer is a computer with a card in it and pulling the plug mid-write is how a
+	  library gets corrupted, so there has to be a way to ask.
+	*/
+	printf("\n== power ==\n");
+	{
+		harness_set_menu_core(1);
+		chome_leave();
+		press(KEY_MENU, 20);
+		frame(8);
+
+		press(KEY_UP, 10);                    // the menu bar
+		press(KEY_RIGHT, 10);                 // Options
+		press(KEY_RIGHT, 10);                 // Power
+		press(KEY_ENTER, 14);
+		frame(8);
+		dump("power-1-menu");
+
+		// Arming says so and does not act; a second press would.
+		press(KEY_ENTER, 12);
+		frame(6);
+		dump("power-2-armed");
+		check(harness_present_count() > 0, "the power screen draws without acting");
+
+		press(KEY_ESC, 10);                   // first B cancels the arming
+		press(KEY_ESC, 10);
+		press(KEY_ESC, 10);
+		frame(6);
+	}
+
+	/*
 	  Controllers. No adapter in the container either, so what is checked is the part
 	  that reads what the tools say: bluetoothctl's paired list and btctl's running
 	  commentary on a pairing. The pairing itself needs a radio and a pad in pairing
