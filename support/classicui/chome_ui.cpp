@@ -1046,9 +1046,11 @@ static int build_legend(legend_pair *out, int max)
 			if (n < max) { out[n++] = lp(LBL_B, "Done", "Done"); }
 			break;
 		}
-		if (bt_pair_state() == BTP_FAIL)
+		if (bt_pair_state() != BTP_IDLE)
 		{
-			if (n < max) { out[n++] = lp(LBL_A, "Try Again", "Retry"); }
+			// A finished result. "Add Another" rather than "Try Again" once one worked.
+			int ok = (bt_pair_state() == BTP_OK);
+			if (n < max) { out[n++] = lp(LBL_A, ok ? "Add Another" : "Try Again", ok ? "Add" : "Retry"); }
 			if (n < max) { out[n++] = lp(LBL_B, "Done", "Done"); }
 			break;
 		}
@@ -1742,7 +1744,11 @@ static void draw_pads(const chome_profile *p)
 
 	// Pairing mode owns the screen while it is on: the list underneath is what this is
 	// about to change, and the player is holding a button down waiting to be told.
-	if (bt_pairing() || bt_pair_state() == BTP_FAIL)
+	/*
+	  Any state but idle owns the screen, not just a running one: pairing mode now ends
+	  itself the moment a controller works, and the result has to stay up to be read.
+	*/
+	if (bt_pairing() || bt_pair_state() != BTP_IDLE)
 	{
 		int st = bt_pair_state();
 
@@ -2348,7 +2354,7 @@ static void move_v(int dir)
 	case SCR_PADS:
 	{
 		// Nothing to move through while pairing, or when the list is empty.
-		if (bt_pairing() || bt_pair_state() == BTP_FAIL) { nudge(); return; }
+		if (bt_pairing() || bt_pair_state() != BTP_IDLE) { nudge(); return; }
 
 		int n = bt_count();
 		if (!n) { nudge(); return; }
@@ -2626,7 +2632,7 @@ static void back()
 		  wondering whether it worked. A second B leaves.
 		*/
 		if (bt_pairing()) { bt_pair_stop(); mark_dirty(); break; }
-		if (bt_pair_state() == BTP_FAIL) { bt_pair_ack(); mark_dirty(); break; }
+		if (bt_pair_state() != BTP_IDLE) { bt_pair_ack(); mark_dirty(); break; }
 		go_screen(SCR_OPTIONS);
 		break;
 
@@ -3964,7 +3970,7 @@ int chome_handle(uint32_t key)
 
 			if (screen == SCR_PADS)
 			{
-				if (bt_pairing() || bt_pair_state() == BTP_FAIL) { nudge(); break; }
+				if (bt_pairing() || bt_pair_state() != BTP_IDLE) { nudge(); break; }
 
 				const bt_dev *d = bt_at(pads_row);
 				if (!d || d->connected) { nudge(); break; }
