@@ -115,6 +115,7 @@ static const ini_var_t ini_vars[] =
 	{ "VRR_VESA_FRAMERATE", (void *)(&(cfg.vrr_vesa_framerate)), UINT8, 0, 255 },
 	{ "VIDEO_OFF", (void*)(&(cfg.video_off)), INT16, 0, 3600 },
 	{ "VIDEO_OFF_LOGO", (void*)(&(cfg.video_off_logo)), UINT8, 0, 1 },
+	{ "MENU_PLAYER", (void*)(&(cfg.menu_player)), UINT8, 0, 6 },
 	{ "PLAYER_1_CONTROLLER", (void*)(&(cfg.player_controller[0])), STRINGARR, sizeof(cfg.player_controller[0]) / sizeof(cfg.player_controller[0][0]), sizeof(cfg.player_controller[0][0]) },
 	{ "PLAYER_2_CONTROLLER", (void*)(&(cfg.player_controller[1])), STRINGARR, sizeof(cfg.player_controller[0]) / sizeof(cfg.player_controller[0][0]), sizeof(cfg.player_controller[0][0]) },
 	{ "PLAYER_3_CONTROLLER", (void*)(&(cfg.player_controller[2])), STRINGARR, sizeof(cfg.player_controller[0]) / sizeof(cfg.player_controller[0][0]), sizeof(cfg.player_controller[0][0]) },
