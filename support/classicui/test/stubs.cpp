@@ -234,6 +234,9 @@ char *neogeo_get_altname(char *path, char *name, char *altname)
 		if (!strcasecmp(altname, known[i].set)) return (char*)known[i].title;
 	}
 	return 0;
+}
+
+/*
   Models video_menu_fb_analog(). The part the UI has to cope with is that taking
   the scaler resizes the framebuffer to the TV mode, so the canvas shrinks under it
   mid-session; where the scaler output already reaches the screen it is a no-op.
