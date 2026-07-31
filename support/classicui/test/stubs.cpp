@@ -453,6 +453,15 @@ int screenshot_thumbnail(const char *fullpath, int max_w)
 	return 0;
 }
 
+// This one is handed the pixels, so the harness only has to record the call.
+bool write_screenshot(const char *filename, const uint8_t *argb,
+	int width, int height, int output_width, int output_height)
+{
+	printf("  [stub] write_screenshot(\"%s\", %p, %dx%d -> %dx%d)\n",
+		filename ? filename : "", (const void *)argb, width, height, output_width, output_height);
+	return argb && width > 0 && height > 0;
+}
+
 static char last_launch[1024] = {};
 
 const char *harness_last_launch() { return last_launch; }
