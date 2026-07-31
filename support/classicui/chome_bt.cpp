@@ -31,6 +31,37 @@ int bt_present()
 	return (!stat(ADAPTER, &st) && S_ISDIR(st.st_mode)) ? 1 : 0;
 }
 
+/* ----------------------------------------------------------------- naming --- */
+
+/*
+  Only pads whose own name is unhelpful. Sony's is the reason this exists; Microsoft's
+  varies by revision and none of them say which; Nintendo and 8BitDo already name
+  themselves properly and are deliberately absent.
+*/
+static const struct { uint16_t vid, pid; const char *label; } pad_names[] =
+{
+	{ 0x054C, 0x0268, "PlayStation 3 Controller" },
+	{ 0x054C, 0x05C4, "PlayStation 4 Controller" },
+	{ 0x054C, 0x09CC, "PlayStation 4 Controller" },
+	{ 0x054C, 0x0BA0, "PlayStation 4 Controller" },     // the USB dongle
+	{ 0x054C, 0x0CE6, "PlayStation 5 Controller" },
+	{ 0x054C, 0x0DF2, "PlayStation 5 Controller" },
+	{ 0x045E, 0x028E, "Xbox 360 Controller" },
+	{ 0x045E, 0x02E0, "Xbox Controller" },
+	{ 0x045E, 0x02FD, "Xbox Controller" },
+	{ 0x045E, 0x0B13, "Xbox Controller" },
+	{ 0x045E, 0x0B20, "Xbox Controller" },
+};
+
+const char *bt_pad_label(uint16_t vid, uint16_t pid, const char *reported)
+{
+	for (size_t i = 0; i < sizeof(pad_names) / sizeof(pad_names[0]); i++)
+	{
+		if (pad_names[i].vid == vid && pad_names[i].pid == pid) return pad_names[i].label;
+	}
+	return (reported && *reported) ? reported : "Controller";
+}
+
 /* ------------------------------------------------------------------ exec --- */
 
 static int run_to(const char *const argv[], const char *path)

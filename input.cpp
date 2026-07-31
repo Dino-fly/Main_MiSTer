@@ -2020,6 +2020,57 @@ static int kbd_toggle = 0;
 // 1 when the last key handed to the menu came from a gamepad, 0 from a keyboard.
 static int menu_key_from_pad = 1;
 static int menu_key_dev = -1;
+int input_pad_list(pad_info *out, int max)
+{
+	if (!out || max < 1) return 0;
+
+	int n = 0;
+	for (int i = 0; i < NUMDEV && n < max; i++)
+	{
+		// A player number is what makes a device a controller here: it is given on the
+		// pad input path, so anything holding one has behaved like a pad.
+		if (!input[i].num || input[i].mouse) continue;
+
+		/*
+		  The parts of a pad that are not the pad, and our own uinput device, which
+		  nobody plugged in.
+		*/
+		if (strcasestr(input[i].name, "Touchpad")) continue;
+		if (strcasestr(input[i].name, "Motion Sensor")) continue;
+		if (strcasestr(input[i].name, UINPUT_NAME)) continue;
+
+		int seen = 0;
+		for (int j = 0; j < n; j++) if (out[j].player == input[i].num) { seen = 1; break; }
+		if (seen) continue;
+
+		pad_info *p = &out[n++];
+		memset(p, 0, sizeof(*p));
+		p->player = input[i].num;
+		p->vid = input[i].vid;
+		p->pid = input[i].pid;
+		snprintf(p->name, sizeof(p->name), "%s", input[i].name);
+
+		if (strcasestr(input[i].name, "SNAC")) p->kind = PAD_SNAC;
+		else if (strstr(input[i].sysfs, "bluetooth"))
+		{
+			p->kind = PAD_BT;
+			snprintf(p->mac, sizeof(p->mac), "%s", input[i].mac);
+		}
+		else p->kind = PAD_WIRED;
+	}
+
+	// By player, because that is the order the screen is read in.
+	for (int i = 1; i < n; i++)
+	{
+		pad_info t = out[i];
+		int j = i - 1;
+		while (j >= 0 && out[j].player > t.player) { out[j + 1] = out[j]; j--; }
+		out[j + 1] = t;
+	}
+
+	return n;
+}
+
 int input_menu_key_from_pad() { return menu_key_from_pad; }
 
 /*
