@@ -76,4 +76,29 @@ void theme_update(int w, int h, int force);
 #define COL_FOCUS    0xfff2f2f5u
 #define COL_BLACK    0xff000000u
 
+/*
+  Face-button colours, for the legend's button prompts.
+
+  A PlayStation player reads the shapes by colour before they read the shape, and a Super
+  Famicom pad's four buttons are colour-coded the same way - so a prompt that says which
+  button in the pad's own colours is quicker to act on than a grey glyph. Keyed to the
+  shape (or the letter), not to what the button is mapped to: a circle is red on every
+  PlayStation pad ever made whatever the firmware has bound it to.
+
+  Brighter than the panel palette above because these sit on a dark chip and have to hold
+  up at 8 pixels on a CRT.
+*/
+#define COL_BTN_TRIANGLE 0xff5cc46bu
+#define COL_BTN_CIRCLE   0xffe8544fu
+#define COL_BTN_SQUARE   0xfff2a3bdu
+#define COL_BTN_CROSS    0xff7b7bf0u
+
+#define COL_BTN_A        0xffe8544fu
+#define COL_BTN_B        0xffe8b22bu
+#define COL_BTN_X        0xff5a8fe0u
+#define COL_BTN_Y        0xff5cc46bu
+
+// The chip they sit on: near-black, as on the pad itself.
+#define COL_BTN_CHIP     0xff16171cu
+
 #endif
