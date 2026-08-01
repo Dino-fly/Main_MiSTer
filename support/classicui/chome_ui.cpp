@@ -1052,23 +1052,6 @@ static prompt btn_prompt(int which)
 	return out;
 }
 
-/*
-  The letters, in a Super Famicom pad's colours. Only for a pad: a keyboard's ENTER and ESC
-  are keys, not buttons, and colouring them would be inventing a convention rather than
-  reusing one the player already knows.
-*/
-static uint32_t btn_letter_col(int which)
-{
-	switch (which)
-	{
-	case LBL_A: return COL_BTN_A;
-	case LBL_B: return COL_BTN_B;
-	case LBL_X: return COL_BTN_X;
-	case LBL_Y: return COL_BTN_Y;
-	default:    return 0;                          // Select has no colour on any pad
-	}
-}
-
 // dim marks a prompt that is on screen but not available - a save already registered and
 // waiting, say. Shown rather than removed, so the row does not reshuffle under the player.
 // col is the pad's own colour for this button, 0 for a keyboard key - which has none.
