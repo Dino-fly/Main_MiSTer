@@ -137,6 +137,52 @@ Define-buttons screens if you prefer something else.
 - **Only rebuilt cores gain the feature.** A stock core will simply ignore the
   pad; the firmware detects this and does nothing rather than misbehaving.
 
+## Troubleshooting
+
+### `snac_pad: unknown option` at boot or when a core loads
+
+**Your MiSTer firmware is the stock one, not this build.** That message comes
+from the firmware's `MiSTer.ini` parser when it meets a setting it doesn't
+know, so it proves the replacement binary is not the one running. Cores have
+nothing to do with it.
+
+Check what's actually installed, over SSH:
+
+```
+strings /media/fat/MiSTer | grep -c "MiSTer SNAC Pad"
+```
+
+`1` or more means the right firmware is in place; `0` means it is stock.
+
+Three things cause this:
+
+1. **The firmware step was skipped.** Copying cores alone is not enough — the
+   pad is published to Linux by the firmware. Copy `MiSTer` from the archive to
+   `/media/fat/MiSTer` and reboot.
+2. **An updater replaced it afterwards.** `update_all.sh`, the MiSTer Downloader
+   and similar tools manage `/media/fat/MiSTer` and will overwrite this build
+   with the official release. If you run one, reinstall the firmware afterwards.
+   This is the most common cause when it worked and then stopped.
+3. **It landed in the wrong place.** It must be the file `/media/fat/MiSTer`
+   exactly — not inside a folder, and not renamed by your browser or unzip tool.
+   Make sure it is executable: `chmod +x /media/fat/MiSTer`.
+
+Until the firmware is replaced, the setting does nothing and the pad will not
+appear. The error itself is harmless — the firmware skips the unknown line and
+carries on.
+
+### The pad does nothing in a core, but the menu works (or vice versa)
+
+The menu is driven by the firmware, individual cores by their own `.rbf`. If the
+menu responds but a game does not, that core has not been rebuilt with this
+change — use one from the archive. If neither responds, see the section above.
+
+### An arcade game says the core is missing
+
+Arcade cores must keep the plain name the `.mra` refers to — `ActFancer.rbf`,
+not `Arcade-ActFancer.rbf`. Archives released before 31 July 2026 had this
+wrong; re-download if yours contains `Arcade-` prefixed files.
+
 ## Reverting
 
 Restore `MiSTer.backup` over `/media/fat/MiSTer`, put your original
