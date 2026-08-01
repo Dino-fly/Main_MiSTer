@@ -1116,6 +1116,57 @@ static void assert_video()
   well would have had savestate numbers written into its hardware selector, switching carts
   under the player when they picked slot 2.
 */
+/*
+  A held menu button repeats, and the repeat used to close the menu the press had just
+  opened - so on the device it took two presses to get in, and the first one flashed
+  something for a split second. menu.cpp's menu_key_get() repeats a held key while
+  chome_active(), and opening this menu takes long enough that the repeat lands right
+  after it. Two presses with no release between them are one physical press.
+*/
+static void assert_menu_repeat()
+{
+	printf("\n== a held menu button is one press ==\n");
+
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "gb\nTetris (World).gb\n"); fclose(f); }
+	}
+
+	harness_set_menu_core(0);
+	harness_set_fb_supported(1);
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+
+	chome_handle(0);
+	if (chome_ingame_active()) press(KEY_MENU, 14);
+	frame(6);
+	check(!chome_ingame_active(), "starting from the game");
+
+	chome_handle(KEY_MENU);                   // pressed, and still held
+	frame(12);
+	check(chome_ingame_active(), "one press opens the menu");
+
+	harness_advance(600);                     // past menu.cpp's repeat delay
+	check(chome_handle(KEY_MENU) == 1, "a repeat of the held press is consumed");
+	check(chome_ingame_active(), "and does not close what that press just opened");
+
+	chome_handle(KEY_MENU | UPSTROKE);        // finally released
+	frame(8);
+	check(chome_ingame_active(), "the menu is still up after the release");
+
+	press(KEY_MENU, 16);                      // and a fresh press closes it
+	frame(8);
+	check(!chome_ingame_active(), "a second real press closes it");
+
+	for (int i = 1; i <= 4; i++)
+	{
+		char p2[512];
+		snprintf(p2, sizeof(p2), "%s/savestates/Gameboy/Tetris (World)_%d.ss", ROOT, i);
+		unlink(p2);
+	}
+}
+
 static void assert_slot_match()
 {
 	printf("\n== which option is the savestate slot ==\n");
@@ -1757,6 +1808,7 @@ int main()
 	assert_launch();
 	assert_ingame();
 	assert_slot_match();
+	assert_menu_repeat();
 	assert_input_labels();
 	assert_overscan();
 
