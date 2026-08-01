@@ -1182,29 +1182,40 @@ static legend_pair lp(int which, const char *label, const char *shortl)
 	return out;
 }
 
-static void btn_hint_c(int cx, int y, int s, uint32_t col, const char *pre, int which, const char *post)
+/*
+  A sentence with a button drawn into it - "Press [O] again to restart".
+
+  Three quarters of a character either side of the glyph. Two pixels was enough when the
+  button was a letter on a chip; a drawn one is a dark rounded button, and on the light
+  panel of a dialog it is a solid block - set close to the words it read as "Press[A]again".
+*/
+#define BTN_HINT_PAD 6
+
+static int btn_hint_w(int s, const char *pre, int which, const char *post)
 {
 	legend_pair b = lp(which, "", "");
+	return (pre && *pre ? gfx_text_w(pre, s) : 0)
+		+ (post && *post ? gfx_text_w(post, s) : 0)
+		+ btn_chip_w(b.key, b.pic, s) + BTN_HINT_PAD * 2 * s;
+}
 
-	int wpre = pre && *pre ? gfx_text_w(pre, s) : 0;
-	int wpost = post && *post ? gfx_text_w(post, s) : 0;
-	int wchip = btn_chip_w(b.key, b.pic, s);
+static void btn_hint_l(int x, int y, int s, uint32_t col, const char *pre, int which, const char *post)
+{
+	legend_pair b = lp(which, "", "");
+	int pad = BTN_HINT_PAD * s;
 
-	// Three quarters of a character either side. Two pixels was enough when the button was
-	// a letter on a chip; a drawn one is a dark rounded button, and on the light panel of a
-	// dialog it is a solid block - set close to the words it read as "Press[A]again".
-	int pad = 6 * s;
-
-	int total = wpre + wchip + wpost + pad * 2;
-	int x = cx - total / 2;
-
-	if (wpre) gfx_text(pre, x, y, s, col, 0);
-	x += wpre + pad;
+	if (pre && *pre) { gfx_text(pre, x, y, s, col, 0); x += gfx_text_w(pre, s); }
+	x += pad;
 
 	btn_chip(b.key, b.pic, b.col, 0, x + 2 * s, y, s);
-	x += wchip + pad;
+	x += btn_chip_w(b.key, b.pic, s) + pad;
 
-	if (wpost) gfx_text(post, x, y, s, col, 0);
+	if (post && *post) gfx_text(post, x, y, s, col, 0);
+}
+
+static void btn_hint_c(int cx, int y, int s, uint32_t col, const char *pre, int which, const char *post)
+{
+	btn_hint_l(cx - btn_hint_w(s, pre, which, post) / 2, y, s, col, pre, which, post);
 }
 
 static int build_legend(legend_pair *out, int max)
@@ -1539,11 +1550,15 @@ static void draw_suspend(const chome_profile *p)
 	int armed = (del_arm_slot >= 0 && !CheckTimer(del_arm_until));
 
 	char hdr[128];
-	if (armed) snprintf(hdr, sizeof(hdr), "DELETE SLOT %d? PRESS X AGAIN", del_arm_slot + 1);
+	if (armed) snprintf(hdr, sizeof(hdr), "DELETE SLOT %d? PRESS", del_arm_slot + 1);
 	else snprintf(hdr, sizeof(hdr), "%s - SUSPEND POINTS", it ? it->title : "");
 	for (char *q = hdr; *q; q++) *q = (char)toupper((unsigned char)*q);
-	gfx_text(gfx_clip(hdr, s, p->w - p->inset * 2), p->inset, y + 6 * s, s,
-		armed ? COL_RED : COL_PANELHI, 0);
+
+	// Armed, the header draws the button rather than naming it - the legend under it is
+	// showing that same button, and one of them saying "X" while the other drew a square
+	// was the two of them describing different controllers.
+	if (armed) btn_hint_l(p->inset, y + 6 * s, s, COL_RED, hdr, LBL_X, "AGAIN");
+	else gfx_text(gfx_clip(hdr, s, p->w - p->inset * 2), p->inset, y + 6 * s, s, COL_PANELHI, 0);
 
 	/*
 	  A core with no savestate entries at all - most arcade hardware - can never fill
@@ -1800,7 +1815,7 @@ static void draw_options_panel(const chome_profile *p)
 		cfg.classicui_profile == 0 ? "Auto" : theme_get()->name,
 		v3,
 		v2,
-		ig_active ? (closing ? "PRESS A AGAIN" : "Back To Menu") : "Classic Menu >"
+		ig_active ? (closing ? "Again To Confirm" : "Back To Menu") : "Classic Menu >"
 	};
 
 	draw_rows(&b, rows, vals, OPT_ROWS, opt_row);
@@ -2149,8 +2164,15 @@ static void draw_pads(const chome_profile *p)
 
 	if (!n)
 	{
+		/*
+		  No letter in the sentence: the legend below already offers the button, and only
+		  when there is an adapter to use it on. Promising a wireless controller to
+		  somebody with no adapter plugged in is worse than saying nothing.
+		*/
 		char lines[4][64];
-		int nl = wrap_text("Plug a controller into the USB port, or press A to add a wireless one.",
+		int nl = wrap_text(bt_present()
+			? "Plug a controller into the USB port, or add a wireless one."
+			: "Plug a controller into the USB port. No wireless adapter is plugged in.",
 			(b.w - 16 * s) / (8 * s), lines, 3);
 		for (int i = 0; i < nl; i++)
 			gfx_text_c(lines[i], b.x + b.w / 2, b.y + b.h / 2 - 4 * s + i * 10 * s, s, COL_PANELHI, 0);
