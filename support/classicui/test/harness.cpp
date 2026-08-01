@@ -1243,10 +1243,21 @@ static void assert_ingame()
 	press(KEY_MENU, 20);
 	press(KEY_DOWN, 18);
 	harness_reset_status();
+	harness_reset_analog_claims();
 	press(KEY_ENTER, 12);                     // A loads the slot
 	printf("  after load: pulsed=%s\n", harness_last_pulse_opt());
 	check(harness_pulses_on("T") == 1, "loading pulses the core's restore bit");
 	check(!chome_ingame_active(), "loading drops straight back into the game");
+
+	/*
+	  ...and lets go of the screen on the way out. chome_handle() used to run its whole
+	  frame after the key that closed the menu - re-claiming the scaler, re-measuring the
+	  canvas, painting - so the game came back with the front-end still sitting on the
+	  analog output and no menu drawn to explain it. On the device the pad stopped
+	  reaching the game. Closing with the menu button hid it, because that path returns
+	  the moment it closes; every other way out did not.
+	*/
+	check(harness_analog_claims() == 0, "and lets go of the analog output rather than re-taking it");
 
 	// Browsing works: the menu bar and its panels are all here.
 	press(KEY_MENU, 20);
@@ -1260,9 +1271,11 @@ static void assert_ingame()
 	// A on the running game resumes rather than reloading it.
 	check(chome_ingame_active(), "still in the menu");
 	harness_clear_launch();
+	harness_reset_analog_claims();
 	press(KEY_ENTER, 12);
 	check(!chome_ingame_active(), "A on the running game resumes it");
 	check(harness_last_launch()[0] == 0, "and does not relaunch the core");
+	check(harness_analog_claims() == 0, "and that way out lets go of the screen too");
 	check(!harness_muted(), "and hands the sound back");
 
 	/*
@@ -2329,6 +2342,32 @@ int main()
 				dump("icons-sheet");
 			}
 		}
+	}
+
+	/*
+	  The menu button in the menu core. It used to hand straight off to the classic OSD,
+	  so a player browsing the shelf who pressed it landed in MiSTer's own menu - the one
+	  thing this front-end exists to keep out of their way. It opens our menu bar now.
+	*/
+	printf("\n== the menu button on the shelf ==\n");
+	{
+		harness_set_menu_core(1);
+		harness_set_fb(1280, 720);
+		gfx_shutdown();
+		theme_update(1280, 720, 1);
+		chome_leave();
+		press(KEY_MENU, 20);
+		frame(8);
+		check(chome_active(), "the front-end is up");
+
+		press(KEY_MENU, 16);
+		check(chome_active(), "the menu button does not drop out to the classic OSD");
+		dump("menubutton-1-menubar");
+
+		press(KEY_MENU, 16);
+		check(chome_active(), "and pressing it again stays with us");
+		press(KEY_ESC, 10);
+		frame(6);
 	}
 
 	/*
