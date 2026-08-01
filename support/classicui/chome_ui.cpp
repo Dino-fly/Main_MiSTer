@@ -4480,6 +4480,34 @@ int chome_handle(uint32_t key)
 	}
 
 	/*
+	  A menu-button press while the previous one's release is still owed can only be the
+	  auto-repeat of the same physical press, so it is not a second thing the player did.
+
+	  menu.cpp's menu_key_get() repeats a held key once its repeat timer expires, and one
+	  of the conditions for repeating is chome_active() - true the moment this menu opens.
+	  Opening it is not quick (a screenshot, the framebuffer, a video mode change, the
+	  freeze state), so the repeat lands immediately afterwards, sees the menu up, and
+	  closes what the press just opened. On the device that was "it takes two presses to
+	  open the menu, and the first press flashes something for a split second".
+
+	  Why it only happened after closing with B or by loading a slot: those closes never
+	  deliver their own key's release to the menu, so menu_key stays latched on a press and
+	  the repeat timer is left expired - armed to fire on the very next key. Closing with
+	  the menu button delivers an UPSTROKE, which resets that timer. The deeper fault is
+	  the swallowed release in user_io.cpp; this guard is the part that can be fixed
+	  without touching the keyboard routing every core shares.
+
+	  Only while the menu is actually up, so a lost release cannot wedge the menu button:
+	  the worst this can do is leave one menu closable by B rather than by the button, and
+	  the menu button's release is in fact always delivered - user_io.cpp sends
+	  KEY_F12|UPSTROKE for a menu event whatever happened to the press, which the trace
+	  confirms, since it arrives even after the menu has closed. Without that condition it
+	  also swallowed the press that puts a game away on a core with no framebuffer, where
+	  there is no menu to open and no release to follow.
+	*/
+	if (eat_menu_release && igmenu && igpress && ig_active) return 1;
+
+	/*
 	  Inside a game core the whole front-end runs, not a cut-down pause panel: the
 	  shelf, folders, Display, Options, everything, drawn over a still of the
 	  running game. Taking the HPS framebuffer also routes pad input here
