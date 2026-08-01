@@ -1159,6 +1159,25 @@ static void assert_menu_repeat()
 	frame(8);
 	check(!chome_ingame_active(), "a second real press closes it");
 
+	/*
+	  The other direction, which the first attempt at this broke: a repeat arriving just
+	  after the menu closed must not open it again. That is what made going back to the
+	  game need two presses as well.
+	*/
+	chome_handle(KEY_MENU);                   // pressed, and held
+	frame(10);
+	check(chome_ingame_active(), "held press opens it again");
+	chome_handle(KEY_MENU | UPSTROKE);
+	frame(6);
+
+	chome_handle(KEY_MENU);                   // press that closes, still held
+	check(!chome_ingame_active(), "one press closes it");
+	harness_advance(600);
+	check(chome_handle(KEY_MENU) == 1, "and the repeat after that close is consumed");
+	check(!chome_ingame_active(), "so it does not re-open behind the player");
+	chome_handle(KEY_MENU | UPSTROKE);
+	frame(6);
+
 	for (int i = 1; i <= 4; i++)
 	{
 		char p2[512];
@@ -1449,6 +1468,8 @@ static void assert_ingame()
 		harness_set_core_name("GAMEBOY");         // ...but a Game Boy core is running
 		harness_set_menu_core(0);
 		chome_handle(KEY_MENU);
+		harness_advance(16);
+		chome_handle(KEY_MENU | UPSTROKE);        // as the device always sends it
 		frame(8);
 		struct stat st;
 		check(stat("/tmp/classicui_current", &st) != 0,
@@ -1465,6 +1486,10 @@ static void assert_ingame()
 	harness_reset_status();
 	harness_clear_launch();
 	check(chome_handle(KEY_MENU) == 1, "a core without a framebuffer does not fall back to the OSD");
+	// Its release, the way the device always sends one for a menu event - without it the
+	// front-end is left owing a release that will never come, which no real pad does.
+	harness_advance(16);
+	chome_handle(KEY_MENU | UPSTROKE);
 	printf("  loaded rbf: %s  save pulses: %d\n", harness_last_rbf(), harness_pulses_on("S"));
 	check(strstr(harness_last_rbf(), "menu.rbf") != 0, "it returns to Classic Home instead");
 	check(harness_pulses_on("S") == 1, "and suspends the game on the way out");
