@@ -257,9 +257,20 @@ static int fb_analog = 0;
 static int fb_analog_w = 0, fb_analog_h = 0;
 int harness_fb_analog() { return fb_analog; }
 
+/*
+  Every *claim*, not the resulting state. The front-end re-asserts this every frame while
+  it owns the screen, so on a setup where the scaler is already pointed at the TV the call
+  is a no-op and the state tells you nothing - which is exactly the case where "the menu
+  closed but the front-end carried on drawing" hides.
+*/
+static int fb_analog_claims = 0;
+int harness_analog_claims() { return fb_analog_claims; }
+void harness_reset_analog_claims() { fb_analog_claims = 0; }
+
 void video_menu_fb_analog(int on)
 {
 	on = on ? 1 : 0;
+	if (on) fb_analog_claims++;
 	if (scaler_visible) return;
 	if (on == fb_analog) return;
 

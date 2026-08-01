@@ -4427,6 +4427,7 @@ int chome_handle(uint32_t key)
 	uint32_t igk = key & ~UPSTROKE;
 	int igpress = key && !(key & UPSTROKE);
 	int igmenu = (igk == KEY_MENU || igk == KEY_F12);
+	int was_ingame = ig_active;
 
 	if (eat_menu_release && igmenu && (key & UPSTROKE))
 	{
@@ -4687,10 +4688,17 @@ int chome_handle(uint32_t key)
 
 		case KEY_MENU:
 		case KEY_F12:
-			// Only in a game core: the handoff in the menu core wants the classic
-			// menu, and there the release is what asks for it.
+			/*
+			  In a game core this is the way out of the pause menu, and the release that
+			  follows has to be eaten or the classic OSD opens on it.
+
+			  In the menu core it used to hand straight off to the classic OSD, which is
+			  the one menu a player of this front-end should never meet by accident. It
+			  opens our own menu bar instead - the same thing Up does. Advanced settings
+			  are still one deliberate choice away, on Options.
+			*/
 			if (ig_active) { eat_menu_release = 1; ig_close(1); }
-			else chome_leave();
+			else go_screen(screen == SCR_MENUBAR ? SCR_HOME : SCR_MENUBAR);
 			return 1;
 
 		default:
@@ -4703,6 +4711,22 @@ int chome_handle(uint32_t key)
 		// discrete taps looks like a held key and triggers the screenful jump.
 		if (!key || k == last_key) key_run = 0;
 	}
+
+	/*
+	  That key closed the in-game menu, so stop here.
+
+	  Everything below is the frame: it re-claims the analog output, re-measures the
+	  canvas and paints. Running it after the menu has gone puts the front-end back over
+	  the running game with no menu on it - the scaler pointed at our framebuffer, the
+	  canvas re-measured to the core's mode - and the game is left unreachable behind it.
+	  On the device that showed up as "load a state, land back in the game, and the pad
+	  does nothing"; pressing the menu button appeared to fix it because that is the one
+	  close path that already returned before reaching here (case KEY_MENU below).
+
+	  Every other way out came through: loading a slot, B on the shelf, quitting a game,
+	  saving-and-closing. The close itself was always correct - what followed it was not.
+	*/
+	if (was_ingame && !ig_active) return 1;
 
 	/*
 	  Networking. Cheap unless something is in flight: it reaps the child that runs
