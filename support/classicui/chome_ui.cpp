@@ -4497,15 +4497,18 @@ int chome_handle(uint32_t key)
 	  the swallowed release in user_io.cpp; this guard is the part that can be fixed
 	  without touching the keyboard routing every core shares.
 
-	  Only while the menu is actually up, so a lost release cannot wedge the menu button:
-	  the worst this can do is leave one menu closable by B rather than by the button, and
-	  the menu button's release is in fact always delivered - user_io.cpp sends
-	  KEY_F12|UPSTROKE for a menu event whatever happened to the press, which the trace
-	  confirms, since it arrives even after the menu has closed. Without that condition it
-	  also swallowed the press that puts a game away on a core with no framebuffer, where
-	  there is no menu to open and no release to follow.
+	  Both directions. A first attempt only ignored a repeat while the menu was up, which
+	  fixed opening and broke closing: the repeat then arrived just after the close, found
+	  no menu, and opened it again - so going back to the game needed two presses too, and
+	  at REPEATRATE the open/close churn left the menu black and dead. The real repair is
+	  in menu.cpp, which no longer repeats the menu button at all; this stays as the layer
+	  that can be tested, and because one duplicate press must never toggle twice.
+
+	  Safe against a stuck flag: user_io.cpp sends KEY_F12|UPSTROKE for a menu event
+	  whatever happened to the press, which the trace confirms - it arrives even after the
+	  menu has closed.
 	*/
-	if (eat_menu_release && igmenu && igpress && ig_active) return 1;
+	if (eat_menu_release && igmenu && igpress) return 1;
 
 	/*
 	  Inside a game core the whole front-end runs, not a cut-down pause panel: the
