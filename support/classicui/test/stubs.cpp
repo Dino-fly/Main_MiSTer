@@ -373,6 +373,25 @@ static const char *fake_confstr_slotty[] =
 	0
 };
 
+/*
+  A core that pauses for real - the label says "Pause", not "Pause when OSD is open", so
+  it is honoured whatever the OSD is doing. SMS is the first one Dinofly owns. Such a core is
+  never frozen with a state (there is nothing to hold still), which is what makes saving
+  into a slot a different path: the core has to be asked, and asked while it runs.
+*/
+static const char *fake_confstr_realpause[] =
+{
+	"REALPAUSE",
+	"FS1,BIN,Load ROM",
+	"-",
+	"OH,Pause,Off,On",
+	"o01,Savestate Slot,1,2,3,4",
+	"h3RS,Save state (Alt-F1)",
+	"h3RT,Restore state (F1)",
+	"R0,Reset",
+	0
+};
+
 static int confstr_on = 1;
 void harness_set_confstr(int v) { confstr_on = v; }
 
@@ -381,7 +400,8 @@ char *user_io_get_confstr(int index)
 	if (!confstr_on) return 0;
 
 	const char **tbl = (confstr_on == 2) ? fake_confstr_nopause
-		: (confstr_on == 3) ? fake_confstr_slotty : fake_confstr;
+		: (confstr_on == 3) ? fake_confstr_slotty
+		: (confstr_on == 4) ? fake_confstr_realpause : fake_confstr;
 	int n = 0;
 	while (tbl[n]) n++;
 

@@ -1186,6 +1186,72 @@ static void assert_menu_repeat()
 	}
 }
 
+/*
+  Saving on a core that pauses for real. There is no held state on such a core - nothing had
+  to be held still - so the core is asked directly, and a save pulse is only serviced by a
+  running core. That used to resume the game and close the menu, which reads as the
+  front-end throwing the player out for pressing Save; SMS is the first core Dinofly owns that
+  pauses, which is how it surfaced. The menu stays up now, the pause comes off for the write
+  and goes back on when the state lands.
+*/
+static void assert_save_on_pausing_core()
+{
+	printf("\n== saving on a core that pauses properly ==\n");
+
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "gb\nTetris (World).gb\n"); fclose(f); }
+	}
+
+	harness_set_menu_core(0);
+	harness_set_fb_supported(1);
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+
+	chome_handle(0);
+	if (chome_ingame_active()) press(KEY_MENU, 14);
+	frame(6);
+
+	const char *slot2 = ROOT "/savestates/Gameboy/Tetris (World)_1.ss";
+	unlink(slot2);
+
+	harness_set_confstr(4);                   // a real pause, honoured off the OSD
+	harness_reset_status();
+	press(KEY_MENU, 20);
+	check(chome_ingame_active(), "the menu opens");
+	check(harness_opt_val("H") != 0, "the core is really paused, not frozen with a state");
+	check(harness_pulses_on("S") == 0, "so no held state is written");
+
+	// The strip belongs to the selected game, and the selection only lands on the running
+	// one once the shelf has been built.
+	for (int i = 0; i < 40 && lib_scanning(); i++) frame(2);
+	frame(20);
+
+	press(KEY_DOWN, 20);                      // the suspend strip
+	harness_reset_status();
+	press(KEY_BACKSPACE, 10);                 // Y saves into the selected slot
+
+	check(chome_ingame_active(), "the menu stays up instead of dropping into the game");
+	check(harness_pulses_on("S") == 1, "the core was asked for the state");
+	check(harness_opt_val("H") == 0, "and let run, since a paused core never services it");
+
+	// The core gets round to writing it.
+	{
+		FILE *f = fopen(slot2, "wb");
+		if (f) { fprintf(f, "STATE"); fclose(f); }
+	}
+	frame(20);
+
+	check(harness_opt_val("H") != 0, "once the state lands the pause goes back on");
+	check(chome_ingame_active(), "and the menu is still up");
+
+	press(KEY_MENU, 16);
+	frame(8);
+	harness_set_confstr(1);
+	unlink(slot2);
+}
+
 static void assert_slot_match()
 {
 	printf("\n== which option is the savestate slot ==\n");
@@ -1832,6 +1898,7 @@ int main()
 	walk_looks();
 	assert_launch();
 	assert_ingame();
+	assert_save_on_pausing_core();
 	assert_slot_match();
 	assert_menu_repeat();
 	assert_input_labels();
