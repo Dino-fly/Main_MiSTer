@@ -3553,6 +3553,22 @@ static void ig_mute_release()
 static int freeze_engage()
 {
 	if (ig_paused) return 0;                       // a real pause is better
+
+	/*
+	  The one operation in this front-end that can take a core down with it.
+
+	  Holding the game still means asking the core for a save state, and the SNES core dies
+	  if it is asked during the Battletoads intro - black picture, no more save states,
+	  nothing short of reloading the core recovers it. That is upstream, not ours: it
+	  reproduces from MiSTer's own Alt-F1 hotkey with this front-end out of the loop, and
+	  the same save five seconds earlier in the same intro is fine.
+
+	  Since every menu open in a core without a real pause fires one of these, the setting
+	  exists to take the whole class of risk away. Off means the game plays on behind the
+	  menu - which is already what Neo Geo, Mega Drive and N64 do here.
+	*/
+	if (!cfg.classicui_freeze) return 0;
+
 	if (!ss_can_save() || !ss_can_load()) return 0;
 
 	if (!ss_do_save(susp_slot())) return 0;
