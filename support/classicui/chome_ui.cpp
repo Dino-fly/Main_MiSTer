@@ -16,6 +16,7 @@
 #include "chome_video.h"
 #include "chome_icons32.h"
 #include "chome_icons16.h"
+#include "chome_btn12.h"
 #include "chome_osk.h"
 #include "chome_net.h"
 #include "chome_bt.h"
@@ -533,6 +534,31 @@ static void picto(const char *name, int x, int y, int box, uint32_t col)
 {
 	if (box < 4) return;
 
+	/*
+	  Two sizes of the same shape, and the small box takes the small one. Sampling a 16x16
+	  mask down to 8 pixels drops every other row and column, which a filled silhouette
+	  survives and a one-pixel outline does not - an outlined triangle reduced that way
+	  loses two of its three sides. See outline() in tools/icons32.py.
+	*/
+	if (box < ICON16)
+	{
+		for (size_t i = 0; i < sizeof(pictos8) / sizeof(pictos8[0]); i++)
+		{
+			if (strcmp(pictos8[i].name, name)) continue;
+
+			const picto8_def *d8 = &pictos8[i];
+			for (int oy = 0; oy < box; oy++)
+			{
+				const char *row = d8->rows[oy * ICON8 / box];
+				for (int ox = 0; ox < box; ox++)
+				{
+					if (row[ox * ICON8 / box] == '#') gfx_fill(x + ox, y + oy, 1, 1, col);
+				}
+			}
+			return;
+		}
+	}
+
 	const picto_def *d = 0;
 	for (size_t i = 0; i < sizeof(pictos) / sizeof(pictos[0]); i++)
 	{
@@ -579,10 +605,10 @@ static void draw_sysicon(const sysicon_def *d, int x, int y, int box, uint32_t c
 
 	for (int oy = 0; oy < box; oy++)
 	{
-		const char *row = d->rows[oy * ICON32 / box];
+		const char *row = d->rows[oy * ICON_SYS / box];
 		for (int ox = 0; ox < box; ox++)
 		{
-			if (row[ox * ICON32 / box] == '#') gfx_fill(x + ox, y + oy, 1, 1, col);
+			if (row[ox * ICON_SYS / box] == '#') gfx_fill(x + ox, y + oy, 1, 1, col);
 		}
 	}
 }
@@ -984,9 +1010,9 @@ static const char *btn(int which)
   to go back - the Japanese convention, and the one the physical layout implies,
   since A sits where the circle does. Remap the pad and this follows.
 
-  The cross comes from the OSD font's own X: every drawn cross we tried breaks into
-  dots at the eight pixels a 240p legend has for it, and an X is what people type for
-  that button anyway.
+  The four shapes are drawn, not lettered - see chome_btn12.h. Twelve pixels, which is
+  the floor Derek set: below that a filled triangle and a filled square are both blobs,
+  so the shapes are outlined, and an outline needs the room.
 */
 #define BTN_CODE_SOUTH 0x130
 #define BTN_CODE_EAST  0x131
@@ -1005,7 +1031,7 @@ static int pad_is_psx()
 		|| strcasestr(n, "Sony") ? 1 : 0;
 }
 
-struct prompt { const char *text; const char *pic; };
+struct prompt { const char *text; const char *pic; uint32_t col; };
 
 static prompt btn_prompt(int which)
 {
@@ -1017,24 +1043,185 @@ static prompt btn_prompt(int which)
 
 	switch (input_menu_key_btn(sysbtn[which]))
 	{
-	case BTN_CODE_EAST:  out.pic = "psx_circle";   break;
-	case BTN_CODE_NORTH: out.pic = "psx_triangle"; break;
-	case BTN_CODE_WEST:  out.pic = "psx_square";   break;
-	case BTN_CODE_SOUTH: out.text = "X";           break;
+	case BTN_CODE_EAST:  out.pic = "psx_circle";   out.col = COL_BTN_CIRCLE;   break;
+	case BTN_CODE_NORTH: out.pic = "psx_triangle"; out.col = COL_BTN_TRIANGLE; break;
+	case BTN_CODE_WEST:  out.pic = "psx_square";   out.col = COL_BTN_SQUARE;   break;
+	case BTN_CODE_SOUTH: out.pic = "psx_cross";     out.col = COL_BTN_CROSS;    break;
 	default: break;                                // Select keeps its own name
 	}
 	return out;
 }
 
+/*
+  The letters, in a Super Famicom pad's colours. Only for a pad: a keyboard's ENTER and ESC
+  are keys, not buttons, and colouring them would be inventing a convention rather than
+  reusing one the player already knows.
+*/
+static uint32_t btn_letter_col(int which)
+{
+	switch (which)
+	{
+	case LBL_A: return COL_BTN_A;
+	case LBL_B: return COL_BTN_B;
+	case LBL_X: return COL_BTN_X;
+	case LBL_Y: return COL_BTN_Y;
+	default:    return 0;                          // Select has no colour on any pad
+	}
+}
+
 // dim marks a prompt that is on screen but not available - a save already registered and
 // waiting, say. Shown rather than removed, so the row does not reshuffle under the player.
-struct legend_pair { const char *key; const char *pic; const char *label; const char *shortl; int dim; };
+// col is the pad's own colour for this button, 0 for a keyboard key - which has none.
+struct legend_pair { const char *key; const char *pic; const char *label; const char *shortl; int dim; uint32_t col; };
+
+static legend_pair lp(int which, const char *label, const char *shortl);
+
+
+/*
+  One button, drawn as it looks on the pad: the shape or letter in the pad's own colour on
+  a near-black chip, or the old light chip with dark lettering for a keyboard key, which
+  has no colour of its own.
+
+  Shared with the dialogs rather than living inside the legend, because a dialog that says
+  "press X" while the legend below it shows a square is telling the player two different
+  things - which is what he found.
+*/
+static const btn12_def *btn12_find(const char *name)
+{
+	if (!name) return 0;
+	for (size_t i = 0; i < sizeof(btn12s) / sizeof(btn12s[0]); i++)
+	{
+		if (!strcmp(btn12s[i].name, name)) return &btn12s[i];
+	}
+	return 0;
+}
+
+/*
+  A button, drawn rather than lettered. Twelve pixels tall at 240p and a whole multiple of
+  that above: below twelve the four PlayStation shapes stop telling each other apart, and a
+  fractional scale would put their one-pixel outlines on half pixels.
+
+  Width comes from the row, because Start and Select are pills carrying a word while the
+  face buttons are square. The glyph brings its own chip - its corners are transparent,
+  which is what makes it read as a rounded button instead of a box - so nothing is filled
+  behind it.
+*/
+static int btn12_w(const btn12_def *d)
+{
+	return (int)strlen(d->rows[0]);
+}
+
+static void btn12_draw(const btn12_def *d, int x, int y, int s, uint32_t accent, int dim)
+{
+	uint32_t chip = dim ? COL_BGDARK : COL_BTN_CHIP;
+	if (dim) accent = COL_DIM;
+
+	int w = btn12_w(d);
+	for (int gy = 0; gy < BTN12; gy++)
+	{
+		const char *row = d->rows[gy];
+		for (int gx = 0; gx < w; gx++)
+		{
+			char c = row[gx];
+			if (c == '.') continue;
+			gfx_fill(x + gx * s, y + gy * s, s, s, (c == 'c') ? accent : chip);
+		}
+	}
+}
+
+static int btn_chip_w(const char *key, const char *pic, int s)
+{
+	const btn12_def *d = btn12_find(pic);
+	if (d) return btn12_w(d) * s;
+
+	return (pic ? 8 * s : gfx_text_w(key, s)) + 4 * s;
+}
+
+/*
+  A centred line of prose with one button in it, so a dialog names the same thing the
+  legend does. lp() already resolves which shape or letter this pad uses for that button,
+  so this asks it rather than hard-coding a letter.
+*/
+static void btn_hint_c(int cx, int y, int s, uint32_t col, const char *pre, int which, const char *post);
+
+static void btn_chip(const char *key, const char *pic, uint32_t col, int dim, int x, int y, int s)
+{
+	const btn12_def *d = btn12_find(pic);
+	if (d)
+	{
+		// Centred on the row of text beside it: the glyph is taller than the 8-pixel font,
+		// so it hangs two pixels either side of the baseline rather than dragging the row.
+		btn12_draw(d, x - 2 * s, y - 2 * s, s, col ? col : COL_WHITE, dim);
+		return;
+	}
+
+	int kw = pic ? 8 * s : gfx_text_w(key, s);
+
+	gfx_fill(x - 2 * s, y - 2 * s, kw + 4 * s, 8 * s + 4 * s, col ? COL_BTN_CHIP : COL_PANEL);
+
+	uint32_t kcol = col ? col : (dim ? COL_DIM : COL_INK);
+	if (pic) picto(pic, x, y, 8 * s, kcol);
+	else gfx_text(key, x, y, s, kcol, 0);
+}
 
 // A prompt for one of the face buttons, whatever it is called on this controller.
 static legend_pair lp(int which, const char *label, const char *shortl)
 {
 	prompt pr = btn_prompt(which);
-	return { pr.text, pr.pic, label, shortl };
+
+	uint32_t col = pr.col;
+	const char *pic = pr.pic;
+
+	/*
+	  A pad with no PlayStation shape for this button gets the lettered button drawn
+	  instead - a coloured face with the letter knocked out, in that pad's own colours -
+	  and Select gets its pill. Not the font's letter on a chip: a drawn A beside a drawn
+	  circle is the only way the two read as the same kind of thing.
+	*/
+	if (!pic && using_pad)
+	{
+		switch (which)
+		{
+		case LBL_A:      pic = "btn_a";      col = COL_BTN_A; break;
+		case LBL_B:      pic = "btn_b";      col = COL_BTN_B; break;
+		case LBL_X:      pic = "btn_x";      col = COL_BTN_X; break;
+		case LBL_Y:      pic = "btn_y";      col = COL_BTN_Y; break;
+		case LBL_SELECT: pic = "btn_select"; col = 0;         break;
+		default: break;
+		}
+	}
+	else if (!pic && !using_pad)
+	{
+		col = 0;                               // a keyboard key keeps the plain chip
+	}
+
+	legend_pair out = { pr.text, pic, label, shortl, 0, col };
+	return out;
+}
+
+static void btn_hint_c(int cx, int y, int s, uint32_t col, const char *pre, int which, const char *post)
+{
+	legend_pair b = lp(which, "", "");
+
+	int wpre = pre && *pre ? gfx_text_w(pre, s) : 0;
+	int wpost = post && *post ? gfx_text_w(post, s) : 0;
+	int wchip = btn_chip_w(b.key, b.pic, s);
+
+	// Three quarters of a character either side. Two pixels was enough when the button was
+	// a letter on a chip; a drawn one is a dark rounded button, and on the light panel of a
+	// dialog it is a solid block - set close to the words it read as "Press[A]again".
+	int pad = 6 * s;
+
+	int total = wpre + wchip + wpost + pad * 2;
+	int x = cx - total / 2;
+
+	if (wpre) gfx_text(pre, x, y, s, col, 0);
+	x += wpre + pad;
+
+	btn_chip(b.key, b.pic, b.col, 0, x + 2 * s, y, s);
+	x += wchip + pad;
+
+	if (wpost) gfx_text(post, x, y, s, col, 0);
 }
 
 static int build_legend(legend_pair *out, int max)
@@ -1065,7 +1252,7 @@ static int build_legend(legend_pair *out, int max)
 			out[n].dim = busy;
 			n++;
 		}
-		else if (n < max) { out[n++] = { CH_DOWN, 0, "Lock", "Lock" }; }
+		else if (n < max) { out[n++] = { CH_DOWN, "dpad_down", "Lock", "Lock", 0, COL_WHITE }; }
 		if (n < max) { out[n++] = lp(LBL_X, "Delete", "Del"); }
 		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
 		break;
@@ -1125,12 +1312,12 @@ static int build_legend(legend_pair *out, int max)
 		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
 		break;
 	case SCR_DISPLAY:
-		if (n < max) { out[n++] = { CH_LEFT CH_RIGHT, 0, "Choose", "Sel" }; }
+		if (n < max) { out[n++] = { CH_LEFT CH_RIGHT, "dpad_lr", "Choose", "Sel", 0, COL_WHITE }; }
 		if (n < max) { out[n++] = lp(LBL_A, "Apply", "OK"); }
 		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
 		break;
 	case SCR_OPTIONS:
-		if (n < max) { out[n++] = { CH_LEFT CH_RIGHT, 0, "Change", "Chg" }; }
+		if (n < max) { out[n++] = { CH_LEFT CH_RIGHT, "dpad_lr", "Change", "Chg", 0, COL_WHITE }; }
 		if (n < max) { out[n++] = lp(LBL_A, "Select", "OK"); }
 		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
 		break;
@@ -1139,7 +1326,7 @@ static int build_legend(legend_pair *out, int max)
 		break;
 	case SCR_MENUBAR:
 		if (n < max) { out[n++] = lp(LBL_A, "Open", "Open"); }
-		if (n < max) { out[n++] = { CH_LEFT CH_RIGHT, 0, "Move", "Move" }; }
+		if (n < max) { out[n++] = { CH_LEFT CH_RIGHT, "dpad_lr", "Move", "Move", 0, COL_WHITE }; }
 		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
 		break;
 	case SCR_BROWSE:
@@ -1150,7 +1337,7 @@ static int build_legend(legend_pair *out, int max)
 		if (e && e->kind != ENT_GAME)
 		{
 			if (n < max) { out[n++] = lp(LBL_A, "Open", "Open"); }
-			if (n < max) { out[n++] = { CH_UP, 0, "Menu", "Menu" }; }
+			if (n < max) { out[n++] = { CH_UP, "dpad_up", "Menu", "Menu", 0, COL_WHITE }; }
 			if (n < max) { out[n++] = lp(LBL_SELECT, "Sort", "Sort"); }
 		}
 		else
@@ -1162,7 +1349,7 @@ static int build_legend(legend_pair *out, int max)
 			  favouriting a game is worth more there than re-sorting the shelf. The
 			  action itself was always here - it just never appeared on a CRT.
 			*/
-			if (n < max) { out[n++] = { CH_DOWN, 0, "Suspend Points", "Saves" }; }
+			if (n < max) { out[n++] = { CH_DOWN, "dpad_down", "Suspend Points", "Saves", 0, COL_WHITE }; }
 			if (n < max) { out[n++] = lp(LBL_Y, "Favourite", "Fav"); }
 			if (n < max) { out[n++] = lp(LBL_SELECT, "Sort", "Sort"); }
 		}
@@ -1188,8 +1375,9 @@ static void draw_legend(const chome_profile *p)
 	for (int i = 0; i < n; i++)
 	{
 		labels[i] = lo ? pairs[i].shortl : pairs[i].label;
-		// A pictogram occupies one glyph cell, so the row measures the same either way.
-		widths[i] = (pairs[i].pic ? 8 * s : gfx_text_w(pairs[i].key, s))
+		// Measured by whatever will draw it: a drawn button is twelve pixels and Select
+		// is a pill half again as wide, so a fixed glyph cell put the labels wrong.
+		widths[i] = btn_chip_w(pairs[i].key, pairs[i].pic, s)
 			+ 5 * s + gfx_text_w(labels[i], s);
 		total += widths[i];
 	}
@@ -1209,14 +1397,11 @@ static void draw_legend(const chome_profile *p)
 
 	for (int i = 0; i < n; i++)
 	{
-		int kw = pairs[i].pic ? 8 * s : gfx_text_w(pairs[i].key, s);
-		gfx_fill(x - 2 * s, p->y_legend - 2 * s, kw + 4 * s, 8 * s + 4 * s, COL_PANEL);
+		int kw = btn_chip_w(pairs[i].key, pairs[i].pic, s);
+		btn_chip(pairs[i].key, pairs[i].pic, pairs[i].dim ? 0 : pairs[i].col,
+			pairs[i].dim, x, p->y_legend, s);
 
-		uint32_t kcol = pairs[i].dim ? COL_DIM : COL_INK;
 		uint32_t lcol = pairs[i].dim ? COL_DIM : COL_PANELHI;
-
-		if (pairs[i].pic) picto(pairs[i].pic, x, p->y_legend, 8 * s, kcol);
-		else gfx_text(pairs[i].key, x, p->y_legend, s, kcol, 0);
 
 		char up[64];
 		snprintf(up, sizeof(up), "%s", labels[i]);
@@ -1735,8 +1920,7 @@ static void draw_wifi(const chome_profile *p)
 			gfx_text_c(lines[i], b.x + b.w / 2, cy + (i + 2) * 10 * s, s, COL_INK, 0);
 
 		if (js != JOIN_WORK)
-			gfx_text_c(using_pad ? "A - OK" : "ENTER - OK", b.x + b.w / 2,
-				b.y + b.h - foot, s, COL_PANELLO, 0);
+			btn_hint_c(b.x + b.w / 2, b.y + b.h - foot, s, COL_PANELLO, "", LBL_A, "OK");
 		return;
 	}
 
@@ -1758,8 +1942,7 @@ static void draw_wifi(const chome_profile *p)
 		gfx_text_c(net_scanning() ? "Looking for networks" : "No networks found",
 			b.x + b.w / 2, b.y + b.h / 2, s, COL_INK, 0);
 		if (!net_scanning())
-			gfx_text_c(using_pad ? "X - LOOK AGAIN" : "TAB - LOOK AGAIN", b.x + b.w / 2,
-				b.y + b.h - foot, s, COL_PANELLO, 0);
+			btn_hint_c(b.x + b.w / 2, b.y + b.h - foot, s, COL_PANELLO, "", LBL_X, "LOOK AGAIN");
 		return;
 	}
 
@@ -2048,8 +2231,8 @@ static void draw_pads(const chome_profile *p)
 	}
 
 	if (armed)
-		gfx_text_c(using_pad ? "PRESS X AGAIN TO FORGET IT" : "PRESS TAB AGAIN TO FORGET IT",
-			b.x + b.w / 2, b.y + b.h - foot, s, COL_RED, 0);
+		btn_hint_c(b.x + b.w / 2, b.y + b.h - foot, s, COL_RED,
+			"PRESS", LBL_X, "AGAIN TO FORGET IT");
 	else if (n > vis)
 	{
 		char more[48];
@@ -2095,15 +2278,21 @@ static void draw_power(const chome_profile *p)
 		gfx_text(rows[i], b.x + 10 * s, ry, s, on ? COL_WHITE : COL_INK, 0);
 	}
 
-	const char *note = armed
-		? ((pwr_arm == 0) ? "Press A again to restart" : "Press A again to shut down")
-		: "Always shut down here rather than pulling the plug.";
+	int ny = y + PWR_ROWS * rowh + 6 * s;
 
-	char lines[4][64];
-	int nl = wrap_text(note, (b.w - 16 * s) / (8 * s), lines, 2);
-	for (int i = 0; i < nl; i++)
-		gfx_text_c(lines[i], b.x + b.w / 2, y + PWR_ROWS * rowh + 6 * s + i * 10 * s, s,
-			armed ? COL_RED : COL_PANELHI, 0);
+	if (armed)
+	{
+		btn_hint_c(b.x + b.w / 2, ny, s, COL_RED, "Press", LBL_A,
+			(pwr_arm == 0) ? "again to restart" : "again to shut down");
+	}
+	else
+	{
+		char lines[4][64];
+		int nl = wrap_text("Always shut down here rather than pulling the plug.",
+			(b.w - 16 * s) / (8 * s), lines, 2);
+		for (int i = 0; i < nl; i++)
+			gfx_text_c(lines[i], b.x + b.w / 2, ny + i * 10 * s, s, COL_PANELHI, 0);
+	}
 }
 
 static void draw_about_panel(const chome_profile *p)
