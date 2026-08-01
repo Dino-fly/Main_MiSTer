@@ -3206,6 +3206,10 @@ static void ss_scan_hooks()
 	memset(&ss_hk, 0, sizeof(ss_hk));
 	ss_hk_valid = 1;
 
+	// A terse "Slot" is only believed as a last resort - see the slot branch below.
+	char slot_fb[32] = {};
+	int slot_fb_ex = 0, slot_fb_count = 0, have_slot_fb = 0;
+
 	for (int i = 2; i < 128; i++)
 	{
 		char *p = user_io_get_confstr(i);
@@ -3292,16 +3296,52 @@ static void ss_scan_hooks()
 		{
 			const char *spec = p + 1;
 			if (spec[0] == 'X') spec++;             // set-by-ARM marker
-			ss_copy_opt(spec, ss_hk.slot_opt, sizeof(ss_hk.slot_opt));
-			ss_hk.slot_ex = ex;
 
 			// How many values the option offers, so we never select a missing slot.
 			int n = 0;
 			char v[64];
 			while (n < 8 && substrcpy(v, p, (char)(2 + n)) && v[0]) n++;
-			ss_hk.slot_count = n ? n : 4;
-			ss_hk.found_slot = 1;
+
+			/*
+			  "Slot" on its own is not necessarily ours. MSX means a cartridge slot by it
+			  and Apple II an expansion slot - both were matched here, and in a core that
+			  also had savestates, picking slot 2 would have switched hardware under the
+			  player instead. Measured on the device: MSX reported slots=2 and Apple II
+			  slots=3 with no save or load entry at all.
+
+			  So take a label that says which kind of slot it means, and keep a bare one
+			  only as a fallback - for a core that does have savestates and named the
+			  option tersely.
+			*/
+			if (label_has(label, "state") || label_has(label, "save"))
+			{
+				ss_copy_opt(spec, ss_hk.slot_opt, sizeof(ss_hk.slot_opt));
+				ss_hk.slot_ex = ex;
+				ss_hk.slot_count = n ? n : 4;
+				ss_hk.found_slot = 1;
+			}
+			else if (!have_slot_fb)
+			{
+				ss_copy_opt(spec, slot_fb, sizeof(slot_fb));
+				slot_fb_ex = ex;
+				slot_fb_count = n ? n : 4;
+				have_slot_fb = 1;
+			}
 		}
+	}
+
+	/*
+	  The fallback, and only where the core really does have savestates - otherwise a
+	  cartridge slot would be adopted as a savestate selector in a core that has none.
+	  Done after the loop rather than inside it, because the CONF_STR is free to list the
+	  slot option before the save and restore entries.
+	*/
+	if (!ss_hk.found_slot && have_slot_fb && (ss_hk.found_save || ss_hk.found_load))
+	{
+		memcpy(ss_hk.slot_opt, slot_fb, sizeof(ss_hk.slot_opt));
+		ss_hk.slot_ex = slot_fb_ex;
+		ss_hk.slot_count = slot_fb_count;
+		ss_hk.found_slot = 1;
 	}
 
 	printf("ClassicUI: core hooks - sdcard:%s save:%s load:%s slot:%s(%d) pause:%s%s\n",

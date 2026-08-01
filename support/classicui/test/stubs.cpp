@@ -353,6 +353,26 @@ static const char *fake_confstr_nopause[] =
 	0
 };
 
+/*
+  A core that means something else by "Slot". MSX lists cartridge slots and Apple II
+  expansion slots, and both were being adopted as the savestate selector - measured on the
+  device. This one has savestates *as well*, and lists its unrelated slot option first, so
+  a scanner that takes the first "slot" it sees picks the wrong one.
+*/
+static const char *fake_confstr_slotty[] =
+{
+	"SLOTTY",
+	"FS1,ROM,Load ROM",
+	"OGH,Cartridge Slot,Empty,Cart A,Cart B",
+	"-",
+	"OV,Savestates to SDCard,On,Off",
+	"o01,Savestate Slot,1,2,3,4",
+	"h3RS,Save state (Alt-F1)",
+	"h3RT,Restore state (F1)",
+	"R0,Reset",
+	0
+};
+
 static int confstr_on = 1;
 void harness_set_confstr(int v) { confstr_on = v; }
 
@@ -360,7 +380,8 @@ char *user_io_get_confstr(int index)
 {
 	if (!confstr_on) return 0;
 
-	const char **tbl = (confstr_on == 2) ? fake_confstr_nopause : fake_confstr;
+	const char **tbl = (confstr_on == 2) ? fake_confstr_nopause
+		: (confstr_on == 3) ? fake_confstr_slotty : fake_confstr;
 	int n = 0;
 	while (tbl[n]) n++;
 
