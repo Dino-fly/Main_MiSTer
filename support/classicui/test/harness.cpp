@@ -30,6 +30,7 @@
 #include "../chome_net.h"
 #include "../chome_bt.h"
 #include "../chome_icons32.h"
+#include "../chome_btn12.h"
 #include "../../../lib/imlib2/Imlib2.h"
 #include "../../../lib/miniz/miniz.h"
 
@@ -1925,6 +1926,29 @@ int main()
 		press(KEY_ESC, 10);
 		press(KEY_ESC, 10);
 		frame(6);
+
+		/*
+		  And the same dialog with a PlayStation pad in hand. The point of the pair is the
+		  sentence inside the panel: it has to name the button the legend below it names,
+		  which it did not when dialogs spelled out letters and the legend drew shapes.
+		*/
+		harness_set_pad_name("MiSTer SNAC Pad 1");
+		chome_leave();
+		press(KEY_MENU, 20);
+		frame(8);
+		press(KEY_UP, 10);
+		press(KEY_RIGHT, 10);
+		press(KEY_RIGHT, 10);
+		press(KEY_ENTER, 14);
+		press(KEY_ENTER, 12);
+		frame(6);
+		dump("power-3-armed-psx");
+
+		press(KEY_ESC, 10);
+		press(KEY_ESC, 10);
+		press(KEY_ESC, 10);
+		frame(6);
+		harness_set_pad_name("Generic USB Gamepad");
 	}
 
 	/*
@@ -2242,12 +2266,21 @@ int main()
 		for (size_t k = 0; k < sizeof(sysicons) / sizeof(sysicons[0]); k++)
 		{
 			int ink = 0;
-			for (int r = 0; r < ICON32; r++)
+			for (int r = 0; r < ICON_SYS; r++)
 				for (const char *q = sysicons[k].rows[r]; *q; q++) if (*q == '#') ink++;
 
-			// A recognisable silhouette in a 1024-pixel grid is somewhere in the
-			// middle. All ink or almost none means the reduction went wrong.
-			if (ink < 80 || ink > 850) { printf("  %s: %d px of ink\n", sysicons[k].id, ink); bad++; }
+			/*
+			  A recognisable silhouette covers somewhere between a twelfth and four
+			  fifths of its grid. Expressed as a fraction rather than a pixel count,
+			  because the count moves with ICON_SYS - raising it from 32 to 64 broke
+			  this check while the icons themselves were fine.
+			*/
+			int cells = ICON_SYS * ICON_SYS;
+			if (ink < cells / 12 || ink > (cells * 4) / 5)
+			{
+				printf("  %s: %d px of ink in %d\n", sysicons[k].id, ink, cells);
+				bad++;
+			}
 		}
 		check(!bad, "and every icon has a plausible amount of ink in it");
 
@@ -2279,22 +2312,79 @@ int main()
 			{
 				gfx_fill(0, 0, 1280, 720, COL_BGDARK);
 				int n = (int)(sizeof(sysicons) / sizeof(sysicons[0]));
-				int cols = 8, zoom = 3, cell = ICON32 * zoom + 24;
+				int cols = 8, zoom = 3, cell = ICON_SYS * zoom + 24;
 				for (int k = 0; k < n; k++)
 				{
 					int cx = 20 + (k % cols) * cell, cy = 20 + (k / cols) * cell;
-					for (int oy = 0; oy < ICON32 * zoom; oy++)
+					for (int oy = 0; oy < ICON_SYS * zoom; oy++)
 					{
 						const char *row = sysicons[k].rows[oy / zoom];
-						for (int ox = 0; ox < ICON32 * zoom; ox++)
+						for (int ox = 0; ox < ICON_SYS * zoom; ox++)
 							if (row[ox / zoom] == '#')
 								gfx_fill(cx + ox, cy + oy, 1, 1, COL_WHITE);
 					}
-					gfx_text(sysicons[k].id, cx, cy + ICON32 * zoom + 2, 1, COL_DIM, 0);
+					gfx_text(sysicons[k].id, cx, cy + ICON_SYS * zoom + 2, 1, COL_DIM, 0);
 				}
 				gfx_end();
 				dump("icons-sheet");
 			}
+		}
+	}
+
+	/*
+	  A contact sheet of the button glyphs, at the size they are drawn and magnified, so
+	  the shapes can be judged rather than guessed at.
+	*/
+	printf("\n== button glyphs ==\n");
+	{
+		struct { const char *name; uint32_t col; } tint[] =
+		{
+			{ "psx_triangle", COL_BTN_TRIANGLE }, { "psx_circle", COL_BTN_CIRCLE },
+			{ "psx_square",   COL_BTN_SQUARE   }, { "psx_cross",  COL_BTN_CROSS  },
+			{ "btn_a", COL_BTN_A }, { "btn_b", COL_BTN_B },
+			{ "btn_x", COL_BTN_X }, { "btn_y", COL_BTN_Y },
+			{ "dpad_up", COL_WHITE }, { "dpad_down", COL_WHITE }, { "dpad_lr", COL_WHITE },
+			{ "btn_start", COL_WHITE }, { "btn_select", COL_WHITE },
+		};
+		int n = (int)(sizeof(tint) / sizeof(tint[0]));
+		check(n == (int)(sizeof(btn12s) / sizeof(btn12s[0])), "every glyph is on the sheet");
+
+		harness_set_fb(1280, 720);
+		gfx_shutdown();
+		theme_update(1280, 720, 1);
+		if (gfx_begin())
+		{
+			gfx_fill(0, 0, 1280, 720, COL_BGDARK);
+			gfx_text("BUTTON GLYPHS - 1x (240p), 2x, 3x, 4x", 30, 22, 2, COL_INK, 0);
+
+			for (int k = 0; k < n; k++)
+			{
+				const btn12_def *d = 0;
+				for (size_t i = 0; i < sizeof(btn12s) / sizeof(btn12s[0]); i++)
+					if (!strcmp(btn12s[i].name, tint[k].name)) d = &btn12s[i];
+				if (!d) { check(0, tint[k].name); continue; }
+
+				int w = (int)strlen(d->rows[0]);
+				int x0 = 40 + (k / 7) * 600, y0 = 66 + (k % 7) * 90;
+				gfx_text(tint[k].name, x0, y0, 2, COL_DIM, 0);
+
+				int x = x0 + 170;
+				for (int zoom = 1; zoom <= 4; zoom++)
+				{
+					int y = y0 + (54 - BTN12 * zoom) / 2;
+					for (int gy = 0; gy < BTN12; gy++)
+						for (int gx = 0; gx < w; gx++)
+						{
+							char c = d->rows[gy][gx];
+							if (c == '.') continue;
+							gfx_fill(x + gx * zoom, y + gy * zoom, zoom, zoom,
+								(c == 'c') ? tint[k].col : COL_BTN_CHIP);
+						}
+					x += w * zoom + 22;
+				}
+			}
+			gfx_end();
+			dump("buttons-sheet");
 		}
 	}
 
@@ -2326,6 +2416,33 @@ int main()
 		dump("prompts-2-psx");
 		unsigned long psx = harness_fb_hash(660, 720);
 		check(psx != generic, "a SNAC pad changes the prompts");
+
+		/*
+		  And at 240p, which is the size that matters: the legend draws each button at
+		  its native twelve pixels there, one framebuffer pixel per glyph pixel, so what
+		  reaches the TV is exactly the grid in chome_btn12.h.
+		*/
+		harness_set_fb(320, 240);
+		gfx_shutdown();
+		theme_update(320, 240, 3);
+		chome_leave();
+		press(KEY_MENU, 20);              // re-enter, or the canvas change draws nothing
+		frame(12);
+		dump("prompts-4-psx-240p");
+
+		// The same 240p legend with a pad that has letters on it, which is the other half
+		// of the pair: lettered buttons drawn the same way, in a Super Famicom's colours.
+		harness_set_pad_name("Generic USB Gamepad");
+		press(KEY_DOWN, 10);
+		press(KEY_UP, 10);
+		frame(12);
+		dump("prompts-5-letters-240p");
+		check(harness_fb_hash(0, 240) != 0, "the lettered 240p legend drew something");
+
+		harness_set_fb(1280, 720);
+		gfx_shutdown();
+		theme_update(1280, 720, 1);
+		frame(10);
 
 		// ...and back again when they pick the other controller up.
 		harness_set_pad_name("Generic USB Gamepad");
