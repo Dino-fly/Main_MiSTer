@@ -3405,9 +3405,26 @@ static void vga_fb_takeover_update()
 {
 	if (cfg.direct_video || cfg.vga_scaler) return;
 
-	// Diagnostic: see the note in video_set_mode().
-	printf("video: takeover check - req=%d fb=%d hdmi=%d held=%d\n",
-		menu_fb_analog_req, fb_num, hdmi_present(), vga_fb_takeover);
+	/*
+	  Diagnostic: see the note in video_set_mode(). Only when something moves.
+
+	  This is reached once a frame while the front-end holds the screen, because
+	  video_menu_fb_analog() re-asserts every frame and its early-out needs the takeover
+	  to have actually been granted. Where it cannot be granted - an HDMI sink is attached,
+	  so want_ui is always false - the early-out never fires and this printed at 60 Hz. It
+	  wrote a 257 MB /tmp/debug.txt and filled the 247 MB tmpfs, which cost the log, the
+	  screenshots and anything else wanting /tmp.
+	*/
+	{
+		static int p_req = -1, p_fb = -1, p_hdmi = -1, p_held = -1;
+		int hp = hdmi_present();
+		if (p_req != menu_fb_analog_req || p_fb != fb_num || p_hdmi != hp || p_held != vga_fb_takeover)
+		{
+			p_req = menu_fb_analog_req; p_fb = fb_num; p_hdmi = hp; p_held = vga_fb_takeover;
+			printf("video: takeover check - req=%d fb=%d hdmi=%d held=%d\n",
+				menu_fb_analog_req, fb_num, hp, vga_fb_takeover);
+		}
+	}
 
 	int want_term = cfg.fb_terminal_vga && !fb_num;
 

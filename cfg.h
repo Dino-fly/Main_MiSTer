@@ -118,6 +118,7 @@ typedef struct {
 	uint32_t keyboard_as_joystick[256];
 	uint8_t classicui;
 	uint8_t classicui_artfetch;
+	uint8_t classicui_freeze;
 	uint8_t classicui_profile;
 	uint8_t classicui_overscan;
 	char classicui_artdir[256];

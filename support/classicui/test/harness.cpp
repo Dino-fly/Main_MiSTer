@@ -1187,6 +1187,47 @@ static void assert_menu_repeat()
 }
 
 /*
+  classicui_freeze=0: the escape hatch for a core that cannot survive being asked for a
+  state (see the SNES/Battletoads case). The game runs on behind the menu instead, exactly
+  as it already does on a core with no save states at all - so the menu still opens, the
+  slots still work, and nothing asks the core to save on the way in.
+*/
+static void assert_freeze_off()
+{
+	printf("\n== the freeze can be turned off ==\n");
+
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "gb\nTetris (World).gb\n"); fclose(f); }
+	}
+
+	harness_set_menu_core(0);
+	harness_set_fb_supported(1);
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+	chome_handle(0);
+	if (chome_ingame_active()) press(KEY_MENU, 14);
+	frame(6);
+
+	harness_set_confstr(2);                   // savestates, no usable pause: normally freezes
+	cfg.classicui_freeze = 0;
+	harness_reset_status();
+
+	press(KEY_MENU, 20);
+	check(chome_ingame_active(), "the menu still opens");
+	check(harness_pulses_on("S") == 0, "and nothing asks the core for a state");
+
+	press(KEY_MENU, 16);
+	frame(8);
+	check(!chome_ingame_active(), "and it closes again");
+	check(harness_pulses_on("T") == 0, "with no restore on the way out either");
+
+	cfg.classicui_freeze = 1;
+	harness_set_confstr(1);
+}
+
+/*
   Saving on a core that pauses for real. There is no held state on such a core - nothing had
   to be held still - so the core is asked directly, and a save pulse is only serviced by a
   running core. That used to resume the game and close the menu, which reads as the
@@ -1870,6 +1911,7 @@ int main()
 
 	cfg.classicui = 1;
 	cfg.classicui_artfetch = 0;                       // no network in tests
+	cfg.classicui_freeze = 1;                         // as cfg.cpp defaults it
 	cfg.classicui_overscan = 6;                       // as cfg_parse() defaults it
 	snprintf(cfg.classicui_artdir, sizeof(cfg.classicui_artdir), "boxart");
 	cfg.osd_timeout = 0;
@@ -1899,6 +1941,7 @@ int main()
 	assert_launch();
 	assert_ingame();
 	assert_save_on_pausing_core();
+	assert_freeze_off();
 	assert_slot_match();
 	assert_menu_repeat();
 	assert_input_labels();
