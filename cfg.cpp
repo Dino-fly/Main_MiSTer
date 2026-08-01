@@ -153,6 +153,7 @@ static const ini_var_t ini_vars[] =
 	{ "CLASSICUI_OVERSCAN", (void*)(&(cfg.classicui_overscan)), UINT8, 0, 15 },
 	{ "CLASSICUI_ARTDIR", (void*)(&(cfg.classicui_artdir)), STRING, 0, sizeof(cfg.classicui_artdir) - 1 },
 	{ "CLASSICUI_ARTFETCH", (void*)(&(cfg.classicui_artfetch)), UINT8, 0, 1 },
+	{ "CLASSICUI_FREEZE", (void*)(&(cfg.classicui_freeze)), UINT8, 0, 1 },
 	{ "CLASSICUI_ARTURL", (void*)(&(cfg.classicui_arturl)), STRING, 0, sizeof(cfg.classicui_arturl) - 1 },
 };
 
@@ -606,6 +607,13 @@ void cfg_parse()
 	cfg.browse_expand = 1;
 	cfg.logo = 1;
 	cfg.rumble = 1;
+	/*
+	  On by default: it is what stops the game advancing while the menu is open. Off is for
+	  the case in mister-snes-savestate-bug - a core that cannot survive being asked for a
+	  state at that moment - where a game that keeps playing behind the menu beats a core
+	  that has to be reloaded.
+	*/
+	cfg.classicui_freeze = 1;
 	cfg.wheel_force = 50;
 	cfg.dvi_mode = 2;
 	cfg.lookahead = 1;
