@@ -590,7 +590,21 @@ static uint32_t menu_key_get(void)
 		else if (CheckTimer(repeat))
 		{
 			repeat = GetTimer(REPEATRATE);
-			if (GetASCIIKey(c1) || chome_active() || menustate == MENU_FILE_SELECT2 || ((menustate == MENU_COMMON2) && (menusub == 17)) || ((menustate == MENU_SYSTEM2) && (menusub == 5)))
+			/*
+			  The menu button is never repeated. Holding it cannot mean "open the menu
+			  again and again", and at REPEATRATE it means fifty of them a second: with the
+			  Classic Home front-end up (the chome_active() term below) a held menu button
+			  opened the menu, closed it, opened it... which on the device looked like
+			  needing two presses, and after a few tries left the menu black and dead.
+
+			  It repeated at all because a release that never reaches this latch leaves the
+			  repeat timer expired and armed, so the next press repeats immediately rather
+			  than after REPEATDELAY - see chome_handle() for that half of it.
+			*/
+			int menu_btn = ((c1 & ~UPSTROKE) == KEY_F12 || (c1 & ~UPSTROKE) == KEY_MENU);
+
+			if (!menu_btn &&
+				(GetASCIIKey(c1) || chome_active() || menustate == MENU_FILE_SELECT2 || ((menustate == MENU_COMMON2) && (menusub == 17)) || ((menustate == MENU_SYSTEM2) && (menusub == 5))))
 			{
 				c = c1;
 				hold_cnt++;
