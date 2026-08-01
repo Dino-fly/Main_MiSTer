@@ -1035,7 +1035,7 @@ struct prompt { const char *text; const char *pic; uint32_t col; };
 
 static prompt btn_prompt(int which)
 {
-	prompt out = { btn(which), 0 };
+	prompt out = { btn(which), 0, 0 };   // no shape and no colour: a named key, not a button
 	if (which < 0 || which >= LBL_COUNT || !using_pad || !pad_is_psx()) return out;
 
 	static const int sysbtn[LBL_COUNT] =
