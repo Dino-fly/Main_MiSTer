@@ -2,7 +2,7 @@
 """
 Generates the icon headers from RetroArch's "monochrome" icon set and Twemoji:
 
-    chome_icons32.h   32x32, one per system, for the shelf
+    chome_icons32.h   one per system, for the shelf (N below, currently 64x64)
     chome_icons16.h   16x16 pictograms used as badges and button prompts
 
     python3 support/classicui/tools/icons32.py            # fetch and generate
@@ -45,7 +45,10 @@ SOURCES = {
              "{commit}/assets/72x72/{name}.png"),
 }
 
-N = 32
+# The card can give a system icon up to about 114 pixels at HD, so a 32x32 source was
+# being blown up three and a half times and looked it. 64 halves that; the cost is about
+# a hundred kilobytes of header, which is the trade being made deliberately.
+N = 64
 THRESHOLD = 0.42
 FIT_MARGIN = 2          # air left around the drawing inside its box
 
@@ -53,6 +56,9 @@ FIT_MARGIN = 2          # air left around the drawing inside its box
 # shapes. The same reduction of a console silhouette to 16 pixels is mush, which is
 # why systems get 32 and these do not.
 N16 = 16
+
+# ...and an 8x8 for the 240p legend, where a 16x16 mask cannot survive the reduction.
+N8 = 8
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "..", "chome_icons32.h")
@@ -110,15 +116,40 @@ PICTOS = [
     # someone's hands. The cross is not here: the OSD font's own X is a clean one at
     # eight pixels, where every emoji cross falls apart into dots. Twemoji has no
     # hollow triangle, so that one is filled; it still reads as a triangle.
-    ("psx_circle",   "twemoji", "2b55"),
-    ("psx_triangle", "twemoji", "1f53a"),
-    ("psx_square",   "twemoji", "2b1b"),
+    # Outlined, not filled: at eight pixels a filled triangle is a blob and a filled
+    # square is a block, and the three shapes stop being distinguishable from each other.
+    # The outline is taken from the source silhouette mechanically - see outline().
+    ("psx_circle",   "twemoji", "2b55",  True),
+    ("psx_triangle", "twemoji", "1f53a", True),
+    ("psx_square",   "twemoji", "2b1b",  True),
 
     # The controller-pairing screen. This is the one symbol for "wireless" that a
     # player already knows from every phone and television, so it is worth more than
     # any picture of a gamepad - and the set has no gamepad anyway.
     ("bluetooth", "retroarch", "bluetooth"),
 ]
+
+
+def outline(grid):
+    """Keeps only the edge of a filled shape: a pixel that is ink and has a non-ink
+    neighbour. Purely mechanical - no shape is drawn here, the silhouette is the source
+    art's own - and it is what makes these read at eight pixels. A filled 5x5 triangle is
+    a blob; its outline is a triangle."""
+    h = len(grid)
+    w = len(grid[0])
+
+    def ink(x, y):
+        return 0 <= x < w and 0 <= y < h and grid[y][x] == "#"
+
+    out = []
+    for y in range(h):
+        row = ""
+        for x in range(w):
+            edge = ink(x, y) and not (ink(x - 1, y) and ink(x + 1, y)
+                                      and ink(x, y - 1) and ink(x, y + 1))
+            row += "#" if edge else "."
+        out.append(row)
+    return out
 
 
 def fetch(source, name):
@@ -349,9 +380,9 @@ def main():
 #ifndef CHOME_ICONS32_H
 #define CHOME_ICONS32_H
 
-#define ICON32 {N}
+#define ICON_SYS {N}
 
-struct sysicon_def {{ const char *id; const char *rows[ICON32]; }};
+struct sysicon_def {{ const char *id; const char *rows[ICON_SYS]; }};
 
 static const sysicon_def sysicons[] =
 {{
@@ -365,17 +396,30 @@ static const sysicon_def sysicons[] =
         f.write("};\n\n#endif\n")
 
     pictos = []
-    for pid, source, name in PICTOS:
+    for entry in PICTOS:
+        pid, source, name = entry[0], entry[1], entry[2]
+        want_outline = len(entry) > 3 and entry[3]
+
         path = fetch(source, name)
         digest = hashlib.sha256(open(path, "rb").read()).hexdigest()
         w, h, alpha = read_alpha(path)
         grid = to_grid(w, h, alpha, N16)
 
+        # A native 8x8 as well. picto() samples the mask down to the box it is given, and
+        # at 240p that box is 8 pixels - where a one-pixel outline drawn at 16x16 loses
+        # half of itself to the subsampling and the shapes stop being shapes. So reduce
+        # first, then outline, and let the front-end pick the size it is actually drawing.
+        grid8 = to_grid(w, h, alpha, N8)
+
+        if want_outline:
+            grid = outline(grid)
+            grid8 = outline(grid8)
+
         ink = sum(r.count("#") for r in grid)
-        if ink < 12:
+        if ink < 8:
             raise SystemExit(f"{pid}: only {ink} pixels of ink - wrong file?")
 
-        pictos.append((pid, source, name, digest, grid))
+        pictos.append((pid, source, name, digest, grid, grid8))
         print(f"  {pid:7s} {ink:4d} px  {source}: {name}  (16x16)")
 
     with open(os.path.normpath(OUT16), "w") as f:
@@ -395,13 +439,29 @@ static const sysicon_def sysicons[] =
 
 struct picto_def {{ const char *name; const char *rows[ICON16]; }};
 
+/*
+  The same shapes at 8x8, reduced from the source art and *then* outlined. picto() samples
+  a mask down to whatever box it is drawing into, and at 240p that box is 8 pixels - where
+  a one-pixel outline authored at 16x16 loses half of itself and a triangle stops looking
+  like one. The front-end picks whichever of the two fits the box.
+*/
+#define ICON8 {N8}
+
+struct picto8_def {{ const char *name; const char *rows[ICON8]; }};
+
 static const picto_def pictos[] =
 {{
 """)
-        for pid, source, name, digest, grid in pictos:
+        for pid, source, name, digest, grid, grid8 in pictos:
             f.write(f'\t// {name}  ({source}, sha256 {digest[:16]})\n')
             f.write(f'\t{{ "{pid}", {{\n')
             for r in grid:
+                f.write(f'\t\t"{r}",\n')
+            f.write("\t} },\n")
+        f.write("};\n\nstatic const picto8_def pictos8[] =\n{\n")
+        for pid, source, name, digest, grid, grid8 in pictos:
+            f.write(f'\t{{ "{pid}", {{\n')
+            for r in grid8:
                 f.write(f'\t\t"{r}",\n')
             f.write("\t} },\n")
         f.write("};\n\n#endif\n")
@@ -409,7 +469,10 @@ static const picto_def pictos[] =
     print(f"wrote {os.path.normpath(OUT16)} with {len(pictos)} pictograms")
 
     if not args.keep:
-        for _sid, source, name, _d, _g in icons + pictos:
+        # icons are 5-tuples and pictos are 6 (they carry an 8x8 grid too), so index
+        # rather than unpack.
+        for entry in icons + pictos:
+            source, name = entry[1], entry[2]
             p = os.path.join(CACHE, source + "_" + name + ".png")
             if os.path.exists(p):
                 os.remove(p)
