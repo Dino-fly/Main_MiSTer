@@ -59,48 +59,69 @@ gains the feature simply by being rebuilt.
 
 ## Install
 
-Everything happens on the **SD card**. Power the MiSTer off, take the card out
-and put it in your computer. The card's *root* is the top level, where you can
-see folders like `_Arcade`, `_Console`, `games` and `config`, and a file called
-`MiSTer` with no extension.
+The archive unzips to a folder called **`SD-CARD-ROOT`** whose contents mirror
+your MiSTer's SD card. Installing is copying that folder's *contents* onto the
+card and letting it merge.
 
-**1. Back up the two things you are replacing.** In the card root, make copies
-of `MiSTer` and `menu.rbf` — call them `MiSTer.backup` and `menu.rbf.backup`.
-Right-click, copy, paste, rename. That is your way back.
+**1. Power the MiSTer off and put its SD card in your computer.** The card root
+is the top level, where you can see `_Arcade`, `_Console`, `games`, `config` and
+a file called `MiSTer` with no extension.
 
-**2. Copy the new `MiSTer`** from the archive into the card root, replacing the
-existing one. This file is the important one: the pad will not work without it,
-no matter how many cores you copy.
+**2. Back up the two files you are replacing.** In the card root, copy `MiSTer`
+and `menu.rbf` and rename the copies to `MiSTer.backup` and `menu.rbf.backup`.
+That is your way back.
 
-**3. Copy the cores you want.** Everything under `cores/` in the archive:
+**3. Copy everything inside `SD-CARD-ROOT` into the card root** and confirm the
+merge when your computer asks. The folders line up with the ones already on your
+card:
 
-| From the archive | Goes on the card |
-|---|---|
-| `cores/Menu.rbf` | the card root, renamed to `menu.rbf` |
-| `cores/*.rbf` | `_Console` or `_Computer`, wherever you keep that system today |
-| `cores/_Arcade/*.rbf` | the `_Arcade\cores` folder |
+```
+SD-CARD-ROOT/
+  MiSTer                    replaces the firmware in the card root
+  menu.rbf                  replaces the menu core
+  _Console/*.rbf            console cores
+  _Computer/*.rbf           computer cores
+  _Arcade/cores/*.rbf       arcade cores
+  _Other/, _Utility/        the rest
+  Scripts/                  optional clean-up script (see below)
+  README.md, MANIFEST_*.txt documentation
+```
 
-If a core of the same name is already there, replace it — or delete the older
-one afterwards, otherwise both show up in the menu.
+Only `MiSTer` and `menu.rbf` overwrite anything. The cores are named with
+today's date (`SNES_20260731.rbf`), so they sit **alongside** whatever you have
+rather than replacing it — nothing of yours is lost.
 
-**4. Add one line to `MiSTer.ini`** in the card root. Open it in a text editor
-(Notepad, TextEdit — anything plain) and add:
+**4. Add one line to `MiSTer.ini`** in the card root, using any plain-text
+editor:
 
 ```ini
 snac_pad=1
 ```
 
+The archive deliberately does not include a `MiSTer.ini`, because overwriting
+yours would wipe your settings.
+
 **5. Put the card back**, power on, and plug in the PSX SNAC adapter and pad.
 
-> **macOS note:** copy files by dragging in Finder as usual, then eject the card
-> properly before removing it, or the writes may not be flushed.
->
-> **Linux/Windows note:** the file must be named exactly `MiSTer` — no `.bin`,
-> no `.txt`. Some browsers add an extension when downloading.
+### Tidying up the duplicates (optional)
 
-If you prefer working over the network instead of moving the card, the same
-files live at `/media/fat/` on a running MiSTer, and the firmware needs
-`chmod +x /media/fat/MiSTer` after copying.
+Because the new cores carry a datecode, you will now have two entries for some
+systems — your old `SNES_20240101.rbf` and the new `SNES_20260731.rbf`. To keep
+only the new ones, open the MiSTer's **Scripts** menu and run
+**`snac_remove_old_cores`**. It deletes older copies of the cores this package
+installed and touches nothing else.
+
+Prefer to do it by hand? Just delete the older-dated `.rbf` files. Or leave them
+— both work, you simply see two entries.
+
+> **macOS:** eject the card properly before pulling it out, or the writes may
+> not be flushed.
+>
+> **Any OS:** the firmware file must end up named exactly `MiSTer` — no `.bin`,
+> no `(1)`. Some browsers and unzip tools rename things.
+
+If you would rather copy over the network to a running MiSTer, the same layout
+maps onto `/media/fat/`, and the firmware needs `chmod +x /media/fat/MiSTer`.
 
 ## What you need
 
@@ -141,9 +162,9 @@ Define-buttons screens if you prefer something else.
 does not recognise the `snac_pad` setting — which only the new firmware
 understands. So it proves step 2 has not taken effect. Cores are not involved.
 
-The fix is the same whatever the cause: **copy `MiSTer` from the archive into
-the card root again**, replacing what is there, and reboot. Copying it twice
-does no harm.
+The fix is the same whatever the cause: **copy `MiSTer` from the archive's
+`SD-CARD-ROOT` folder into the card root again**, replacing what is there, and
+reboot. Copying it twice does no harm.
 
 Why it usually happens:
 
