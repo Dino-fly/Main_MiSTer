@@ -1110,6 +1110,61 @@ static void assert_video()
 	}
 }
 
+/*
+  "Slot" does not always mean a savestate slot. Measured on the device: MSX reports two and
+  Apple II three, meaning cartridge and expansion slots - so a core that had savestates as
+  well would have had savestate numbers written into its hardware selector, switching carts
+  under the player when they picked slot 2.
+*/
+static void assert_slot_match()
+{
+	printf("\n== which option is the savestate slot ==\n");
+
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "gb\nTetris (World).gb\n"); fclose(f); }
+	}
+
+	harness_set_menu_core(0);
+	harness_set_fb_supported(1);
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+
+	// Start from the game, whatever the previous scenario left behind.
+	chome_handle(0);
+	if (chome_ingame_active()) press(KEY_MENU, 14);
+	frame(6);
+
+	// After the close, so ig_open() re-reads it - that is where ss_hk_valid is cleared.
+	harness_set_confstr(3);                   // savestates, plus a cartridge "Slot" first
+	harness_set_opt("GH", 0);
+	harness_reset_status();
+
+	press(KEY_MENU, 20);                      // opening freezes, which selects a slot
+	check(chome_ingame_active(), "the menu opens on this core");
+	check(harness_opt_val("GH") == 0, "the cartridge slot is left alone");
+
+	press(KEY_DOWN, 18);                      // the suspend strip
+	press(KEY_RIGHT, 10);                     // slot 2
+	press(KEY_BACKSPACE, 12);                 // Y saves there
+	check(harness_opt_val("GH") == 0, "and still left alone after picking a slot");
+	check(harness_opt_val("01") != 0, "the savestate slot option is the one that moved");
+
+	press(KEY_MENU, 16);
+	frame(8);
+	harness_set_confstr(1);
+	chome_leave();
+
+	// This core shares Tetris with the in-game scenario, so take its states back out.
+	for (int i = 1; i <= 4; i++)
+	{
+		char p2[512];
+		snprintf(p2, sizeof(p2), "%s/savestates/Gameboy/Tetris (World)_%d.ss", ROOT, i);
+		unlink(p2);
+	}
+}
+
 static void assert_ingame()
 {
 	printf("\n== in-game: the whole UI, over a running game ==\n");
@@ -1701,6 +1756,7 @@ int main()
 	walk_looks();
 	assert_launch();
 	assert_ingame();
+	assert_slot_match();
 	assert_input_labels();
 	assert_overscan();
 
