@@ -2281,6 +2281,15 @@ static void video_set_mode(vmode_custom_t *v, double Fpix)
 
 	video_fb_config();
 
+	/*
+	  Diagnostic for the front-end's takeover. Low rate - only on an actual mode change -
+	  and it is what showed that the firmware's own view of a working return and a broken
+	  one are identical, which is what eventually pointed the search away from video
+	  altogether. Kept on both branches so it does not go missing from one of them again.
+	*/
+	if (fb_num) printf("video: mode now %dx%d, fb %d at %dx%d, takeover=%d\n",
+		v_cur.item[1], v_cur.item[5], fb_num, fb_width, fb_height, vga_fb_takeover);
+
 	setShadowMask();
 }
 
