@@ -139,22 +139,34 @@ The project name is whatever the `.qpf` file is called. The result appears in
 
 ## Part 3 — installing
 
-| File | Goes to |
-|---|---|
-| `bin/MiSTer` | `/media/fat/MiSTer` — **back up the original first** |
-| `output_files/Menu.rbf` | `/media/fat/menu.rbf` — back up the original first |
-| other `output_files/*.rbf` | wherever you keep cores; arcade cores in `/media/fat/_Arcade/cores/` |
+Power the MiSTer off and put its SD card in your computer. The card *root* is
+the top level, where you can see `_Arcade`, `_Console`, `games`, `config` and a
+file called `MiSTer` with no extension.
 
-Then add to `/media/fat/MiSTer.ini`:
+Back up `MiSTer` and `menu.rbf` first — copy and rename them to
+`MiSTer.backup` and `menu.rbf.backup`. Then:
+
+| What you built | Where it goes on the card |
+|---|---|
+| `bin/MiSTer` | the card root, replacing `MiSTer` |
+| `output_files/Menu.rbf` | the card root, renamed to `menu.rbf` |
+| other `output_files/*.rbf` | `_Console` / `_Computer`, alongside your existing cores |
+| arcade cores | the `_Arcade\cores` folder, named as the `.mra` expects |
+
+Add one line to `MiSTer.ini` in the card root:
 
 ```ini
 snac_pad=1
 ```
 
-Reboot, plug in a PSX SNAC adapter and pad. The pad should appear as
-"MiSTer SNAC Pad 1" and drive the OSD menu.
+Put the card back, power on, and plug in a PSX SNAC adapter and pad. The pad
+should appear as "MiSTer SNAC Pad 1" and drive the OSD menu.
 
----
+> If you would rather copy over the network to a running MiSTer, those same
+> files live under `/media/fat/`, and the firmware needs
+> `chmod +x /media/fat/MiSTer` afterwards. Note that `update_all.sh` and the
+> MiSTer Downloader replace `/media/fat/MiSTer` with the official build, so
+> reinstall your firmware after running either.
 
 ## Building many cores
 

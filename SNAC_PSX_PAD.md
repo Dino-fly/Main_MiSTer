@@ -59,52 +59,48 @@ gains the feature simply by being rebuilt.
 
 ## Install
 
-**1. Back up the firmware you are replacing:**
+Everything happens on the **SD card**. Power the MiSTer off, take the card out
+and put it in your computer. The card's *root* is the top level, where you can
+see folders like `_Arcade`, `_Console`, `games` and `config`, and a file called
+`MiSTer` with no extension.
 
-```
-cp /media/fat/MiSTer /media/fat/MiSTer.backup
-```
+**1. Back up the two things you are replacing.** In the card root, make copies
+of `MiSTer` and `menu.rbf` — call them `MiSTer.backup` and `menu.rbf.backup`.
+Right-click, copy, paste, rename. That is your way back.
 
-**2. Copy the new firmware** to the SD card root as `/media/fat/MiSTer`, then:
+**2. Copy the new `MiSTer`** from the archive into the card root, replacing the
+existing one. This file is the important one: the pad will not work without it,
+no matter how many cores you copy.
 
-```
-chmod +x /media/fat/MiSTer
-```
+**3. Copy the cores you want.** Everything under `cores/` in the archive:
 
-**3. Copy the cores you want.** Keep your originals — these do not replace
-them unless the filenames collide.
-
-| Core type | Destination |
+| From the archive | Goes on the card |
 |---|---|
-| Menu (`menu.rbf`) | `/media/fat/menu.rbf` — back up the existing one first |
-| Console cores | wherever you keep them (`/media/fat/_Console/`, `_Computer/`, or the root) |
-| Arcade cores | `/media/fat/_Arcade/cores/` — your existing `.mra` files find them by name |
+| `cores/Menu.rbf` | the card root, renamed to `menu.rbf` |
+| `cores/*.rbf` | `_Console` or `_Computer`, wherever you keep that system today |
+| `cores/_Arcade/*.rbf` | the `_Arcade\cores` folder |
 
-> **Replacing rather than adding:** MiSTer matches a core by the part of the
-> filename before the datecode, so `NES_20260731.rbf` and an older
-> `NES_20240101.rbf` both appear. Delete or move the old file if you want the
-> new one to be the only choice. Arcade cores must keep the plain name the
-> `.mra` refers to (`ActFancer.rbf`, not `Arcade-ActFancer.rbf`).
+If a core of the same name is already there, replace it — or delete the older
+one afterwards, otherwise both show up in the menu.
 
-**4. Enable it** in `/media/fat/MiSTer.ini`:
+**4. Add one line to `MiSTer.ini`** in the card root. Open it in a text editor
+(Notepad, TextEdit — anything plain) and add:
 
 ```ini
 snac_pad=1
 ```
 
-- `1` — on, with **Select+Start** acting as the menu button.
-- `2` — on, without that combo.
-- `0` or omitted — off (the default).
+**5. Put the card back**, power on, and plug in the PSX SNAC adapter and pad.
 
-Per-core sections work. To let a core keep the user port for its own native
-SNAC passthrough:
+> **macOS note:** copy files by dragging in Finder as usual, then eject the card
+> properly before removing it, or the writes may not be flushed.
+>
+> **Linux/Windows note:** the file must be named exactly `MiSTer` — no `.bin`,
+> no `.txt`. Some browsers add an extension when downloading.
 
-```ini
-[PSX]
-snac_pad=0
-```
-
-**5. Reboot**, plug in the adapter and pad, and load one of the rebuilt cores.
+If you prefer working over the network instead of moving the card, the same
+files live at `/media/fat/` on a running MiSTer, and the firmware needs
+`chmod +x /media/fat/MiSTer` after copying.
 
 ## What you need
 
@@ -141,53 +137,48 @@ Define-buttons screens if you prefer something else.
 
 ### `snac_pad: unknown option` at boot or when a core loads
 
-**Your MiSTer firmware is the stock one, not this build.** That message comes
-from the firmware's `MiSTer.ini` parser when it meets a setting it doesn't
-know, so it proves the replacement binary is not the one running. Cores have
-nothing to do with it.
+**The old firmware is still on the card.** That message is MiSTer telling you it
+does not recognise the `snac_pad` setting — which only the new firmware
+understands. So it proves step 2 has not taken effect. Cores are not involved.
 
-Check what's actually installed, over SSH:
+The fix is the same whatever the cause: **copy `MiSTer` from the archive into
+the card root again**, replacing what is there, and reboot. Copying it twice
+does no harm.
 
-```
-strings /media/fat/MiSTer | grep -c "MiSTer SNAC Pad"
-```
+Why it usually happens:
 
-`1` or more means the right firmware is in place; `0` means it is stock.
+1. **Only the cores were copied.** Easy to miss, because the cores are the bulky
+   part — but the firmware is the piece that makes the pad appear at all.
+2. **An updater put the official one back.** `update_all.sh`, the MiSTer
+   Downloader and similar tools replace the `MiSTer` file with the official
+   release. If you run one of those, copy this firmware in again afterwards.
+   This is the usual explanation when it worked for a while and then stopped.
+3. **The file is in the wrong place or renamed.** It must sit in the card root
+   as `MiSTer` — not inside a folder, not `MiSTer.bin`, not `MiSTer (1)`.
 
-Three things cause this:
+The error is harmless in itself: MiSTer skips the line it does not understand
+and carries on booting.
 
-1. **The firmware step was skipped.** Copying cores alone is not enough — the
-   pad is published to Linux by the firmware. Copy `MiSTer` from the archive to
-   `/media/fat/MiSTer` and reboot.
-2. **An updater replaced it afterwards.** `update_all.sh`, the MiSTer Downloader
-   and similar tools manage `/media/fat/MiSTer` and will overwrite this build
-   with the official release. If you run one, reinstall the firmware afterwards.
-   This is the most common cause when it worked and then stopped.
-3. **It landed in the wrong place.** It must be the file `/media/fat/MiSTer`
-   exactly — not inside a folder, and not renamed by your browser or unzip tool.
-   Make sure it is executable: `chmod +x /media/fat/MiSTer`.
+### The pad works in the menu but not in a game (or the other way round)
 
-Until the firmware is replaced, the setting does nothing and the pad will not
-appear. The error itself is harmless — the firmware skips the unknown line and
-carries on.
-
-### The pad does nothing in a core, but the menu works (or vice versa)
-
-The menu is driven by the firmware, individual cores by their own `.rbf`. If the
-menu responds but a game does not, that core has not been rebuilt with this
-change — use one from the archive. If neither responds, see the section above.
+The menu is driven by the firmware; each game core is its own `.rbf` file. If
+the menu responds but a game does not, that core has not been replaced with one
+from the archive. If nothing responds anywhere, see above — the firmware is the
+common factor.
 
 ### An arcade game says the core is missing
 
-Arcade cores must keep the plain name the `.mra` refers to — `ActFancer.rbf`,
-not `Arcade-ActFancer.rbf`. Archives released before 31 July 2026 had this
-wrong; re-download if yours contains `Arcade-` prefixed files.
+Arcade `.rbf` files must keep the plain name the `.mra` expects —
+`ActFancer.rbf`, not `Arcade-ActFancer.rbf`. Archives downloaded before
+31 July 2026 had this wrong; re-download if yours contains `Arcade-` prefixed
+files.
 
 ## Reverting
 
-Restore `MiSTer.backup` over `/media/fat/MiSTer`, put your original
-`menu.rbf` back, and remove `snac_pad` from `MiSTer.ini`. The cores are inert
-without the firmware, so they can be left in place.
+Put the card back in your computer, rename `MiSTer.backup` to `MiSTer`
+(replacing the new one) and `menu.rbf.backup` to `menu.rbf`, then delete the
+`snac_pad` line from `MiSTer.ini`. The cores do nothing without the firmware,
+so you can leave them where they are.
 
 ## Source
 
