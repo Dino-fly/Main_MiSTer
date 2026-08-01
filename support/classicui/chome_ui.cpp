@@ -367,6 +367,7 @@ static int ss_can_load();
 static int ss_do_save(int slot);
 static int ss_do_load(int slot);
 static void ss_pause_release(int engaged);
+static int ss_pause_engage();
 
 /* ------------------------------------------------------------- helpers ---- */
 
@@ -3707,6 +3708,17 @@ static char pend_png[1024];
 static unsigned long pend_after = 0;     // the state must be newer than this
 static int pend_reserved = -1;           // which slot holds it, for the copy in DDR
 
+/*
+  A core that pauses properly writes the chosen slot itself, so there is nothing to copy -
+  only something to wait for. pend_reserved < 0 says so. What is waited on is the slot's own
+  file changing, since the pause had to come off for the core to service the pulse at all
+  and it has to go back on the moment the state lands.
+*/
+static int pend_repause = 0;             // the pause we took off, to put back
+static int pend_pre_ok = 0;              // was there a file there before
+static unsigned long pend_pre_mtime = 0;
+static long long pend_pre_size = 0;
+
 static void pend_start(const chome_item *it, int slot)
 {
 	if (!lib_slot_target(it, susp_slot(), pend_src, sizeof(pend_src))) return;
@@ -3724,6 +3736,52 @@ static void pend_start(const chome_item *it, int slot)
 	printf("ClassicUI: slot %d is waiting for the held state\n", slot + 1);
 }
 
+/*
+  The same request on a core that pauses properly. No held state exists - there was nothing
+  to hold still - so the core is asked directly, which means letting it run: a save pulse is
+  only serviced by a running core. The menu stays up over the same still, the game is
+  already muted, and the pause goes back on as soon as the state is there.
+
+  Before this, Save on such a core resumed the game and closed the menu, which reads as the
+  front-end throwing you out for pressing Save. SMS is the first core Dinofly has that pauses,
+  which is how it surfaced.
+*/
+static int pend_direct_start(const chome_item *it, int slot)
+{
+	if (!lib_slot_target(it, slot, pend_src, sizeof(pend_src))) return 0;
+	snprintf(pend_dst, sizeof(pend_dst), "%s", pend_src);
+	if (!slot_png_path(it, slot, pend_png, sizeof(pend_png))) pend_png[0] = 0;
+
+	// What the slot looks like now, so its replacement can be recognised.
+	struct stat st;
+	pend_pre_ok = !stat(pend_src, &st);
+	pend_pre_mtime = pend_pre_ok ? (unsigned long)st.st_mtime : 0;
+	pend_pre_size = pend_pre_ok ? (long long)st.st_size : 0;
+
+	// Off with the pause, or the pulse is never serviced. ss_do_save() looks at ig_paused
+	// to decide whether to lift it around the pulse, so it must not still be set here.
+	int was = ig_paused;
+	ss_pause_release(ig_paused);
+	ig_paused = 0;
+
+	if (!ss_do_save(slot))
+	{
+		if (was) ig_paused = ss_pause_engage();
+		return 0;
+	}
+
+	pend_repause = was;
+	pend_slot = slot;
+	pend_reserved = -1;
+	pend_after = (unsigned long)time(0);
+	pend_until = GetTimer(8000);
+	pend_failed = -1;
+
+	ss_write_thumb(it, slot);              // the picture is of now, as in pend_start()
+	printf("ClassicUI: slot %d is waiting for the core to write it\n", slot + 1);
+	return 1;
+}
+
 // Runs every frame in every core, so a registered save finishes whether the menu is
 // still open or not.
 void chome_pend_poll()
@@ -3731,6 +3789,51 @@ void chome_pend_poll()
 	if (pend_slot < 0) return;
 
 	struct stat st;
+
+	if (pend_reserved < 0)
+	{
+		int done = (!stat(pend_src, &st)
+			&& (!pend_pre_ok || (unsigned long)st.st_mtime != pend_pre_mtime
+				|| (long long)st.st_size != pend_pre_size));
+
+		if (!done && pend_until && !CheckTimer(pend_until)) return;
+
+		/*
+		  At the deadline a file stamped at or after the request still counts: a slot
+		  overwritten inside the same second changes neither field.
+		*/
+		if (!done && !stat(pend_src, &st) && (unsigned long)st.st_mtime + 2 >= pend_after) done = 1;
+
+		/*
+		  Only while the menu is still up. The player may have closed it while this was in
+		  flight, and pausing a core they are playing would freeze the game on them.
+		*/
+		if (pend_repause)
+		{
+			if (ig_active) ig_paused = ss_pause_engage();
+			pend_repause = 0;
+		}
+
+		if (done)
+		{
+			printf("ClassicUI: the core wrote slot %d\n", pend_slot + 1);
+			chome_item *sel = cur_game();
+			if (sel) lib_refresh_slots(sel);
+			if (ig_have_item) lib_refresh_slots(&ig_item);
+		}
+		else
+		{
+			if (pend_png[0]) unlink(pend_png);
+			pend_failed = pend_slot;
+			printf("ClassicUI: the core never wrote slot %d\n", pend_slot + 1);
+		}
+
+		pend_slot = -1;
+		pend_until = 0;
+		mark_dirty();
+		return;
+	}
+
 	if (!stat(pend_src, &st) && (unsigned long)st.st_mtime + 2 >= pend_after)
 	{
 		if (copy_file(pend_src, pend_dst))
@@ -4655,8 +4758,11 @@ int chome_handle(uint32_t key)
 				/*
 				  And there are cores that never froze, because they pause properly. For
 				  those no held state is ever coming, so the core has to be asked - which
-				  means resuming, since a save pulse is only serviced by a running core.
+				  means letting it run. That can be done with the menu still up (see
+				  pend_direct_start); only if even that fails is the game resumed.
 				*/
+				if (ig_paused && pend_direct_start(it, slot_idx)) { mark_dirty(); break; }
+
 				if (ss_do_save(slot_idx)) { ig_frozen = 0; ig_close(1); }
 				else nudge();
 				break;
