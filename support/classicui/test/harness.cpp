@@ -1342,6 +1342,146 @@ static void assert_slot_match()
 	}
 }
 
+/*
+  The shelf must come back in the view the game was launched from. He was browsing the
+  NES system view, started Contra, opened the menu over it and got the all-games shelf
+  with Contra selected - which looks nearly right, and is a long walk back to where he
+  was.
+
+  Two things this has to arrange, because on the device they come for free. A game core
+  is a *fresh* MiSTer - launching re-execs - so its shelf statics are at their defaults
+  and the launched-from view exists only in the session record; here the same state is
+  reached by walking back out to the root shelf after the launch, which leaves exactly
+  what a re-exec leaves: root in memory, the system view on disk. And the record is read
+  once per process, so this has to be the first in-game open of the run - if a later
+  section is ever moved in front of it, these checks fail rather than quietly stop
+  meaning anything.
+*/
+static void assert_ingame_view()
+{
+	printf("\n== the launched-from view survives the game ==\n");
+
+	harness_set_menu_core(1);
+	harness_set_fb_supported(1);
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+
+	chome_leave();
+	press(KEY_MENU, 20);
+	frame(6);
+
+	int gbsys = -1;
+	for (int i = 0; i < lib_sys_count(); i++) if (!strcmp(lib_sys(i)->id, "gb")) gbsys = i;
+	if (gbsys < 0) { check(0, "the systems table has Game Boy"); return; }
+
+	// Systems is the second entry of the root shelf, and Game Boy has two games -
+	// so a shelf of two is unmistakably that view and not the unfiltered root.
+	for (int i = 0; i < 30; i++) press(KEY_LEFT, 2);
+	press(KEY_RIGHT, 6);
+	press(KEY_ENTER, 10);
+
+	int folder = -1;
+	for (int i = 0; i < lib_view_count(); i++)
+	{
+		const chome_entry *e = lib_view_entry(i);
+		if (e && e->sysidx == gbsys) { folder = i; break; }
+	}
+	if (folder < 0) { check(0, "the Systems folder lists Game Boy"); return; }
+
+	for (int i = 0; i < folder; i++) press(KEY_RIGHT, 4);
+	press(KEY_ENTER, 12);
+
+	int sysn = lib_view_count();
+	printf("  the Game Boy shelf holds %d entries\n", sysn);
+	check(sysn == 2 && lib_view_entry(0)->kind == ENT_GAME, "the Game Boy system view is up");
+	dump("ingameview-1-launched-from");
+
+	// Tetris sorts first, and it is the game the in-game sections run.
+	harness_clear_launch();
+	press(KEY_ENTER, 4);
+	frame(80);                                // let the 900ms curtain elapse
+	check(strstr(harness_last_launch(), ".mgl") != 0, "a game was launched from that view");
+
+	{
+		FILE *f = fopen(ROOT "/config/classicui_session.cfg", "rb");
+		check(f != 0, "the launch wrote a session record");
+		if (f)
+		{
+			uint32_t magic = 0;
+			int fields[3] = {};
+			size_t got = fread(&magic, sizeof(magic), 1, f);
+			got += fread(fields, sizeof(fields), 1, f);
+			fclose(f);
+			printf("  session: view=%d sys=%d sort=%d\n", fields[0], fields[1], fields[2]);
+			check(got == 2 && fields[0] == VIEW_SYS && fields[1] == gbsys,
+				"and it holds the system view, not the root");
+		}
+	}
+
+	// The fresh process a launch really gets: nothing in memory but the root shelf.
+	press(KEY_ESC, 10);
+	press(KEY_ESC, 10);
+	check(lib_view_count() > sysn && lib_view_entry(0)->kind == ENT_FOLDER,
+		"the shelf is walked back to the root, as a re-exec would leave it");
+
+	// ...and now the game core, with the record from the launch still on the card.
+	harness_set_menu_core(0);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+	chome_handle(0);
+	press(KEY_MENU, 20);
+	check(chome_ingame_active(), "the menu opens over the game");
+	for (int i = 0; i < 40 && lib_scanning(); i++) frame(2);
+	frame(20);
+
+	int n = lib_view_count();
+	int only_gb = (n > 0);
+	for (int i = 0; i < n; i++)
+	{
+		const chome_entry *e = lib_view_entry(i);
+		if (!e || e->kind != ENT_GAME) { only_gb = 0; break; }
+		chome_item *it = lib_item(e->game);
+		if (!it || it->sysidx != gbsys) { only_gb = 0; break; }
+	}
+	printf("  the in-game shelf holds %d entries\n", n);
+	check(n == sysn && only_gb, "the in-game shelf is the view the game was launched from");
+	dump("ingameview-2-back-in-that-view");
+
+	/*
+	  And the selection is still the running game, inside that view - the point being
+	  that ig_select_running() now searches the restored view rather than the default
+	  one. Read through the favourite toggle, which acts on the selected game: there is
+	  no other way in from here to ask what the shelf is parked on.
+	*/
+	chome_item *tetris = 0;
+	for (int i = 0; i < lib_item_count(); i++)
+	{
+		chome_item *it = lib_item(i);
+		if (!strcmp(it->title, "Tetris")) tetris = it;
+	}
+	if (tetris)
+	{
+		int was = tetris->fav;
+		press(KEY_BACKSPACE, 8);
+		check(tetris->fav != was, "and it is parked on the running game");
+		press(KEY_BACKSPACE, 8);              // leave the library as it was found
+		check(tetris->fav == was, "with the favourite put back");
+	}
+	else check(0, "found Tetris in the index");
+
+	press(KEY_MENU, 16);
+	frame(8);
+	check(!chome_ingame_active(), "and the menu closes back into the game");
+
+	// The rest of the run expects the root shelf, so walk out of the restored view.
+	harness_set_menu_core(1);
+	chome_handle(0);
+	press(KEY_ESC, 10);
+	press(KEY_ESC, 10);
+	check(lib_view_entry(0)->kind == ENT_FOLDER, "the root shelf is back for what follows");
+}
+
 static void assert_ingame()
 {
 	printf("\n== in-game: the whole UI, over a running game ==\n");
@@ -2020,6 +2160,9 @@ int main()
 
 	walk_looks();
 	assert_launch();
+	// Before every other in-game section: the session record is read once per process,
+	// and this is the one that cares which process read it. See its own comment.
+	assert_ingame_view();
 	assert_ingame();
 	assert_save_on_pausing_core();
 	assert_freeze_off();
