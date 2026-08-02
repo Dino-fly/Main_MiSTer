@@ -111,6 +111,8 @@ static const ini_var_t ini_vars[] =
 	{ "RUMBLE", (void *)(&(cfg.rumble)), UINT8, 0, 1 },
 	{ "SNAC_PAD", (void *)(&(cfg.snac_pad)), UINT8, 0, 2 },
 	{ "SNAC_PSX", (void *)(&(cfg.snac_psx)), UINT8, 0, 1 },
+	{ "SNAC_PSX_FALLBACK", (void *)(&(cfg.snac_psx_fallback)), UINT8, 0, 1 },
+	{ "SNAC_PSX_MEMCARD", (void *)(&(cfg.snac_psx_memcard)), UINT8, 0, 1 },
 	{ "WHEEL_FORCE", (void*)(&(cfg.wheel_force)), UINT8, 0, 100 },
 	{ "WHEEL_RANGE", (void*)(&(cfg.wheel_range)), UINT16, 0, 1000 },
 	{ "HDMI_GAME_MODE", (void *)(&(cfg.hdmi_game_mode)), UINT8, 0, 1 },
@@ -607,6 +609,8 @@ void cfg_parse()
 	cfg.fb_terminal = 1;
 	cfg.controller_info = 6;
 	cfg.browse_expand = 1;
+	// The PSX SNAC fallback is on unless asked otherwise; a zeroed struct would mean off.
+	cfg.snac_psx_fallback = 1;
 	cfg.logo = 1;
 	cfg.rumble = 1;
 	/*

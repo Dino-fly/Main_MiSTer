@@ -11,7 +11,7 @@
 // Select+Start -> OSD button synthesis). Can be set per-core.
 //
 // The PSX core is the exception, and snac_psx chooses which reader owns the port
-// there - see psx_native_apply() below.
+// there - see the note above psx_hand_over() below.
 
 #include <stdio.h>
 #include <string.h>
@@ -250,10 +250,39 @@ static void pad_update(int idx, int connected, uint8_t id, uint16_t buttons, con
 
   So: snac_psx=0 (default) native, snac_psx=1 emulated. It is read per-core like every
   other key, but only ever consulted on the PSX core.
+
+  Why this cannot be chosen per port, which is the obvious thing to want. The adapter
+  gives each port its own ATT but shares CLK, CMD, DAT and ACK - one bus, two chip
+  selects. Whoever drives it drives both ports, so "native on port 1, emulated on
+  port 2" would be two masters on the same wires. The choice is for the pair.
+
+  What *is* per port is which of the core's own pads is pointed at SNAC: Pad1 and Pad2
+  are separate options. So in native mode the ports are handled one at a time, and a
+  port with nothing in it is left on the core's virtual pad, where a USB or Bluetooth
+  controller can still be that player.
+
+  Which needs knowing what is plugged in, so the reader is run first. It reports a
+  connected flag per port, and it is the only thing that can: it is also the only
+  reason to keep it enabled at all when nothing is connected to either port - a pad
+  plugged in later then still appears, and can still open the menu. That is the
+  fallback, and snac_psx_fallback=0 turns it off and commits to native regardless.
+
+  Memory cards cannot take part in any of this, and it is worth saying why. The core
+  offers one option for both slots - "SNAC MemCard,Virtual,Real", not one per card -
+  so there is nothing per-slot to control. And this reader could not detect them
+  anyway: it addresses the controller (0x01) and a memory card answers to 0x81, which
+  it never sends. Detecting a card would be a change to psx_snac_pad.sv and a rebuild
+  of every core. So snac_psx_memcard is a plain manual choice, virtual by default,
+  because "Real" with no card in the slot means no memory card at all.
 */
-static int psx_native = 0;      // the core owns the port on this core
-static int psx_applied = 0;     // its Pad1 option has been set, or given up on
-static unsigned long psx_next = 0;
+#define PSX_PROBE_MS 400
+
+static int psx_native = 0;      // the core owns the bus on this core
+static int psx_phase = 0;       // 0 probing, 1 settled
+static int psx_probe_ok = 0;    // the reader answered, so presence is knowable
+static int psx_seen[2] = {};    // a pad was seen on that port during the probe
+static unsigned long psx_until = 0;
+static int psx_emulate = 0;     // probe found nothing, so the reader is kept
 
 // Everything before the first comma, minus the D<n>/h<n> hide markers and the
 // leading O, which is what user_io_status_bits() wants.
@@ -281,27 +310,13 @@ static int confstr_spec(const char *line, char *out, int len)
 }
 
 /*
-  Point the core's own Pad1 at the port.
+  Set one of the core's own options by name, to the value with that name.
 
-  Without this, "native" would mean the reader stands down and the core carries on
-  with its default Dualshock - a virtual pad nothing is feeding - and the player gets
-  no input at all, which is worse than either mode. The value is found by name rather
-  than by index: the list has thirteen entries today and a core is free to add more.
-
-  Only Pad1. Setting Pad2 as well would take player two away from whoever has a USB
-  pad in the second slot and no second SNAC port, and the core's own menu is one press
-  away for anybody who wants it.
-
-  Nothing is written to the core's config. This applies at core load and lasts as long
-  as the core does, so a player who changes Pad1 by hand keeps their choice until the
-  next load, and snac_psx=1 is how to stop it happening at all.
+  By name in both directions on purpose: Pad1 has thirteen values today and a core is
+  free to add more, so an index would be a guess with a wrong controller as the prize.
 */
-static void psx_native_apply()
+static int confstr_set(const char *option, const char *value)
 {
-	if (psx_applied || !psx_native) return;
-	if (psx_next && !CheckTimer(psx_next)) return;
-	psx_next = GetTimer(500);
-
 	for (int i = 1; i < 64; i++)
 	{
 		char *line = user_io_get_confstr(i);
@@ -314,31 +329,63 @@ static void psx_native_apply()
 		if (!name) continue;
 		name++;
 
-		if (strncasecmp(name, "Pad1,", 5)) continue;
+		size_t nlen = strlen(option);
+		if (strncasecmp(name, option, nlen) || name[nlen] != ',') continue;
 
-		// The values follow the name, in order; the index is what the option takes.
-		const char *v = name + 5;
+		const char *v = name + nlen + 1;
 		for (int idx = 0; *v; idx++)
 		{
 			const char *end = strchr(v, ',');
-			int n = end ? (int)(end - v) : (int)strlen(v);
+			size_t n = end ? (size_t)(end - v) : strlen(v);
 
-			if (n == 10 && !strncasecmp(v, "SNAC-port1", 10))
+			if (n == strlen(value) && !strncasecmp(v, value, n))
 			{
 				user_io_status_set(spec, (uint32_t)idx);
-				printf("snacpad: PSX core reads the port itself (Pad1 = SNAC-port1)\n");
-				psx_applied = 1;
-				return;
+				printf("snacpad: PSX %s = %s\n", option, value);
+				return 1;
 			}
 
 			if (!end) break;
 			v = end + 1;
 		}
 
-		printf("snacpad: PSX core has no SNAC-port1 in Pad1, leaving it alone\n");
-		psx_applied = 1;
+		printf("snacpad: PSX %s has no \"%s\", left alone\n", option, value);
+		return 0;
+	}
+	return 0;
+}
+
+/*
+  Hand the bus to the core, for the ports that have something on them.
+
+  Without pointing the core's pads at SNAC, "native" would leave it on its default
+  Dualshock - a virtual pad nothing is feeding - and the player would get no input at
+  all, which is worse than either mode.
+
+  Nothing is written to the core's config. This applies at core load and lasts as long
+  as the core does, so a player who changes Pad1 by hand keeps their choice until the
+  next load, and snac_psx=1 stops it happening at all.
+*/
+static void psx_hand_over()
+{
+	if (!psx_probe_ok)
+	{
+		// No reader in this core, so nothing is knowable and nothing is touched. The
+		// core's own SNAC options still work; they are just set by hand, as always.
+		printf("snacpad: PSX core has no reader, leaving its pad options alone\n");
 		return;
 	}
+
+	int force = (cfg.snac_psx_fallback == 0);
+
+	if (psx_seen[0] || force) confstr_set("Pad1", "SNAC-port1");
+	else printf("snacpad: nothing on SNAC port 1, leaving Pad1 virtual\n");
+
+	if (psx_seen[1] || force) confstr_set("Pad2", "SNAC-port2");
+	else printf("snacpad: nothing on SNAC port 2, leaving Pad2 virtual\n");
+
+	// One option for both slots, and undetectable - see the note above.
+	if (cfg.snac_psx_memcard) confstr_set("SNAC MemCard", "Real");
 }
 
 void snacpad_init()
@@ -347,22 +394,29 @@ void snacpad_init()
 	supported = -1;
 	enabled = 0;
 	psx_native = 0;
-	psx_applied = 0;
-	psx_next = 0;
+	psx_phase = 0;
+	psx_probe_ok = 0;
+	psx_seen[0] = psx_seen[1] = 0;
+	psx_until = 0;
+	psx_emulate = 0;
 	poll_timer = 0;
 }
 
 void snacpad_poll()
 {
 	/*
-	  On PSX the port belongs to the core unless the player asked otherwise, so the
-	  reader is held down and the core is pointed at the port instead. Both halves are
-	  here rather than at init: the CONF_STR is not readable that early.
+	  On PSX the bus belongs to the core unless the player asked otherwise - but which
+	  ports to hand it for depends on what is plugged in, and the reader is the only
+	  thing that can tell us. So it runs first, for PSX_PROBE_MS, and the hand-over
+	  happens after. All of it here rather than at init: the CONF_STR is not readable
+	  that early, and neither is a pad that has not been polled yet.
 	*/
-	psx_native = (cfg.snac_pad != 0) && is_psx() && (cfg.snac_psx == 0);
-	if (psx_native) psx_native_apply();
+	int psx_want_native = (cfg.snac_pad != 0) && is_psx() && (cfg.snac_psx == 0);
+	int probing = psx_want_native && (psx_phase == 0);
 
-	int want = (cfg.snac_pad != 0) && !psx_native;
+	psx_native = psx_want_native && !probing && !psx_emulate;
+
+	int want = (cfg.snac_pad != 0) && (!psx_native || probing);
 
 	/*
 	  With the feature off there is nothing to say to the core and no reason to touch
@@ -388,6 +442,12 @@ void snacpad_poll()
 			pad_destroy(0);
 			pad_destroy(1);
 		}
+		if (probing)
+		{
+			psx_probe_ok = 0;
+			psx_phase = 1;
+			psx_hand_over();
+		}
 		poll_timer = GetTimer(SNAC_RETRY_MS);
 		return;
 	}
@@ -408,6 +468,34 @@ void snacpad_poll()
 		supported = 1;
 	}
 	enabled = want;
+
+	if (probing)
+	{
+		psx_probe_ok = 1;
+		if (w0 >> 15) psx_seen[0] = 1;
+		if (w4 >> 15) psx_seen[1] = 1;
+
+		if (!psx_until) psx_until = GetTimer(PSX_PROBE_MS);
+		else if (CheckTimer(psx_until))
+		{
+			psx_phase = 1;
+
+			if (psx_seen[0] || psx_seen[1] || cfg.snac_psx_fallback == 0)
+			{
+				psx_hand_over();
+			}
+			else
+			{
+				/*
+				  Nothing on either port. Handing the bus over would buy nothing and
+				  cost the menu, so the reader keeps it: a pad plugged in later still
+				  appears, and can still open the front-end.
+				*/
+				psx_emulate = 1;
+				printf("snacpad: no SNAC pad on either port, staying emulated\n");
+			}
+		}
+	}
 
 	if (!want)
 	{
