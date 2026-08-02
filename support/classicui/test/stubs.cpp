@@ -414,6 +414,24 @@ static const char *fake_confstr_realpause[] =
 	0
 };
 
+/*
+  A core with only TWO savestate slots - PSX, GBA and WonderSwan are all like this, where
+  most cores offer four. The last slot is reserved to hold the game still, so such a core
+  leaves the player exactly one.
+*/
+static const char *fake_confstr_twoslot[] =
+{
+	"TWOSLOT",
+	"FS1,BIN,Load ROM",
+	"-",
+	"OV,Savestates to SDCard,On,Off",
+	"o01,Savestate Slot,1,2",
+	"h3RS,Save state (Alt-F1)",
+	"h3RT,Restore state (F1)",
+	"R0,Reset",
+	0
+};
+
 static int confstr_on = 1;
 void harness_set_confstr(int v) { confstr_on = v; }
 
@@ -423,7 +441,8 @@ char *user_io_get_confstr(int index)
 
 	const char **tbl = (confstr_on == 2) ? fake_confstr_nopause
 		: (confstr_on == 3) ? fake_confstr_slotty
-		: (confstr_on == 4) ? fake_confstr_realpause : fake_confstr;
+		: (confstr_on == 4) ? fake_confstr_realpause
+		: (confstr_on == 5) ? fake_confstr_twoslot : fake_confstr;
 	int n = 0;
 	while (tbl[n]) n++;
 

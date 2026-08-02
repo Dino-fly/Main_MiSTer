@@ -431,6 +431,7 @@ static void mark_dirty() { dirty = 1; }
 
 static const uint32_t *ig_live_ref(int w, int h);
 static void ig_close(int restore_video);
+static int user_slots();
 static void ig_select_running();
 static int ss_can_save();
 static int susp_matches(const chome_item *it);
@@ -1022,7 +1023,7 @@ static void draw_pips(const chome_profile *p)
 	if (!it) return;
 
 	int s = (p->id == PROF_HD) ? 2 : 1;
-	int d = 6 * s, gap = 5 * s, n = CH_SLOTS_USER;
+	int d = 6 * s, gap = 5 * s, n = user_slots();
 	int x0 = p->w / 2 - (n * d + (n - 1) * gap) / 2;
 
 	for (int i = 0; i < n; i++)
@@ -2104,7 +2105,7 @@ static void draw_suspend(const chome_profile *p)
 		return;
 	}
 
-	int n = CH_SLOTS_USER, tw = p->thumb_w, th = p->thumb_h, gap = p->thumb_gap;
+	int n = user_slots(), tw = p->thumb_w, th = p->thumb_h, gap = p->thumb_gap;
 	int x0 = (p->w - (n * tw + (n - 1) * gap)) / 2;
 	int ty = y + 18 * s + 6;
 
@@ -4022,7 +4023,7 @@ static void move_h(int dir)
 	case SCR_SUSPEND:
 	{
 		int n = slot_idx + dir;
-		if (n < 0 || n >= CH_SLOTS_USER) { nudge(); return; }
+		if (n < 0 || n >= user_slots()) { nudge(); return; }
 		slot_idx = n;
 		break;
 	}
@@ -4945,6 +4946,35 @@ static int susp_matches(const chome_item *it)
 
 // The core's last slot: a suspend is automatic and frequent, so it stays out of the
 // slots the player picked by hand.
+/*
+  How many slots the player actually gets.
+
+  The last slot a core offers is reserved to hold the game still while the menu is open
+  (susp_slot), so the player gets the ones before it - and a core does not have to offer
+  four. PSX, GBA and WonderSwan offer **two**, which leaves exactly one.
+
+  Showing three regardless meant the third slot *was* the reserved one: saving there
+  copied the held state onto itself and looked like it had worked, and loading it restored
+  the moment the menu was opened - which looks exactly like a load doing nothing. That is
+  what Dinofly hit on PSX with Destruction Derby.
+
+  Only knowable once the core is up, since the count comes from its CONF_STR. From the
+  shelf the strip is a display of files that already exist, not somewhere to save into, so
+  the full three are shown there as before.
+*/
+static int user_slots()
+{
+	if (!ig_active || !ss_hk_valid) return CH_SLOTS_USER;
+
+	const ss_hooks *h = ss_get();
+	if (!h->found_save && !h->found_load) return CH_SLOTS_USER;
+
+	int total = h->found_slot ? h->slot_count : 1;
+	int n = total - 1;
+	if (n < 0) n = 0;
+	return (n < CH_SLOTS_USER) ? n : CH_SLOTS_USER;
+}
+
 static int susp_slot()
 {
 	const ss_hooks *h = ss_get();

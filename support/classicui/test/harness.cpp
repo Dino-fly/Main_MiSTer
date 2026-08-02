@@ -1519,6 +1519,71 @@ static int fav_count()
   front-end looks. Remembering that first "nothing" is what left Dinofly's machine showing
   "No adapter" in Options while it was reachable over that very interface.
 */
+/*
+  A core with two slots gives the player one, not three.
+
+  The last slot is the one the menu holds the game still in, so three tiles on a two-slot
+  core meant the third tile *was* that reserved slot: saving there copied the held state
+  over itself and reported success, and loading it put the player back at the moment the
+  menu opened - indistinguishable from a load that did nothing. Dinofly hit it on PSX.
+*/
+static void assert_slot_count_follows_core()
+{
+	printf("\n== the strip shows the slots the core actually has ==\n");
+
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "gb\nTetris (World).gb\n"); fclose(f); }
+	}
+
+	harness_set_menu_core(0);
+	harness_set_fb_supported(1);
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+	chome_handle(0);
+	if (chome_ingame_active()) press(KEY_MENU, 14);
+	frame(6);
+
+	// Four slots: three for the player.
+	harness_set_confstr(1);
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 40 && lib_scanning(); i++) frame(2);
+	frame(16);
+	press(KEY_DOWN, 18);
+	unsigned long four = harness_fb_hash(0, 720);
+	press(KEY_RIGHT, 8);
+	check(harness_fb_hash(0, 720) != four, "on a four-slot core the cursor moves off slot 1");
+	press(KEY_ESC, 10);
+	press(KEY_MENU, 16);
+	frame(8);
+
+	// Two slots: one for the player, so there is nowhere to move to.
+	harness_set_confstr(5);
+	press(KEY_MENU, 20);
+	frame(16);
+	press(KEY_DOWN, 18);
+	frame(60);
+	check(harness_fb_hash(0, 720) != four, "a two-slot core draws a different strip");
+
+	/*
+	  What this check can and cannot prove, since it is easy to fool yourself here. A
+	  different strip means the count follows the core rather than being hardcoded at three
+	  - that is the bug Dinofly hit, and this fails without the fix. It does NOT pin the exact
+	  arithmetic: an off-by-one that offered two slots instead of one would still draw
+	  something different and still pass.
+
+	  Two observables were tried and discarded rather than left in. Comparing whole-screen
+	  hashes after pressing right measures the *nudge animation* and any cover art that
+	  decoded in between, not the cursor. Asserting where a save lands is vacuous here,
+	  because the fake core never writes a state file - only a real one does.
+	*/
+
+	press(KEY_MENU, 16);
+	frame(8);
+	harness_set_confstr(1);
+}
+
 static void assert_wifi_adapter_appears()
 {
 	printf("\n== an adapter that turns up late is still found ==\n");
@@ -2700,6 +2765,7 @@ int main()
 	assert_ingame();
 	assert_save_on_pausing_core();
 	assert_freeze_off();
+	assert_slot_count_follows_core();
 	assert_wifi_adapter_appears();
 	assert_back_leftmost();
 	assert_slot_match();
