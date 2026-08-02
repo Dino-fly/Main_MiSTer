@@ -438,6 +438,7 @@ static int susp_matches(const chome_item *it);
 static int ig_load_item();
 static void quit_to_home(int suspend);
 static int ss_can_load();
+static void draw_running_warning(const chome_profile *p);
 static int ss_do_save(int slot);
 static int ss_do_load(int slot);
 static void ss_pause_release(int engaged);
@@ -3925,6 +3926,9 @@ static void render()
 	default: break;
 	}
 
+	// Over the panels too: a game that is still playing is true whatever is on top of it.
+	draw_running_warning(p);
+
 	// Last, and over everything: while the keyboard is up it is the only thing the
 	// player can act on.
 	if (osk_active()) osk_draw(p, using_pad);
@@ -5337,6 +5341,33 @@ static int pend_direct_start(const chome_item *it, int slot)
 	ss_write_thumb(it, slot);              // the picture is of now, as in pend_start()
 	printf("ClassicUI: slot %d is waiting for the core to write it\n", slot + 1);
 	return 1;
+}
+
+/*
+  The one case where the menu does not stop the game.
+
+  Every other core is either paused or held still by a state, so the player can read a
+  screen for as long as they like. A core with neither offers nothing to hold it with:
+  the game plays on behind this menu and they can lose a life while deciding what to
+  do. That is not something to infer from movement in the corner of the screen, so it
+  says so across the top.
+
+  Not while a save is in flight on a core that does pause: pend_direct_start() takes
+  the pause off deliberately, because a save pulse is only serviced by a running core,
+  and a red bar flashing up for that would be a lie about the core rather than a
+  warning about it.
+*/
+static void draw_running_warning(const chome_profile *p)
+{
+	if (!ig_active || ig_paused || ig_frozen || pend_repause) return;
+
+	int s = p->ts_ui;
+	int h = 13 * s;
+
+	gfx_fill(0, 0, p->w, h, COL_RED);
+	gfx_fill(0, h, p->w, (s > 1) ? 2 : 1, COL_SHADOW);
+	gfx_text_c("STILL PLAYING - this system cannot pause your game",
+		p->w / 2, (h - 7 * s) / 2, s, COL_WHITE, 0);
 }
 
 // Runs every frame in every core, so a registered save finishes whether the menu is

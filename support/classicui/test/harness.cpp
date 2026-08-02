@@ -2609,10 +2609,33 @@ static void assert_ingame()
 	}
 	harness_set_confstr(1);
 
-	// A core with no savestate or pause entries is left completely alone.
+	/*
+	  A core with no savestate or pause entries is left completely alone.
+
+	  The block above finishes inside the menu, and MENU is a toggle - so opening it
+	  here was closing it, and every check below ran against the shelf. One of them
+	  read the pause bit of a core that was not even showing a menu and passed for it.
+	*/
+	if (chome_ingame_active()) { press(KEY_MENU, 16); frame(6); }
 	harness_set_confstr(0);
 	press(KEY_MENU, 20);
+	check(chome_ingame_active(), "the menu opens on a core with neither pause nor states");
 	check(harness_pause_val() == 0, "a core with no pause entry keeps running");
+
+	/*
+	  And says so. This is the one core where the game is not stopped, so it is the one
+	  core that has to admit it - counted as red across the top row rather than hashed,
+	  because a hash only says the top of the screen differs and the whole point is
+	  *what* it says.
+	*/
+	frame(6);
+	{
+		const uint32_t *fb = harness_fb_shown();
+		int w = gfx_w(), red = 0;
+		for (int x = 0; fb && x < w; x++) if (fb[x] == 0xffc4353cu) red++;
+		check(red > w / 2, "and warns across the top that the game is still playing");
+		dump("still-playing-warning");
+	}
 	press(KEY_DOWN, 16);
 	harness_reset_status();
 	press(KEY_BACKSPACE, 8);
