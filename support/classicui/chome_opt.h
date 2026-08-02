@@ -40,8 +40,7 @@
 
 #include <inttypes.h>
 
-#define OPT_MAX        24        // the table, and the view built from it
-#define OPT_CHOICE_MAX 6
+#define OPT_MAX 24               // the table, and the view built from it
 
 // What kind of thing the value is, which is also how left and right behave on it.
 #define OPT_LIST   0             // one of a short list of named values
@@ -52,7 +51,6 @@
 #define OG_PICTURE 0
 #define OG_PADS    1
 #define OG_MENU    2
-#define OG_COUNT   3
 
 // When a written value starts being true.
 #define OW_NOW   0               // this session is already living under it
@@ -115,7 +113,6 @@ int opt_view(int *out, int max, int scaler_visible);
 void opt_load(const char *path);
 
 int opt_value(int i);            // what it is set to now, edits included
-int opt_saved(int i);            // what the file said when it was read
 int opt_present(int i);          // the key was in the file at all
 int opt_is_rec(int i);           // the value is the recommended one - what the colour says
 
@@ -142,7 +139,6 @@ const char *opt_value_text(int i, char *buf, int max);
 const char *opt_rec_text(int i, char *buf, int max);
 
 int opt_dirty();                 // edits not yet written
-int opt_dirty_at(int i);
 
 /*
   Write the edits. Only what changed is written: a settings screen that wrote all of

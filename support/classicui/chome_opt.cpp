@@ -166,10 +166,8 @@ void opt_load(const char *path)
 }
 
 int opt_value(int i)   { return (i >= 0 && i < NOPTS) ? cur[i] : 0; }
-int opt_saved(int i)   { return (i >= 0 && i < NOPTS) ? was[i] : 0; }
 int opt_present(int i) { return (i >= 0 && i < NOPTS) ? present[i] : 0; }
 int opt_is_rec(int i)  { return (i >= 0 && i < NOPTS) ? (cur[i] == opts[i].rec) : 1; }
-int opt_dirty_at(int i){ return (i >= 0 && i < NOPTS) ? (cur[i] != was[i]) : 0; }
 
 int opt_set(int i, int v)
 {
