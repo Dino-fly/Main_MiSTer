@@ -24,6 +24,14 @@
 #define SCAN_OUT "/tmp/chome_scan.txt"
 #define LINK_OUT "/tmp/chome_link.txt"
 
+/*
+  The join child's progress, one digit written after each step it completes. A file
+  rather than a pipe because the parent is a frame loop that must never block or poll
+  a descriptor it might have to drain, and because a whole-file rewrite of one byte is
+  the one write a reader cannot catch half-finished.
+*/
+#define JOIN_OUT "/tmp/chome_join.txt"
+
 #define K_NONE 0
 #define K_SCAN 1
 #define K_LINK 2
@@ -43,6 +51,7 @@ static int kind = K_NONE;
 static int scanning = 0;
 static int join_state = JOIN_IDLE;
 static char join_detail[96];
+static int join_phase = 0;
 
 static int watching = 0;
 static unsigned long link_due = 0;
@@ -87,8 +96,13 @@ const char *net_iface()
 	return iface;
 }
 
+static int forced_present = -1;
+
+void net_force_present(int on) { forced_present = on; }
+
 int net_present()
 {
+	if (forced_present >= 0) return forced_present ? 1 : 0;
 	return net_iface()[0] ? 1 : 0;
 }
 
@@ -476,6 +490,18 @@ void net_scan_start()
 int net_scanning() { return scanning; }
 int net_count() { return nap; }
 
+void net_force_scanning(int on) { scanning = on ? 1 : 0; }
+
+void net_force_join(int state, const char *detail)
+{
+	join_state = state;
+	snprintf(join_detail, sizeof(join_detail), "%s", detail ? detail : "");
+
+	// And the phase with it, exactly as net_join() does: the phase only moves forward,
+	// so a fresh join that inherited the last one's would open nearly complete.
+	join_phase = 0;
+}
+
 const net_ap *net_at(int i)
 {
 	if (i < 0 || i >= nap) return 0;
@@ -487,6 +513,51 @@ const net_ap *net_at(int i)
 static char join_ssid[NET_SSID];
 static char join_psk[80];
 static int join_secure = 0;
+
+/*
+  Called by the child only, after each step it finishes. Written whole and short so a
+  parent that reads it mid-write gets either the old digit or the new one.
+*/
+static void join_report(int phase)
+{
+	FILE *f = fopen(JOIN_OUT, "wb");
+	if (!f) return;
+	fprintf(f, "%d\n", phase);
+	fclose(f);
+}
+
+void net_ingest_join_phase(const char *text)
+{
+	if (!text) return;
+
+	while (*text == ' ' || *text == '\t' || *text == '\n') text++;
+	if (*text < '0' || *text > '9') return;
+
+	int v = *text - '0';
+	if (v == JOIN_ROLLBACK) { join_phase = JOIN_ROLLBACK; return; }
+	if (v < 0 || v > JOIN_STEPS) return;
+
+	// Forward only. The child writes in order, but a stale file from the previous
+	// join is exactly what a fresh one would read on its first frame.
+	if (join_phase != JOIN_ROLLBACK && v > join_phase) join_phase = v;
+}
+
+int net_join_phase() { return join_phase; }
+
+const char *net_join_phase_name(int phase)
+{
+	// What is being waited for, in the words of somebody standing in the room, not
+	// the names of the commands. "ifup" means nothing to the audience for this menu.
+	switch (phase)
+	{
+	case 0: return "Saving it";
+	case 1: return "Restarting Wi-Fi";
+	case 2: return "Finding the network";
+	case 3: return "Getting an address";
+	case JOIN_ROLLBACK: return "Putting your old network back";
+	}
+	return "Connected";
+}
 
 /*
   The child half of a join. It may block for as long as it likes.
@@ -517,12 +588,14 @@ static void join_child()
 	fwrite(conf, 1, (size_t)n, f);
 	fclose(f);
 	sync();
+	join_report(1);
 
 	const char *dn[] = { "ifdown", net_iface(), 0 };
 	const char *up[] = { "ifup", net_iface(), 0 };
 
 	run_quiet(dn);
 	run_quiet(up);
+	join_report(2);
 
 	/*
 	  Associated is not enough: a wrong password associates and then falls off, and
@@ -547,15 +620,22 @@ static void join_child()
 		if (!up_now) continue;
 		if (strcmp(l.ssid, join_ssid)) continue;   // associated, but not to this one
 
+		// Associated. Reported here rather than after the loop because this is where
+		// the wait changes character: the password was right and DHCP is the hold-up.
+		join_report(3);
+
 		read_ip(&l);
 		if (l.ip[0]) ok = 1;
 	}
 
 	if (ok)
 	{
+		join_report(JOIN_STEPS);
 		free(old);
 		_exit(0);
 	}
+
+	join_report(JOIN_ROLLBACK);
 
 	// Put it back exactly as it was.
 	if (old)
@@ -603,6 +683,14 @@ void net_join(const char *ssid, const char *psk, int secure)
 
 	join_state = JOIN_WORK;
 	snprintf(join_detail, sizeof(join_detail), "%s", join_ssid);
+
+	/*
+	  Before the fork, and the stale file with it: the phase only ever moves forward,
+	  so a leftover "3" from the last attempt would show this one as nearly done from
+	  its first frame.
+	*/
+	join_phase = 0;
+	remove(JOIN_OUT);
 
 	pid_t p = fork();
 	if (!p) join_child();
@@ -675,6 +763,17 @@ void net_poll()
 		child_kill = 0;
 	}
 
+	/*
+	  A join reports where it has got to as it goes, and unlike everything else here
+	  that means reading from a child that is still running. Once a frame is plenty:
+	  the steps are seconds apart.
+	*/
+	if (child > 0 && kind == K_JOIN)
+	{
+		char *t = slurp(JOIN_OUT);
+		if (t) { net_ingest_join_phase(t); free(t); }
+	}
+
 	if (child > 0)
 	{
 		int st = 0;
@@ -718,6 +817,11 @@ void net_poll()
 				}
 
 				join_state = (code == 0) ? JOIN_OK : (code == 2) ? JOIN_LOST : JOIN_FAIL;
+
+				// The last report the child managed to write may have been lost to the
+				// race with its own exit; a join that returned 0 is finished whatever
+				// the file says. A failed one keeps whatever step it reached.
+				if (join_state == JOIN_OK) join_phase = JOIN_STEPS;
 
 				if (join_state == JOIN_OK)
 					snprintf(join_detail, sizeof(join_detail), "%s", join_ssid);

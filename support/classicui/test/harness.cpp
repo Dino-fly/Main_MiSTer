@@ -456,6 +456,42 @@ static int panel_rows_pixels(uint32_t want)
 	return n;
 }
 
+/*
+  How many pixels in a box are exactly one colour. Same licence as panel_rows_pixels()
+  above: gfx_fill() and the font both write colours through unblended, so an exact
+  match finds what was drawn in that colour and nothing else.
+
+  It is how the activity indicators are checked. gfx_spinner() fills its head at full
+  strength and blends only the tail, so a count of the ring's own colour is a count of
+  heads - one when the ring is up, none when it is not.
+*/
+static int box_pixels(int x0, int y0, int x1, int y1, uint32_t want)
+{
+	const uint32_t *fb = harness_fb_shown();
+	int w = gfx_w(), h = gfx_h();
+	if (!fb || w < 1 || h < 1) return 0;
+
+	if (x0 < 0) x0 = 0;
+	if (y0 < 0) y0 = 0;
+	if (x1 > w) x1 = w;
+	if (y1 > h) y1 = h;
+
+	int n = 0;
+	for (int y = y0; y < y1; y++)
+		for (int x = x0; x < x1; x++)
+			if ((fb[(size_t)y * w + x] | 0xff000000u) == want) n++;
+
+	return n;
+}
+
+// Over the same box pt_panel_hash() fingerprints, which at every profile is inside the
+// Wi-Fi and Controllers panels and outside the shelf behind them.
+static int panel_pixels(uint32_t want)
+{
+	int w = gfx_w(), h = gfx_h();
+	return box_pixels(w / 4, h / 2 - h / 6, (3 * w) / 4, h / 2 + h / 6, want);
+}
+
 static int opt_find(const char *key)
 {
 	for (int i = 0; i < opt_count(); i++)
@@ -3087,7 +3123,91 @@ int main()
 		dump("pads-3-pairing-failed");
 		check(bt_pair_state() == BTP_FAIL, "a finished pairing keeps the panel up until acknowledged");
 
+		/*
+		  A failure is left showing how far it got rather than emptied: "it never saw the
+		  pad" and "it paired and then could not connect" are different things to try
+		  next, and the track is the only place that distinction appears.
+		*/
+		check(bt_pair_step() == 2, "a failed pairing keeps the step it reached");
+
+		/*
+		  And stops dead. The step it stopped at is still filled, so a static panel is
+		  the only thing distinguishing "gave up at step two" from "working on step two"
+		  - which is the whole claim the animation is making.
+		*/
+		frame(14);
+		unsigned long hf = pt_panel_hash();
+		frame(20);
+		check(pt_panel_hash() == hf, "and nothing on it is still pretending to work");
+
 		bt_pair_ack();
+		frame(6);
+
+		/*
+		  The step the progress track is drawn from, read off btctl's own commentary. It
+		  is what makes the track honest: a pairing that stalls stops advancing it, which
+		  is the whole reason for showing it.
+		*/
+		bt_progress_reset();
+		check(bt_pair_step() == 0, "a pairing starts with nothing behind it");
+
+		bt_ingest_progress("NAME: 8BitDo SN30 Pro");
+		check(bt_pair_step() == 1, "finding a controller is the first step done");
+
+		bt_ingest_progress("Pairing...");
+		check(bt_pair_step() == 2, "pairing is the second");
+
+		// btctl emits this in the middle of a pairing it is still working on, so it must
+		// not walk the track backwards.
+		bt_ingest_progress("Searching...");
+		check(bt_pair_step() == 2, "and a line btctl repeats mid-pairing does not undo it");
+
+		bt_ingest_progress("Connecting...");
+		check(bt_pair_step() == 3, "connecting is the third");
+
+		bt_ingest_progress("Done.");
+		check(bt_pair_step() == BTP_STEPS, "and \"Done.\" is all of them");
+
+		// The next pad in the loop starts over. Without this the track would open full
+		// for a controller nothing has happened to yet.
+		bt_ingest_progress("NAME: Some Phone");
+		bt_ingest_progress("Skipping: non-input device");
+		check(bt_pair_step() == 0, "going back to looking empties it again");
+
+		/*
+		  And the panel, with the step driven through the same transcript. The completed
+		  segments are the only green on it while a pairing is running, so counting that
+		  colour is reading the track back off the screen.
+		*/
+		bt_progress_reset();
+		bt_ingest_progress("NAME: 8BitDo SN30 Pro");
+		frame(10);
+		dump("pads-11-pairing-found");
+		int pg1 = panel_pixels(COL_GREEN);
+		unsigned long ph1 = pt_panel_hash();
+
+		bt_ingest_progress("Pairing...");
+		bt_ingest_progress("Connecting...");
+		frame(10);
+		dump("pads-12-pairing-connecting");
+		int pg3 = panel_pixels(COL_GREEN);
+
+		check(pg1 > 0, "the pairing panel shows how far along it is");
+		check(pg3 > pg1, "and fills as btctl reports each step");
+		check(pt_panel_hash() != ph1, "so the panel changes when the step does");
+
+		// And the ring around the Bluetooth rune turns while - and only while - the
+		// conversation is live.
+		unsigned long pa1 = pt_panel_hash();
+		frame(12);
+		check(pt_panel_hash() != pa1, "a live pairing is visibly working, not hung");
+
+		bt_pair_ack();
+		frame(14);
+		unsigned long pi1 = pt_panel_hash();
+		frame(20);
+		check(pt_panel_hash() == pi1, "and an acknowledged one stops repainting");
+
 		frame(6);
 
 		/*
@@ -3322,6 +3442,253 @@ int main()
 		frame(6);
 	}
 
+	/*
+	  Waiting. The two screens where a player is left holding a button or a password and
+	  has to be told that something is happening - and the shared parts that tell them.
+
+	  What matters here and is not visible in a PNG is the *tie to real state*: the ring
+	  turns because a scan is running and stops because it stopped, and the track fills
+	  because the tool doing the work said so. So each of these drives the state the
+	  screen reads and then reads pixels back off the screen, rather than trusting that
+	  a call was made.
+	*/
+	printf("\n== waiting: activity and progress ==\n");
+	{
+		// The steps a join reports, before any of it is drawn. The child writes one
+		// digit per step and this is the only thing the parent reads.
+		net_force_join(JOIN_IDLE, "");
+		net_ingest_join_phase("0");
+		check(net_join_phase() == 0, "a join starts at its first step");
+
+		net_ingest_join_phase("2\n");
+		check(net_join_phase() == 2, "and follows the child's own report");
+
+		net_ingest_join_phase("1\n");
+		check(net_join_phase() == 2, "a step that arrives out of order does not walk it backwards");
+
+		net_ingest_join_phase("");
+		net_ingest_join_phase("x");
+		net_ingest_join_phase("7");
+		check(net_join_phase() == 2, "and neither does a truncated, empty or impossible one");
+
+		check(strcmp(net_join_phase_name(0), net_join_phase_name(3)) != 0,
+			"each step is named differently, or the track is the only thing moving");
+		check(!strstr(net_join_phase_name(1), "ifup") && !strstr(net_join_phase_name(2), "iw"),
+			"and named for what is being waited for, not for the command doing it");
+
+		net_ingest_join_phase("9");
+		check(net_join_phase() == JOIN_ROLLBACK, "a rollback is reported as itself, not as progress");
+
+		// And starting a join clears it, or the next attempt would open where the last
+		// one gave up.
+		net_force_join(JOIN_WORK, "X");
+		check(net_join_phase() == 0, "a new join starts with nothing behind it");
+		net_force_join(JOIN_IDLE, "");
+
+		/*
+		  Getting to the screen. There is no radio in the container, so presence, a
+		  running scan and a running join are all asserted - see net_force_present().
+
+		  With presence comes the link refresher, which runs `iw` every few seconds - and
+		  a container that has none would come back with nothing and read as "not
+		  connected", wiping the ingested link out from under the screen every time it
+		  happened to fire. So `iw` is faked into PATH answering the way it really does,
+		  the same bargain the controllers section makes with bluetoothctl. The real
+		  refresh path then runs, and whenever its child lands it lands on the same link.
+		*/
+		{
+			FILE *f = fopen("/usr/local/bin/iw", "w");
+			if (f)
+			{
+				fputs("#!/bin/sh\n"
+					"if [ \"$1\" = dev ]; then\n"
+					"  echo 'Connected to 74:da:88:1c:2b:aa (on wlan0)'\n"
+					"  printf '\\tSSID: BrainDamage\\n'\n"
+					"  printf '\\tsignal: -48 dBm\\n'\n"
+					"fi\n", f);
+				fclose(f);
+				chmod("/usr/local/bin/iw", 0755);
+			}
+		}
+
+		net_force_present(1);
+		net_force_scanning(0);
+		net_force_join(JOIN_IDLE, "");
+
+		harness_set_menu_core(1);
+		chome_leave();
+		press(KEY_MENU, 20);
+		frame(8);
+
+		press(KEY_UP, 10);                    // the menu bar
+		press(KEY_RIGHT, 10);                 // Options
+		press(KEY_ENTER, 14);
+		press(KEY_UP, 8);                     // wrap to the last row
+		press(KEY_UP, 8);                     // More Settings
+		press(KEY_UP, 8);                     // Best Settings
+		press(KEY_UP, 8);                     // and up to Wi-Fi
+		press(KEY_ENTER, 14);
+		frame(10);
+
+		/*
+		  An empty list with a radio present. Nothing else on this screen is drawn in
+		  COL_BLUE in that state - there is no row to select - so a count of it is a
+		  count of the ring's head, which gfx_spinner() fills rather than blends.
+		*/
+		net_ingest_scan("");
+		net_force_scanning(1);
+		frame(12);
+		dump("wifi-3-scanning-empty");
+
+		int spin_on = panel_pixels(COL_BLUE);
+		check(spin_on > 0, "a running scan is shown as a ring, not just as a sentence");
+
+		unsigned long h1 = pt_panel_hash();
+		frame(12);                            // ~190ms: more than one position of the ring
+		unsigned long h2 = pt_panel_hash();
+		frame(12);
+		unsigned long h3 = pt_panel_hash();
+		check(!(h1 == h2 && h2 == h3), "and the ring turns as the clock advances");
+
+		/*
+		  And stops when the scan does. This is the assertion that makes the animation
+		  worth having: a ring that spins while a screen is open says nothing.
+		*/
+		net_force_scanning(0);
+		frame(14);
+		dump("wifi-4-scan-finished");
+		check(panel_pixels(COL_BLUE) == 0, "a finished scan takes the ring away");
+
+		unsigned long q1 = pt_panel_hash();
+		frame(20);
+		check(pt_panel_hash() == q1, "and an idle screen does not repaint at all");
+
+		/*
+		  The list. Its rows carry a second line saying what each network is, which is
+		  what the padlock alone was asking the player to know; COL_DIM is that line and
+		  nothing else on the panel uses it.
+		*/
+		net_ingest_scan(SCAN_TEXT);
+		net_ingest_link(LINK_TEXT);
+		frame(12);
+		dump("wifi-5-rows");
+		check(panel_pixels(COL_DIM) > 0, "every network says what it is on a line of its own");
+
+		/*
+		  A scan running over a list that is already up. The ring moves to the footer so
+		  the list stays usable, and the rows must not have gone anywhere.
+		*/
+		net_force_scanning(1);
+		frame(12);
+		dump("wifi-6-scanning-more");
+		check(panel_pixels(COL_DIM) > 0, "and they stay while more are being looked for");
+		net_force_scanning(0);
+		frame(10);
+
+		/*
+		  The join panel. The track is driven by the phase the child reported and by
+		  nothing else, so more phases behind us must be more of the track filled -
+		  measured as green pixels, which is the only thing on this panel drawn in it
+		  while a join is running.
+		*/
+		net_force_join(JOIN_WORK, "HOME-WIFI");
+		net_ingest_join_phase("0");
+		net_ingest_join_phase("1");
+		frame(12);
+		dump("wifi-7-joining-early");
+		int g1 = panel_pixels(COL_GREEN);
+		unsigned long j1 = pt_panel_hash();
+
+		net_ingest_join_phase("3");
+		frame(12);
+		dump("wifi-8-joining-late");
+		int g3 = panel_pixels(COL_GREEN);
+
+		check(g1 > 0, "a running join shows how far it has got");
+		check(g3 > g1, "and the track follows the child's report rather than a timer");
+		check(pt_panel_hash() != j1, "so the panel changes when the step does");
+
+		// The sweep on the step being worked on keeps moving even though the step has
+		// not: the wait for DHCP has no progress inside it, and a still screen would
+		// read as a hung one.
+		unsigned long s1 = pt_panel_hash();
+		frame(12);
+		check(pt_panel_hash() != s1, "and the step being worked on is visibly still working");
+
+		/*
+		  A failure that had to put the old network back is not step four of joining, so
+		  it is drawn with none of the track filled rather than nearly all of it.
+		*/
+		net_force_join(JOIN_WORK, "HOME-WIFI");
+		net_ingest_join_phase("9");
+		frame(12);
+		dump("wifi-9-rolling-back");
+		check(panel_pixels(COL_GREEN) == 0, "a rollback is not drawn as progress");
+
+		net_force_join(JOIN_IDLE, "");
+		frame(8);
+
+		press(KEY_ESC, 10);
+		press(KEY_ESC, 10);
+		frame(6);
+
+		/*
+		  And both reworked screens on the canvas that can least afford them. Two-line
+		  rows and a status band are the changes most likely to run out of room at 240p,
+		  and they are also the profile Dinofly's own set gets - so the pictures are the
+		  point here, and the check is that the treatment survived rather than collapsing
+		  to a panel with no rows in it. COL_DIM is the second line of a row and nothing
+		  else on either panel is drawn in it.
+		*/
+		int was_profile = cfg.classicui_profile;
+
+		cfg.classicui_profile = 3;
+		harness_set_fb(320, 240);
+		gfx_shutdown();
+		theme_update(320, 240, 3);
+		chome_leave();
+		press(KEY_MENU, 20);
+		frame(10);
+
+		/*
+		  No RIGHT here, unlike every other walk to Options above: Display drops out of
+		  the menu bar at 240p (mb_visible), so Options is the first entry rather than
+		  the second and one press to the right would go straight past it.
+		*/
+		press(KEY_UP, 10);
+		press(KEY_ENTER, 14);
+		press(KEY_UP, 8);
+		press(KEY_UP, 8);
+		press(KEY_UP, 8);
+		press(KEY_UP, 8);                     // Wi-Fi
+		press(KEY_ENTER, 14);
+		frame(10);
+		dump("wifi-10-240p");
+		check(panel_pixels(COL_DIM) > 0, "the Wi-Fi rows keep their second line at 240p");
+
+		press(KEY_ESC, 10);
+		press(KEY_UP, 8);                     // Controllers
+		press(KEY_ENTER, 14);
+		frame(10);
+		dump("pads-13-240p");
+		check(panel_pixels(COL_DIM) > 0, "and so do the controller rows");
+
+		press(KEY_ESC, 10);
+		press(KEY_ESC, 10);
+		frame(6);
+
+		// Put the canvas and the forced profile back exactly as they were: the sections
+		// after this one have their own 240p cases and read cfg.classicui_profile to set
+		// them up, so leaving it forced makes them render at the wrong profile.
+		net_force_present(-1);
+		cfg.classicui_profile = was_profile;
+		harness_set_fb(1280, 720);
+		gfx_shutdown();
+		theme_update(1280, 720, was_profile);
+		chome_leave();
+		press(KEY_MENU, 20);
+		frame(8);
+	}
 	/*
 	  Best Settings. This rewrites the player's own MiSTer.ini, which is a
 	  hand-edited CRLF file full of their comments, so most of what is checked here is

@@ -71,6 +71,32 @@ int  net_join_state();
 const char *net_join_detail();
 void net_join_ack();
 
+/*
+  How far a running join has got, 0..JOIN_STEPS, so the screen can show progress
+  rather than a word that does not change for a minute.
+
+  It is the child's own report, not a timer: the join happens in a forked process that
+  may block for as long as it likes, and it writes the step it has reached to a file
+  after each one. A stalled join therefore stops advancing, which is exactly what the
+  player needs to be able to see.
+
+  JOIN_ROLLBACK is past the end on purpose. Putting the old network back is not step
+  five of getting onto the new one - it is what happens instead, and the screen says
+  so rather than filling the track as though something had succeeded.
+*/
+#define JOIN_STEPS    4             // saving -> restarting -> associating -> address
+#define JOIN_ROLLBACK 9
+
+int net_join_phase();
+const char *net_join_phase_name(int phase);
+
+/*
+  Makes `text` the phase, as read from the child's file. Exposed for the same reason
+  net_ingest_scan() is: it is the only part of a join a machine with no radio can
+  drive.
+*/
+void net_ingest_join_phase(const char *text);
+
 /* ----------------------------------------------------------------------------
   Pure parts, exposed because they are the parts a harness without a radio can
   actually check: real `iw` output goes in, the table comes out.
@@ -98,5 +124,25 @@ int net_conf_build(char *buf, size_t len, const char *country,
 // Reads country=XX out of an existing config, so rewriting the file does not throw
 // away the setting that decides which channels are legal here.
 int net_conf_country(const char *text, char *out, size_t len);
+
+/*
+  Three seams for a machine with no radio, the same bargain bt_force_present() makes.
+
+  net_present() stats a directory under /sys, and net_scanning() and net_join_state()
+  are set by children running `iw` and `ifup`. None of the three can be produced in a
+  container, and they are the entire input to the parts of the Wi-Fi screen where the
+  player is *waiting* - which is the half of that screen worth checking, since it is
+  the half with an animation in it that has to stop when the work does.
+
+  What is faked is only the answer, not the screen: the screen reads exactly these
+  functions and nothing else, the same way it reads the AP list net_ingest_scan()
+  supplies. Pass -1 to net_force_present() to get the real answer back.
+*/
+void net_force_present(int on);
+void net_force_scanning(int on);
+
+// Puts a join into `state` without a child, and resets the phase the way net_join()
+// does, so a forced join starts from nothing behind it like a real one.
+void net_force_join(int state, const char *detail);
 
 #endif

@@ -344,6 +344,52 @@ so this session agrees with the file. An option whose worst case is a machine th
 player cannot recover would need to say so on screen before it is set, the way
 closing a game does; nothing in the table today does.
 
+## Wi-Fi and Controllers: the screens where you wait
+
+These two are the only places in the front-end where the player asks for something and
+then has to stand there. Both are built from the same three pieces, which live beside
+`draw_rows()` in `chome_ui.cpp` and are deliberately general - the rest of Options
+wants the same treatment and a second copy would drift.
+
+| Piece | What it is |
+|---|---|
+| `draw_listrow()` | A row with an icon column, a title, a **second line** saying what the thing is, a state chip on the right and a colour stripe on the left. The stripe survives selection, so the one row the player is looking at is not the one row that stops saying what it is |
+| `draw_section()` | A heading and a rule over a group of rows, for one line |
+| `draw_progress()` | The mark, the headline, a **progress track** and the guidance, centred in the panel |
+
+What each screen gained:
+
+- **Wi-Fi** has a status band across the top - signal bars, the network, the address -
+  and each row says "Connected", "Needs a password" or "Open" instead of leaving that
+  to a padlock. A join is a progress screen with named steps.
+- **Controllers** groups the list into *ready to play* and *paired, not awake*, with a
+  player chip (`P1`) or `ASLEEP` on the right and what to do about it underneath. "Add
+  a Controller" is **pinned** to the foot of the panel and the list scrolls above it,
+  so it is reachable at any number of pads rather than at up to five of them.
+
+### The animation is a state, not a decoration
+
+`gfx_spinner()` and `gfx_track()` (`chome_gfx.cpp`) are the only animated things here
+and both are driven by what a real child process reported:
+
+- `bt_pair_step()` reads `btctl`'s own commentary - found, pairing, connecting, done -
+  so the track advancing is the pairing advancing, and a pairing that stalls stops the
+  track. A failure is left showing **how far it got**, because "it never saw the pad"
+  and "it paired and could not connect" are different things to try next.
+- `net_join_phase()` is the join child's own report. It writes one digit to
+  `/tmp/chome_join.txt` after each step and the parent reads it once a frame. Putting
+  the old network back is drawn as *no* progress rather than as a nearly-full bar - it
+  is not step five of joining, it is the opposite of it.
+
+`ui_busy()` decides whether anything turns, and returns 0 unless a scan, a join or a
+pairing is genuinely in flight. Nothing spins because a screen is open: an indicator
+that always spins teaches people to ignore it, and then it cannot do the one job it
+has, which is to say "this has not hung". A busy screen repaints at `GFX_SPIN_MS`
+(100 ms), not at frame rate - the ring has eight positions and a repaint is a full
+compose and blit, which matters over the minute a pairing can take.
+
+Neither indicator is an icon and neither wanted to be; see `ICONS.md`.
+
 ## The index cache
 
 Every core switch re-execs the binary, so without a cache the first menu open
