@@ -225,6 +225,17 @@ static void ref_shot_path(const char *sysid, const char *rompath, char *out, int
   which is what actually gets written; the strip is a fixed four wide and has always
   shown slots such a core does not have, which is cosmetic and predates this.
 */
+/*
+  How much of the frame a look preview shows, as a percentage of its width.
+
+  Fitting the whole frame into a tile a couple of hundred pixels wide destroys the very
+  thing these looks change: a scanline, a shadow mask and a soft filter all live at the
+  scale of single pixels, and squeezed down to fit they average out into a faint tint
+  that looks the same for every preset. Showing the middle of the frame instead trades
+  away picture the player already knows for the detail they are choosing between.
+*/
+#define VP_ZOOM_PCT   45
+
 #define CH_SLOTS      4
 #define CH_SLOTS_USER 3
 
@@ -431,12 +442,14 @@ static void mark_dirty() { dirty = 1; }
 
 static const uint32_t *ig_live_ref(int w, int h);
 static void ig_close(int restore_video);
+static int user_slots();
 static void ig_select_running();
 static int ss_can_save();
 static int susp_matches(const chome_item *it);
 static int ig_load_item();
 static void quit_to_home(int suspend);
 static int ss_can_load();
+static void draw_running_warning(const chome_profile *p);
 static int ss_do_save(int slot);
 static int ss_do_load(int slot);
 static void ss_pause_release(int engaged);
@@ -1022,7 +1035,7 @@ static void draw_pips(const chome_profile *p)
 	if (!it) return;
 
 	int s = (p->id == PROF_HD) ? 2 : 1;
-	int d = 6 * s, gap = 5 * s, n = CH_SLOTS_USER;
+	int d = 6 * s, gap = 5 * s, n = user_slots();
 	int x0 = p->w / 2 - (n * d + (n - 1) * gap) / 2;
 
 	for (int i = 0; i < n; i++)
@@ -2104,7 +2117,7 @@ static void draw_suspend(const chome_profile *p)
 		return;
 	}
 
-	int n = CH_SLOTS_USER, tw = p->thumb_w, th = p->thumb_h, gap = p->thumb_gap;
+	int n = user_slots(), tw = p->thumb_w, th = p->thumb_h, gap = p->thumb_gap;
 	int x0 = (p->w - (n * tw + (n - 1) * gap)) / 2;
 	int ty = y + 18 * s + 6;
 
@@ -2182,6 +2195,44 @@ static void draw_radio(int cx, int cy, int r, int on)
 	if (on) gfx_fill(cx - r / 2, cy - r / 2, r, r, COL_RED);
 }
 
+/*
+  A stored picture, cropped the same way the live frame is.
+
+  Decoded larger than the tile and then taken from the middle at 1:1, so a preset's
+  detail survives at the size it is judged. Deliberately not cached here: art_thumb()
+  already caches the decode, and a second cache in front of it would be one more place
+  to hand back the picture a file used to have - which is the bug this module has
+  already had once.
+*/
+static const uint32_t *ref_zoom(const char *path, int w, int h)
+{
+	static uint32_t *buf = 0;
+	static int bw = 0, bh = 0;
+
+	if (!path || !*path || w < 1 || h < 1) return 0;
+
+	int fw = w * 100 / VP_ZOOM_PCT;
+	int fh = h * 100 / VP_ZOOM_PCT;
+	const uint32_t *full = art_thumb(path, fw, fh);
+	if (!full) return 0;
+
+	if (!buf || bw != w || bh != h)
+	{
+		free(buf);
+		buf = (uint32_t*)malloc((size_t)w * h * 4);
+		if (!buf) { bw = bh = 0; return 0; }
+		bw = w;
+		bh = h;
+	}
+
+	int ox = (fw - w) / 2;
+	int oy = (fh - h) / 2;
+	for (int y = 0; y < h; y++)
+		memcpy(buf + (size_t)y * w, full + (size_t)(oy + y) * fw + ox, (size_t)w * 4);
+
+	return buf;
+}
+
 static void draw_display_screen(const chome_profile *p)
 {
 	int s = p->ts_ui;
@@ -2237,7 +2288,7 @@ static void draw_display_screen(const chome_profile *p)
 	if (!ref)
 	{
 		char rp[1024];
-		if (ref_shot_for(it, rp, sizeof(rp))) ref = art_thumb(rp, tile_w, tile_h);
+		if (ref_shot_for(it, rp, sizeof(rp))) ref = ref_zoom(rp, tile_w, tile_h);
 	}
 
 	// Which hardware these looks belong to.
@@ -3924,6 +3975,9 @@ static void render()
 	default: break;
 	}
 
+	// Over the panels too: a game that is still playing is true whatever is on top of it.
+	draw_running_warning(p);
+
 	// Last, and over everything: while the keyboard is up it is the only thing the
 	// player can act on.
 	if (osk_active()) osk_draw(p, using_pad);
@@ -4022,7 +4076,7 @@ static void move_h(int dir)
 	case SCR_SUSPEND:
 	{
 		int n = slot_idx + dir;
-		if (n < 0 || n >= CH_SLOTS_USER) { nudge(); return; }
+		if (n < 0 || n >= user_slots()) { nudge(); return; }
 		slot_idx = n;
 		break;
 	}
@@ -4284,6 +4338,10 @@ static void accept()
 		if (look_row < 0 || look_row >= n) { nudge(); break; }
 
 		vp_set(lit->sysidx, vclass, opts[look_row]);
+
+		// The game it applies to is on screen behind this menu, so show it there now.
+		if (ig_active && ig_is_running(lit)) vp_apply_now(lit->sysidx, vclass);
+
 		printf("ClassicUI: %s (%s) now uses look \"%s\"\n",
 			lib_sys(lit->sysidx) ? lib_sys(lit->sysidx)->name : "?",
 			vp_class_label(vclass), vp_name(opts[look_row]));
@@ -4945,6 +5003,35 @@ static int susp_matches(const chome_item *it)
 
 // The core's last slot: a suspend is automatic and frequent, so it stays out of the
 // slots the player picked by hand.
+/*
+  How many slots the player actually gets.
+
+  The last slot a core offers is reserved to hold the game still while the menu is open
+  (susp_slot), so the player gets the ones before it - and a core does not have to offer
+  four. PSX, GBA and WonderSwan offer **two**, which leaves exactly one.
+
+  Showing three regardless meant the third slot *was* the reserved one: saving there
+  copied the held state onto itself and looked like it had worked, and loading it restored
+  the moment the menu was opened - which looks exactly like a load doing nothing. That is
+  what Derek hit on PSX with Destruction Derby.
+
+  Only knowable once the core is up, since the count comes from its CONF_STR. From the
+  shelf the strip is a display of files that already exist, not somewhere to save into, so
+  the full three are shown there as before.
+*/
+static int user_slots()
+{
+	if (!ig_active || !ss_hk_valid) return CH_SLOTS_USER;
+
+	const ss_hooks *h = ss_get();
+	if (!h->found_save && !h->found_load) return CH_SLOTS_USER;
+
+	int total = h->found_slot ? h->slot_count : 1;
+	int n = total - 1;
+	if (n < 0) n = 0;
+	return (n < CH_SLOTS_USER) ? n : CH_SLOTS_USER;
+}
+
 static int susp_slot()
 {
 	const ss_hooks *h = ss_get();
@@ -5159,7 +5246,10 @@ static int ss_write_thumb(const chome_item *it, int slot)
 	int oh = (int)(((long long)ow * ig_shot_h) / ig_shot_w);
 	if (oh < 1) oh = 1;
 
-	return write_screenshot(png, (const uint8_t *)ig_shot, ig_shot_w, ig_shot_h, ow, oh) ? 1 : 0;
+	if (!write_screenshot(png, (const uint8_t *)ig_shot, ig_shot_w, ig_shot_h, ow, oh)) return 0;
+
+	art_forget(png);        // the tile is looking at the moment we just replaced
+	return 1;
 }
 
 /*
@@ -5304,6 +5394,33 @@ static int pend_direct_start(const chome_item *it, int slot)
 	ss_write_thumb(it, slot);              // the picture is of now, as in pend_start()
 	printf("ClassicUI: slot %d is waiting for the core to write it\n", slot + 1);
 	return 1;
+}
+
+/*
+  The one case where the menu does not stop the game.
+
+  Every other core is either paused or held still by a state, so the player can read a
+  screen for as long as they like. A core with neither offers nothing to hold it with:
+  the game plays on behind this menu and they can lose a life while deciding what to
+  do. That is not something to infer from movement in the corner of the screen, so it
+  says so across the top.
+
+  Not while a save is in flight on a core that does pause: pend_direct_start() takes
+  the pause off deliberately, because a save pulse is only serviced by a running core,
+  and a red bar flashing up for that would be a lie about the core rather than a
+  warning about it.
+*/
+static void draw_running_warning(const chome_profile *p)
+{
+	if (!ig_active || ig_paused || ig_frozen || pend_repause) return;
+
+	int s = p->ts_ui;
+	int h = 13 * s;
+
+	gfx_fill(0, 0, p->w, h, COL_RED);
+	gfx_fill(0, h, p->w, (s > 1) ? 2 : 1, COL_SHADOW);
+	gfx_text_c("STILL PLAYING - this system cannot pause your game",
+		p->w / 2, (h - 7 * s) / 2, s, COL_WHITE, 0);
 }
 
 // Runs every frame in every core, so a registered save finishes whether the menu is
@@ -5606,12 +5723,20 @@ static const uint32_t *ig_live_ref(int w, int h)
 	if (!buf) { bw = bh = 0; return 0; }
 	bw = w; bh = h;
 
+	// The middle of the frame, magnified - see VP_ZOOM_PCT.
+	int rw = ig_shot_w * VP_ZOOM_PCT / 100;
+	int rh = ig_shot_h * VP_ZOOM_PCT / 100;
+	if (rw < 8) rw = ig_shot_w;
+	if (rh < 8) rh = ig_shot_h;
+	int ox = (ig_shot_w - rw) / 2;
+	int oy = (ig_shot_h - rh) / 2;
+
 	for (int y = 0; y < h; y++)
 	{
-		int sy = (y * ig_shot_h) / h;
+		int sy = oy + (y * rh) / h;
 		const uint32_t *srow = ig_shot + (size_t)sy * ig_shot_w;
 		uint32_t *drow = buf + (size_t)y * w;
-		for (int x = 0; x < w; x++) drow[x] = srow[(x * ig_shot_w) / w] | 0xff000000u;
+		for (int x = 0; x < w; x++) drow[x] = srow[ox + (x * rw) / w] | 0xff000000u;
 	}
 
 	return buf;

@@ -1519,6 +1519,169 @@ static int fav_count()
   front-end looks. Remembering that first "nothing" is what left Derek's machine showing
   "No adapter" in Options while it was reachable over that very interface.
 */
+/*
+  A core with two slots gives the player one, not three.
+
+  The last slot is the one the menu holds the game still in, so three tiles on a two-slot
+  core meant the third tile *was* that reserved slot: saving there copied the held state
+  over itself and reported success, and loading it put the player back at the moment the
+  menu opened - indistinguishable from a load that did nothing. Derek hit it on PSX.
+*/
+/*
+  Why the picture cache cannot decide this from the file alone.
+
+  It compares size and mtime. Two frames of one game are the same scene in the same
+  palette, so they very often compress to the same number of bytes, and the card is FAT
+  whose timestamps are granular to two seconds - a rewrite lands inside one. That is a
+  hit on a file whose contents changed, and the tile keeps the moment that was replaced.
+
+  This builds exactly that: same dimensions, same byte count, same timestamp, different
+  picture. The stat check cannot see it and is not expected to. art_forget() is how the
+  code that rewrote the file says so, and the check is that saying so is enough.
+*/
+/*
+  A look chosen for the running game shows up on it now, not after a reload.
+
+  The preset is armed for the *next* core to pick up, which is right for a game about
+  to launch and wrong for the one already on screen - it read as the setting doing
+  nothing until the core was reloaded. What is checked is that the preset file the
+  video layer was handed names the look that was chosen.
+*/
+static void assert_look_applies_to_the_running_core()
+{
+	printf("\n== a display look reaches the running core at once ==\n");
+
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "gb\nTetris (World).gb\n"); fclose(f); }
+	}
+
+	harness_set_menu_core(0);
+	harness_set_fb_supported(1);
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+	harness_set_confstr(1);
+	chome_handle(0);
+	if (chome_ingame_active()) press(KEY_MENU, 14);
+	frame(6);
+
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 40 && lib_scanning(); i++) frame(2);
+	frame(16);
+	check(chome_ingame_active(), "the menu is up over the running game");
+
+	char before[1024];
+	snprintf(before, sizeof(before), "%s", harness_last_preset());
+
+	press(KEY_UP, 14);                    // the menu bar, Display first
+	press(KEY_ENTER, 18);
+	press(KEY_DOWN, 12);                  // some other look than the current one
+	press(KEY_ENTER, 18);
+	frame(10);
+
+	const char *now = harness_last_preset();
+	check(now && now[0] && strcmp(now, before) != 0,
+		"choosing a look hands the running core a preset straight away");
+	dump("look-applied-live");
+
+	press(KEY_ESC, 10);
+	press(KEY_ESC, 10);
+	press(KEY_MENU, 16);
+	frame(8);
+}
+
+static void assert_forget_beats_the_stat_check()
+{
+	const char *p = ROOT "/boxart/cachetest.png";
+	const int tw = 64, th = 48;
+
+	make_cover(p, 240, 180, 0xff104080);
+	struct stat a = {};
+	stat(p, &a);
+
+	const uint32_t *one = art_thumb(p, tw, th);
+	uint32_t *was = (uint32_t*)malloc((size_t)tw * th * 4);
+	if (one && was) memcpy(was, one, (size_t)tw * th * 4);
+	check(one != 0, "a picture decodes");
+
+	make_cover(p, 240, 180, 0xff801040);
+	struct timeval tv[2];
+	tv[0].tv_sec = tv[1].tv_sec = a.st_mtime;
+	tv[0].tv_usec = tv[1].tv_usec = 0;
+	utimes(p, tv);
+
+	struct stat b = {};
+	stat(p, &b);
+	check(a.st_size == b.st_size && a.st_mtime == b.st_mtime,
+		"a different picture can have the same size and timestamp");
+
+	art_forget(p);
+	const uint32_t *two = art_thumb(p, tw, th);
+	check(two && was && memcmp(was, two, (size_t)tw * th * 4) != 0,
+		"and art_forget shows the new one anyway");
+
+	free(was);
+	unlink(p);
+}
+
+static void assert_slot_count_follows_core()
+{
+	printf("\n== the strip shows the slots the core actually has ==\n");
+
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "gb\nTetris (World).gb\n"); fclose(f); }
+	}
+
+	harness_set_menu_core(0);
+	harness_set_fb_supported(1);
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+	chome_handle(0);
+	if (chome_ingame_active()) press(KEY_MENU, 14);
+	frame(6);
+
+	// Four slots: three for the player.
+	harness_set_confstr(1);
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 40 && lib_scanning(); i++) frame(2);
+	frame(16);
+	press(KEY_DOWN, 18);
+	unsigned long four = harness_fb_hash(0, 720);
+	press(KEY_RIGHT, 8);
+	check(harness_fb_hash(0, 720) != four, "on a four-slot core the cursor moves off slot 1");
+	press(KEY_ESC, 10);
+	press(KEY_MENU, 16);
+	frame(8);
+
+	// Two slots: one for the player, so there is nowhere to move to.
+	harness_set_confstr(5);
+	press(KEY_MENU, 20);
+	frame(16);
+	press(KEY_DOWN, 18);
+	frame(60);
+	check(harness_fb_hash(0, 720) != four, "a two-slot core draws a different strip");
+
+	/*
+	  What this check can and cannot prove, since it is easy to fool yourself here. A
+	  different strip means the count follows the core rather than being hardcoded at three
+	  - that is the bug Derek hit, and this fails without the fix. It does NOT pin the exact
+	  arithmetic: an off-by-one that offered two slots instead of one would still draw
+	  something different and still pass.
+
+	  Two observables were tried and discarded rather than left in. Comparing whole-screen
+	  hashes after pressing right measures the *nudge animation* and any cover art that
+	  decoded in between, not the cursor. Asserting where a save lands is vacuous here,
+	  because the fake core never writes a state file - only a real one does.
+	*/
+
+	press(KEY_MENU, 16);
+	frame(8);
+	harness_set_confstr(1);
+}
+
 static void assert_wifi_adapter_appears()
 {
 	printf("\n== an adapter that turns up late is still found ==\n");
@@ -2459,16 +2622,72 @@ static void assert_ingame()
 			if (r5) { if (fread(got4, 1, sizeof(got4) - 1, r5)) {} fclose(r5); }
 			check(!strcmp(got4, "HELD-FOURTH"), "and replaces it once the core writes the held state");
 			check(harness_ss_copy_to() == 1, "with the memory copy following the file again");
+
+			/*
+			  Saving over the same slot a second time, which is what he actually did.
+
+			  The check above passed all along while the bug was live, because the picture it
+			  compared against was one the test painted itself - so any picture the UI wrote
+			  looked like a change. Here both pictures come from the UI, at two different
+			  moments of the game, which is the comparison that means something.
+			*/
+			{
+				const int tw = 200, th = 150;
+				const uint32_t *a = art_thumb(png2, tw, th);
+				uint32_t *first = (uint32_t*)malloc((size_t)tw * th * 4);
+				if (a && first) memcpy(first, a, (size_t)tw * th * 4);
+
+				// Leave and come back, so the menu grabs a new still: the game has moved on.
+				press(KEY_MENU, 16);
+				frame(8);
+				press(KEY_MENU, 16);
+				frame(20);
+				press(KEY_DOWN, 20);              // the strip again, from the top
+				press(KEY_RIGHT, 12);             // and back onto slot 2
+
+				FILE *fifth = fopen(ROOT "/savestates/Gameboy/Tetris (World)_4.ss", "wb");
+				if (fifth) { fprintf(fifth, "HELD-FIFTH"); fclose(fifth); }
+				press(KEY_BACKSPACE, 12);
+				frame(30);
+
+				const uint32_t *b = art_thumb(png2, tw, th);
+				check(a && b && first && memcmp(first, b, (size_t)tw * th * 4) != 0,
+					"saving over the same slot twice shows the second moment, not the first");
+				free(first);
+			}
 		}
 
 		unlink(ROOT "/savestates/Gameboy/Tetris (World)_4.ss");
 	}
 	harness_set_confstr(1);
 
-	// A core with no savestate or pause entries is left completely alone.
+	/*
+	  A core with no savestate or pause entries is left completely alone.
+
+	  The block above finishes inside the menu, and MENU is a toggle - so opening it
+	  here was closing it, and every check below ran against the shelf. One of them
+	  read the pause bit of a core that was not even showing a menu and passed for it.
+	*/
+	if (chome_ingame_active()) { press(KEY_MENU, 16); frame(6); }
 	harness_set_confstr(0);
 	press(KEY_MENU, 20);
+	check(chome_ingame_active(), "the menu opens on a core with neither pause nor states");
 	check(harness_pause_val() == 0, "a core with no pause entry keeps running");
+
+	/*
+	  And says so. This is the one core where the game is not stopped, so it is the one
+	  core that has to admit it - counted as red across the top row rather than hashed,
+	  because a hash only says the top of the screen differs and the whole point is
+	  *what* it says.
+	*/
+	frame(6);
+	{
+		const uint32_t *fb = harness_fb_shown();
+		int w = gfx_w(), red = 0;
+		for (int x = 0; fb && x < w; x++) if (fb[x] == 0xffc4353cu) red++;
+		check(red > w / 2, "and warns across the top that the game is still playing");
+		dump("still-playing-warning");
+	}
 	press(KEY_DOWN, 16);
 	harness_reset_status();
 	press(KEY_BACKSPACE, 8);
@@ -2700,6 +2919,9 @@ int main()
 	assert_ingame();
 	assert_save_on_pausing_core();
 	assert_freeze_off();
+	assert_look_applies_to_the_running_core();
+	assert_forget_beats_the_stat_check();
+	assert_slot_count_follows_core();
 	assert_wifi_adapter_appears();
 	assert_back_leftmost();
 	assert_slot_match();
