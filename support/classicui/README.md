@@ -20,6 +20,7 @@ console log: every module prints what it decided.
 | `chome_art.cpp` | Cover art: local lookup, lazy decode, LRU cache, optional online fetch |
 | `chome_video.cpp` | Video looks: preset/filter/mask/gamma generation, per-system defaults, previews |
 | `chome_ini.cpp` | The `MiSTer.ini` settings this front-end assumes, and a rewrite that leaves the rest of the player's file alone |
+| `chome_opt.cpp` | The `MiSTer.ini` options the player may edit: labels, defaults, ranges, and what a value is worth changing to |
 | `chome_ui.cpp` | Screens, navigation, launch |
 | `test/` | Host harness: compiles the modules unmodified against fakes, asserts behaviour, renders every screen to PNG |
 
@@ -280,6 +281,69 @@ the session already running is under the new values too. That is what the panel
 says, and it is read off the table rather than asserted - a setting with no `cfg`
 field would make it say the opposite.
 
+## More Settings
+
+Options ▸ More Settings edits `MiSTer.ini` directly - the screen next to Best
+Settings, which writes a fixed set without asking. Eleven options today, across
+three groups (Picture, Controllers, This Menu), in one flat list that scrolls;
+the group of the row under the cursor is in the panel header, which is how the
+grouping shows without spending rows on headings.
+
+Left and right change a value, X puts it back, and nothing is written until
+**Save Changes** at the bottom of the list is confirmed twice. Leaving with
+unsaved edits asks before throwing them away - the alternative, saving on the way
+out, is the worse surprise.
+
+**A value that is not the recommended one is amber**, and the line under the list
+names what it usually is. For most options "recommended" is simply the machine's
+default; for the two this front-end has an opinion about - `disable_autofire` and
+`controller_info`, both in the Best Settings set - it is what Best Settings
+writes. The two tables would otherwise contradict each other on screen, so the
+harness checks they agree.
+
+### Where the metadata lives, and why not in cfg.cpp
+
+`ini_var[]` in `cfg.cpp` already has every option's name, type and range, and
+nothing else: no labels, no defaults (those are assignments at the top of
+`cfg_parse()`), no grouping. So `chome_opt.cpp` carries a table of its own,
+copying the range and the default by hand. That duplication is the cost of not
+touching firmware-wide code for a front-end's benefit; what the harness can check,
+it does.
+
+### What is not offered
+
+Nothing that can leave the machine with no picture and no way back:
+`vga_scaler`, `direct_video`, `vga_mode`, `forced_scandoubler`, `video_mode`,
+`fb_terminal`, `bootcore` and `main`. The audience for this front-end cannot ssh
+in to undo a black screen. `gamepad_defaults` is out for the same reason in
+miniature - it silently moves every button in every core.
+
+Every value is picked from a list or stepped inside the range `cfg.cpp` declares,
+so nothing here can write a value the parser will reject. That is not tidiness:
+`ini_parse_numeric()` raises a `cfg_error()` for an out-of-range value and
+`user_io.cpp` shows those as an `Info()` panel over the game for five seconds on
+the next core load - a classic-OSD element, which is the thing the front-end
+exists to prevent. A file that already holds an out-of-range value is shown
+clamped, because that is the value the firmware will use.
+
+The picture options (`vscale_mode`, brightness, contrast, colour,
+`hdmi_limited`, `hdmi_game_mode`) **disappear when the scaler's output is not what
+reaches the screen**, on the same `video_scaler_is_visible()` test that drops the
+Display entry from the menu bar, and for the same reason: on `direct_video` or an
+analog-only set they change nothing at all.
+
+Only what changed is written. Writing the whole table would plant a dozen lines in
+somebody's ini for things they never touched, and freeze today's defaults into a
+file that would otherwise follow the firmware. The write itself is
+`chome_ini.cpp`'s - same backup, same binary CRLF-preserving rewrite, same
+`.bak` - so there is one ini writer here, not two.
+
+**Widening the set is a table edit**, and the shape of the entry says what is
+needed: a key, a label, a sentence, a range, a default, and a `cfg` field to poke
+so this session agrees with the file. An option whose worst case is a machine the
+player cannot recover would need to say so on screen before it is set, the way
+closing a game does; nothing in the table today does.
+
 ## The index cache
 
 Every core switch re-execs the binary, so without a cache the first menu open
@@ -344,7 +408,7 @@ backwards - what the legend shows is what the key does.
 | D-pad | arrows | move / reveal menu bar (up) / suspend points (down) |
 | A | Enter | start, resume, open folder, confirm |
 | B | Esc | back, leave folder, resume |
-| X | Tab | delete a suspend point (two presses) |
+| X | Tab | delete a suspend point (two presses), or put a setting back to its usual value |
 | Y | Backspace | favourite, or save into a slot in-game |
 | Select | ` (backtick) | sort |
 | L / R | - / = | jump one screenful |

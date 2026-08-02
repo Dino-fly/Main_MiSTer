@@ -30,6 +30,7 @@
 #include "../chome_net.h"
 #include "../chome_bt.h"
 #include "../chome_ini.h"
+#include "../chome_opt.h"
 #include "../chome_icons32.h"
 #include "../chome_btn12.h"
 #include "../../../lib/imlib2/Imlib2.h"
@@ -123,9 +124,13 @@ static int ini_stray_lines(const char *a, const char *b)
 			const char *q = pa;
 			while (*q == ' ' || *q == '\t') q++;
 
+			// Ours means either table's: Best Settings writes its own set, and the
+			// settings screen writes whichever of its options the player moved.
 			int ours = 0;
 			for (int w = 0; w < ini_want_count(); w++)
 				if (!strncasecmp(q, ini_want_at(w)->key, strlen(ini_want_at(w)->key))) ours = 1;
+			for (int w = 0; w < opt_count(); w++)
+				if (!strncasecmp(q, opt_at(w)->key, strlen(opt_at(w)->key))) ours = 1;
 
 			if (!ours) { printf("  stray change: %.*s\n", (int)la, pa); stray++; }
 		}
@@ -381,6 +386,81 @@ static void press(int key, int settle = 12)
 	harness_advance(16);
 	chome_handle(key | UPSTROKE);
 	frame(settle);
+}
+
+/*
+  A fingerprint of whatever panel is up. Panels here are centred and at least half the
+  canvas wide at every profile, so the middle half of the middle of the screen is inside
+  one and outside the shelf - which is what makes two of these comparable across steps.
+*/
+static unsigned long pt_panel_hash()
+{
+	int w = gfx_w(), h = gfx_h();
+	return harness_fb_hash_box(w / 4, h / 2 - h / 6, (3 * w) / 4, h / 2 + h / 6);
+}
+
+/*
+  The panel rectangle draw_panel() uses, which is where the settings screen lives. Two
+  things are read out of it below: a hash, for "did anything on this panel change", and
+  a count of one exact colour, for the amber that marks a value away from its default.
+  gfx_fill() and the font both write colours through unblended, so an exact match is
+  legitimate - the same reason the legend and the suspend strip can be read this way.
+*/
+static void panel_rect(int *x0, int *y0, int *x1, int *y1)
+{
+	const chome_profile *p = theme_get();
+	*x0 = (p->w - p->panel_w) / 2;
+	*y0 = (p->h - p->panel_h) / 2;
+	*x1 = *x0 + p->panel_w;
+	*y1 = *y0 + p->panel_h;
+}
+
+static unsigned long panel_hash()
+{
+	int x0, y0, x1, y1;
+	panel_rect(&x0, &y0, &x1, &y1);
+	return harness_fb_hash_box(x0, y0, x1, y1);
+}
+
+/*
+  A count of one exact colour over the settings panel's rows - the rows alone, and
+  deliberately so: the footer names the recommended value in the very colour the rows use
+  for "not that value", so counting the whole panel would find amber whatever the rows
+  were drawn in, which is exactly the mistake this avoids. The two constants are draw_settings()'s header and footer heights
+  and have to move with it.
+*/
+static int panel_rows_pixels(uint32_t want)
+{
+	const chome_profile *p = theme_get();
+	int s = p->ts_ui;
+
+	int x0, y0, x1, y1;
+	panel_rect(&x0, &y0, &x1, &y1);
+	y0 += 10 * s + 6;
+	y1 -= 3 * 10 * s + 4 * s;
+
+	const uint32_t *fb = harness_fb_shown();
+	int w = gfx_w(), h = gfx_h();
+	if (!fb || w < 1 || h < 1) return 0;
+
+	if (x0 < 0) x0 = 0;
+	if (y0 < 0) y0 = 0;
+	if (x1 > w) x1 = w;
+	if (y1 > h) y1 = h;
+
+	int n = 0;
+	for (int y = y0; y < y1; y++)
+		for (int x = x0; x < x1; x++)
+			if ((fb[(size_t)y * w + x] | 0xff000000u) == want) n++;
+
+	return n;
+}
+
+static int opt_find(const char *key)
+{
+	for (int i = 0; i < opt_count(); i++)
+		if (!strcasecmp(opt_at(i)->key, key)) return i;
+	return -1;
 }
 
 static void dump(const char *name)
@@ -2945,6 +3025,7 @@ int main()
 		press(KEY_RIGHT, 10);                 // Options
 		press(KEY_ENTER, 14);
 		press(KEY_UP, 8);                     // wrap to the last row
+		press(KEY_UP, 8);                     // More Settings
 		press(KEY_UP, 8);                     // Best Settings
 		press(KEY_UP, 8);                     // Wi-Fi
 		press(KEY_UP, 8);                     // Controllers
@@ -3007,6 +3088,139 @@ int main()
 		check(bt_pair_state() == BTP_FAIL, "a finished pairing keeps the panel up until acknowledged");
 
 		bt_pair_ack();
+		frame(6);
+
+		/*
+		  Adding a controller is the last entry in the list rather than a shortcut on the
+		  legend, and picking any controller opens a tester. Both need an adapter to be
+		  worth offering and the container has none, so one is asserted for the rest of
+		  this section - see bt_force_present().
+
+		  With one comes the refresh child, which runs bluetoothctl - and a container that
+		  has none would come back with an empty list and wipe the fixture out from under
+		  the screen. So bluetoothctl is faked into PATH, answering the way 5.61 does. The
+		  real refresh path then runs, and whenever its child happens to land it lands on
+		  the same three devices, which is what makes the screen comparable across steps.
+		*/
+		{
+			FILE *f = fopen("/usr/local/bin/bluetoothctl", "w");
+			if (f)
+			{
+				fputs("#!/bin/sh\n"
+					"if [ \"$1\" = paired-devices ]; then\n"
+					"  echo 'Device DC:2C:26:1B:9A:71 Wireless Controller'\n"
+					"  echo 'Device E4:17:D8:22:0B:5C 8BitDo SN30 Pro'\n"
+					"  echo 'Device 00:1B:DC:0F:AA:12 00-1B-DC-0F-AA-12'\n"
+					"elif [ \"$1\" = info ] && [ \"$2\" = DC:2C:26:1B:9A:71 ]; then\n"
+					"  printf '\\tConnected: yes\\n'\n"
+					"else\n"
+					"  printf '\\tConnected: no\\n'\n"
+					"fi\n", f);
+				fclose(f);
+				chmod("/usr/local/bin/bluetoothctl", 0755);
+			}
+		}
+
+		bt_force_present(1);
+		bt_refresh();
+		frame(40);
+		check(bt_count() == 3, "the faked bluetoothctl keeps the same three paired devices");
+		dump("pads-5-add-last");
+
+		unsigned long h_list = pt_panel_hash();
+
+		/*
+		  MiSTer's own default map (def_mmap in input.cpp): A is the east button, B south,
+		  X north, Y west. On the DualShock in row 1 that is circle, cross, triangle and
+		  square, which is what the tester has to draw.
+		*/
+		static const uint16_t PAD_CODES[PAD_STATE_BTNS] = {
+			0x0321, 0x0320, 0x0323, 0x0322,      // right, left, down, up
+			0x0131, 0x0130, 0x0133, 0x0134,      // A east, B south, X north, Y west
+			0x0136, 0x0137, 0x013A, 0x013B,      // L, R, Select, Start
+		};
+
+		// Row 1 is the wired DualShock, player 1. A on it is "test it", not "scan".
+		press(KEY_ENTER, 14);
+		harness_set_pad_state(1, 0, PAD_CODES, 0, 0, 0);
+		frame(8);
+		dump("pads-6-tester");
+
+		unsigned long h_idle = pt_panel_hash();
+		check(!bt_pairing(), "A on a controller does not start a scan");
+		check(h_idle != h_list, "it opens the controller tester instead");
+
+		/*
+		  Which is modal on both axes. move_h()'s default: drives the shelf behind the
+		  panel, and every screen here that forgot to say so paged the browser from
+		  inside a dialog.
+		*/
+		press(KEY_RIGHT, 8);
+		press(KEY_DOWN, 8);
+		frame(6);
+		check(pt_panel_hash() == h_idle, "and nothing behind it moves");
+
+		/*
+		  There is no controller in the container, so the tester is handed the state one
+		  would be in and asked to draw it. Two different buttons held must not produce
+		  the same picture, or the screen is not showing what is being pressed.
+		*/
+		harness_set_pad_state(1, 1u << SYS_BTN_A, PAD_CODES, 0, 0, 0);
+		frame(8);
+		dump("pads-7-tester-a");
+		unsigned long h_a = pt_panel_hash();
+		check(h_a != h_idle, "a held button lights up on the tester");
+
+		harness_set_pad_state(1, 1u << SYS_BTN_UP, PAD_CODES, 0, 0, 0);
+		frame(8);
+		dump("pads-8-tester-up");
+		check(pt_panel_hash() != h_a, "and a different button lights something else");
+
+		// The sticks are drawn only for a pad that has them: a SNAC pad is a digital
+		// PlayStation pad, and two boxes that never move would be a question it cannot
+		// answer.
+		harness_set_pad_state(1, 0, PAD_CODES, 1, 100, -70);
+		frame(8);
+		dump("pads-9-tester-stick");
+		check(pt_panel_hash() != h_idle, "a pad with sticks is drawn with them");
+
+		/*
+		  Leaving takes two presses of B, so that B itself can be pressed and seen to
+		  work. One press must not leave - that is the whole point of the arming.
+		*/
+		harness_set_pad_state(1, 0, PAD_CODES, 0, 0, 0);
+		frame(8);
+		press(KEY_ESC, 10);
+		frame(6);
+		dump("pads-10-tester-back-armed");
+		check(pt_panel_hash() != h_list, "one press of B stays in the tester");
+
+		press(KEY_ESC, 10);
+		frame(8);
+		check(pt_panel_hash() == h_list, "and the second press returns to the list");
+
+		/*
+		  And the entry itself, which is what all of that was for: five controllers in the
+		  fixture, so the sixth row is the one that adds one - reachable only if it is
+		  there, and the only row on the screen for which A starts a scan.
+		*/
+		for (int i = 0; i < 5; i++) press(KEY_DOWN, 8);
+
+		/*
+		  Asked before the frame settles, not after. btctl is not in the container either,
+		  so the child it forks dies at once and bt_poll() clears the flag on the very next
+		  frame - "pairing mode did not start" and "pairing mode started and the child was
+		  reaped" look identical a dozen frames later.
+		*/
+		chome_handle(KEY_ENTER);
+		check(bt_pairing(), "the row below the last controller is the one that adds one");
+		chome_handle(KEY_ENTER | UPSTROKE);
+		frame(6);
+
+		bt_pair_stop();
+		bt_pair_ack();
+		bt_force_present(-1);
+		harness_clear_pad_state();
 		frame(6);
 
 		press(KEY_ESC, 10);
@@ -3083,6 +3297,7 @@ int main()
 		press(KEY_RIGHT, 10);                 // Options
 		press(KEY_ENTER, 14);
 		press(KEY_UP, 8);                     // wrap to the last row
+		press(KEY_UP, 8);                     // More Settings
 		press(KEY_UP, 8);                     // Best Settings
 		press(KEY_UP, 8);                     // and up to Wi-Fi
 		press(KEY_ENTER, 14);
@@ -3289,6 +3504,7 @@ int main()
 		press(KEY_RIGHT, 10);                 // Options
 		press(KEY_ENTER, 14);
 		press(KEY_UP, 8);                     // wrap to the last row
+		press(KEY_UP, 8);                     // More Settings
 		press(KEY_UP, 8);                     // Best Settings
 		frame(6);
 		dump("ini-1-options-row");
@@ -3339,6 +3555,7 @@ int main()
 		press(KEY_ENTER, 14);
 		press(KEY_UP, 8);
 		press(KEY_UP, 8);
+		press(KEY_UP, 8);
 		press(KEY_ENTER, 14);
 		frame(8);
 		dump("ini-6-plan-240p");
@@ -3354,6 +3571,330 @@ int main()
 		gfx_shutdown();
 		theme_update(1280, 720, 1);
 		frame(6);
+
+		unlink(path);
+		unlink(bak);
+	}
+
+	/*
+	  More Settings - the screen that edits the ini rather than asserting an opinion
+	  about it. Two halves: the model, which is where the clamping and the
+	  default-versus-recommended distinction live, and the screen, where the write and
+	  the colour coding are checked by driving it with keys and reading the pixels back.
+	*/
+	printf("\n== more settings ==\n");
+	{
+		// These are global and later screens are laid out from one of them, so whatever
+		// the block pokes into cfg has to go back.
+		uint8_t was_over = cfg.classicui_overscan;
+		uint8_t was_rumble = cfg.rumble;
+		uint8_t was_vscale = cfg.vscale_mode;
+		uint8_t was_bright = cfg.video_brightness;
+
+		/*
+		  A fixture with one of each thing the model has to survive:
+
+		  - vscale_mode holds a value that is not the default, so it starts out amber
+		  - video_brightness is out of range. The firmware clamps it and carries on, so
+		    the screen has to show the value the machine is really using
+		  - rumble is written with a space instead of an '=', which cfg.cpp accepts
+		  - hdmi_limited is not a number at all
+		  - controller_info is set twice and the [NES] one is later, so that is the one
+		    in force - the same rule ini_plan() follows
+		  - classicui_overscan is absent, which has to read as its default rather than 0
+		*/
+		static const char *SRC =
+			"[MiSTer]\r\n"
+			"; my own notes, which have to survive all of this\r\n"
+			"vscale_mode=1\r\n"
+			"video_brightness=250\r\n"
+			"rumble 0\r\n"
+			"hdmi_limited=yes\r\n"
+			"controller_info=6\r\n"
+			"video_contrast=50\r\n"
+			"\r\n"
+			"[NES]\r\n"
+			"controller_info=0\r\n";
+
+		// Everything at the value this front-end recommends: the two keys whose
+		// recommendation is not the machine's default, and nothing else.
+		static const char *CLEAN =
+			"[MiSTer]\r\n"
+			"disable_autofire=1\r\n"
+			"controller_info=0\r\n";
+
+		char path[1024], bak[1024];
+		snprintf(path, sizeof(path), "%s/MiSTer.ini", ROOT);
+		snprintf(bak, sizeof(bak), "%s.bak", path);
+		put_file(path, SRC);
+
+		/* ------------------------------------------------------------- the table --- */
+
+		int bad_range = 0, no_text = 0, bad_choice = 0;
+		for (int i = 0; i < opt_count(); i++)
+		{
+			const opt_def *o = opt_at(i);
+			if (o->def < o->lo || o->def > o->hi) bad_range++;
+			if (o->rec < o->lo || o->rec > o->hi) bad_range++;
+			if (o->kind == OPT_NUMBER && o->step < 1) bad_range++;
+			if (!o->key[0] || !o->label[0] || !o->help[0]) no_text++;
+			for (int c = 0; c < o->nchoices; c++)
+				if (o->choices[c].val < o->lo || o->choices[c].val > o->hi) bad_choice++;
+		}
+		check(!bad_range, "every default and step is inside the range cfg.cpp declares");
+		check(!bad_choice, "and so is every value the player can pick");
+		check(!no_text, "every option has a label and a sentence explaining it");
+
+		/*
+		  The two tables have to agree. Best Settings writes disable_autofire=1 without
+		  being asked; if this screen thought 0 was the value to recommend it would paint
+		  that result amber and offer to undo it on the next screen along.
+		*/
+		int disagree = 0;
+		for (int w = 0; w < ini_want_count(); w++)
+		{
+			const ini_want *wt = ini_want_at(w);
+			int i = opt_find(wt->key);
+			if (i >= 0 && opt_at(i)->rec != atoi(wt->value)) disagree++;
+		}
+		check(!disagree, "an option in both tables recommends what Best Settings writes");
+
+		/* ------------------------------------------------------------- the model --- */
+
+		opt_load(path);
+
+		int i_size = opt_find("vscale_mode");
+		int i_bri  = opt_find("video_brightness");
+		int i_con  = opt_find("video_contrast");
+		int i_rum  = opt_find("rumble");
+		int i_blk  = opt_find("hdmi_limited");
+		int i_pop  = opt_find("controller_info");
+		int i_ovr  = opt_find("classicui_overscan");
+		check(i_size >= 0 && i_bri >= 0 && i_con >= 0 && i_rum >= 0 && i_blk >= 0
+			&& i_pop >= 0 && i_ovr >= 0, "the set holds the options this fixture is about");
+
+		check(opt_value(i_size) == 1 && opt_present(i_size), "a value in the file is read from it");
+		check(opt_value(i_ovr) == 6 && !opt_present(i_ovr), "a key that is absent reads as its default");
+		check(opt_value(i_bri) == 100, "one out of range reads as the value the firmware will use");
+		check(opt_value(i_rum) == 0, "a key written with a space instead of an '=' still counts");
+		check(opt_value(i_blk) == 0 && !opt_present(i_blk), "and one that is not a number reads as absent");
+		check(opt_value(i_pop) == 0, "where a key is set twice, the later one is what is shown");
+
+		// What the colour is made of. controller_info is the interesting one: 0 is not
+		// the machine's default, and it is still not flagged, because it is what this
+		// front-end recommends - which is the distinction the whole table exists for.
+		check(!opt_is_rec(i_size), "a value away from the recommended one is flagged");
+		check(opt_is_rec(i_con), "and one at it is not");
+		check(opt_at(i_pop)->def != opt_at(i_pop)->rec && opt_is_rec(i_pop),
+			"a recommendation that is not the machine's default is honoured as the recommendation");
+
+		check(opt_set(i_ovr, 99) == 15 && opt_value(i_ovr) == 15, "a value above the range is clamped to it");
+		check(opt_set(i_ovr, -3) == 0, "and one below it");
+
+		opt_set(i_bri, 100);
+		check(!opt_step_by(i_bri, 1), "a number at the top of its range does not move");
+		check(opt_step_by(i_bri, -1) && opt_value(i_bri) == 95, "and steps back down by its own step");
+		opt_set(i_bri, 2);
+		check(opt_step_by(i_bri, -1) && opt_value(i_bri) == 0, "a step that would go under the range stops at it");
+
+		opt_set(i_blk, 2);
+		check(opt_step_by(i_blk, 1) && opt_value(i_blk) == 0, "a list wraps round rather than stopping");
+		opt_set(i_pop, 3);
+		check(opt_step_by(i_pop, 1) && opt_value(i_pop) == 0,
+			"and stepping off a value no choice claims lands on one that is");
+
+		char vb[24];
+		opt_set(i_ovr, 8);
+		check(!strcmp(opt_value_text(i_ovr, vb, sizeof(vb)), "8%"), "a number reads with its unit");
+		opt_set(i_pop, 3);
+		check(!strcmp(opt_value_text(i_pop, vb, sizeof(vb)), "3"),
+			"and a value no name covers reads as itself rather than being rounded to one");
+
+		check(opt_reset(i_size) && opt_value(i_size) == 0 && !opt_reset(i_size),
+			"a reset puts an option back to the recommended value, once");
+
+		{
+			int vw[OPT_MAX];
+			int nall = opt_view(vw, OPT_MAX, 1);
+			int nana = opt_view(vw, OPT_MAX, 0);
+			check(nall == opt_count() && nana < nall,
+				"the scaler-only options are dropped when the scaler is not what reaches the screen");
+
+			int leaked = 0;
+			for (int i = 0; i < nana; i++) if (opt_at(vw[i])->scaler_only) leaked++;
+			check(!leaked, "and none of them is left in the list");
+		}
+
+		/* ------------------------------------------------------------- the write --- */
+
+		opt_load(path);
+		opt_set(i_ovr, 9);
+		opt_step_by(i_rum, 1);
+		check(opt_dirty() == 2, "two edits, two things to write");
+
+		check(opt_apply(path) == 2, "and writing reports both");
+
+		static char now[8192], saved[8192];
+		check(slurp_file(path, now, sizeof(now)) > 0, "the ini is still readable afterwards");
+		check(slurp_file(bak, saved, sizeof(saved)) > 0 && !strcmp(saved, SRC),
+			"the backup is the old file, byte for byte");
+
+		int bare_lf = 0;
+		for (int i = 0; now[i]; i++) if (now[i] == '\n' && (!i || now[i - 1] != '\r')) bare_lf++;
+		check(!bare_lf, "CRLF survives the write - it is done in binary, like everything here");
+
+		check(strstr(now, "rumble 1") != 0, "a value changes without disturbing how the line was written");
+		check(strstr(now, "[MiSTer]\r\nclassicui_overscan=9\r\n") != 0,
+			"a key that was absent is added under a header of its own");
+		check(strstr(now, "vscale_mode=1") != 0 && strstr(now, "video_brightness=250") != 0,
+			"an option nobody touched is left exactly as it was, out of range and all");
+		check(strstr(now, "; my own notes") != 0 && ini_stray_lines(SRC, now) == 0,
+			"and the rest of the player's file is still their file");
+
+		check(cfg.classicui_overscan == 9 && cfg.rumble == 1, "the running firmware is told as well");
+		check(opt_wrote_live(), "both of those are true for this session already, and the screen says so");
+		check(!opt_dirty() && opt_apply(path) == 0, "and there is nothing left to write");
+
+		/* ------------------------------------------------------------ the screen --- */
+
+		harness_set_menu_core(1);
+		chome_leave();
+		press(KEY_MENU, 20);
+		frame(8);
+
+		press(KEY_UP, 10);                    // the menu bar
+		press(KEY_RIGHT, 10);                 // Options
+		press(KEY_ENTER, 14);
+		press(KEY_UP, 8);                     // wrap to the last row
+		press(KEY_UP, 8);                     // More Settings
+		frame(6);
+		dump("set-1-options-row");
+
+		press(KEY_ENTER, 14);
+		frame(8);
+		dump("set-2-list");
+		check(panel_rows_pixels(COL_YELLOW) > 0, "the screen marks the values that are not the recommended ones");
+
+		/*
+		  And the other half of that, which is the check that would pass on any screen
+		  that simply drew everything amber: a file already at the recommended values has
+		  none of it, and one press of right puts some there.
+		*/
+		press(KEY_ESC, 10);
+		press(KEY_ESC, 10);
+		press(KEY_ESC, 10);
+		put_file(path, CLEAN);
+
+		press(KEY_UP, 10);
+		press(KEY_RIGHT, 10);
+		press(KEY_ENTER, 14);
+		press(KEY_UP, 8);
+		press(KEY_UP, 8);
+		press(KEY_ENTER, 14);
+		frame(8);
+		dump("set-3-all-default");
+		check(panel_rows_pixels(COL_YELLOW) == 0, "a file already at those values has no amber on it at all");
+
+		press(KEY_RIGHT, 10);
+		frame(8);
+		dump("set-4-changed");
+		check(panel_rows_pixels(COL_YELLOW) > 0, "and moving one value colours it");
+		check(slurp_file(path, now, sizeof(now)) > 0 && !strcmp(now, CLEAN),
+			"changing a value on screen does not write anything on its own");
+
+		// Up from the first row wraps to Save Changes, which is the last one.
+		press(KEY_UP, 8);
+		press(KEY_ENTER, 12);
+		frame(6);
+		dump("set-5-save-armed");
+		check(slurp_file(path, now, sizeof(now)) > 0 && !strcmp(now, CLEAN),
+			"one press of A does not touch the file either");
+
+		press(KEY_ENTER, 12);
+		frame(8);
+		dump("set-6-saved");
+		check(slurp_file(path, now, sizeof(now)) > 0 && strstr(now, "vscale_mode=1") != 0,
+			"the second press writes it");
+		check(strstr(now, "disable_autofire=1") != 0 && !strstr(now, "video_brightness"),
+			"and writes only what was changed, not the whole table");
+		check(panel_rows_pixels(COL_YELLOW) > 0,
+			"the colour is about the default, not about being unsaved, so it stays");
+
+		static char written[8192];
+		snprintf(written, sizeof(written), "%s", now);
+
+		/*
+		  Leaving with edits that were never written throws them away, so it asks first.
+		  Read off the panel, because there is nothing else to ask: staying put and
+		  leaving look identical from outside until the panel is gone.
+		*/
+		press(KEY_DOWN, 8);                   // back round to the first setting
+		press(KEY_RIGHT, 10);
+		frame(6);
+		unsigned long h_edit = panel_hash();
+
+		press(KEY_ESC, 10);
+		frame(6);
+		dump("set-7-discard-armed");
+		check(panel_hash() != h_edit, "B with unsaved changes says something rather than just leaving");
+
+		press(KEY_ESC, 10);
+		frame(8);
+		check(panel_hash() != h_edit, "and the second press leaves");
+		check(slurp_file(path, now, sizeof(now)) > 0 && !strcmp(now, written),
+			"the edits it threw away were not written");
+
+		press(KEY_ENTER, 14);                 // straight back in, the cursor is still there
+		frame(8);
+		check(opt_value(i_size) == 1 && !opt_dirty(),
+			"and re-opening the screen shows the file rather than the abandoned edits");
+
+		/*
+		  The canvas his CRT really gets. Twelve rows do not fit in the panel at 240p, so
+		  this is where the list has to scroll - and where a cursor that walked off the
+		  bottom would show up as a panel that stops changing.
+		*/
+		press(KEY_ESC, 10);
+		press(KEY_ESC, 10);
+		press(KEY_ESC, 10);
+
+		harness_set_fb(320, 240);
+		gfx_shutdown();
+		theme_update(320, 240, 3);
+
+		chome_leave();
+		press(KEY_MENU, 20);
+		frame(12);
+		press(KEY_UP, 10);                    // Display is dropped at 240p: Options is first
+		press(KEY_ENTER, 14);
+		press(KEY_UP, 8);
+		press(KEY_UP, 8);
+		press(KEY_ENTER, 14);
+		frame(8);
+		dump("set-8-240p");
+		check(gfx_w() == 320, "the list lays out on a 240p canvas");
+
+		unsigned long h_top = panel_hash();
+		press(KEY_UP, 8);                     // wrap to the last row, which is off the bottom
+		frame(6);
+		dump("set-9-240p-scrolled");
+		check(panel_hash() != h_top, "a list too long for the panel scrolls to the cursor");
+
+		press(KEY_ESC, 10);
+		press(KEY_ESC, 10);
+		press(KEY_ESC, 10);
+
+		harness_set_fb(1280, 720);
+		gfx_shutdown();
+		theme_update(1280, 720, 1);
+		frame(6);
+
+		cfg.classicui_overscan = was_over;
+		cfg.rumble = was_rumble;
+		cfg.vscale_mode = was_vscale;
+		cfg.video_brightness = was_bright;
+		theme_invalidate();
+		theme_update(1280, 720, 1);
 
 		unlink(path);
 		unlink(bak);

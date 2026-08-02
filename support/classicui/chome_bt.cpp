@@ -25,8 +25,14 @@
   socket. The adapter's presence is a directory in sysfs, which is a stat - and this
   is asked on every frame the screen is open.
 */
+static int present_forced = -1;
+
+void bt_force_present(int on) { present_forced = on; }
+
 int bt_present()
 {
+	if (present_forced >= 0) return present_forced;
+
 	struct stat st;
 	return (!stat(ADAPTER, &st) && S_ISDIR(st.st_mode)) ? 1 : 0;
 }
