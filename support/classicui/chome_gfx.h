@@ -41,6 +41,30 @@ void gfx_blend(int x, int y, int w, int h, uint32_t col, int alpha);
 // 50% checkerboard scrim: dims a region without introducing a new colour.
 void gfx_scrim(int x, int y, int w, int h, uint32_t col, int step);
 
+/*
+  Activity indicators. Both are driven by a millisecond clock, not by a frame count -
+  frames here are only drawn when something changed, so a frame counter would make the
+  same animation run at a different speed depending on what else was moving.
+
+  GFX_SPIN_MS is also the rate at which a screen showing one has to repaint, and it is
+  a tenth of a second rather than a frame time on purpose: the ring has eight
+  positions, so painting faster than it moves is work with nothing to show for it, and
+  a full repaint of this UI is not free.
+*/
+#define GFX_SPIN_DOTS 8
+#define GFX_SPIN_MS   100UL
+#define GFX_SWEEP_MS  900UL
+
+// A ring of dots with a bright head and a fading tail: something is happening and has
+// not stopped happening. Drawn around whatever sits at cx,cy - an icon, usually.
+void gfx_spinner(int cx, int cy, int r, int dot, unsigned long ms, uint32_t hot, uint32_t cold);
+
+// Named steps as a row of boxes: `done` behind us, the one being worked on sweeping,
+// the rest empty. See the comment in chome_gfx.cpp for why the active one sweeps
+// rather than creeping forward, and why `live` has to be told rather than assumed.
+void gfx_track(int x, int y, int w, int h, int nseg, int done, int live, unsigned long ms,
+	uint32_t fill, uint32_t track, uint32_t glow);
+
 // Text, in MiSTer's 8x8 OSD ROM font (charrom.cpp), at integer scales only.
 // Codes 1..4 are up/down/left/right arrows, which the ROM font lacks.
 #define CH_UP    "\x01"

@@ -86,6 +86,20 @@ int  bt_pair_state();
 int  bt_pair_done();                // how many have paired since it started
 
 /*
+  How far along the current controller is, 0..BTP_STEPS, for the progress track on the
+  pairing screen. The five states above say what kind of thing is happening; this says
+  how much of it is behind us, which is the question somebody holding two buttons down
+  is actually asking.
+
+  It is a reading of the same btctl lines the state machine already parses, not a
+  timer: a pairing that stalls stops advancing, which is the whole point of showing it.
+  A failure leaves the step where it got to, so the screen can say how far it got.
+*/
+#define BTP_STEPS 4                 // looking -> found -> pairing -> connecting -> ready
+int  bt_pair_step();
+const char *bt_pair_step_name(int step);
+
+/*
   The controller the conversation is about, and one line of plain language about it.
   Both are empty until something is found.
 */
