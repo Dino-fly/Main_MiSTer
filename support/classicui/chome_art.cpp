@@ -261,6 +261,15 @@ static void cache_evict(int need)
 	}
 }
 
+/*
+  imlib2 keeps its own cache of everything it loads, and decides whether an entry is still
+  good from the file's mtime. A savestate slot's picture is rewritten in place whenever its
+  state is, and a second write inside the same timestamp is invisible to that test - the card
+  is FAT, whose mtimes are granular to two seconds - so it hands back the picture from before
+  the save. Measured: the file grew from 1899 to 2355 bytes and imlib2 still returned the old
+  image. Every load below is therefore decached: the pixels are copied into our own cache, so
+  imlib2's second copy of them is only memory we pay for twice and a way to be wrong.
+*/
 static int decode_into(const char *path, art_slot *s, uint32_t plate)
 {
 	Imlib_Load_Error err = IMLIB_LOAD_ERROR_NONE;
@@ -276,7 +285,7 @@ static int decode_into(const char *path, art_slot *s, uint32_t plate)
 	int sh = imlib_image_get_height();
 	if (sw < 1 || sh < 1)
 	{
-		imlib_free_image();
+		imlib_free_image_and_decache();
 		return 0;
 	}
 
@@ -302,7 +311,7 @@ static int decode_into(const char *path, art_slot *s, uint32_t plate)
 
 	Imlib_Image scaled = imlib_create_cropped_scaled_image(0, 0, sw, sh, fw, fh);
 	imlib_context_set_image(img);
-	imlib_free_image();
+	imlib_free_image_and_decache();
 
 	if (!scaled) return 0;
 
@@ -354,15 +363,35 @@ struct thumb_slot
 	int w, h;
 	int failed;
 	uint32_t stamp;
+	unsigned long mtime;              // of the file that was decoded, so a rewrite is seen
+	long long size;                   // -1 when there was no file
 	uint32_t *data;
 };
 
 static thumb_slot thumbs[THUMB_CACHE];
 static uint32_t thumb_clock = 0;
 
+/*
+  Unlike cover art, these pictures are rewritten under us while their path stays the same:
+  a savestate slot's picture is replaced every time its state is, and saving over a suspend
+  point does exactly that. So a hit is checked against the file rather than trusted - without
+  it the tile kept showing the moment that had just been overwritten, which reads as the save
+  having done nothing at all, and it is what he reported as "overwriting a state does not
+  work". A miss on a file that has not changed is only the same decode again.
+
+  mtime alone will not do: the card is FAT, whose timestamps are granular to two seconds, and
+  the picture is rewritten a moment after the one before it. The size goes with it, and the
+  two together are wrong only for a rewrite that is byte-identical in the same second - which
+  is a picture that looks the same anyway.
+*/
 const uint32_t *art_thumb(const char *fullpath, int w, int h)
 {
 	if (!fullpath || !*fullpath || w < 1 || h < 1) return 0;
+
+	struct stat st;
+	int have = (!stat(fullpath, &st) && S_ISREG(st.st_mode));
+	unsigned long mtime = have ? (unsigned long)st.st_mtime : 0;
+	long long size = have ? (long long)st.st_size : -1;
 
 	thumb_slot *victim = &thumbs[0];
 	for (int i = 0; i < THUMB_CACHE; i++)
@@ -370,8 +399,14 @@ const uint32_t *art_thumb(const char *fullpath, int w, int h)
 		thumb_slot *t = &thumbs[i];
 		if (!strcmp(t->path, fullpath) && t->w == w && t->h == h)
 		{
-			t->stamp = ++thumb_clock;
-			return t->failed ? 0 : t->data;
+			if (t->mtime == mtime && t->size == size)
+			{
+				t->stamp = ++thumb_clock;
+				return t->failed ? 0 : t->data;
+			}
+
+			victim = t;                   // same picture, different contents: read it again
+			break;
 		}
 		if (t->stamp < victim->stamp) victim = t;
 	}
@@ -383,8 +418,10 @@ const uint32_t *art_thumb(const char *fullpath, int w, int h)
 	victim->w = w;
 	victim->h = h;
 	victim->stamp = ++thumb_clock;
+	victim->mtime = mtime;
+	victim->size = size;
 
-	if (!file_exists_abs(fullpath))
+	if (!have)
 	{
 		victim->failed = 1;
 		return 0;

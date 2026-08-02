@@ -1706,6 +1706,87 @@ static void assert_ingame()
 		check(!strcmp(got2, "HELD-AGAIN"), "and the copy happens the moment the state lands");
 		check(harness_status_pulses() == 0, "still without asking the core for anything");
 
+		/*
+		  Saving over a state that is already in the slot.
+
+		  Slot 2 holds one now, and the strip has already decoded its picture - which is what
+		  he found broken. Replacing the state has to replace what the tile shows, or the
+		  player is left looking at the moment that was just overwritten and reads it as the
+		  save having done nothing.
+		*/
+		{
+			const char *ss2 = ROOT "/savestates/Gameboy/Tetris (World)_2.ss";
+			const char *png2 = ROOT "/savestates/Gameboy/Tetris (World)_2.png";
+			const int tw = 200, th = 150;
+
+			/*
+			  The picture of the state that is in there, read the way the tile reads it.
+
+			  Everything here happens inside one second, which is the point: it is what made
+			  the second cache visible. imlib2 decides whether its own copy is still good from
+			  the file's mtime, so the rewrite below is invisible to it - and on the card that
+			  is a two-second window, not a one-second one.
+			*/
+			make_cover(png2, 240, 180, 0xffb02040);
+			const uint32_t *shown = art_thumb(png2, tw, th);
+			check(shown != 0, "the picture of the state already in the slot is on screen");
+
+			uint32_t *was = (uint32_t*)malloc((size_t)tw * th * 4);
+			if (shown && was) memcpy(was, shown, (size_t)tw * th * 4);
+
+			// A new held moment, and the same button on the same slot.
+			FILE *third = fopen(ROOT "/savestates/Gameboy/Tetris (World)_4.ss", "wb");
+			if (third) { fprintf(third, "HELD-THIRD"); fclose(third); }
+
+			harness_reset_status();
+			harness_reset_ss_copy();
+			press(KEY_BACKSPACE, 12);
+			frame(20);
+
+			char got3[32] = {};
+			FILE *r3 = fopen(ss2, "rb");
+			if (r3) { if (fread(got3, 1, sizeof(got3) - 1, r3)) {} fclose(r3); }
+			check(!strcmp(got3, "HELD-THIRD"), "the new moment replaces the state already in the slot");
+			check(harness_ss_copy_to() == 1, "and replaces it in the core's memory too");
+			check(harness_ss_copy_from() == 3, "from the slot the game is held still in");
+			check(harness_status_pulses() == 0, "and still asks the core for nothing");
+
+			const uint32_t *now = art_thumb(png2, tw, th);
+			check(now && was && memcmp(now, was, (size_t)tw * th * 4) != 0,
+				"and the tile shows the new picture, not the one it had cached");
+			free(was);
+
+			/*
+			  The same overwrite with the held state not written yet, which is what every
+			  menu open but the first looks like: the request waits. Nothing may be lost
+			  while it does - the state in the slot is still the one to load until the new
+			  one is there to replace it.
+			*/
+			{
+				struct timeval tv[2];
+				tv[0].tv_sec = tv[1].tv_sec = (long)time(0) - 3600;
+				tv[0].tv_usec = tv[1].tv_usec = 0;
+				utimes(ROOT "/savestates/Gameboy/Tetris (World)_4.ss", tv);
+			}
+			harness_reset_ss_copy();
+			press(KEY_BACKSPACE, 12);
+
+			char held3[32] = {};
+			FILE *r4 = fopen(ss2, "rb");
+			if (r4) { if (fread(held3, 1, sizeof(held3) - 1, r4)) {} fclose(r4); }
+			check(!strcmp(held3, "HELD-THIRD"), "a save that is still waiting leaves the old state in place");
+
+			FILE *fourth = fopen(ROOT "/savestates/Gameboy/Tetris (World)_4.ss", "wb");
+			if (fourth) { fprintf(fourth, "HELD-FOURTH"); fclose(fourth); }
+			frame(30);
+
+			char got4[32] = {};
+			FILE *r5 = fopen(ss2, "rb");
+			if (r5) { if (fread(got4, 1, sizeof(got4) - 1, r5)) {} fclose(r5); }
+			check(!strcmp(got4, "HELD-FOURTH"), "and replaces it once the core writes the held state");
+			check(harness_ss_copy_to() == 1, "with the memory copy following the file again");
+		}
+
 		unlink(ROOT "/savestates/Gameboy/Tetris (World)_4.ss");
 	}
 	harness_set_confstr(1);
