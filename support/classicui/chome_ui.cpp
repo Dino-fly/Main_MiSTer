@@ -225,6 +225,17 @@ static void ref_shot_path(const char *sysid, const char *rompath, char *out, int
   which is what actually gets written; the strip is a fixed four wide and has always
   shown slots such a core does not have, which is cosmetic and predates this.
 */
+/*
+  How much of the frame a look preview shows, as a percentage of its width.
+
+  Fitting the whole frame into a tile a couple of hundred pixels wide destroys the very
+  thing these looks change: a scanline, a shadow mask and a soft filter all live at the
+  scale of single pixels, and squeezed down to fit they average out into a faint tint
+  that looks the same for every preset. Showing the middle of the frame instead trades
+  away picture the player already knows for the detail they are choosing between.
+*/
+#define VP_ZOOM_PCT   45
+
 #define CH_SLOTS      4
 #define CH_SLOTS_USER 3
 
@@ -2184,6 +2195,44 @@ static void draw_radio(int cx, int cy, int r, int on)
 	if (on) gfx_fill(cx - r / 2, cy - r / 2, r, r, COL_RED);
 }
 
+/*
+  A stored picture, cropped the same way the live frame is.
+
+  Decoded larger than the tile and then taken from the middle at 1:1, so a preset's
+  detail survives at the size it is judged. Deliberately not cached here: art_thumb()
+  already caches the decode, and a second cache in front of it would be one more place
+  to hand back the picture a file used to have - which is the bug this module has
+  already had once.
+*/
+static const uint32_t *ref_zoom(const char *path, int w, int h)
+{
+	static uint32_t *buf = 0;
+	static int bw = 0, bh = 0;
+
+	if (!path || !*path || w < 1 || h < 1) return 0;
+
+	int fw = w * 100 / VP_ZOOM_PCT;
+	int fh = h * 100 / VP_ZOOM_PCT;
+	const uint32_t *full = art_thumb(path, fw, fh);
+	if (!full) return 0;
+
+	if (!buf || bw != w || bh != h)
+	{
+		free(buf);
+		buf = (uint32_t*)malloc((size_t)w * h * 4);
+		if (!buf) { bw = bh = 0; return 0; }
+		bw = w;
+		bh = h;
+	}
+
+	int ox = (fw - w) / 2;
+	int oy = (fh - h) / 2;
+	for (int y = 0; y < h; y++)
+		memcpy(buf + (size_t)y * w, full + (size_t)(oy + y) * fw + ox, (size_t)w * 4);
+
+	return buf;
+}
+
 static void draw_display_screen(const chome_profile *p)
 {
 	int s = p->ts_ui;
@@ -2239,7 +2288,7 @@ static void draw_display_screen(const chome_profile *p)
 	if (!ref)
 	{
 		char rp[1024];
-		if (ref_shot_for(it, rp, sizeof(rp))) ref = art_thumb(rp, tile_w, tile_h);
+		if (ref_shot_for(it, rp, sizeof(rp))) ref = ref_zoom(rp, tile_w, tile_h);
 	}
 
 	// Which hardware these looks belong to.
@@ -5674,12 +5723,20 @@ static const uint32_t *ig_live_ref(int w, int h)
 	if (!buf) { bw = bh = 0; return 0; }
 	bw = w; bh = h;
 
+	// The middle of the frame, magnified - see VP_ZOOM_PCT.
+	int rw = ig_shot_w * VP_ZOOM_PCT / 100;
+	int rh = ig_shot_h * VP_ZOOM_PCT / 100;
+	if (rw < 8) rw = ig_shot_w;
+	if (rh < 8) rh = ig_shot_h;
+	int ox = (ig_shot_w - rw) / 2;
+	int oy = (ig_shot_h - rh) / 2;
+
 	for (int y = 0; y < h; y++)
 	{
-		int sy = (y * ig_shot_h) / h;
+		int sy = oy + (y * rh) / h;
 		const uint32_t *srow = ig_shot + (size_t)sy * ig_shot_w;
 		uint32_t *drow = buf + (size_t)y * w;
-		for (int x = 0; x < w; x++) drow[x] = srow[(x * ig_shot_w) / w] | 0xff000000u;
+		for (int x = 0; x < w; x++) drow[x] = srow[ox + (x * rw) / w] | 0xff000000u;
 	}
 
 	return buf;
