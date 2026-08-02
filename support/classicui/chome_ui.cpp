@@ -1030,33 +1030,149 @@ static const char *btn(int which)
 
   A PlayStation pad has no A or B on it, so telling somebody to "press A" is asking
   them to translate. Naming the shape they can see is the whole point of a prompt.
+  There are four sets - keyboard, Nintendo, PlayStation, Xbox - plus a fifth for a pad
+  we cannot place; pad_layout() picks between them from the last device used.
 
-  Which shape goes with which menu button is looked up, not assumed: SYS_BTN_A is
-  whatever button that pad has mapped to it, and the PSX pad reports its faces as the
-  four positional codes (snacpad.cpp: Triangle north, Circle east, Cross south,
-  Square west). With MiSTer's default map that lands on circle to confirm and cross
-  to go back - the Japanese convention, and the one the physical layout implies,
-  since A sits where the circle does. Remap the pad and this follows.
+  Which shape or letter goes with which menu button is looked up, not assumed: SYS_BTN_A
+  is whatever button that pad has mapped to it, so remap the pad and the prompts follow.
+  How a mapped code becomes a shape or a letter is the next comment down.
 
   The four shapes are drawn, not lettered - see chome_btn12.h. Twelve pixels, which is
   the floor Derek set: below that a filled triangle and a filled square are both blobs,
   so the shapes are outlined, and an outline needs the room.
+*/
+
+/*
+  POSITION OR LETTER - the decision the Xbox set turns on, since Xbox swaps A/B and X/Y
+  round from Nintendo and the two answers therefore disagree.
+
+  What we follow is the *reported button code*, which is the only thing actually available:
+  input_menu_key_btn() gives the code the user's own map binds to a menu button, so a
+  remapped pad stays correctly described. A code is then read as a POSITION on the pad, and
+  the letter comes from that layout's diamond - not from the code's legacy letter name.
+
+  Why position and not the letter name: input-event-codes.h gives each of these four
+  numbers two names, BTN_SOUTH/BTN_A, BTN_EAST/BTN_B, BTN_NORTH/BTN_X, BTN_WEST/BTN_Y. The
+  positional name is the definition; the lettered one is an older alias, and its letters
+  spell out an *Xbox* pad - which is why BTN_NORTH is also BTN_X even though X sits west on
+  an Xbox pad. Take the letter name literally and every pad in the world is described as
+  though it were an Xbox, which is exactly the bug this feature exists to remove.
+
+  So each layout has its own diamond:
+
+      Nintendo:  N=X  E=A  S=B  W=Y          Xbox:  N=Y  E=B  S=A  W=X
+
+  and the honest consequence, which is worth stating because it looks like a mistake: the
+  two tables differ in A/B only. X and Y come out the same on both, because xpad puts an
+  Xbox pad's X and Y on BTN_X and BTN_Y - the alias names - and those aliases are the
+  positions Nintendo's X and Y sit on. Two departures cancelling, not a copy-paste slip.
+
+  Where a pad's layout is unknown there is no diamond to read a position through, so
+  PAD_PLAIN quotes the code's own legacy letter (the Xbox table) rather than inventing a
+  geometry, and draws it with no colour - see COL_BTN_PLAIN.
+
+  A PlayStation pad needs no diamond: it has no letters, so position is the only readable
+  answer and it is the right one. snacpad.cpp emits BTN_NORTH for triangle, BTN_EAST for
+  circle, BTN_SOUTH for cross and BTN_WEST for square. With MiSTer's default map
+  (def_mmap in input.cpp binds SYS_BTN_A to BTN_EAST) that lands on circle to confirm and
+  cross to go back - the Japanese convention, and the one the physical layout implies.
+  The same default is why a Nintendo pad's confirm prompt reads A and an Xbox pad's reads
+  B: both are the east button, and the two pads print different letters on it.
 */
 #define BTN_CODE_SOUTH 0x130
 #define BTN_CODE_EAST  0x131
 #define BTN_CODE_NORTH 0x133
 #define BTN_CODE_WEST  0x134
 
-static int pad_is_psx()
+/*
+  Which family of pad is in the player's hands, and so which set of prompts to draw.
+
+  Only the name is available to tell them apart - a SNAC pad has no vid/pid of its own,
+  it is a uinput device snacpad.cpp creates - so this matches on names that *state a
+  layout*. A name that only states a brand is not enough: 8BitDo alone sells pads with
+  Nintendo lettering and pads with Xbox lettering, so "8BitDo" deliberately does not
+  match anything here and falls through to PAD_PLAIN. Guessing wrong is worse than
+  declining: a legend that paints Nintendo colours on an Xbox pad has told the player
+  something false about the thing in their hands, whereas PAD_PLAIN still names the
+  right button and merely has no colour for it.
+*/
+#define PAD_KBD   0     // no pad was used last: named keys on a light chip, no colour
+#define PAD_PSX   1
+#define PAD_SNES  2
+#define PAD_XBOX  3
+#define PAD_PLAIN 4
+
+static int pad_layout()
 {
+	if (!using_pad) return PAD_KBD;
+
 	const char *n = input_menu_key_devname();
-	if (!n || !*n) return 0;
+	if (!n || !*n) return PAD_PLAIN;
 
 	// A SNAC pad is a uinput device snacpad.cpp names; a USB Sony pad says so too,
 	// and the same labels are right for it.
-	return strcasestr(n, "SNAC") || strcasestr(n, "PlayStation")
+	if (strcasestr(n, "SNAC") || strcasestr(n, "PlayStation")
 		|| strcasestr(n, "DualShock") || strcasestr(n, "DualSense")
-		|| strcasestr(n, "Sony") ? 1 : 0;
+		|| strcasestr(n, "Sony")) return PAD_PSX;
+
+	// "Microsoft X-Box 360 pad" is what the kernel's xpad driver calls one; the wireless
+	// ones report "Xbox Wireless Controller". XInput is checked too because a third-party
+	// pad in that mode presents Xbox lettering whatever else its name says.
+	if (strcasestr(n, "Xbox") || strcasestr(n, "X-Box")
+		|| strcasestr(n, "XInput")) return PAD_XBOX;
+
+	// Nintendo lettering, and the same four colours on all of them. "Nintendo" covers the
+	// Switch Pro Controller, whose kernel name begins with it.
+	if (strcasestr(n, "SNES") || strcasestr(n, "Super Nintendo")
+		|| strcasestr(n, "Super Famicom") || strcasestr(n, "Famicom")
+		|| strcasestr(n, "Nintendo") || strcasestr(n, "Joy-Con")
+		|| strcasestr(n, "Switch Pro")) return PAD_SNES;
+
+	return PAD_PLAIN;
+}
+
+// Indexed by LBL_A..LBL_Y, which is also the letter order.
+static const char *letter_pic[4] = { "btn_a", "btn_b", "btn_x", "btn_y" };
+
+/*
+  Which letter is printed on the button this code came from - see the diamonds above.
+  -1 for anything that is not one of the four faces: Select, a shoulder, or a button the
+  pad reports as something else entirely.
+*/
+static int code_letter(int layout, uint16_t code)
+{
+	int pos;
+	switch (code)
+	{
+	case BTN_CODE_SOUTH: pos = 0; break;
+	case BTN_CODE_EAST:  pos = 1; break;
+	case BTN_CODE_NORTH: pos = 2; break;
+	case BTN_CODE_WEST:  pos = 3; break;
+	default: return -1;
+	}
+
+	// south, east, north, west
+	static const int nintendo[4] = { LBL_B, LBL_A, LBL_X, LBL_Y };
+	static const int legacy[4]   = { LBL_A, LBL_B, LBL_X, LBL_Y };
+
+	return (layout == PAD_SNES) ? nintendo[pos] : legacy[pos];
+}
+
+/*
+  The colour of a letter on this pad. Keyed to the letter rather than to the menu button
+  it is bound to, for the same reason a circle is red however it is mapped: what the
+  player sees is the plastic, not the binding.
+*/
+static uint32_t letter_col(int layout, int letter)
+{
+	static const uint32_t snes[4] = { COL_SNES_A, COL_SNES_B, COL_SNES_X, COL_SNES_Y };
+	static const uint32_t xbox[4] = { COL_XBOX_A, COL_XBOX_B, COL_XBOX_X, COL_XBOX_Y };
+
+	if (letter < 0 || letter > 3) return COL_BTN_PLAIN;
+
+	if (layout == PAD_SNES) return snes[letter];
+	if (layout == PAD_XBOX) return xbox[letter];
+	return COL_BTN_PLAIN;
 }
 
 struct prompt { const char *text; const char *pic; uint32_t col; };
@@ -1064,18 +1180,37 @@ struct prompt { const char *text; const char *pic; uint32_t col; };
 static prompt btn_prompt(int which)
 {
 	prompt out = { btn(which), 0, 0 };   // no shape and no colour: a named key, not a button
-	if (which < 0 || which >= LBL_COUNT || !using_pad || !pad_is_psx()) return out;
+	if (which < 0 || which >= LBL_COUNT) return out;
+
+	int layout = pad_layout();
+	if (layout == PAD_KBD) return out;
 
 	static const int sysbtn[LBL_COUNT] =
 		{ SYS_BTN_A, SYS_BTN_B, SYS_BTN_X, SYS_BTN_Y, SYS_BTN_SELECT };
 
-	switch (input_menu_key_btn(sysbtn[which]))
+	uint16_t code = input_menu_key_btn(sysbtn[which]);
+
+	if (layout == PAD_PSX)
 	{
-	case BTN_CODE_EAST:  out.pic = "psx_circle";   out.col = COL_BTN_CIRCLE;   break;
-	case BTN_CODE_NORTH: out.pic = "psx_triangle"; out.col = COL_BTN_TRIANGLE; break;
-	case BTN_CODE_WEST:  out.pic = "psx_square";   out.col = COL_BTN_SQUARE;   break;
-	case BTN_CODE_SOUTH: out.pic = "psx_cross";     out.col = COL_BTN_CROSS;    break;
-	default: break;                                // Select keeps its own name
+		switch (code)
+		{
+		case BTN_CODE_EAST:  out.pic = "psx_circle";   out.col = COL_BTN_CIRCLE;   break;
+		case BTN_CODE_NORTH: out.pic = "psx_triangle"; out.col = COL_BTN_TRIANGLE; break;
+		case BTN_CODE_WEST:  out.pic = "psx_square";   out.col = COL_BTN_SQUARE;   break;
+		case BTN_CODE_SOUTH: out.pic = "psx_cross";     out.col = COL_BTN_CROSS;    break;
+		default: break;                                // Select keeps its own name
+		}
+		return out;
+	}
+
+	// A lettered pad: where the button sits says which letter, and the layout says both
+	// which diamond to read that through and what colour the letter is.
+	int letter = code_letter(layout, code);
+
+	if (letter >= 0)
+	{
+		out.pic = letter_pic[letter];
+		out.col = letter_col(layout, letter);
 	}
 	return out;
 }
@@ -1184,24 +1319,28 @@ static legend_pair lp(int which, const char *label, const char *shortl)
 	const char *pic = pr.pic;
 
 	/*
-	  A pad with no PlayStation shape for this button gets the lettered button drawn
-	  instead - a coloured face with the letter knocked out, in that pad's own colours -
-	  and Select gets its pill. Not the font's letter on a chip: a drawn A beside a drawn
-	  circle is the only way the two read as the same kind of thing.
+	  Select gets its pill on every pad - none of the four families gives it a colour or a
+	  shape, only a word - and a face button whose code the pad did not report as one of
+	  the four letters falls back to the name the firmware uses for it, drawn the same way.
+	  Not the font's letter on a chip: a drawn A beside a drawn circle is the only way the
+	  two read as the same kind of thing.
+
+	  The fallback is a real path, not belt-and-braces: an unmapped button reads back as 0,
+	  and a pad that reports its faces as BTN_TRIGGER or BTN_THUMB - some HID gamepads do -
+	  reaches it too. Better to draw MiSTer's own name for the button than nothing at all.
 	*/
-	if (!pic && using_pad)
+	int layout = pad_layout();
+
+	if (!pic && layout != PAD_KBD)
 	{
-		switch (which)
+		if (which == LBL_SELECT) { pic = "btn_select"; col = 0; }
+		else if (which >= LBL_A && which <= LBL_Y)
 		{
-		case LBL_A:      pic = "btn_a";      col = COL_BTN_A; break;
-		case LBL_B:      pic = "btn_b";      col = COL_BTN_B; break;
-		case LBL_X:      pic = "btn_x";      col = COL_BTN_X; break;
-		case LBL_Y:      pic = "btn_y";      col = COL_BTN_Y; break;
-		case LBL_SELECT: pic = "btn_select"; col = 0;         break;
-		default: break;
+			pic = letter_pic[which];
+			col = letter_col(layout, which);
 		}
 	}
-	else if (!pic && !using_pad)
+	else if (!pic && layout == PAD_KBD)
 	{
 		col = 0;                               // a keyboard key keeps the plain chip
 	}
