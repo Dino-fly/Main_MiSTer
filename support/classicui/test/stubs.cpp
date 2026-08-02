@@ -539,6 +539,15 @@ void user_io_status_set(const char *opt, uint32_t value, int)
 	printf("  [stub] user_io_status_set(\"%s\", %u)\n", last_status_opt, value);
 }
 
+/*
+  A game is not a still. Every grab has to differ from the last, or a whole class of
+  bug is invisible here: two saves into one slot wrote *identical pixels*, so a tile
+  that never updated its picture looked exactly like one that did. The counter is what
+  makes "the moment" mean something - it stands in for the game having moved on.
+*/
+static unsigned grab_seq = 0;
+void harness_reset_grab_seq() { grab_seq = 0; }
+
 int screenshot_grab(uint32_t *dst, int max_px, int *out_w, int *out_h)
 {
 	int w = 320, h = 240;
@@ -552,6 +561,14 @@ int screenshot_grab(uint32_t *dst, int max_px, int *out_w, int *out_h)
 		if (f) { if (fread(buf, 1, sizeof(buf) - 1, f)) {} fclose(f); }
 		for (const char *p = buf; *p; p++) { seed ^= (unsigned char)*p; seed *= 16777619u; }
 	}
+	/*
+	  What moves between two grabs is a sprite, not the palette. That matters: the same
+	  scene in the same colours a few pixels apart compresses to the same number of bytes,
+	  which is exactly the case the picture cache cannot tell from a stat. Recolouring the
+	  sky instead would change the file size and let a broken cache look fixed.
+	*/
+	++grab_seq;
+	int sx = (int)(grab_seq * 17u % 60u);
 
 	uint32_t sky = 0xff000000u | ((seed >> 8) & 0x3f3f7f);
 	uint32_t ground = 0xff000000u | ((seed >> 16) & 0x2f5f2f);
@@ -563,7 +580,7 @@ int screenshot_grab(uint32_t *dst, int max_px, int *out_w, int *out_h)
 			uint32_t c = sky;
 			if (y > h * 2 / 3) c = ground;
 			else if (((x / 16) + (y / 16)) % 7 == 0) c |= 0x202020;
-			if (x > w / 3 && x < w / 2 && y > h / 3 && y < h * 2 / 3) c = 0xffe08040;
+			if (x > w / 3 + sx && x < w / 2 + sx && y > h / 3 && y < h * 2 / 3) c = 0xffe08040;
 			dst[y * w + x] = c;
 		}
 	}

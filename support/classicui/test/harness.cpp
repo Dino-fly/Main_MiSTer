@@ -1527,6 +1527,52 @@ static int fav_count()
   over itself and reported success, and loading it put the player back at the moment the
   menu opened - indistinguishable from a load that did nothing. Dinofly hit it on PSX.
 */
+/*
+  Why the picture cache cannot decide this from the file alone.
+
+  It compares size and mtime. Two frames of one game are the same scene in the same
+  palette, so they very often compress to the same number of bytes, and the card is FAT
+  whose timestamps are granular to two seconds - a rewrite lands inside one. That is a
+  hit on a file whose contents changed, and the tile keeps the moment that was replaced.
+
+  This builds exactly that: same dimensions, same byte count, same timestamp, different
+  picture. The stat check cannot see it and is not expected to. art_forget() is how the
+  code that rewrote the file says so, and the check is that saying so is enough.
+*/
+static void assert_forget_beats_the_stat_check()
+{
+	const char *p = ROOT "/boxart/cachetest.png";
+	const int tw = 64, th = 48;
+
+	make_cover(p, 240, 180, 0xff104080);
+	struct stat a = {};
+	stat(p, &a);
+
+	const uint32_t *one = art_thumb(p, tw, th);
+	uint32_t *was = (uint32_t*)malloc((size_t)tw * th * 4);
+	if (one && was) memcpy(was, one, (size_t)tw * th * 4);
+	check(one != 0, "a picture decodes");
+
+	make_cover(p, 240, 180, 0xff801040);
+	struct timeval tv[2];
+	tv[0].tv_sec = tv[1].tv_sec = a.st_mtime;
+	tv[0].tv_usec = tv[1].tv_usec = 0;
+	utimes(p, tv);
+
+	struct stat b = {};
+	stat(p, &b);
+	check(a.st_size == b.st_size && a.st_mtime == b.st_mtime,
+		"a different picture can have the same size and timestamp");
+
+	art_forget(p);
+	const uint32_t *two = art_thumb(p, tw, th);
+	check(two && was && memcmp(was, two, (size_t)tw * th * 4) != 0,
+		"and art_forget shows the new one anyway");
+
+	free(was);
+	unlink(p);
+}
+
 static void assert_slot_count_follows_core()
 {
 	printf("\n== the strip shows the slots the core actually has ==\n");
@@ -2524,6 +2570,39 @@ static void assert_ingame()
 			if (r5) { if (fread(got4, 1, sizeof(got4) - 1, r5)) {} fclose(r5); }
 			check(!strcmp(got4, "HELD-FOURTH"), "and replaces it once the core writes the held state");
 			check(harness_ss_copy_to() == 1, "with the memory copy following the file again");
+
+			/*
+			  Saving over the same slot a second time, which is what he actually did.
+
+			  The check above passed all along while the bug was live, because the picture it
+			  compared against was one the test painted itself - so any picture the UI wrote
+			  looked like a change. Here both pictures come from the UI, at two different
+			  moments of the game, which is the comparison that means something.
+			*/
+			{
+				const int tw = 200, th = 150;
+				const uint32_t *a = art_thumb(png2, tw, th);
+				uint32_t *first = (uint32_t*)malloc((size_t)tw * th * 4);
+				if (a && first) memcpy(first, a, (size_t)tw * th * 4);
+
+				// Leave and come back, so the menu grabs a new still: the game has moved on.
+				press(KEY_MENU, 16);
+				frame(8);
+				press(KEY_MENU, 16);
+				frame(20);
+				press(KEY_DOWN, 20);              // the strip again, from the top
+				press(KEY_RIGHT, 12);             // and back onto slot 2
+
+				FILE *fifth = fopen(ROOT "/savestates/Gameboy/Tetris (World)_4.ss", "wb");
+				if (fifth) { fprintf(fifth, "HELD-FIFTH"); fclose(fifth); }
+				press(KEY_BACKSPACE, 12);
+				frame(30);
+
+				const uint32_t *b = art_thumb(png2, tw, th);
+				check(a && b && first && memcmp(first, b, (size_t)tw * th * 4) != 0,
+					"saving over the same slot twice shows the second moment, not the first");
+				free(first);
+			}
 		}
 
 		unlink(ROOT "/savestates/Gameboy/Tetris (World)_4.ss");
@@ -2765,6 +2844,7 @@ int main()
 	assert_ingame();
 	assert_save_on_pausing_core();
 	assert_freeze_off();
+	assert_forget_beats_the_stat_check();
 	assert_slot_count_follows_core();
 	assert_wifi_adapter_appears();
 	assert_back_leftmost();
