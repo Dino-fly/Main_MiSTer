@@ -1539,6 +1539,58 @@ static int fav_count()
   picture. The stat check cannot see it and is not expected to. art_forget() is how the
   code that rewrote the file says so, and the check is that saying so is enough.
 */
+/*
+  A look chosen for the running game shows up on it now, not after a reload.
+
+  The preset is armed for the *next* core to pick up, which is right for a game about
+  to launch and wrong for the one already on screen - it read as the setting doing
+  nothing until the core was reloaded. What is checked is that the preset file the
+  video layer was handed names the look that was chosen.
+*/
+static void assert_look_applies_to_the_running_core()
+{
+	printf("\n== a display look reaches the running core at once ==\n");
+
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "gb\nTetris (World).gb\n"); fclose(f); }
+	}
+
+	harness_set_menu_core(0);
+	harness_set_fb_supported(1);
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+	harness_set_confstr(1);
+	chome_handle(0);
+	if (chome_ingame_active()) press(KEY_MENU, 14);
+	frame(6);
+
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 40 && lib_scanning(); i++) frame(2);
+	frame(16);
+	check(chome_ingame_active(), "the menu is up over the running game");
+
+	char before[1024];
+	snprintf(before, sizeof(before), "%s", harness_last_preset());
+
+	press(KEY_UP, 14);                    // the menu bar, Display first
+	press(KEY_ENTER, 18);
+	press(KEY_DOWN, 12);                  // some other look than the current one
+	press(KEY_ENTER, 18);
+	frame(10);
+
+	const char *now = harness_last_preset();
+	check(now && now[0] && strcmp(now, before) != 0,
+		"choosing a look hands the running core a preset straight away");
+	dump("look-applied-live");
+
+	press(KEY_ESC, 10);
+	press(KEY_ESC, 10);
+	press(KEY_MENU, 16);
+	frame(8);
+}
+
 static void assert_forget_beats_the_stat_check()
 {
 	const char *p = ROOT "/boxart/cachetest.png";
@@ -2867,6 +2919,7 @@ int main()
 	assert_ingame();
 	assert_save_on_pausing_core();
 	assert_freeze_off();
+	assert_look_applies_to_the_running_core();
 	assert_forget_beats_the_stat_check();
 	assert_slot_count_follows_core();
 	assert_wifi_adapter_appears();

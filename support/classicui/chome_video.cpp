@@ -626,6 +626,30 @@ void vp_arm_for_launch(int sysidx, int vclass_hint)
 	printf("ClassicUI: armed video look \"%s\" for the next core\n", presets[p].name);
 }
 
+/*
+  The same look, applied to the core that is already running.
+
+  vp_arm_for_launch() leaves the choice for the next core to pick up. That is right for
+  a game about to start and wrong for the one on screen: the player chose a look in
+  order to see it, and having to reload the core first reads as the setting not working.
+
+  Safe to do while the menu is up. A preset carries only the scaler's filters, mask and
+  gamma - no mode, no timing - so nothing here disturbs the framebuffer this is drawn
+  into, which is the thing that has broken before when video state moved underneath it.
+*/
+int vp_apply_now(int sysidx, int vclass_hint)
+{
+	int i = vp_effective(sysidx, vclass_hint);
+	if (i < 0 || i >= NPRESETS) return 0;
+
+	char path[1024];
+	if (!vp_preset_path(i, path, sizeof(path))) return 0;
+
+	printf("ClassicUI: applying video look \"%s\" to the running core\n", presets[i].name);
+	video_loadPreset(path, true);
+	return 1;
+}
+
 void vp_apply_pending()
 {
 	FILE *f = fopen(PENDING, "rt");
