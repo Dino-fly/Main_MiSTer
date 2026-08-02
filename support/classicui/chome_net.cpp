@@ -39,6 +39,14 @@
 
 static char iface[24];
 static int iface_known = 0;
+static unsigned long iface_next = 0;      // when to look again, while there is nothing
+
+/*
+  Where the wireless interfaces are. A variable only so the harness can point it at a
+  directory it controls; nothing outside a test ever changes it.
+*/
+static const char *net_dir = "/sys/class/net";
+void net_set_sysdir(const char *d) { net_dir = d ? d : "/sys/class/net"; iface_known = 0; iface_next = 0; }
 
 static net_ap aps[NET_MAX];
 static int nap = 0;
@@ -64,12 +72,26 @@ static unsigned long child_kill = 0;    // when to give up on a read-only child
   name wlan0 would work on almost every MiSTer and then not work on somebody's, for
   no reason they could discover.
 */
+/*
+  Finding the wireless interface, and NOT remembering that there was none.
+
+  The adapter is a USB dongle whose driver may not have created its interface by the time
+  this front-end first asks - so the first look can legitimately find nothing on a machine
+  that has perfectly good Wi-Fi. Caching that answer meant the Options row read "No adapter"
+  and the Wi-Fi screen stayed empty for the rest of the session, on a MiSTer that was at
+  that moment reachable over the very interface it was denying. Found on Derek's device,
+  where /sys/class/net/wlan0/wireless existed and the front-end had been told otherwise
+  since boot.
+
+  So a hit is cached for good and a miss is retried, at most once a second: this is called
+  from per-frame paths and opendir() on every frame for the lifetime of the process is not
+  a trade worth making.
+*/
 static void find_iface()
 {
-	iface_known = 1;
 	iface[0] = 0;
 
-	DIR *d = opendir("/sys/class/net");
+	DIR *d = opendir(net_dir);
 	if (!d) return;
 
 	struct dirent *e;
@@ -78,12 +100,13 @@ static void find_iface()
 		if (e->d_name[0] == '.') continue;
 
 		char p[256];
-		snprintf(p, sizeof(p), "/sys/class/net/%s/wireless", e->d_name);
+		snprintf(p, sizeof(p), "%s/%s/wireless", net_dir, e->d_name);
 
 		struct stat st;
 		if (!stat(p, &st) && S_ISDIR(st.st_mode))
 		{
 			snprintf(iface, sizeof(iface), "%s", e->d_name);
+			iface_known = 1;                 // only a hit is worth remembering
 			break;
 		}
 	}
@@ -92,7 +115,11 @@ static void find_iface()
 
 const char *net_iface()
 {
-	if (!iface_known) find_iface();
+	if (!iface_known && CheckTimer(iface_next))
+	{
+		iface_next = GetTimer(1000);
+		find_iface();
+	}
 	return iface;
 }
 
