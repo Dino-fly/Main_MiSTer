@@ -45,6 +45,7 @@ struct net_link
 // 1 when this machine has a wireless interface at all.
 int net_present();
 const char *net_iface();
+void net_set_sysdir(const char *d);   // tests only - see find_iface()
 
 /*
   Called once a frame while a network screen is open. Reaps finished children and
