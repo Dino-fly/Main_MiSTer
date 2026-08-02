@@ -1865,6 +1865,31 @@ static int sys_savestates(const char *id)
   so a red disc and a green disc hash alike while an A and a B do not. gfx_fill() writes
   colours through unblended, which is what makes an exact comparison legitimate here.
 */
+static unsigned long legend_shape_box(int x0, int y0, int x1, int y1)
+{
+	const uint32_t *fb = harness_fb_shown();
+	int w = gfx_w(), h = gfx_h();
+	if (!fb || w < 1 || h < 1) return 0;
+
+	if (y0 < 0) y0 = 0;
+	if (y1 > h) y1 = h;
+	if (x0 < 0) x0 = 0;
+	if (x1 > w) x1 = w;
+
+	unsigned long v = 1469598103934665603UL;
+	for (int y = y0; y < y1; y++)
+	{
+		for (int x = x0; x < x1; x++)
+		{
+			uint32_t px = fb[(size_t)y * w + x];
+			int ink = (px != COL_BG && px != COL_BGDARK && px != COL_BTN_CHIP);
+			v ^= (unsigned long)ink;
+			v *= 1099511628211UL;
+		}
+	}
+	return v;
+}
+
 static unsigned long legend_shape(int y0, int y1)
 {
 	const uint32_t *fb = harness_fb_shown();
@@ -4833,6 +4858,32 @@ int main()
 		unsigned long xbox = harness_fb_hash(660, 720);
 
 		/*
+		  Which letter sits where on an Xbox pad, checked by colour because the colour
+		  follows the letter. The legend has two lettered buttons: the east one that
+		  confirms, and the west one on Favourite. On an Xbox pad west is X and it is
+		  blue - Y is amber and belongs at the top, nowhere in this legend.
+
+		  This is the check that would have caught reading input.h's BTN_X and BTN_Y
+		  aliases as geometry: they are BTN_NORTH and BTN_WEST, which is backwards for
+		  the pad the letters come from, and it put an amber Y on Favourite.
+		*/
+		{
+			const uint32_t *fb = harness_fb_shown();
+			int w = gfx_w(), blue = 0, amber = 0;
+			for (int y = 660; fb && y < 720; y++)
+			{
+				for (int x = 0; x < w; x++)
+				{
+					uint32_t c = fb[(size_t)y * w + x];
+					if (c == 0xff5a8fe0u) blue++;      // COL_XBOX_X
+					if (c == 0xffe8b22bu) amber++;     // COL_XBOX_Y
+				}
+			}
+			check(blue > 0, "an Xbox pad puts a blue X on the west button");
+			check(amber == 0, "and no Y on it, which belongs at the top");
+		}
+
+		/*
 		  The names these pads use over Bluetooth, which is how Dinofly's are paired. Read
 		  out of /var/lib/bluetooth on his own machine: a DualShock 4 announces itself as
 		  "Wireless Controller" and a Switch Pro as "Pro Controller" - no maker in either,
@@ -4979,7 +5030,7 @@ int main()
 		press(KEY_UP, 10);
 		frame(10);
 		unsigned long xbox_before = harness_fb_hash(660, 720);
-		unsigned long xbox_east = legend_shape(660, 720);
+		unsigned long xbox_east = legend_shape_box(0, 660, gfx_w() / 3, 720);
 		harness_swap_pad_faces();
 		press(KEY_DOWN, 10);
 		press(KEY_UP, 10);
@@ -5000,15 +5051,20 @@ int main()
 		  Read as the code's legacy letter name instead - the reading this replaced - both
 		  pads would draw B on east, so the first check would pass wrongly by drawing the
 		  Xbox letter on a Nintendo pad, and the second would fail.
+
+		  Bounded to the left third, which is the confirm prompt. The claim is about one
+		  button, so it is checked on one button: across the whole legend these two now
+		  differ for an unrelated and correct reason - Favourite is the west button, which
+		  is Y on a Nintendo pad and X on an Xbox one.
 		*/
-		unsigned long xbox_south = legend_shape(660, 720);   // A/B swapped: now the south button
+		unsigned long xbox_south = legend_shape_box(0, 660, gfx_w() / 3, 720);   // A/B swapped: now south
 		harness_swap_pad_faces();
 
 		harness_set_pad_name("Nintendo Switch Pro Controller");
 		press(KEY_DOWN, 10);
 		press(KEY_UP, 10);
 		frame(10);
-		unsigned long snes_east = legend_shape(660, 720);
+		unsigned long snes_east = legend_shape_box(0, 660, gfx_w() / 3, 720);
 
 		check(snes_east != xbox_east,
 			"the east button is a different letter on a Nintendo pad than on an Xbox one");
