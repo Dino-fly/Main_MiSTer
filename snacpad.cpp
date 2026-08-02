@@ -9,6 +9,9 @@
 //
 // MiSTer.ini: snac_pad=1 enables it (2 = same but without the
 // Select+Start -> OSD button synthesis). Can be set per-core.
+//
+// The PSX core is the exception, and snac_psx chooses which reader owns the port
+// there - see psx_native_apply() below.
 
 #include <stdio.h>
 #include <string.h>
@@ -227,18 +230,149 @@ static void pad_update(int idx, int connected, uint8_t id, uint16_t buttons, con
 	memcpy(pad->axes, axes, sizeof(pad->axes));
 }
 
+/*
+  Who owns the SNAC port on the PSX core.
+
+  Every other core has only one candidate: the reader in sys/, mirroring pads through
+  uinput. The PSX core has two, because a PSX core reading a PSX port natively is the
+  thing SNAC was built for in the first place, and both drive the same clock and
+  command pins. They cannot share.
+
+  Native is the default, and it is the better one for a PSX player: the core sees the
+  real protocol, so GunCon and Justifier, NeGcon and the wheels, rumble, and the
+  physical memory cards in a SuperStation One all work. Emulation reaches none of
+  those - it presents a plain digital pad.
+
+  What emulation buys is the menu. The Select+Start chord is synthesised in this file,
+  so with the core reading the port directly there is no uinput device, no chord, and
+  no way to open the front-end from that pad at all. A player with only a SNAC pad and
+  no other controller wants snac_psx=1 for that reason alone.
+
+  So: snac_psx=0 (default) native, snac_psx=1 emulated. It is read per-core like every
+  other key, but only ever consulted on the PSX core.
+*/
+static int psx_native = 0;      // the core owns the port on this core
+static int psx_applied = 0;     // its Pad1 option has been set, or given up on
+static unsigned long psx_next = 0;
+
+// Everything before the first comma, minus the D<n>/h<n> hide markers and the
+// leading O, which is what user_io_status_bits() wants.
+static int confstr_spec(const char *line, char *out, int len)
+{
+	const char *p = line;
+
+	while (*p)
+	{
+		if ((*p == 'D' || *p == 'd' || *p == 'H' || *p == 'h') && p[1] >= '0' && p[1] <= '9')
+		{
+			p += 2;
+			continue;
+		}
+		break;
+	}
+
+	if (*p != 'O' && *p != 'o') return 0;
+	p++;
+
+	int n = 0;
+	while (*p && *p != ',' && n < len - 1) out[n++] = *p++;
+	out[n] = 0;
+	return (*p == ',') && n;
+}
+
+/*
+  Point the core's own Pad1 at the port.
+
+  Without this, "native" would mean the reader stands down and the core carries on
+  with its default Dualshock - a virtual pad nothing is feeding - and the player gets
+  no input at all, which is worse than either mode. The value is found by name rather
+  than by index: the list has thirteen entries today and a core is free to add more.
+
+  Only Pad1. Setting Pad2 as well would take player two away from whoever has a USB
+  pad in the second slot and no second SNAC port, and the core's own menu is one press
+  away for anybody who wants it.
+
+  Nothing is written to the core's config. This applies at core load and lasts as long
+  as the core does, so a player who changes Pad1 by hand keeps their choice until the
+  next load, and snac_psx=1 is how to stop it happening at all.
+*/
+static void psx_native_apply()
+{
+	if (psx_applied || !psx_native) return;
+	if (psx_next && !CheckTimer(psx_next)) return;
+	psx_next = GetTimer(500);
+
+	for (int i = 1; i < 64; i++)
+	{
+		char *line = user_io_get_confstr(i);
+		if (!line || !*line) break;
+
+		char spec[32];
+		if (!confstr_spec(line, spec, sizeof(spec))) continue;
+
+		const char *name = strchr(line, ',');
+		if (!name) continue;
+		name++;
+
+		if (strncasecmp(name, "Pad1,", 5)) continue;
+
+		// The values follow the name, in order; the index is what the option takes.
+		const char *v = name + 5;
+		for (int idx = 0; *v; idx++)
+		{
+			const char *end = strchr(v, ',');
+			int n = end ? (int)(end - v) : (int)strlen(v);
+
+			if (n == 10 && !strncasecmp(v, "SNAC-port1", 10))
+			{
+				user_io_status_set(spec, (uint32_t)idx);
+				printf("snacpad: PSX core reads the port itself (Pad1 = SNAC-port1)\n");
+				psx_applied = 1;
+				return;
+			}
+
+			if (!end) break;
+			v = end + 1;
+		}
+
+		printf("snacpad: PSX core has no SNAC-port1 in Pad1, leaving it alone\n");
+		psx_applied = 1;
+		return;
+	}
+}
+
 void snacpad_init()
 {
 	// core (re)loaded: the fabric side is back to disabled, probe again
 	supported = -1;
 	enabled = 0;
+	psx_native = 0;
+	psx_applied = 0;
+	psx_next = 0;
 	poll_timer = 0;
 }
 
 void snacpad_poll()
 {
-	int want = (cfg.snac_pad != 0);
-	if (!want && !enabled && supported < 0 && pads[0].fd < 0 && pads[1].fd < 0) return;
+	/*
+	  On PSX the port belongs to the core unless the player asked otherwise, so the
+	  reader is held down and the core is pointed at the port instead. Both halves are
+	  here rather than at init: the CONF_STR is not readable that early.
+	*/
+	psx_native = (cfg.snac_pad != 0) && is_psx() && (cfg.snac_psx == 0);
+	if (psx_native) psx_native_apply();
+
+	int want = (cfg.snac_pad != 0) && !psx_native;
+
+	/*
+	  With the feature off there is nothing to say to the core and no reason to touch
+	  SPI at all. PSX native mode is different: the reader has to be *told* to let go,
+	  rather than trusted to have come up idle, or the two readers would both be
+	  driving the port. So it runs the handshake even though it wants nothing back -
+	  once a second, after the first one establishes that the core has a reader.
+	*/
+	if (!want && !enabled && !psx_native && supported < 0
+		&& pads[0].fd < 0 && pads[1].fd < 0) return;
 
 	if (poll_timer && !CheckTimer(poll_timer)) return;
 	poll_timer = GetTimer(SNAC_POLL_MS);
