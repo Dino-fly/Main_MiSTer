@@ -207,11 +207,46 @@ int ini_plan_restart(const ini_change *c, int n)
 	return 0;
 }
 
+int ini_value_of(const char *path, const char *key, char *out, int max)
+{
+	if (max) out[0] = 0;
+
+	FILE *f = fopen(path, "rb");
+	if (!f) return 0;
+
+	int present = 0;
+	char line[1024];
+	while (fgets(line, sizeof(line), f))
+	{
+		int len = (int)strlen(line);
+		int i = 0, crlf = 0;
+		int be = next_line(line, len, &i, &crlf);
+
+		int vs, ve;
+		if (!line_assign(line, 0, be, key, &vs, &ve)) continue;
+
+		// Last one wins, as in ini_plan(): which assignment the firmware actually
+		// obeys depends on the sections that matched the core being loaded, and that
+		// is not knowable from here.
+		int n = ve - vs;
+		if (n > max - 1) n = max - 1;
+		if (n < 0) n = 0;
+		memcpy(out, line + vs, (size_t)n);
+		out[n] = 0;
+		present = 1;
+	}
+	fclose(f);
+	return present;
+}
+
 /* ---------------------------------------------------------- the rewrite --- */
 
-int ini_rewrite(const char *src, int srclen, char *dst, int dstmax)
+int ini_rewrite_set(const char *src, int srclen, char *dst, int dstmax,
+	const ini_set *set, int n, const char *note)
 {
-	int seen[NWANTS];
+	if (n > INI_SET_MAX) return -1;
+
+	int seen[INI_SET_MAX];
 	memset(seen, 0, sizeof(seen));
 
 	int o = 0;
@@ -232,15 +267,15 @@ int ini_rewrite(const char *src, int srclen, char *dst, int dstmax)
 		if (crlf) ncrlf++; else if (i > be) nlf++;
 
 		int done = 0;
-		for (int w = 0; w < NWANTS && !done; w++)
+		for (int w = 0; w < n && !done; w++)
 		{
 			int vs, ve;
-			if (!line_assign(src, ls, be, wants[w].key, &vs, &ve)) continue;
+			if (!line_assign(src, ls, be, set[w].key, &vs, &ve)) continue;
 
 			// Everything before the value and everything after it is the player's:
 			// indentation, the spelling of the key, the spacing, the trailing note.
 			PUT(src + ls, vs - ls);
-			PUTS(wants[w].value);
+			PUTS(set[w].value);
 			PUT(src + ve, i - ve);
 			seen[w] = 1;
 			done = 1;
@@ -250,7 +285,7 @@ int ini_rewrite(const char *src, int srclen, char *dst, int dstmax)
 	}
 
 	int missing = 0;
-	for (int w = 0; w < NWANTS; w++) if (!seen[w]) missing++;
+	for (int w = 0; w < n; w++) if (!seen[w]) missing++;
 	if (!missing) return o;
 
 	/*
@@ -263,23 +298,36 @@ int ini_rewrite(const char *src, int srclen, char *dst, int dstmax)
 
 	if (o && dst[o - 1] != '\n') PUTS(eol);
 	PUTS(eol);
-	PUTS("; Written by Classic Home - Options > Best Settings.");
+	PUTS(note);
 	PUTS(eol);
 	PUTS("[MiSTer]");
 	PUTS(eol);
 
-	for (int w = 0; w < NWANTS; w++)
+	for (int w = 0; w < n; w++)
 	{
 		if (seen[w]) continue;
-		PUTS(wants[w].key);
+		PUTS(set[w].key);
 		PUTS("=");
-		PUTS(wants[w].value);
+		PUTS(set[w].value);
 		PUTS(eol);
 	}
 
 #undef PUTS
 #undef PUT
 	return o;
+}
+
+int ini_rewrite(const char *src, int srclen, char *dst, int dstmax)
+{
+	ini_set set[NWANTS];
+	for (int w = 0; w < NWANTS; w++)
+	{
+		set[w].key = wants[w].key;
+		set[w].value = wants[w].value;
+	}
+
+	return ini_rewrite_set(src, srclen, dst, dstmax, set, NWANTS,
+		"; Written by Classic Home - Options > Best Settings.");
 }
 
 /* ------------------------------------------------------------ the write --- */
@@ -321,21 +369,19 @@ static int spill(const char *path, const char *buf, int len)
 	return ok;
 }
 
-int ini_apply(const char *path)
+/*
+  Back up, rewrite and rename, for whatever set of assignments is handed in. 1 on
+  success; 0 leaves the file untouched and says why in last_error.
+*/
+static int ini_write_set(const char *path, const ini_set *set, int n, const char *note)
 {
-	last_error[0] = 0;
-
 	char *src = 0;
 	int srclen = 0;
 	if (!slurp(path, &src, &srclen))
 	{
 		snprintf(last_error, sizeof(last_error), "Could not read %s", cfg_get_name(altcfg()));
-		return -1;
+		return 0;
 	}
-
-	ini_change plan[INI_WANT_MAX];
-	int n = ini_plan(path, plan, INI_WANT_MAX);
-	if (!n) { free(src); return 0; }
 
 	/*
 	  The backup goes first and a failure to write it stops everything. Rewriting
@@ -346,19 +392,19 @@ int ini_apply(const char *path)
 	{
 		snprintf(last_error, sizeof(last_error), "Could not save a backup - nothing was changed");
 		free(src);
-		return -1;
+		return 0;
 	}
 
-	int dstmax = srclen * 2 + 1024;
+	int dstmax = srclen * 2 + 1024 + n * 128;
 	char *dst = (char*)malloc((size_t)dstmax);
-	int dstlen = dst ? ini_rewrite(src, srclen, dst, dstmax) : -1;
+	int dstlen = dst ? ini_rewrite_set(src, srclen, dst, dstmax, set, n, note) : -1;
 	free(src);
 
 	if (dstlen < 0)
 	{
 		free(dst);
 		snprintf(last_error, sizeof(last_error), "Could not prepare the new settings");
-		return -1;
+		return 0;
 	}
 
 	// Written beside the original and renamed over it, so a power cut during the write
@@ -374,9 +420,46 @@ int ini_apply(const char *path)
 		unlink(tmp);
 		snprintf(last_error, sizeof(last_error), "Could not write %s - the old one is unchanged",
 			cfg_get_name(altcfg()));
-		return -1;
+		return 0;
 	}
 	sync();
+	return 1;
+}
+
+int ini_apply_set(const char *path, const ini_set *set, int n, const char *note)
+{
+	last_error[0] = 0;
+	if (n <= 0) return 0;
+	if (!ini_write_set(path, set, n, note)) return -1;
+
+	for (int i = 0; i < n; i++) printf("ClassicUI: %s = %s\n", set[i].key, set[i].value);
+	printf("ClassicUI: %d setting(s) written, old file kept as %s\n", n, ini_backup_path());
+	return n;
+}
+
+int ini_apply(const char *path)
+{
+	last_error[0] = 0;
+
+	ini_change plan[INI_WANT_MAX];
+	int n = ini_plan(path, plan, INI_WANT_MAX);
+	if (!n) return 0;
+
+	/*
+	  The whole set is handed to the writer, not just the ones that disagree. A key
+	  already holding our value rewrites to the same bytes, and passing them all means
+	  one that appears twice - once right, once wrong, in a core section - is fixed in
+	  both places rather than only where the plan happened to look.
+	*/
+	ini_set set[NWANTS];
+	for (int w = 0; w < NWANTS; w++)
+	{
+		set[w].key = wants[w].key;
+		set[w].value = wants[w].value;
+	}
+
+	if (!ini_write_set(path, set, NWANTS, "; Written by Classic Home - Options > Best Settings."))
+		return -1;
 
 	/*
 	  And tell this process, which parsed the ini before any of this was true. The
