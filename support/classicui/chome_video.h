@@ -81,6 +81,9 @@ void vp_set(int sysidx, int vclass, int preset);
 void vp_arm_for_launch(int sysidx, int vclass_hint);
 void vp_apply_pending();
 
+// Applies the look the running core should have, right now rather than at next launch.
+int vp_apply_now(int sysidx, int vclass_hint);
+
 // Absolute path of a look's generated preset file, for applying it directly.
 int  vp_preset_path(int i, char *out, int len);
 

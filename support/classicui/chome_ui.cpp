@@ -4289,6 +4289,10 @@ static void accept()
 		if (look_row < 0 || look_row >= n) { nudge(); break; }
 
 		vp_set(lit->sysidx, vclass, opts[look_row]);
+
+		// The game it applies to is on screen behind this menu, so show it there now.
+		if (ig_active && ig_is_running(lit)) vp_apply_now(lit->sysidx, vclass);
+
 		printf("ClassicUI: %s (%s) now uses look \"%s\"\n",
 			lib_sys(lit->sysidx) ? lib_sys(lit->sysidx)->name : "?",
 			vp_class_label(vclass), vp_name(opts[look_row]));
