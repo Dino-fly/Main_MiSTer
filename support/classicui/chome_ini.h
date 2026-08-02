@@ -52,6 +52,20 @@ struct ini_change
 int ini_want_count();
 const ini_want *ini_want_at(int i);
 
+/*
+  One assignment to make. The set above is the front-end's own opinion; this is the
+  general form underneath it, so that a second screen - Options > More Settings, which
+  lets the player set things this file has no opinion about at all - writes through the
+  same parser and the same backup rather than growing a second ini writer beside it.
+*/
+#define INI_SET_MAX 32
+
+struct ini_set
+{
+	const char *key;
+	const char *value;
+};
+
 // The ini this machine is really using (alt inis included), absolute.
 const char *ini_path();
 
@@ -74,6 +88,24 @@ int ini_plan_restart(const ini_change *c, int n);
   that appear nowhere are appended in a [MiSTer] section of their own.
 */
 int ini_rewrite(const char *src, int srclen, char *dst, int dstmax);
+
+/*
+  The same, for an arbitrary set of assignments. `note` is the comment written above
+  the appended block, so a file says which screen added the lines at the bottom of it.
+*/
+int ini_rewrite_set(const char *src, int srclen, char *dst, int dstmax,
+	const ini_set *set, int n, const char *note);
+
+// What is set now, from the file rather than from cfg - which holds the value after
+// the core's own sections were applied. 1 when the key is there and not commented out.
+int ini_value_of(const char *path, const char *key, char *out, int max);
+
+/*
+  Back up and write an arbitrary set. Returns n, 0 when n is 0, or -1 with
+  ini_last_error() set. The caller owns telling the running firmware: this knows
+  nothing about which cfg field is behind a key.
+*/
+int ini_apply_set(const char *path, const ini_set *set, int n, const char *note);
 
 /*
   Back up, rewrite, and tell the running firmware. Returns the number of settings

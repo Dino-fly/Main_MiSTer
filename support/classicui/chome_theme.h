@@ -59,6 +59,13 @@ struct chome_profile
 const chome_profile *theme_get();
 void theme_update(int w, int h, int force);
 
+/*
+  Make the next theme_update() recompute even though nothing it is passed has changed.
+  For an ini setting the metrics are derived from - classicui_overscan - which the
+  settings screen can move under a canvas that is staying exactly the same size.
+*/
+void theme_invalidate();
+
 #define COL_BG       0xff2a2c36u
 #define COL_BGDARK   0xff1d1f26u
 #define COL_GRID     0xff32343fu
