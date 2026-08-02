@@ -1293,6 +1293,116 @@ static void assert_save_on_pausing_core()
 	unlink(slot2);
 }
 
+static int fav_count()
+{
+	int n = 0;
+	for (int i = 0; i < lib_item_count(); i++) if (lib_item(i)->fav) n++;
+	return n;
+}
+
+/*
+  B at the top of the shelf jumps to the leftmost entry.
+
+  Favourites and Systems are the first cards of a row that is hundreds of games long, and
+  walking left to them one card at a time is what this saves - so at the top level B is a
+  navigation key, not a way out. Two neighbours have to survive it, and both are checked
+  here because each one is a behaviour someone relies on:
+
+  - inside a folder B still means "up one level", since back() pops the nav stack before
+    anything else and this only concerns the level where there is nothing to pop;
+  - in a game core B used to close the in-game menu from here. It cannot do both, so
+    going back to the game is the menu button's job alone now.
+
+  There is no accessor for the shelf selection, so it is read the way the shelf itself
+  offers: Y does nothing on a folder, and A on the leftmost card opens Favourites - made
+  unmistakable by leaving exactly one favourite in the library.
+*/
+static void assert_back_leftmost()
+{
+	printf("\n== B jumps to the leftmost entry ==\n");
+
+	harness_set_menu_core(1);
+	harness_set_fb_supported(1);
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+
+	chome_leave();
+	press(KEY_MENU, 20);
+	frame(6);
+
+	// Out to the root shelf, whatever the previous section was browsing.
+	for (int i = 0; i < 4; i++) press(KEY_ESC, 6);
+	int root_n = lib_view_count();
+	const chome_entry *first = lib_view_entry(0);
+	check(first && first->kind == ENT_FOLDER && !strcmp(first->label, "Favourites"),
+		"the leftmost entry of the root shelf is Favourites");
+
+	// One favourite, and only one: the Favourites view is then a shelf of exactly 1,
+	// which is neither the root shelf nor any system's.
+	for (int i = 0; i < lib_item_count(); i++) if (lib_item(i)->fav) lib_toggle_fav(lib_item(i));
+	chome_item *fav = lib_item(0);
+	lib_toggle_fav(fav);
+	check(fav_count() == 1, "the library has one favourite to look for");
+
+	// Far enough out that no single left press could account for coming back.
+	for (int i = 0; i < 12; i++) press(KEY_RIGHT, 3);
+	press(KEY_ESC, 8);
+
+	int favs = fav_count();
+	press(KEY_BACKSPACE, 8);                  // Y favourites the selected game
+	check(fav_count() == favs, "B left the cursor on a folder, not on a game");
+
+	press(KEY_ENTER, 10);
+	const chome_entry *e = lib_view_entry(0);
+	check(lib_view_count() == 1 && e && e->kind == ENT_GAME && lib_item(e->game) == fav,
+		"and that folder is Favourites, so B went all the way left");
+
+	// Inside a folder B is unchanged: one level up, not a jump.
+	press(KEY_ESC, 10);
+	check(lib_view_count() == root_n, "B comes back out of Favourites");
+
+	press(KEY_RIGHT, 8);                      // Systems, the second card
+	press(KEY_ENTER, 10);
+	int sysn = lib_view_count();
+	check(sysn > 0 && lib_view_entry(0)->kind == ENT_FOLDER, "the Systems folder is open");
+	press(KEY_ENTER, 10);                     // into the first system
+	check(lib_view_count() != sysn, "and a system inside it");
+	press(KEY_ESC, 10);
+	check(lib_view_count() == sysn, "B goes up one level, back to Systems");
+	press(KEY_ESC, 10);
+	check(lib_view_count() == root_n, "and up again, to the root");
+
+	lib_toggle_fav(fav);                      // leave the library as it was found
+
+	/*
+	  And in a game core, where B on the shelf used to be the way back to the game.
+	*/
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "gb\nTetris (World).gb\n"); fclose(f); }
+	}
+
+	harness_set_menu_core(0);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+	chome_handle(0);
+	if (chome_ingame_active()) press(KEY_MENU, 14);
+	frame(6);
+
+	press(KEY_MENU, 20);
+	check(chome_ingame_active(), "the in-game menu is up over the game");
+
+	// The first press jumps left; the rest have nowhere to go and must still not close
+	// it - the shelf is already at the top level, so nav_pop() has nothing to do.
+	for (int i = 0; i < 4; i++) press(KEY_ESC, 8);
+	check(chome_ingame_active(), "B on the shelf no longer drops the player back into the game");
+
+	press(KEY_MENU, 16);
+	frame(8);
+	check(!chome_ingame_active(), "and the menu button is still the way back to it");
+}
+
 static void assert_slot_match()
 {
 	printf("\n== which option is the savestate slot ==\n");
@@ -1590,13 +1700,15 @@ static void assert_ingame()
 	press(KEY_MENU, 20);
 	check(harness_pulses_on("S") >= 1, "the freeze still reaches the save bit with SD off");
 	check(harness_opt_val("V") == 1, "and puts the SD-card option back where it was");
-	press(KEY_ESC, 16);
+	press(KEY_MENU, 16);
 
 	harness_set_opt("V", 0);
 	harness_reset_status();
 	press(KEY_MENU, 20);
 	check(harness_pulses_on("S") == 1, "opening freezes the game with a save");
-	press(KEY_ESC, 16);
+	// The menu button, not B: B is the shelf's own navigation key now. See
+	// assert_back_leftmost().
+	press(KEY_MENU, 16);
 	check(harness_pulses_on("T") == 1, "and closing restores it, so nothing advanced");
 
 	/*
@@ -1721,7 +1833,7 @@ static void assert_ingame()
 		struct stat st;
 		check(stat("/tmp/classicui_current", &st) != 0,
 			"a launch record naming another core is dropped, not believed");
-		press(KEY_ESC, 10);
+		press(KEY_MENU, 10);                      // back to the game; B no longer does this
 
 		// Leave it in a game, as this section found it, and put back a record that does
 		// match the running core - what follows needs a running game to put away.
@@ -2166,6 +2278,7 @@ int main()
 	assert_ingame();
 	assert_save_on_pausing_core();
 	assert_freeze_off();
+	assert_back_leftmost();
 	assert_slot_match();
 	assert_menu_repeat();
 	assert_input_labels();
@@ -2912,6 +3025,19 @@ int main()
 		harness_set_pad_name("Generic USB Gamepad");
 		press(KEY_MENU, 20);
 		frame(10);
+
+		/*
+		  Park on a game rather than trusting whatever the last section left: a folder
+		  gets a different legend, and Down on one only nudges - so the Down/Up used
+		  below to force a redraw would land on the menu bar instead of coming back
+		  here, and the hashes would be of two different screens.
+		*/
+		for (int i = 0; i < 30; i++) press(KEY_LEFT, 2);
+		int lead = 0;
+		while (lead < lib_view_count() && lib_view_entry(lead)->kind != ENT_GAME) lead++;
+		for (int i = 0; i < lead; i++) press(KEY_RIGHT, 6);
+		frame(10);
+
 		dump("prompts-1-generic");
 		unsigned long generic = harness_fb_hash(660, 720);
 
