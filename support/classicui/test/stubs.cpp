@@ -142,6 +142,14 @@ int FileLoad(const char *name, void *buf, int size)
 	return n;
 }
 
+/*
+  Which MiSTer.ini is in use. The real cfg_get_name() scans the card for MiSTer_*.ini
+  and offers them as alternates; nothing in the harness exercises that, and the
+  Best Settings screen only needs a name to hang off getRootDir().
+*/
+uint16_t altcfg(int) { return 0; }
+const char *cfg_get_name(uint8_t) { return "MiSTer.ini"; }
+
 /* ---------------------------------------------------- fake framebuffers --- */
 
 static int fb_supported = 1;

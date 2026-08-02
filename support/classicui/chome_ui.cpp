@@ -20,6 +20,7 @@
 #include "chome_osk.h"
 #include "chome_net.h"
 #include "chome_bt.h"
+#include "chome_ini.h"
 
 #include "../../cfg.h"
 #include "../../user_io.h"
@@ -76,6 +77,27 @@ static char wifi_pick[NET_SSID];             // ...and its name, kept across the
 static int pwr_row = 0;                      // Restart / Shut Down
 static int pwr_arm = -1;                     // ...and which one is one press from happening
 static unsigned long pwr_until = 0;
+
+/*
+  Best Settings: the MiSTer.ini keys this front-end assumes, and what writing
+  them would change. Read from the card when the screen that shows it is opened -
+  never per frame, because the answer only moves when we move it.
+*/
+static ini_change ini_list[INI_WANT_MAX];
+static int ini_n = 0;                        // settings that disagree with the file
+static int ini_armed = 0;                    // one press from rewriting the file
+static unsigned long ini_until = 0;
+static int ini_wrote = -1;                   // -1 idle, >= 0 how many were written, < -1 failed
+static int ini_needs_restart = 0;            // ...and whether that is enough on its own
+
+// Re-reads the ini. Cheap enough to do on every entry to a screen that shows it, and
+// nowhere near cheap enough to do per frame.
+static void ini_refresh()
+{
+	ini_n = ini_plan(ini_path(), ini_list, INI_WANT_MAX);
+	ini_armed = 0;
+	ini_wrote = -1;
+}
 
 static int pads_row = 0;                     // which controller is picked
 static int pads_forget_arm = -1;             // ...and whether forgetting it is armed
@@ -146,9 +168,10 @@ static void ref_shot_path(const char *sysid, const char *rompath, char *out, int
 #define SCR_WIFI    10
 #define SCR_PADS    11
 #define SCR_POWER   12
+#define SCR_INI     13
 
 // Rows on the Options panel. Several places step over them.
-#define OPT_ROWS    7
+#define OPT_ROWS    8
 
 /*
   Savestate slots.
@@ -1957,8 +1980,8 @@ static void draw_options_panel(const chome_profile *p)
 {
 	panel_box b = draw_panel(p, "Options");
 
-	static const char *rows_menu[] = { "Cover Art", "Rescan Library", "Reinstall Looks", "Menu Layout", "Controllers", "Wi-Fi", "Advanced Settings" };
-	static const char *rows_game[] = { "Cover Art", "Rescan Library", "Reinstall Looks", "Menu Layout", "Controllers", "Wi-Fi", "Close Game" };
+	static const char *rows_menu[] = { "Cover Art", "Rescan Library", "Reinstall Looks", "Menu Layout", "Controllers", "Wi-Fi", "Best Settings", "Advanced Settings" };
+	static const char *rows_game[] = { "Cover Art", "Rescan Library", "Reinstall Looks", "Menu Layout", "Controllers", "Wi-Fi", "Best Settings", "Close Game" };
 	const char *const *rows = ig_active ? rows_game : rows_menu;
 	char v1[32];
 	if (lib_scanning()) snprintf(v1, sizeof(v1), "%d...", lib_scan_progress());
@@ -1987,6 +2010,12 @@ static void draw_options_panel(const chome_profile *p)
 	else if (!bt_count()) snprintf(v3, sizeof(v3), "Set Up >");
 	else snprintf(v3, sizeof(v3), "%d Wireless", bt_count());
 
+	// And what the Best Settings row says: how many of them the ini disagrees
+	// with, so a player who has already run it is told there is nothing to do here.
+	char v4[32];
+	if (!ini_n) snprintf(v4, sizeof(v4), "All Set");
+	else snprintf(v4, sizeof(v4), "%d To Change >", ini_n);
+
 	const char *vals[] = {
 		cfg.classicui_artfetch ? "Fetch Missing" : "Local Only",
 		v1,
@@ -1994,6 +2023,7 @@ static void draw_options_panel(const chome_profile *p)
 		cfg.classicui_profile == 0 ? "Auto" : theme_get()->name,
 		v3,
 		v2,
+		v4,
 		ig_active ? (closing ? "Again To Confirm" : "Back To Menu") : "Classic Menu >"
 	};
 
@@ -2475,6 +2505,126 @@ static void draw_power(const chome_profile *p)
 	}
 }
 
+/*
+  Best Settings.
+
+  Two levels on purpose. The left column is an outcome a player can judge - "hide the
+  resolution pop-up over a game" - and the right column is the line that will really be
+  written to their file. Nobody has to read the right column, and nobody who wants to
+  know what is being done to their configuration should have to guess.
+
+  It is a screen rather than an Options row that just acts, because this rewrites a file
+  the player may well have edited themselves: they see the whole list first, and it still
+  takes the two presses that everything unrecoverable takes here.
+*/
+#define INI_NOTE "A copy of the old file is kept, so this can be undone."
+
+static void draw_ini(const chome_profile *p)
+{
+	int s = p->ts_ui;
+	int rowh = 11 * s;
+	int done = (ini_wrote != -1);
+
+	int w = p->w - 2 * p->inset;
+	if (w > 46 * 8 * s) w = 46 * 8 * s;
+	int avail = w - 12 * s;
+
+	/*
+	  ts_tiny is ts_ui on every profile, so the two columns are told apart by colour
+	  rather than by size - and at 240p they do not both fit on a line at all. Measured
+	  rather than assumed: when the widest pair overflows, each setting takes two lines
+	  with its key indented under it, which is the one arrangement that keeps the
+	  written line visible on the canvas Dinofly's CRT actually gets.
+	*/
+	int stacked = 0;
+	for (int i = 0; i < ini_n; i++)
+	{
+		char kv[48];
+		snprintf(kv, sizeof(kv), "%s=%s", ini_list[i].want->key, ini_list[i].want->value);
+		if (gfx_text_w(ini_list[i].want->outcome, s) + gfx_text_w(kv, s) + 8 * s > avail) stacked = 1;
+	}
+
+	// Sized for its content, like Power, rather than taking the default panel.
+	int lines = done ? 3 : (ini_n ? ini_n * (stacked ? 2 : 1) : 1);
+	char note[4][64];
+	int nnote = done ? 0 : (ini_n ? wrap_text(INI_NOTE, avail / (8 * s), note, 3) : 0);
+
+	int h = (10 * s + 6) + 5 * s + lines * rowh + 6 * s + nnote * 9 * s + 6 * s + 12 * s;
+	if (h > p->h - 2 * p->safe_y) h = p->h - 2 * p->safe_y;
+
+	panel_box b = draw_panel_ex(p, w, h, "Best Settings");
+	int y = b.y + 5 * s;
+
+	if (done)
+	{
+		int failed = (ini_wrote < 0);
+		const char *bak = strrchr(ini_backup_path(), '/');
+		char l1[96], l2[96];
+
+		if (failed) snprintf(l1, sizeof(l1), "%s", ini_last_error());
+		else snprintf(l1, sizeof(l1), "%d setting%s changed", ini_wrote, ini_wrote == 1 ? "" : "s");
+		snprintf(l2, sizeof(l2), "Old file kept as %s", bak ? bak + 1 : ini_backup_path());
+
+		gfx_text(gfx_clip(l1, s, avail), b.x + 6 * s, y, s, failed ? COL_RED : COL_INK, 0);
+
+		if (!failed)
+		{
+			gfx_text(gfx_clip(l2, s, avail), b.x + 6 * s, y + rowh, s, COL_PANELLO, 0);
+
+			/*
+			  And the restart line, which has to be the truth rather than a
+			  reassurance. Every setting shipped today has a cfg field ini_apply()
+			  pokes as well as writing, so this session is already living under the
+			  new values; one without a field makes this say the opposite.
+			*/
+			gfx_text(gfx_clip(ini_needs_restart ? "A restart is needed for these"
+			                                    : "In effect now - no restart needed", s, avail),
+				b.x + 6 * s, y + 2 * rowh, s, COL_PANELLO, 0);
+		}
+
+		btn_hint_c(b.x + b.w / 2, b.y + b.h - 11 * s, s, COL_INK, "Press", LBL_B, "to close");
+		return;
+	}
+
+	if (!ini_n)
+	{
+		gfx_text_c(gfx_clip("Everything this menu wants is already set.", s, avail),
+			b.x + b.w / 2, y, s, COL_INK, 0);
+		btn_hint_c(b.x + b.w / 2, b.y + b.h - 11 * s, s, COL_INK, "Press", LBL_B, "to close");
+		return;
+	}
+
+	for (int i = 0; i < ini_n; i++)
+	{
+		const ini_want *wt = ini_list[i].want;
+
+		char kv[48];
+		snprintf(kv, sizeof(kv), "%s=%s", wt->key, wt->value);
+
+		if (stacked)
+		{
+			gfx_text(gfx_clip(wt->outcome, s, avail), b.x + 6 * s, y + 2 * i * rowh, s, COL_INK, 0);
+			gfx_text(gfx_clip(kv, s, avail - 8 * s), b.x + 14 * s, y + (2 * i + 1) * rowh, s, COL_PANELLO, 0);
+		}
+		else
+		{
+			int kvw = gfx_text_w(kv, s);
+			gfx_text(gfx_clip(wt->outcome, s, avail - kvw - 4 * s), b.x + 6 * s, y + i * rowh, s, COL_INK, 0);
+			gfx_text(kv, b.x + b.w - 6 * s - kvw, y + i * rowh, s, COL_PANELLO, 0);
+		}
+	}
+
+	int ny = y + lines * rowh + 6 * s;
+	for (int i = 0; i < nnote; i++)
+		gfx_text_c(note[i], b.x + b.w / 2, ny + i * 9 * s, s, COL_PANELHI, 0);
+
+	// The note stays put while arming so the panel does not resize under the player;
+	// only the line they are about to act on changes.
+	int armed = (ini_armed && !CheckTimer(ini_until));
+	if (armed) btn_hint_c(b.x + b.w / 2, b.y + b.h - 11 * s, s, COL_RED, "Press", LBL_A, "again to write");
+	else btn_hint_c(b.x + b.w / 2, b.y + b.h - 11 * s, s, COL_INK, "Press", LBL_A, "to change them");
+}
+
 static void draw_about_panel(const chome_profile *p)
 {
 	panel_box b = draw_panel(p, "About");
@@ -2779,7 +2929,7 @@ static void render()
 
 	int overlay = (screen == SCR_SORT || screen == SCR_DISPLAY || screen == SCR_OPTIONS ||
 		screen == SCR_ABOUT || screen == SCR_WIFI || screen == SCR_PADS ||
-		screen == SCR_POWER);
+		screen == SCR_POWER || screen == SCR_INI);
 	if (overlay) gfx_scrim(0, 0, p->w, p->h, COL_BGDARK, 2);
 
 	draw_suspend(p);
@@ -2794,6 +2944,7 @@ static void render()
 	case SCR_ABOUT:   draw_about_panel(p); break;
 	case SCR_WIFI:    draw_wifi(p); break;
 	case SCR_POWER:   draw_power(p); break;
+	case SCR_INI:     draw_ini(p); break;
 	case SCR_PADS:    draw_pads(p); break;
 	case SCR_LAUNCH:  draw_launch(p); break;
 	default: break;
@@ -2834,6 +2985,9 @@ static void go_screen(int s)
 	// Reading the link costs a process, so only do it while something is showing it.
 	net_watch(s == SCR_OPTIONS || s == SCR_WIFI);
 	bt_watch(s == SCR_OPTIONS || s == SCR_PADS);
+	// The Options row says how many settings the ini disagrees with, so it has to be
+	// read - once, on the way in, and not on every frame the row is on screen.
+	if (s == SCR_OPTIONS) ini_refresh();
 	mark_dirty();
 }
 
@@ -3126,6 +3280,11 @@ static void accept()
 			break;
 
 		case 6:
+			ini_refresh();
+			go_screen(SCR_INI);
+			break;
+
+		case 7:
 			if (!ig_active) { chome_leave(); break; }
 
 			// Closing the game loses unsaved progress, so it takes two presses.
@@ -3158,6 +3317,29 @@ static void accept()
 
 		pwr_arm = pwr_row;
 		pwr_until = GetTimer(3000);
+		mark_dirty();
+		break;
+
+	case SCR_INI:
+		// Once it has run, A is the way out as well as B - the result panel has nothing
+		// else to act on and a player who pressed A to get here will press A again.
+		if (ini_wrote != -1) { go_screen(SCR_OPTIONS); break; }
+		if (!ini_n) { nudge(); break; }
+
+		if (ini_armed && !CheckTimer(ini_until))
+		{
+			// Read before the write, because ini_apply() rewrites the file the plan was
+			// made from and the answer has to describe what was actually changed.
+			ini_needs_restart = ini_plan_restart(ini_list, ini_n);
+			ini_wrote = ini_apply(ini_path());
+			if (ini_wrote < 0) ini_wrote = -2;         // the result panel says why
+			ini_armed = 0;
+			mark_dirty();
+			break;
+		}
+
+		ini_armed = 1;
+		ini_until = GetTimer(3000);
 		mark_dirty();
 		break;
 
@@ -3279,6 +3461,11 @@ static void back()
 	case SCR_POWER:
 		if (pwr_arm >= 0) { pwr_arm = -1; mark_dirty(); break; }   // first B cancels
 		go_screen(SCR_MENUBAR);
+		break;
+
+	case SCR_INI:
+		if (ini_armed) { ini_armed = 0; mark_dirty(); break; }     // first B cancels
+		go_screen(SCR_OPTIONS);
 		break;
 
 	case SCR_PADS:

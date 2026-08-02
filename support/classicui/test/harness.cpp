@@ -29,6 +29,7 @@
 #include "../chome_osk.h"
 #include "../chome_net.h"
 #include "../chome_bt.h"
+#include "../chome_ini.h"
 #include "../chome_icons32.h"
 #include "../chome_btn12.h"
 #include "../../../lib/imlib2/Imlib2.h"
@@ -73,6 +74,67 @@ static void touch(const char *dir, const char *name, int bytes)
 	if (!f) { printf("  cannot create %s\n", p); return; }
 	for (int i = 0; i < bytes; i++) fputc(i & 0xff, f);
 	fclose(f);
+}
+
+/* -------------------------------------------------------- ini fixtures ---- */
+
+static void put_file(const char *path, const char *text)
+{
+	FILE *f = fopen(path, "wb");                 // binary, or the fixture is not CRLF
+	if (!f) { printf("  cannot write %s\n", path); return; }
+	fwrite(text, 1, strlen(text), f);
+	fclose(f);
+}
+
+static int slurp_file(const char *path, char *buf, int max)
+{
+	FILE *f = fopen(path, "rb");
+	if (!f) return -1;
+	int n = (int)fread(buf, 1, (size_t)max - 1, f);
+	fclose(f);
+	buf[n] = 0;
+	return n;
+}
+
+/*
+  Lines that differ between the two files and are not an assignment of one of our keys.
+  The point of the rewrite is that this is zero: a player's comments, spacing, ordering
+  and unrelated settings come through untouched.
+
+  It walks the source's lines only, so the block appended at the end is not counted -
+  that one is asserted for on its own. And a line whose key merely starts with one of
+  ours would be forgiven here, so the prefix case has its own check too.
+*/
+static int ini_stray_lines(const char *a, const char *b)
+{
+	int stray = 0;
+	const char *pa = a, *pb = b;
+
+	while (*pa)
+	{
+		const char *ea = strchr(pa, '\n');
+		ea = ea ? ea + 1 : pa + strlen(pa);
+		const char *eb = strchr(pb, '\n');
+		eb = eb ? eb + 1 : pb + strlen(pb);
+
+		size_t la = (size_t)(ea - pa), lb = (size_t)(eb - pb);
+		if (la != lb || memcmp(pa, pb, la))
+		{
+			const char *q = pa;
+			while (*q == ' ' || *q == '\t') q++;
+
+			int ours = 0;
+			for (int w = 0; w < ini_want_count(); w++)
+				if (!strncasecmp(q, ini_want_at(w)->key, strlen(ini_want_at(w)->key))) ours = 1;
+
+			if (!ours) { printf("  stray change: %.*s\n", (int)la, pa); stray++; }
+		}
+
+		pa = ea;
+		pb = eb;
+		if (!*pb && *pa) { printf("  the rewrite is short of lines\n"); stray++; break; }
+	}
+	return stray;
 }
 
 // A stand-in cover: coloured plate, a band, and a diagonal, so we can see
@@ -2883,6 +2945,7 @@ int main()
 		press(KEY_RIGHT, 10);                 // Options
 		press(KEY_ENTER, 14);
 		press(KEY_UP, 8);                     // wrap to the last row
+		press(KEY_UP, 8);                     // Best Settings
 		press(KEY_UP, 8);                     // Wi-Fi
 		press(KEY_UP, 8);                     // Controllers
 		press(KEY_ENTER, 14);
@@ -3020,6 +3083,7 @@ int main()
 		press(KEY_RIGHT, 10);                 // Options
 		press(KEY_ENTER, 14);
 		press(KEY_UP, 8);                     // wrap to the last row
+		press(KEY_UP, 8);                     // Best Settings
 		press(KEY_UP, 8);                     // and up to Wi-Fi
 		press(KEY_ENTER, 14);
 		frame(8);
@@ -3041,6 +3105,258 @@ int main()
 		press(KEY_ESC, 10);
 		press(KEY_ESC, 10);
 		frame(6);
+	}
+
+	/*
+	  Best Settings. This rewrites the player's own MiSTer.ini, which is a
+	  hand-edited CRLF file full of their comments, so most of what is checked here is
+	  about what the rewrite leaves alone rather than what it changes.
+
+	  The fake SD card is a real directory, so the write half runs for real: the file is
+	  written, read back, and the backup compared against the original bytes.
+	*/
+	printf("\n== recommended settings ==\n");
+	{
+		/*
+		  A fixture shaped like the awkward parts of a real ini. Every line here is one
+		  the rewriter has to get right:
+
+		  - video_info carries a trailing note, which has to survive the value changing
+		  - controller_info exists only as a comment, so it counts as absent
+		  - disable_autofire is not there at all
+		  - video_information is not ours, and our key is a prefix of it. It stands in
+		    for the real pairs in ini_vars - video_off / video_off_logo, hdmi_cec /
+		    hdmi_cec_sleep - and doubles as a key the rewriter has never heard of
+		  - [NES] sets video_info again. A core section is parsed after [MiSTer] and
+		    wins, so fixing only the first one would leave the pop-up on in that core
+		  - the [video=] section uses a space instead of an '=', which cfg.cpp accepts
+		*/
+		static const char *SRC_CRLF =
+			"[MiSTer]\r\n"
+			"; keep the scanlines off in here\r\n"
+			"video_mode=1280x720@60\r\n"
+			"video_info=3            ; seconds the mode banner stays up\r\n"
+			";controller_info=6\r\n"
+			"video_information=1\r\n"
+			"\r\n"
+			"[NES]\r\n"
+			"video_info=9\r\n"
+			"\r\n"
+			"[video=1280x720]\r\n"
+			"video_info 4\r\n";
+
+		static char out[8192], out2[8192];
+		int srclen = (int)strlen(SRC_CRLF);
+		int n = ini_rewrite(SRC_CRLF, srclen, out, sizeof(out));
+		check(n > 0, "a file can be rewritten");
+		out[n] = 0;
+
+		// The whole point of editing in binary: a text-mode write would rewrite every
+		// line ending in the file and turn the next diff into the whole file.
+		int bare_lf = 0, crlf = 0;
+		for (int i = 0; i < n; i++)
+		{
+			if (out[i] != '\n') continue;
+			if (i && out[i - 1] == '\r') crlf++; else bare_lf++;
+		}
+		check(!bare_lf, "CRLF survives the rewrite - not one line ending was changed");
+		check(crlf == 17, "and the file gained only the lines it had to");   // 12 + a 5-line block
+
+		check(strstr(out, "video_info=0            ; seconds the mode banner stays up") != 0,
+			"a value changes without disturbing the note beside it");
+		check(!strstr(out, "video_info=3") && !strstr(out, "video_info=9"),
+			"every assignment of the key is set, not just the first");
+		check(strstr(out, "video_info 0") != 0,
+			"including one written with a space instead of an '='");
+		check(strstr(out, ";controller_info=6") != 0, "a commented-out line is left commented");
+		check(strstr(out, "video_information=1") != 0,
+			"a longer key our key is a prefix of is left alone");
+		check(strstr(out, "video_mode=1280x720@60") != 0 && strstr(out, "[NES]\r\n") != 0,
+			"and so is everything else in the file");
+
+		// The two that were absent, in a section of their own - the file ends inside
+		// [video=], where bare keys would have applied to that one video mode.
+		check(strstr(out, "[MiSTer]\r\ncontroller_info=0\r\ndisable_autofire=1\r\n") != 0,
+			"keys that appear nowhere are added under a [MiSTer] header");
+
+		check(ini_stray_lines(SRC_CRLF, out) == 0, "no line that is not ours was touched");
+
+		// Running it twice must be running it once. The appended block is found as a
+		// real assignment on the second pass, so it is set rather than added again.
+		int n2 = ini_rewrite(out, n, out2, sizeof(out2));
+		out2[n2] = 0;
+		check(n2 == n && !memcmp(out, out2, (size_t)n), "rewriting an already-fixed file changes nothing");
+
+		/*
+		  The mirror of the CRLF check. A file that arrives with Unix line endings has
+		  to leave with them: guessing CRLF because MiSTer.ini usually is would corrupt
+		  an ini somebody edited on the machine itself.
+		*/
+		{
+			static char lfsrc[4096], lfout[8192];
+			int j = 0;
+			for (int i = 0; i < srclen; i++) if (SRC_CRLF[i] != '\r') lfsrc[j++] = SRC_CRLF[i];
+			lfsrc[j] = 0;
+
+			int ln = ini_rewrite(lfsrc, j, lfout, sizeof(lfout));
+			lfout[ln] = 0;
+			check(ln > 0 && !strchr(lfout, '\r'), "an LF file stays an LF file");
+			check(strstr(lfout, "[MiSTer]\ncontroller_info=0\n") != 0,
+				"and the added block follows it");
+		}
+
+		// A file with nothing in it at all - a fresh card, or an ini somebody emptied.
+		{
+			static char eout[2048];
+			int en = ini_rewrite("", 0, eout, sizeof(eout));
+			eout[en] = 0;
+			check(en > 0 && strstr(eout, "[MiSTer]\r\nvideo_info=0\r\n") != 0,
+				"an empty file gets the whole set");
+		}
+
+		/* ------------------------------------------------ and now the real file --- */
+
+		char path[1024], bak[1024];
+		snprintf(path, sizeof(path), "%s/MiSTer.ini", ROOT);
+		snprintf(bak, sizeof(bak), "%s.bak", path);
+		check(!strcmp(ini_path(), path), "the screen writes the ini the machine is using");
+		check(!strcmp(ini_backup_path(), bak), "and keeps the copy beside it");
+		/*
+		  Not MiSTer_something.ini: cfg_get_name() scans the root for that pattern and
+		  offers whatever it finds as an alternate configuration to boot from, so a
+		  backup named that way would turn up in the classic menu as a fourth ini.
+		*/
+		check(!strstr(bak, "MiSTer_"), "under a name the alt-ini scanner will not adopt");
+
+		put_file(path, SRC_CRLF);
+
+		ini_change plan[INI_WANT_MAX];
+		int np = ini_plan(path, plan, INI_WANT_MAX);
+		check(np == 3, "all three settings are reported as needing a change");
+		check(!strcmp(plan[0].had, "4") && plan[0].present,
+			"the value shown is the last one in the file, which is the one in force");
+		check(!plan[1].present && !plan[1].had[0], "a key that is only a comment reads as absent");
+
+		/*
+		  Whether a restart is needed is read off the set rather than asserted. Every
+		  setting shipped today has a cfg field ini_apply() pokes, so the honest answer
+		  is no - and a setting without one has to make it yes, which is what the second
+		  half of this checks with a want that has no field.
+		*/
+		check(!ini_plan_restart(plan, np), "none of the shipped settings needs a restart");
+		{
+			ini_want startup_only = { "font", "x", "a setting only read at startup", 0, 0 };
+			ini_change c;
+			c.want = &startup_only;
+			c.present = 0;
+			c.had[0] = 0;
+			check(ini_plan_restart(&c, 1) == 1, "one that is only read at startup says so");
+		}
+
+		cfg.video_info = 3;
+		cfg.controller_info = 6;
+		cfg.disable_autofire = 0;
+
+		int wrote = ini_apply(path);
+		printf("  ini_apply wrote %d\n", wrote);
+		check(wrote == 3, "writing reports what it changed");
+
+		static char now[8192], saved[8192];
+		check(slurp_file(path, now, sizeof(now)) > 0, "the ini is still readable afterwards");
+		check(slurp_file(bak, saved, sizeof(saved)) > 0, "and a backup was left");
+		check(!strcmp(saved, SRC_CRLF), "the backup is the old file, byte for byte");
+		check(!strcmp(now, out), "and the new one is what the rewrite said it would be");
+
+		// The session that is already running parsed the ini before any of this was
+		// true, so it has to be told as well - that is what makes "no restart" honest.
+		check(cfg.video_info == 0 && cfg.controller_info == 0 && cfg.disable_autofire == 1,
+			"the running firmware is updated too, not just the file");
+
+		check(ini_plan(path, plan, INI_WANT_MAX) == 0, "nothing is left to change");
+		check(ini_apply(path) == 0, "and applying again writes nothing");
+
+		/* ------------------------------------------------------------ the screen --- */
+
+		// Back to the unfixed file, and drive the screen the way a person reaches it.
+		put_file(path, SRC_CRLF);
+
+		harness_set_menu_core(1);
+		chome_leave();
+		press(KEY_MENU, 20);
+		frame(8);
+
+		press(KEY_UP, 10);                    // the menu bar
+		press(KEY_RIGHT, 10);                 // Options
+		press(KEY_ENTER, 14);
+		press(KEY_UP, 8);                     // wrap to the last row
+		press(KEY_UP, 8);                     // Best Settings
+		frame(6);
+		dump("ini-1-options-row");
+
+		press(KEY_ENTER, 14);
+		frame(8);
+		dump("ini-2-plan");
+
+		// Arming says what it will do and does not do it. This is the check that would
+		// fail if the screen ever wrote on the first press.
+		press(KEY_ENTER, 12);
+		frame(6);
+		dump("ini-3-armed");
+		slurp_file(path, now, sizeof(now));
+		check(!strcmp(now, SRC_CRLF), "one press of A does not touch the file");
+
+		press(KEY_ENTER, 12);
+		frame(8);
+		dump("ini-4-written");
+		slurp_file(path, now, sizeof(now));
+		check(!strcmp(now, out), "the second press writes it");
+		check(ini_plan(path, plan, INI_WANT_MAX) == 0, "and the screen leaves nothing to do");
+
+		press(KEY_ESC, 10);
+		frame(6);
+		dump("ini-5-all-set");
+
+		press(KEY_ESC, 10);
+		press(KEY_ESC, 10);
+		frame(6);
+
+		/*
+		  And the same screen on the canvas his CRT really gets. At 240p the outcome and
+		  the line that will be written cannot share a row, so the panel stacks them -
+		  which is the arrangement that has to be looked at, not measured.
+		*/
+		put_file(path, SRC_CRLF);
+		harness_set_fb(320, 240);
+		gfx_shutdown();
+		theme_update(320, 240, 3);
+
+		chome_leave();
+		press(KEY_MENU, 20);
+		frame(12);
+		// No RIGHT here, unlike the HD walk above: Display is dropped from the menu bar
+		// at 240p, so Options is already the first entry.
+		press(KEY_UP, 10);
+		press(KEY_ENTER, 14);
+		press(KEY_UP, 8);
+		press(KEY_UP, 8);
+		press(KEY_ENTER, 14);
+		frame(8);
+		dump("ini-6-plan-240p");
+		check(gfx_w() == 320, "the panel lays out on a 240p canvas");
+		check(ini_plan(path, plan, INI_WANT_MAX) == 3, "and shows the plan rather than acting");
+
+		press(KEY_ESC, 10);
+		press(KEY_ESC, 10);
+		press(KEY_ESC, 10);
+		frame(6);
+
+		harness_set_fb(1280, 720);
+		gfx_shutdown();
+		theme_update(1280, 720, 1);
+		frame(6);
+
+		unlink(path);
+		unlink(bak);
 	}
 
 	/*
