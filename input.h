@@ -157,6 +157,32 @@ struct pad_info
 
 int input_pad_list(pad_info *out, int max);
 
+/*
+  What one player's controller is doing right now, for Classic Home's controller tester.
+
+  Nothing else in the firmware keeps this: every event is dispatched and forgotten as it
+  arrives, so a screen that wants to show a pad's current state has to be given it. Kept
+  deliberately narrow - the twelve buttons the system map names, the two sticks, and the
+  event code behind each button - rather than exposing devInput, which is per *device*
+  and would make a caller join a pad's several event devices back together itself.
+
+  The button bits are SYS_BTN_* positions in the system map, so a remapped pad lights the
+  button actually under the player's thumb; `code` says which physical button that is, so
+  a tester can draw the shape printed on it instead of assuming a layout.
+*/
+#define PAD_STATE_BTNS (SYS_BTN_START + 1)
+
+struct pad_state
+{
+	uint32_t held;                       // 1u << SYS_BTN_*, set while that button is down
+	uint16_t code[PAD_STATE_BTNS];       // the event code this pad has mapped there, 0 if none
+	int      sticks;                     // 1 when this pad has an analog stick at all
+	int      lx, ly, rx, ry;             // stick offsets, -128..127, 0 at rest
+};
+
+// 0 when that player has no controller. `out` is zeroed either way.
+int input_pad_state(int player, pad_state *out);
+
 int input_menu_key_from_pad();
 const char *input_menu_key_devname();
 uint16_t input_menu_key_btn(int sys_btn);

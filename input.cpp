@@ -2020,6 +2020,20 @@ static int kbd_toggle = 0;
 // 1 when the last key handed to the menu came from a gamepad, 0 from a keyboard.
 static int menu_key_from_pad = 1;
 static int menu_key_dev = -1;
+/*
+  The parts of a pad that are not the pad, and our own uinput device, which nobody
+  plugged in. Shared by the list and the live state so the two cannot disagree about
+  which of a DualShock's four event devices *is* the DualShock.
+*/
+static int pad_is_pad_dev(int i)
+{
+	if (!input[i].num || input[i].mouse) return 0;
+	if (strcasestr(input[i].name, "Touchpad")) return 0;
+	if (strcasestr(input[i].name, "Motion Sensor")) return 0;
+	if (strcasestr(input[i].name, UINPUT_NAME)) return 0;
+	return 1;
+}
+
 int input_pad_list(pad_info *out, int max)
 {
 	if (!out || max < 1) return 0;
@@ -2029,15 +2043,7 @@ int input_pad_list(pad_info *out, int max)
 	{
 		// A player number is what makes a device a controller here: it is given on the
 		// pad input path, so anything holding one has behaved like a pad.
-		if (!input[i].num || input[i].mouse) continue;
-
-		/*
-		  The parts of a pad that are not the pad, and our own uinput device, which
-		  nobody plugged in.
-		*/
-		if (strcasestr(input[i].name, "Touchpad")) continue;
-		if (strcasestr(input[i].name, "Motion Sensor")) continue;
-		if (strcasestr(input[i].name, UINPUT_NAME)) continue;
+		if (!pad_is_pad_dev(i)) continue;
 
 		int seen = 0;
 		for (int j = 0; j < n; j++) if (out[j].player == input[i].num) { seen = 1; break; }
@@ -2069,6 +2075,94 @@ int input_pad_list(pad_info *out, int max)
 	}
 
 	return n;
+}
+
+/*
+  Live pad state, accumulated per player as events go past.
+
+  Recorded rather than read back because there is nowhere to read it from: every branch
+  below dispatches its event - to the core, to the OSD, to a synthetic menu key - and
+  returns, and none of them keeps what is currently held. Per player, not per device, so
+  a pad whose sticks and buttons arrive on two event nodes still reads as one controller.
+*/
+static uint32_t pad_live_held[NUMPLAYERS] = {};
+static int      pad_live_stick[NUMPLAYERS][2][2] = {};
+
+static void pad_live_key(int dev, uint16_t code, int value)
+{
+	int num = input[dev].num;
+	if (num < 1 || num > NUMPLAYERS) return;
+	if (value > 1) return;                  // 2 is the kernel's autorepeat, not a new press
+
+	uint32_t *held = &pad_live_held[num - 1];
+
+	for (int i = 0; i < PAD_STATE_BTNS; i++)
+	{
+		if (!input[dev].mmap[i] || code != input[dev].mmap[i]) continue;
+		if (value) *held |= 1u << i;
+		else       *held &= ~(1u << i);
+	}
+
+	/*
+	  A d-pad that is a hat rather than four buttons never appears in mmap[SYS_BTN_UP..]:
+	  the axis becomes synthetic key events at KEY_EMU + axis*2, +1 for the positive
+	  direction, which is what the menu's own direction handling reads further down. The
+	  same decode has to happen here or a DualShock's d-pad tests as dead.
+	*/
+	static const int emu_dir[2][2] = { { SYS_BTN_LEFT, SYS_BTN_RIGHT }, { SYS_BTN_UP, SYS_BTN_DOWN } };
+
+	for (int a = 0; a < 2; a++)
+	{
+		uint32_t m = input[dev].mmap[a ? SYS_AXIS_Y : SYS_AXIS_X];
+		if (!m) continue;
+
+		uint16_t key = KEY_EMU + ((uint16_t)m * 2);
+		for (int d = 0; d < 2; d++)
+		{
+			if (code != (uint16_t)(key + d)) continue;
+			if (value) *held |= 1u << emu_dir[a][d];
+			else       *held &= ~(1u << emu_dir[a][d]);
+		}
+	}
+}
+
+static void pad_live_axis(int dev, int axis, int offset, int stick)
+{
+	int num = input[dev].num;
+	if (num < 1 || num > NUMPLAYERS) return;
+	pad_live_stick[num - 1][stick & 1][axis & 1] = offset;
+}
+
+int input_pad_state(int player, pad_state *out)
+{
+	if (!out) return 0;
+	memset(out, 0, sizeof(*out));
+	if (player < 1 || player > NUMPLAYERS) return 0;
+
+	out->held = pad_live_held[player - 1];
+	out->lx = pad_live_stick[player - 1][0][0];
+	out->ly = pad_live_stick[player - 1][0][1];
+	out->rx = pad_live_stick[player - 1][1][0];
+	out->ry = pad_live_stick[player - 1][1][1];
+
+	/*
+	  The map is per device, so it is taken from the first of this player's devices that
+	  has one - the sub-devices a pad brings with it carry an empty mmap, and the pad
+	  itself is the one that answers.
+	*/
+	int found = 0;
+	for (int i = 0; i < NUMDEV; i++)
+	{
+		if (!pad_is_pad_dev(i) || input[i].num != player) continue;
+		found = 1;
+		if (!input[i].mmap[SYS_BTN_A] && !input[i].mmap[SYS_BTN_B]) continue;
+
+		for (int b = 0; b < PAD_STATE_BTNS; b++) out->code[b] = (uint16_t)input[i].mmap[b];
+		out->sticks = (input[i].stick_l[0] || input[i].stick_l[1]) ? 1 : 0;
+		break;
+	}
+
+	return found;
 }
 
 int input_menu_key_from_pad() { return menu_key_from_pad; }
@@ -2894,6 +2988,11 @@ void reset_players()
 	}
 
 	memset(key_states, 0, sizeof(key_states));
+	// Player numbers have just been thrown away, so anything recorded as held belongs to
+	// nobody now. Left behind it would show as a stuck button on the next pad to be given
+	// this number - see input_pad_state().
+	memset(pad_live_held, 0, sizeof(pad_live_held));
+	memset(pad_live_stick, 0, sizeof(pad_live_stick));
 	for (int i = 0; i < NUMPLAYERS; i++) {
 		clear_autofire(i);
 	}
@@ -3719,6 +3818,14 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 			//joystick buttons, digital directions
 			if (ev->code >= 256 || (input[dev].force_joy && !menu_event))
 			{
+				/*
+				  First, ahead of everything below: each branch from here on claims the
+				  event and returns, and while the front-end owns the screen it is the
+				  menu branch that claims nearly all of them - which is exactly when the
+				  controller tester is the thing on screen asking what is held.
+				*/
+				pad_live_key(dev, ev->code, ev->value);
+
 				if (input[dev].lightgun_req && !user_io_osd_is_visible())
 				{
 					if (osd_event == 1)
@@ -4155,20 +4262,27 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 					else
 					{
 						int offset = (value < -1 || value > 1) ? value : 0;
+						// pad_live_axis() beside each joy_analog(), not inside it: that one
+						// is gated on `grabbed` and applies the deadzone, and a tester wants
+						// the stick as it is, not as the core will receive it.
 						if (input[dev].stick_l[0] && ev->code == (uint16_t)input[dev].mmap[input[dev].stick_l[0]])
 						{
+							pad_live_axis(dev, 0, offset, 0);
 							joy_analog(dev, 0, offset, 0);
 						}
 						else if (input[dev].stick_l[1] && ev->code == (uint16_t)input[dev].mmap[input[dev].stick_l[1]])
 						{
+							pad_live_axis(dev, 1, offset, 0);
 							joy_analog(dev, 1, offset, 0);
 						}
 						else if (input[dev].stick_r[0] && ev->code == (uint16_t)input[dev].mmap[input[dev].stick_r[0]])
 						{
+							pad_live_axis(dev, 0, offset, 1);
 							joy_analog(dev, 0, offset, 1);
 						}
 						else if (input[dev].stick_r[1] && ev->code == (uint16_t)input[dev].mmap[input[dev].stick_r[1]])
 						{
+							pad_live_axis(dev, 1, offset, 1);
 							joy_analog(dev, 1, offset, 1);
 						}
 					}

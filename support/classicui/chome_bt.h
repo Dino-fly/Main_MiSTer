@@ -135,4 +135,14 @@ void bt_ingest_paired(const char *text);
 int bt_ingest_progress(const char *line);
 void bt_progress_reset();
 
+/*
+  Answers bt_present() with `on` instead of asking sysfs; -1 gives the real answer back.
+
+  The one seam here that is not a parser. bt_present() stats a directory under /sys,
+  which a container cannot conjure up, and the parts of the Controllers screen that only
+  exist when there is a radio - the entry that adds a controller, chief among them - are
+  otherwise unreachable from a harness.
+*/
+void bt_force_present(int on);
+
 #endif

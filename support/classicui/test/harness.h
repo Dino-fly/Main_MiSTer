@@ -16,6 +16,8 @@ void harness_set_core_name(const char *n);
 void harness_set_input_pad(int v);
 void harness_clear_pads();
 void harness_add_pad(int player, int kind, uint16_t vid, uint16_t pid, const char *name, const char *mac);
+void harness_clear_pad_state();
+void harness_set_pad_state(int player, uint32_t held, const uint16_t *codes, int sticks, int lx, int ly);
 void harness_set_fb_supported(int v);
 void harness_set_confstr(int v);
 const char *harness_last_status_opt();
@@ -30,6 +32,7 @@ void harness_reset_status();
 
 uint32_t *harness_fb_shown();
 unsigned long harness_fb_hash(int y0, int y1);
+unsigned long harness_fb_hash_box(int x0, int y0, int x1, int y1);
 void harness_set_pad_name(const char *n);
 void harness_swap_pad_faces();
 
