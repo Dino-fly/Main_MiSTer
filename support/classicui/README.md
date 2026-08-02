@@ -306,6 +306,32 @@ on a pad, `ENTER START` on a keyboard - and switches back the moment you touch t
 other one. The 240p profile uses shortened keyboard names (`ENT`, `BSP`) since the
 legend is tight there.
 
+There are four sets of button prompts and a fallback, chosen by `pad_layout()` in
+`chome_ui.cpp` from the name of the device the last menu key came from:
+
+| set | drawn as | recognised by |
+|---|---|---|
+| keyboard | key names on a light chip, no colour | nothing was pressed on a pad |
+| PlayStation | the four shapes | `SNAC`, `PlayStation`, `DualShock`, `DualSense`, `Sony` |
+| Nintendo | letters, Super Famicom colours | `SNES`, `Nintendo`, `Famicom`, `Joy-Con`, `Switch Pro` |
+| Xbox | the same letters, Xbox colours | `Xbox`, `X-Box`, `XInput` |
+| unknown | the same letters, one grey | anything else |
+
+A name that states only a *brand* is not enough to pick a layout - 8BitDo alone sells
+pads lettered both ways - so those land on the fallback deliberately. The fallback
+still names the right button; it just does not invent a colour scheme for a pad it
+cannot identify.
+
+**Which letter or shape goes on a prompt comes from the button code the pad reports**,
+via `input_menu_key_btn()`, so remapping the pad moves the prompt with it. That code
+is read as a *position* on the pad and then through that layout's own diamond, because
+Xbox swaps A/B and X/Y round from Nintendo: the east button is `A` on a Super Famicom
+and `B` on an Xbox, and with MiSTer's default map (`def_mmap`, which binds `SYS_BTN_A`
+to `BTN_EAST`) east is what confirms. Reading the code's *legacy* letter name instead -
+`BTN_EAST` is also `BTN_B` - describes every pad in the world as though it were an
+Xbox. See the comment above `code_letter()` for why the two diamonds nevertheless agree
+about X and Y.
+
 That needs a signal from outside: a gamepad's buttons reach the menu as *synthetic
 key events carrying the same codes a keyboard sends*, because `joy_digital()` builds
 an `input_event` and pushes it through `input_cb()` with `menu_event` set. The codes

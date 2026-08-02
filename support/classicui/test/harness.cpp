@@ -1480,6 +1480,40 @@ static int sys_savestates(const char *id)
 }
 
 /*
+  The legend's silhouette: which pixels are painted, ignoring what colour they were painted
+  with. harness_fb_hash() mixes shape and colour into one number, so it says "the legend
+  changed" and cannot say which of the two changed - and for the lettered pads that is the
+  whole question, because a Nintendo pad and an Xbox pad share one set of letter grids and
+  differ in both the letter and its colour at once.
+
+  Ink is anything that is neither the background nor the near-black chip the glyph sits on,
+  so a red disc and a green disc hash alike while an A and a B do not. gfx_fill() writes
+  colours through unblended, which is what makes an exact comparison legitimate here.
+*/
+static unsigned long legend_shape(int y0, int y1)
+{
+	const uint32_t *fb = harness_fb_shown();
+	int w = gfx_w(), h = gfx_h();
+	if (!fb || w < 1 || h < 1) return 0;
+
+	if (y0 < 0) y0 = 0;
+	if (y1 > h) y1 = h;
+
+	unsigned long v = 1469598103934665603UL;
+	for (int y = y0; y < y1; y++)
+	{
+		for (int x = 0; x < w; x++)
+		{
+			uint32_t px = fb[(size_t)y * w + x];
+			int ink = (px != COL_BG && px != COL_BGDARK && px != COL_BTN_CHIP);
+			v ^= (unsigned long)ink;
+			v *= 1099511628211UL;
+		}
+	}
+	return v;
+}
+
+/*
   What the suspend strip is showing, read back off the framebuffer, because there is no
   other way to ask: slots and message are two branches of one draw and neither leaves a
   flag behind. Two counts, each over the strip's own band (the strip paints over the pips
@@ -3137,8 +3171,8 @@ int main()
 		{
 			{ "psx_triangle", COL_BTN_TRIANGLE }, { "psx_circle", COL_BTN_CIRCLE },
 			{ "psx_square",   COL_BTN_SQUARE   }, { "psx_cross",  COL_BTN_CROSS  },
-			{ "btn_a", COL_BTN_A }, { "btn_b", COL_BTN_B },
-			{ "btn_x", COL_BTN_X }, { "btn_y", COL_BTN_Y },
+			{ "btn_a", COL_SNES_A }, { "btn_b", COL_SNES_B },
+			{ "btn_x", COL_SNES_X }, { "btn_y", COL_SNES_Y },
 			{ "dpad_up", COL_WHITE }, { "dpad_down", COL_WHITE }, { "dpad_lr", COL_WHITE },
 			{ "btn_start", COL_WHITE }, { "btn_select", COL_WHITE },
 		};
@@ -3185,12 +3219,78 @@ int main()
 	}
 
 	/*
+	  The three lettered palettes side by side. There is one set of four letter grids and
+	  three ways to colour it, so this is the only place the difference between a Nintendo
+	  pad and an Xbox one can be seen at all - by eye, since a hash cannot say "that green
+	  is on the wrong button".
+	*/
+	printf("\n== lettered palettes ==\n");
+	{
+		struct { const char *name; uint32_t col[4]; } pal[] =
+		{
+			{ "SNES  A red   B amber X blue Y green",
+				{ COL_SNES_A, COL_SNES_B, COL_SNES_X, COL_SNES_Y } },
+			{ "XBOX  A green B red   X blue Y amber",
+				{ COL_XBOX_A, COL_XBOX_B, COL_XBOX_X, COL_XBOX_Y } },
+			{ "PLAIN an unrecognised pad - no colour is invented",
+				{ COL_BTN_PLAIN, COL_BTN_PLAIN, COL_BTN_PLAIN, COL_BTN_PLAIN } },
+		};
+
+		// The two lettered families must not end up with the same colour on the same
+		// letter, or the whole Xbox set is a no-op the legend hashes below cannot catch.
+		check(COL_XBOX_A != COL_SNES_A && COL_XBOX_B != COL_SNES_B
+			&& COL_XBOX_Y != COL_SNES_Y, "Xbox and Nintendo letters are coloured apart");
+
+		static const char *letters[4] = { "btn_a", "btn_b", "btn_x", "btn_y" };
+
+		harness_set_fb(1280, 720);
+		gfx_shutdown();
+		theme_update(1280, 720, 1);
+		if (gfx_begin())
+		{
+			gfx_fill(0, 0, 1280, 720, COL_BGDARK);
+			gfx_text("LETTERED PALETTES - 1x (240p), 2x, 4x", 30, 22, 2, COL_WHITE, 0);
+
+			for (int p = 0; p < 3; p++)
+			{
+				int y0 = 70 + p * 190;
+				gfx_text(pal[p].name, 40, y0, 2, COL_DIM, 0);
+
+				for (int k = 0; k < 4; k++)
+				{
+					const btn12_def *d = 0;
+					for (size_t i = 0; i < sizeof(btn12s) / sizeof(btn12s[0]); i++)
+						if (!strcmp(btn12s[i].name, letters[k])) d = &btn12s[i];
+					if (!d) { check(0, letters[k]); continue; }
+
+					int x = 40 + k * 300;
+					for (int zoom = 1; zoom <= 4; zoom *= 2)
+					{
+						int y = y0 + 30 + (52 - BTN12 * zoom) / 2;
+						for (int gy = 0; gy < BTN12; gy++)
+							for (int gx = 0; gx < BTN12; gx++)
+							{
+								char c = d->rows[gy][gx];
+								if (c == '.') continue;
+								gfx_fill(x + gx * zoom, y + gy * zoom, zoom, zoom,
+									(c == 'c') ? pal[p].col[k] : COL_BTN_CHIP);
+							}
+						x += BTN12 * zoom + 24;
+					}
+				}
+			}
+			gfx_end();
+			dump("buttons-palettes");
+		}
+	}
+
+	/*
 	  Prompts that follow the controller. A PlayStation pad has no A or B written on
 	  it, so the legend names the shapes instead. There is no way to read the legend
 	  back out of the front-end, so this is checked the way a person would: the same
 	  screen photographed with each controller, and the pictures have to differ.
 	*/
-	printf("\n== playstation prompts ==\n");
+	printf("\n== controller prompts ==\n");
 	{
 		harness_set_menu_core(1);
 		harness_set_fb(1280, 720);
@@ -3227,10 +3327,53 @@ int main()
 		check(psx != generic, "a SNAC pad changes the prompts");
 
 		/*
+		  All four sets, plus the fallback, have to be told apart on the screen - a layout
+		  that resolves correctly and then draws the same legend as another one is no use to
+		  the player. Same shelf, same selection, five controllers, five different pictures.
+
+		  The Nintendo and Xbox pads are the pair that matters: they share one set of letter
+		  grids and differ only in which letter is which colour, so if the palettes were ever
+		  collapsed into one these two hashes would be equal and nothing else here would say
+		  so. "Generic USB Gamepad" is the fallback on purpose - it names a brand and not a
+		  layout, which is exactly the case pad_layout() must decline to guess at.
+		*/
+		harness_set_pad_name("Nintendo Switch Pro Controller");
+		press(KEY_DOWN, 10);
+		press(KEY_UP, 10);
+		frame(10);
+		dump("prompts-6-snes");
+		unsigned long snes = harness_fb_hash(660, 720);
+
+		harness_set_pad_name("Microsoft X-Box 360 pad");
+		press(KEY_DOWN, 10);
+		press(KEY_UP, 10);
+		frame(10);
+		dump("prompts-7-xbox");
+		unsigned long xbox = harness_fb_hash(660, 720);
+
+		harness_set_input_pad(0);
+		press(KEY_DOWN, 10);
+		press(KEY_UP, 10);
+		frame(10);
+		dump("prompts-8-keyboard");
+		unsigned long kbd = harness_fb_hash(660, 720);
+		harness_set_input_pad(1);
+
+		check(snes != psx,     "a Nintendo pad is not given PlayStation shapes");
+		check(xbox != snes,    "an Xbox pad is not given a Nintendo pad's colours");
+		check(xbox != psx,     "an Xbox pad is not given PlayStation shapes");
+		check(generic != snes, "an unrecognised pad is not guessed to be a Nintendo one");
+		check(generic != xbox, "an unrecognised pad is not guessed to be an Xbox one");
+		check(kbd != psx && kbd != snes && kbd != xbox && kbd != generic,
+			"a keyboard gets named keys rather than any pad's buttons");
+
+		/*
 		  And at 240p, which is the size that matters: the legend draws each button at
 		  its native twelve pixels there, one framebuffer pixel per glyph pixel, so what
 		  reaches the TV is exactly the grid in chome_btn12.h.
 		*/
+		// Named rather than inherited from the block above, which leaves an Xbox pad in hand.
+		harness_set_pad_name("MiSTer SNAC Pad 1");
 		harness_set_fb(320, 240);
 		gfx_shutdown();
 		theme_update(320, 240, 3);
@@ -3239,14 +3382,22 @@ int main()
 		frame(12);
 		dump("prompts-4-psx-240p");
 
-		// The same 240p legend with a pad that has letters on it, which is the other half
-		// of the pair: lettered buttons drawn the same way, in a Super Famicom's colours.
-		harness_set_pad_name("Generic USB Gamepad");
+		// The same 240p legend on each lettered pad, which is the other half of the pair:
+		// lettered buttons drawn the same way, in a Super Famicom's colours and then an
+		// Xbox's. Two dumps rather than one because the difference is only colour, and
+		// colour at 240p on a CRT is the thing that has to be judged by eye.
+		harness_set_pad_name("SNES Controller");
 		press(KEY_DOWN, 10);
 		press(KEY_UP, 10);
 		frame(12);
 		dump("prompts-5-letters-240p");
 		check(harness_fb_hash(0, 240) != 0, "the lettered 240p legend drew something");
+
+		harness_set_pad_name("Xbox Wireless Controller");
+		press(KEY_DOWN, 10);
+		press(KEY_UP, 10);
+		frame(12);
+		dump("prompts-9-xbox-240p");
 
 		harness_set_fb(1280, 720);
 		gfx_shutdown();
@@ -3277,6 +3428,52 @@ int main()
 		check(harness_fb_hash(660, 720) != before, "a remapped pad is described as remapped");
 
 		harness_swap_pad_faces();
+
+		/*
+		  The same again on a lettered pad: a prompt follows the pad's own map there too, so
+		  moving which code SYS_BTN_A is bound to has to move the letter with it.
+		*/
+		harness_set_pad_name("Microsoft X-Box 360 pad");
+		press(KEY_DOWN, 10);
+		press(KEY_UP, 10);
+		frame(10);
+		unsigned long xbox_before = harness_fb_hash(660, 720);
+		unsigned long xbox_east = legend_shape(660, 720);
+		harness_swap_pad_faces();
+		press(KEY_DOWN, 10);
+		press(KEY_UP, 10);
+		frame(10);
+		dump("prompts-10-xbox-remapped");
+		check(harness_fb_hash(660, 720) != xbox_before,
+			"a lettered prompt follows the pad's own button map");
+
+		/*
+		  And here is the Xbox layout itself, rather than just its colours.
+
+		  A code is read as a position on the pad and then through that layout's diamond, so
+		  the *east* button - which is what MiSTer's default map confirms with - is B on an
+		  Xbox pad and A on a Nintendo one. That difference is a different letter, not a
+		  different colour, and harness_fb_hash() cannot tell those apart; legend_shape()
+		  ignores colour, so these two checks are about the diamond and nothing else.
+
+		  Read as the code's legacy letter name instead - the reading this replaced - both
+		  pads would draw B on east, so the first check would pass wrongly by drawing the
+		  Xbox letter on a Nintendo pad, and the second would fail.
+		*/
+		unsigned long xbox_south = legend_shape(660, 720);   // A/B swapped: now the south button
+		harness_swap_pad_faces();
+
+		harness_set_pad_name("Nintendo Switch Pro Controller");
+		press(KEY_DOWN, 10);
+		press(KEY_UP, 10);
+		frame(10);
+		unsigned long snes_east = legend_shape(660, 720);
+
+		check(snes_east != xbox_east,
+			"the east button is a different letter on a Nintendo pad than on an Xbox one");
+		check(snes_east == xbox_south,
+			"and Nintendo's east letter is the one Xbox prints on south - the diamond is swapped");
+
 		harness_set_pad_name("Generic USB Gamepad");
 		press(KEY_ESC, 10);
 		frame(6);

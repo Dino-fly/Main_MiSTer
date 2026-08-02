@@ -93,10 +93,33 @@ void theme_update(int w, int h, int force);
 #define COL_BTN_SQUARE   0xfff2a3bdu
 #define COL_BTN_CROSS    0xff7b7bf0u
 
-#define COL_BTN_A        0xffe8544fu
-#define COL_BTN_B        0xffe8b22bu
-#define COL_BTN_X        0xff5a8fe0u
-#define COL_BTN_Y        0xff5cc46bu
+/*
+  The lettered pads, one palette each. Named for the family rather than shared, because the
+  two disagree about which letter is which colour and a single COL_BTN_A cannot be both.
+
+  Xbox reuses three of the Super Famicom's four hues in a different order, and that is not a
+  coincidence worth collapsing: its diamond is Nintendo's with A/B and X/Y swapped over, so
+  the colour standing in a given corner swaps with the letter. Spelled out twice rather than
+  derived from one another, so tuning one pad's red cannot silently move the other's.
+*/
+#define COL_SNES_A       0xffe8544fu   // red
+#define COL_SNES_B       0xffe8b22bu   // amber
+#define COL_SNES_X       0xff5a8fe0u   // blue
+#define COL_SNES_Y       0xff5cc46bu   // green
+
+#define COL_XBOX_A       0xff5cc46bu   // green
+#define COL_XBOX_B       0xffe8544fu   // red
+#define COL_XBOX_X       0xff5a8fe0u   // blue
+#define COL_XBOX_Y       0xffe8b22bu   // amber
+
+/*
+  And a pad whose family we could not work out. The letters still say which button, because
+  those come from the code the pad reports; the colour would be an invention, so there is
+  not one - all four discs are the same light grey. A player holding something we do not
+  recognise is better served by a legend that declines to guess than by one that paints a
+  Nintendo palette onto a pad that does not have it.
+*/
+#define COL_BTN_PLAIN    0xffc3c5d0u
 
 // The chip they sit on: near-black, as on the pad itself.
 #define COL_BTN_CHIP     0xff16171cu

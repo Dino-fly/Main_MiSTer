@@ -68,6 +68,11 @@ and two pills - so drawing them costs less than finding a licence that permits i
 Dinofly drew a PlayStation reference set and asked for these to match it; they are
 authored from that reference rather than copied from it.
 
+There is no separate Xbox set and there should not be one. An Xbox pad's faces are the
+same four letters on the same four discs as a Super Famicom's, and only the colours
+differ - and colour is the caller's, from `chome_theme.h`, not the glyph's. So the Xbox
+layout is a palette and a lookup table, adding nothing to this file.
+
 ## What is deliberately not an icon
 
 Signal-strength bars in the Wi-Fi list, the radio dots on the Display screen and the

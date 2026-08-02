@@ -24,7 +24,13 @@ Each glyph is a 12x12 grid of three states:
     c  the accent, which the front-end fills with that button's own colour
 
 so one grid serves every colour: circle red, triangle green, square pink, cross blue,
-and the four letters in a Super Famicom pad's own colours.
+and the four letters in whichever palette the pad in hand uses.
+
+That last point is why there is no separate Xbox glyph set here and should not be one. An
+Xbox pad's faces are the same four letters on the same four discs as a Super Famicom's -
+only the colours differ, and colour is the caller's, from chome_theme.h. Nor do the letters
+need reshuffling for Xbox's swapped diamond: the caller picks a glyph from the button code
+the pad reported, not from where the button sits, so the letter follows the silkscreen.
 """
 import os
 
