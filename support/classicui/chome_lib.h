@@ -23,6 +23,17 @@
 #define CH_TITLE_LEN   64
 #define CH_PATH_LEN    192
 
+/*
+  Whether a system's core has save states. Only knowable for certain from a loaded
+  core's CONF_STR, which the shelf has not got - so the table carries what has been
+  measured, and the three states are kept apart on purpose: a system nobody has
+  measured must not be told either way. UNKNOWN is zero, so anything that arrives
+  without an answer - a system from classicui_systems.txt - gets that one.
+*/
+#define CH_SS_UNKNOWN  0
+#define CH_SS_YES      1
+#define CH_SS_NO       2
+
 struct chome_sys
 {
 	char id[16];
@@ -43,6 +54,7 @@ struct chome_sys
 	  firmware's own lookup rather than from the filename.
 	*/
 	int  romset;
+	int  savestates;     // CH_SS_*: what is known before the core is loaded
 	int  vclass;         // VC_* in chome_video.h: picks the default video look
 	uint32_t tint;       // fallback-card plate colour
 };
