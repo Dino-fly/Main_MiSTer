@@ -1209,6 +1209,25 @@ static int pad_layout_of(const char *n)
 		|| strcasestr(n, "Nintendo") || strcasestr(n, "Joy-Con")
 		|| strcasestr(n, "Switch Pro")) return PAD_SNES;
 
+	/*
+	  What these pads actually call themselves over Bluetooth, which is neither their
+	  maker nor their model. Taken from Dinofly's own pairing records:
+
+	    Name=Wireless Controller     - a DualShock 4
+	    Name=Pro Controller          - a Switch Pro
+
+	  Both fell through to PAD_PLAIN, so two of the three pads he plays with were being
+	  offered lettered prompts on a machine that knows perfectly well what they are. Only
+	  the USB names carry a maker; every one of the patterns above needs one.
+
+	  Matched in full rather than as substrings, and last. "Xbox Wireless Controller" is
+	  a real name that contains the first of these and is not one, and it is already
+	  caught above - but a substring test here would still be a trap for the next name
+	  somebody adds.
+	*/
+	if (!strcasecmp(n, "Wireless Controller")) return PAD_PSX;
+	if (!strcasecmp(n, "Pro Controller")) return PAD_SNES;
+
 	return PAD_PLAIN;
 }
 
