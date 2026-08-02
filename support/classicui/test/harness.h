@@ -34,6 +34,7 @@ uint32_t *harness_fb_shown();
 unsigned long harness_fb_hash(int y0, int y1);
 unsigned long harness_fb_hash_box(int x0, int y0, int x1, int y1);
 void harness_set_pad_name(const char *n);
+void harness_set_pad_vidpid(uint32_t v);
 void harness_swap_pad_faces();
 
 int harness_muted();

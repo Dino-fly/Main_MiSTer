@@ -185,6 +185,9 @@ int input_pad_state(int player, pad_state *out);
 
 int input_menu_key_from_pad();
 const char *input_menu_key_devname();
+
+// vid<<16|pid of that device, 0 when there is none.
+uint32_t input_menu_key_vidpid();
 uint16_t input_menu_key_btn(int sys_btn);
 int input_state();
 void input_uinp_destroy();

@@ -823,6 +823,15 @@ static uint16_t pad_mmap[12] = { 0, 0, 0, 0, 0x131, 0x130, 0x133, 0x134, 0x136, 
 
 const char *input_menu_key_devname() { return pad_name; }
 
+/*
+  Zero unless a test sets one. A pad with no USB identity is the case where the name
+  has to carry the layout, which is what most of these tests are about - so the
+  vendor lookup must fall through by default or it would mask them.
+*/
+static uint32_t pad_vidpid = 0;
+uint32_t input_menu_key_vidpid() { return pad_vidpid; }
+void harness_set_pad_vidpid(uint32_t v) { pad_vidpid = v; }
+
 uint16_t input_menu_key_btn(int sys_btn)
 {
 	if (sys_btn < 0 || sys_btn >= (int)(sizeof(pad_mmap) / sizeof(pad_mmap[0]))) return 0;
