@@ -1514,6 +1514,40 @@ static int fav_count()
   offers: Y does nothing on a folder, and A on the leftmost card opens Favourites - made
   unmistakable by leaving exactly one favourite in the library.
 */
+/*
+  The Wi-Fi adapter is a USB dongle, and its interface may not exist yet the first time the
+  front-end looks. Remembering that first "nothing" is what left Dinofly's machine showing
+  "No adapter" in Options while it was reachable over that very interface.
+*/
+static void assert_wifi_adapter_appears()
+{
+	printf("\n== an adapter that turns up late is still found ==\n");
+
+	char dir[512], wl[512];
+	snprintf(dir, sizeof(dir), "%s/faked-sysnet", ROOT);
+	mkdir(dir, 0777);
+
+	net_set_sysdir(dir);
+	check(!net_present(), "nothing there yet, so no adapter");
+
+	// The driver gets round to it.
+	snprintf(wl, sizeof(wl), "%s/wlan9", dir);
+	mkdir(wl, 0777);
+	snprintf(wl, sizeof(wl), "%s/wlan9/wireless", dir);
+	mkdir(wl, 0777);
+
+	harness_advance(1200);                   // past the retry interval
+	check(net_present(), "and once it appears the adapter is found");
+	check(!strcmp(net_iface(), "wlan9"), "by name");
+
+	// A hit is kept, so the per-frame path is not opendir()ing forever.
+	rmdir(wl);
+	harness_advance(1200);
+	check(net_present(), "a found adapter is not re-checked away");
+
+	net_set_sysdir(0);
+}
+
 static void assert_back_leftmost()
 {
 	printf("\n== B jumps to the leftmost entry ==\n");
@@ -2666,6 +2700,7 @@ int main()
 	assert_ingame();
 	assert_save_on_pausing_core();
 	assert_freeze_off();
+	assert_wifi_adapter_appears();
 	assert_back_leftmost();
 	assert_slot_match();
 	assert_no_savestates();
