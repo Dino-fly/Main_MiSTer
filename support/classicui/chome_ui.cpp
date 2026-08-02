@@ -1286,11 +1286,27 @@ static int code_letter(int layout, uint16_t code)
 	default: return -1;
 	}
 
-	// south, east, north, west
+	/*
+	  south, east, north, west - by position, because the position is what the player's
+	  thumb knows and the letter printed there is what the pad says.
+
+	  Xbox needs its own row, and the reason is a trap in the kernel's own names. In
+	  input.h BTN_X is an alias of BTN_NORTH and BTN_Y of BTN_WEST, which is backwards
+	  for the pad those letters come from: an Xbox controller has Y at the top and X on
+	  the left. Reading the aliases as geometry put a Y on the west button and an X on
+	  the north one - the wrong letter *and* the wrong colour, since the colour follows
+	  the letter.
+
+	  An unknown pad keeps the alias order. It is a guess either way, and this is not
+	  the place to change what unrecognised hardware has always drawn.
+	*/
 	static const int nintendo[4] = { LBL_B, LBL_A, LBL_X, LBL_Y };
+	static const int xbox[4]     = { LBL_A, LBL_B, LBL_Y, LBL_X };
 	static const int legacy[4]   = { LBL_A, LBL_B, LBL_X, LBL_Y };
 
-	return (layout == PAD_SNES) ? nintendo[pos] : legacy[pos];
+	if (layout == PAD_SNES) return nintendo[pos];
+	if (layout == PAD_XBOX) return xbox[pos];
+	return legacy[pos];
 }
 
 /*
