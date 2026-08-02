@@ -22,6 +22,8 @@
 #include <unistd.h>
 #include <time.h>
 
+#include "../../../lib/imlib2/Imlib2.h"
+
 #include "../../../cfg.h"
 #include "../../../video.h"
 #include "../../../osd.h"
@@ -607,6 +609,10 @@ static int ss_copy_from = -1, ss_copy_to = -1;
 int harness_ss_copy_from() { return ss_copy_from; }
 int harness_ss_copy_to()   { return ss_copy_to; }
 
+// A second copy has to be told from the one before it, or a test that saves twice
+// passes on the first save's record.
+void harness_reset_ss_copy() { ss_copy_from = ss_copy_to = -1; }
+
 int user_io_ss_copy_slot(int from, int to)
 {
 	printf("  [stub] user_io_ss_copy_slot(%d -> %d)\n", from, to);
@@ -623,9 +629,11 @@ int screenshot_thumbnail(const char *fullpath, int max_w)
 }
 
 /*
-  This one is handed the pixels rather than reading the scaler, so the harness can do
-  the real thing minus the encoding: it writes a file, so a test can tell "a thumbnail
-  was written" from "was not", and records the geometry it was asked for.
+  This one is handed the pixels rather than reading the scaler, so the harness does the
+  real thing: a PNG of those pixels, scaled as asked. It writes a decodable image rather
+  than a marker file because the front-end reads these back through art_thumb() - a slot's
+  picture is one of these - so a test can compare what a tile shows against what was
+  written, not merely that something was.
 */
 bool write_screenshot(const char *filename, const uint8_t *argb,
 	int width, int height, int output_width, int output_height)
@@ -635,11 +643,37 @@ bool write_screenshot(const char *filename, const uint8_t *argb,
 
 	if (!filename || !argb || width < 1 || height < 1) return false;
 
-	FILE *f = fopen(filename, "wb");
-	if (!f) return false;
-	fprintf(f, "STUB-PNG %dx%d -> %dx%d\n", width, height, output_width, output_height);
-	fclose(f);
-	return true;
+	// imlib works on its own copy: the caller's buffer is a live screen grab.
+	uint32_t *copy = (uint32_t*)malloc((size_t)width * height * 4);
+	if (!copy) return false;
+	memcpy(copy, argb, (size_t)width * height * 4);
+	for (int i = 0; i < width * height; i++) copy[i] |= 0xff000000u;
+
+	Imlib_Image im = imlib_create_image_using_data(width, height, (DATA32*)copy);
+	if (!im) { free(copy); return false; }
+
+	Imlib_Image out = im;
+	if (output_width > 0 && output_height > 0)
+	{
+		imlib_context_set_image(im);
+		out = imlib_create_cropped_scaled_image(0, 0, width, height, output_width, output_height);
+		if (!out) out = im;
+	}
+
+	// Asked for the error rather than stat'ing afterwards: these are written over a file
+	// that is usually already there, so "a file exists" says nothing about this write.
+	Imlib_Load_Error err = IMLIB_LOAD_ERROR_NONE;
+	imlib_context_set_image(out);
+	imlib_image_set_has_alpha(0);
+	imlib_image_set_format("png");
+	imlib_save_image_with_error_return(filename, &err);
+	if (out != im) imlib_free_image();
+
+	imlib_context_set_image(im);
+	imlib_free_image();
+	free(copy);
+
+	return (err == IMLIB_LOAD_ERROR_NONE);
 }
 
 static char last_launch[1024] = {};

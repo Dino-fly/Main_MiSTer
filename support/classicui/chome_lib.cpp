@@ -31,48 +31,56 @@ struct sys_def
 	int index, delay, computer, mra;
 	uint32_t tint;
 	int romset;          // last, so the rows above keep their positional layout
+	int savestates;      // CH_SS_*, and after romset for the same reason
 };
 
 /*
   type/index follow each core's CONF_STR. Where a core exposes a single ROM slot
   the answer is 'f'/0, which covers most consoles. CD-based and computer cores
   are the ones worth double checking.
+
+  The trailing pair is romset then savestates. The savestate answers were measured
+  by loading each core and reading its CONF_STR (2026-08-02), so they describe the
+  cores on the card rather than MiSTer in general - a core rebuilt from a newer
+  upstream can gain save states without this file being touched, which is why a
+  loaded core's own answer always outranks this one. Systems left at CH_SS_UNKNOWN
+  were not measured; do not guess them from what the hardware "should" do.
 */
 static const sys_def defaults[] =
 {
-	{ "nes",   "Nintendo Entertainment System", "NES",  "_Console/NES",          "NES",     "nes,fds,nsf",  "Nintendo - Nintendo Entertainment System",       'f', 0, 2, 0, 0, 0x8a4b2b },
-	{ "snes",  "Super Nintendo",                "SNES", "_Console/SNES",         "SNES",    "sfc,smc",      "Nintendo - Super Nintendo Entertainment System", 'f', 0, 2, 0, 0, 0x5b4b8a },
-	{ "gb",    "Game Boy",                      "GB",   "_Console/Gameboy",      "GAMEBOY", "gb,gbc",       "Nintendo - Game Boy",                            'f', 0, 2, 0, 0, 0x3c6e4a },
-	{ "gba",   "Game Boy Advance",              "GBA",  "_Console/GBA",          "GBA",     "gba",          "Nintendo - Game Boy Advance",                    'f', 0, 2, 0, 0, 0x4a3c8a },
-	{ "n64",   "Nintendo 64",                   "N64",  "_Console/N64",          "N64",     "n64,z64,v64",  "Nintendo - Nintendo 64",                         'f', 0, 3, 0, 0, 0x2b5e8a },
-	{ "md",    "Mega Drive",                    "MD",   "_Console/Genesis",      "Genesis", "md,bin,gen",   "Sega - Mega Drive - Genesis",                    'f', 0, 2, 0, 0, 0x2b4c7e },
-	{ "sms",   "Master System",                 "SMS",  "_Console/SMS",          "SMS",     "sms,gg,sg",    "Sega - Master System - Mark III",                'f', 0, 2, 0, 0, 0x7e3a2b },
-	{ "tg16",  "TurboGrafx-16",                 "TG16", "_Console/TurboGrafx16", "TGFX16",  "pce,sgx",      "NEC - PC Engine - TurboGrafx 16",                'f', 0, 2, 0, 0, 0x8a6e2b },
-	{ "a7800", "Atari 7800",                    "A78",  "_Console/Atari7800",    "A7800",   "a78,a26,bin",  "Atari - 7800",                                   'f', 0, 2, 0, 0, 0x6e2b2b },
-	{ "psx",   "PlayStation",                   "PSX",  "_Console/PSX",          "PSX",     "cue,chd,exe",  "Sony - PlayStation",                             's', 1, 3, 0, 0, 0x4a4c58 },
+	{ "nes",   "Nintendo Entertainment System", "NES",  "_Console/NES",          "NES",     "nes,fds,nsf",  "Nintendo - Nintendo Entertainment System",       'f', 0, 2, 0, 0, 0x8a4b2b, 0, CH_SS_YES     },
+	{ "snes",  "Super Nintendo",                "SNES", "_Console/SNES",         "SNES",    "sfc,smc",      "Nintendo - Super Nintendo Entertainment System", 'f', 0, 2, 0, 0, 0x5b4b8a, 0, CH_SS_YES     },
+	{ "gb",    "Game Boy",                      "GB",   "_Console/Gameboy",      "GAMEBOY", "gb,gbc",       "Nintendo - Game Boy",                            'f', 0, 2, 0, 0, 0x3c6e4a, 0, CH_SS_YES     },
+	{ "gba",   "Game Boy Advance",              "GBA",  "_Console/GBA",          "GBA",     "gba",          "Nintendo - Game Boy Advance",                    'f', 0, 2, 0, 0, 0x4a3c8a, 0, CH_SS_YES     },
+	{ "n64",   "Nintendo 64",                   "N64",  "_Console/N64",          "N64",     "n64,z64,v64",  "Nintendo - Nintendo 64",                         'f', 0, 3, 0, 0, 0x2b5e8a, 0, CH_SS_NO      },
+	{ "md",    "Mega Drive",                    "MD",   "_Console/Genesis",      "Genesis", "md,bin,gen",   "Sega - Mega Drive - Genesis",                    'f', 0, 2, 0, 0, 0x2b4c7e, 0, CH_SS_NO      },
+	{ "sms",   "Master System",                 "SMS",  "_Console/SMS",          "SMS",     "sms,gg,sg",    "Sega - Master System - Mark III",                'f', 0, 2, 0, 0, 0x7e3a2b, 0, CH_SS_UNKNOWN },
+	{ "tg16",  "TurboGrafx-16",                 "TG16", "_Console/TurboGrafx16", "TGFX16",  "pce,sgx",      "NEC - PC Engine - TurboGrafx 16",                'f', 0, 2, 0, 0, 0x8a6e2b, 0, CH_SS_NO      },
+	{ "a7800", "Atari 7800",                    "A78",  "_Console/Atari7800",    "A7800",   "a78,a26,bin",  "Atari - 7800",                                   'f', 0, 2, 0, 0, 0x6e2b2b, 0, CH_SS_NO      },
+	{ "psx",   "PlayStation",                   "PSX",  "_Console/PSX",          "PSX",     "cue,chd,exe",  "Sony - PlayStation",                             's', 1, 3, 0, 0, 0x4a4c58, 0, CH_SS_YES     },
 	/*
 	  Neo Geo games are romsets rather than ROM files: the archive is loaded whole and
 	  named for the board, so `romset` sends titles through the firmware's romsets.xml
 	  lookup. FS1 in the core's CONF_STR is why this is index 1, and the longer delay
 	  is for the core to come up before a romset of tens of megabytes follows it.
 	*/
-	{ "neogeo","Neo Geo",                       "NEO",  "_Console/NeoGeo",       "NEOGEO",  "zip,neo",      "SNK - Neo Geo",                                  'f', 1, 3, 0, 0, 0x8a2b2b, 1 },
-	{ "arcade","Arcade",                        "ARC",  "",                      "_Arcade", "mra",          "MAME",                                           'f', 0, 0, 0, 1, 0x7e2b3a },
+	{ "neogeo","Neo Geo",                       "NEO",  "_Console/NeoGeo",       "NEOGEO",  "zip,neo",      "SNK - Neo Geo",                                  'f', 1, 3, 0, 0, 0x8a2b2b, 1, CH_SS_NO      },
+	{ "arcade","Arcade",                        "ARC",  "",                      "_Arcade", "mra",          "MAME",                                           'f', 0, 0, 0, 1, 0x7e2b3a, 0, CH_SS_UNKNOWN },
 
 	// Handhelds. Game Gear rides in the SMS core above (.gg), and GBC in the Game
 	// Boy core (.gbc); both are told apart by extension at launch.
-	{ "lynx",  "Atari Lynx",                    "LNX",  "_Console/AtariLynx",    "AtariLynx","lnx",         "Atari - Lynx",                                   'f', 0, 2, 0, 0, 0x2a2a2e },
-	{ "ws",    "WonderSwan",                    "WS",   "_Console/WonderSwan",   "WonderSwan","ws,wsc",     "Bandai - WonderSwan",                            'f', 0, 2, 0, 0, 0x2f3a5a },
-	{ "ngp",   "Neo Geo Pocket Color",          "NGP",  "_Console/NeoGeo-Pocket","NGP",     "ngp,ngc,npc",  "SNK - Neo Geo Pocket Color",                     'f', 0, 2, 0, 0, 0x20304a },
+	{ "lynx",  "Atari Lynx",                    "LNX",  "_Console/AtariLynx",    "AtariLynx","lnx",         "Atari - Lynx",                                   'f', 0, 2, 0, 0, 0x2a2a2e, 0, CH_SS_YES     },
+	{ "ws",    "WonderSwan",                    "WS",   "_Console/WonderSwan",   "WonderSwan","ws,wsc",     "Bandai - WonderSwan",                            'f', 0, 2, 0, 0, 0x2f3a5a, 0, CH_SS_YES     },
+	{ "ngp",   "Neo Geo Pocket Color",          "NGP",  "_Console/NeoGeo-Pocket","NGP",     "ngp,ngc,npc",  "SNK - Neo Geo Pocket Color",                     'f', 0, 2, 0, 0, 0x20304a, 0, CH_SS_NO      },
 
-	{ "amiga", "Amiga",                         "AMI",  "_Computer/Minimig",     "Amiga",   "adf,hdf",      "Commodore - Amiga",                              'f', 0, 3, 1, 0, 0x2e6e63 },
-	{ "st",    "Atari ST",                      "ST",   "_Computer/AtariST",     "AtariST", "st,msa,img",   "Atari - ST",                                     's', 0, 3, 1, 0, 0x3a5e6e },
-	{ "c64",   "Commodore 64",                  "C64",  "_Computer/C64",         "C64",     "d64,g64,prg,crt","Commodore - 64",                               'f', 1, 3, 1, 0, 0x4a5e2b },
-	{ "spec",  "ZX Spectrum",                   "SPE",  "_Computer/ZX-Spectrum", "Spectrum","tap,tzx,z80,trd","Sinclair - ZX Spectrum",                       'f', 1, 3, 1, 0, 0x6e2e5e },
-	{ "cpc",   "Amstrad CPC",                   "CPC",  "_Computer/Amstrad",     "Amstrad", "dsk,cdt",      "Amstrad - CPC",                                  's', 0, 3, 1, 0, 0x2b3a6e },
-	{ "msx",   "MSX",                           "MSX",  "_Computer/MSX",         "MSX",     "rom,dsk,cas",  "Microsoft - MSX",                                'f', 1, 3, 1, 0, 0x6e4a2b },
-	{ "ao486", "PC / DOS",                      "DOS",  "_Computer/ao486",       "AO486",   "img,vhd,ima",  "DOS",                                            's', 0, 4, 1, 0, 0x4a4c58 },
-	{ "apple2","Apple II",                      "AII",  "_Computer/Apple-II",    "Apple-II","dsk,nib,po",   "Apple - II",                                     'f', 0, 3, 1, 0, 0x5e5e5e },
+	{ "amiga", "Amiga",                         "AMI",  "_Computer/Minimig",     "Amiga",   "adf,hdf",      "Commodore - Amiga",                              'f', 0, 3, 1, 0, 0x2e6e63, 0, CH_SS_NO      },
+	{ "st",    "Atari ST",                      "ST",   "_Computer/AtariST",     "AtariST", "st,msa,img",   "Atari - ST",                                     's', 0, 3, 1, 0, 0x3a5e6e, 0, CH_SS_NO      },
+	{ "c64",   "Commodore 64",                  "C64",  "_Computer/C64",         "C64",     "d64,g64,prg,crt","Commodore - 64",                               'f', 1, 3, 1, 0, 0x4a5e2b, 0, CH_SS_NO      },
+	{ "spec",  "ZX Spectrum",                   "SPE",  "_Computer/ZX-Spectrum", "Spectrum","tap,tzx,z80,trd","Sinclair - ZX Spectrum",                       'f', 1, 3, 1, 0, 0x6e2e5e, 0, CH_SS_NO      },
+	{ "cpc",   "Amstrad CPC",                   "CPC",  "_Computer/Amstrad",     "Amstrad", "dsk,cdt",      "Amstrad - CPC",                                  's', 0, 3, 1, 0, 0x2b3a6e, 0, CH_SS_NO      },
+	{ "msx",   "MSX",                           "MSX",  "_Computer/MSX",         "MSX",     "rom,dsk,cas",  "Microsoft - MSX",                                'f', 1, 3, 1, 0, 0x6e4a2b, 0, CH_SS_NO      },
+	{ "ao486", "PC / DOS",                      "DOS",  "_Computer/ao486",       "AO486",   "img,vhd,ima",  "DOS",                                            's', 0, 4, 1, 0, 0x4a4c58, 0, CH_SS_NO      },
+	{ "apple2","Apple II",                      "AII",  "_Computer/Apple-II",    "Apple-II","dsk,nib,po",   "Apple - II",                                     'f', 0, 3, 1, 0, 0x5e5e5e, 0, CH_SS_NO      },
 };
 
 /*
@@ -113,6 +121,7 @@ static void add_sys(const sys_def *d)
 	s->computer = d->computer;
 	s->mra = d->mra;
 	s->romset = d->romset;
+	s->savestates = d->savestates;
 	s->vclass = vclass_for(d->id, d->computer, d->mra);
 	s->tint = 0xff000000u | d->tint;
 }
@@ -126,6 +135,7 @@ static char *trim(char *s)
 }
 
 // id | name | badge | rbf | dir | exts | lr name | type | index | delay | computer | tint
+//   | look | savestates
 static int load_systems_file()
 {
 	char path[1024];
@@ -143,10 +153,10 @@ static int load_systems_file()
 		char *p = trim(line);
 		if (!*p || *p == '#') continue;
 
-		char *fld[13] = {};
+		char *fld[14] = {};
 		int n = 0;
 		char *tok = p;
-		while (n < 13)
+		while (n < 14)
 		{
 			char *bar = strchr(tok, '|');
 			if (bar) *bar = 0;
@@ -168,6 +178,18 @@ static int load_systems_file()
 		if (!strcasecmp(d.dir, "_Arcade")) d.mra = 1;
 		add_sys(&d);
 		if (n > 12 && fld[12][0]) systems[nsys - 1].vclass = vp_class_from_name(fld[12]);
+
+		/*
+		  Spelled out rather than numbered, and anything else - including the field being
+		  absent, which is every file written before this existed - leaves the system
+		  unknown. A file that overrides the table replaces it wholesale, so without this
+		  the built-in measurements would be lost along with the values being corrected.
+		*/
+		if (n > 13)
+		{
+			if (!strcasecmp(fld[13], "yes")) systems[nsys - 1].savestates = CH_SS_YES;
+			else if (!strcasecmp(fld[13], "no")) systems[nsys - 1].savestates = CH_SS_NO;
+		}
 	}
 
 	fclose(f);
