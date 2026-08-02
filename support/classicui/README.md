@@ -5,10 +5,14 @@ Design rationale: `docs/CLASSIC_UI_PLAN.md`.
 
 Enable with `classicui=1` in `MiSTer.ini`. Default is off.
 
-**None of this has run on hardware yet.** It cross-compiles clean with `-Wall
--Wextra` and the logic has been reviewed, but every path below is untested on a
-real DE10-Nano. Treat the first boot as a bring-up exercise, starting with the
-console log: every module prints what it decided.
+**Running on hardware.** Brought up on a DE10-Nano against both a 15 kHz CRT over
+the analog board and an HDMI display: the shelf, launching, save states, the
+in-game menu, controllers, Wi-Fi and the settings screens all work there. Two
+faults that only a real machine could show up are fixed and worth knowing about -
+a per-frame diagnostic that filled `/tmp`, and a Wi-Fi adapter cached as absent
+because the front-end asked before the USB driver had created the interface.
+
+For what it looks like and how to install it, see [GUIDE.md](GUIDE.md).
 
 ## Shape
 
