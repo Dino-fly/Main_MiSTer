@@ -19,6 +19,7 @@ console log: every module prints what it decided.
 | `chome_lib.cpp` | Systems table, background scan, game index, shelf views, favourites/play counts, suspend-slot state |
 | `chome_art.cpp` | Cover art: local lookup, lazy decode, LRU cache, optional online fetch |
 | `chome_video.cpp` | Video looks: preset/filter/mask/gamma generation, per-system defaults, previews |
+| `chome_ini.cpp` | The `MiSTer.ini` settings this front-end assumes, and a rewrite that leaves the rest of the player's file alone |
 | `chome_ui.cpp` | Screens, navigation, launch |
 | `test/` | Host harness: compiles the modules unmodified against fakes, asserts behaviour, renders every screen to PNG |
 
@@ -230,6 +231,54 @@ once instead of one at a time.
 feature and the first thing to tune on hardware.** A full aperture grille masks two
 of three channels per pixel; stacked with scanlines it can get dark. The shipped
 depth is moderate (dimming to about 73% at the darkest point).
+
+## Best Settings
+
+Options ▸ Best Settings writes the `MiSTer.ini` keys this front-end
+assumes. All three exist for the same reason: without them a classic-OSD panel
+appears over the player's game, which is the one thing the front-end exists to
+prevent.
+
+| Key | Set to | Why |
+|---|---|---|
+| `video_info` | `0` | The mode banner. Every core prints its resolution and refresh over the picture when the mode changes - so it is the first thing seen after launching a game |
+| `controller_info` | `0` | The button map. `input.cpp` already suppresses this while the front-end owns the screen, but the front-end is not up in a game core, so plugging a pad mid-session still draws it |
+| `disable_autofire` | `1` | A held face button plus the menu button toggles autofire and announces it in the same panel. Reachable by accident, invisible once on, and with no way back a novice would find |
+
+**The rule that decided the set** is that a setting which changes how the machine
+*behaves* outside the front-end is not ours to rewrite. That ruled out clearing
+`bootcore` (changes what happens at power-on), `fb_terminal=0` (also removes
+Scripts and Help from the classic menu, which Options deliberately still hands
+off to), `vga_scaler` / `direct_video` (video routing; getting it wrong is a
+black screen), `gamepad_defaults` (silently moves every button in every core)
+and `vscale_mode`. The reasoning is in `chome_ini.cpp` beside the table so it is
+not re-argued.
+
+The screen lists what will change before writing anything, and takes the two
+presses that everything unrecoverable here takes. The left column is an outcome
+the player can judge; the right column is the exact line that will be written,
+for anyone who wants to know what is being done to their file.
+
+**The file is the player's.** Everything not being set is copied through byte for
+byte - line endings, comments, ordering, unknown keys, sections we have never
+heard of. `MiSTer.ini` is CRLF and hand-edited, and a rewrite that reflowed it
+would lose the notes people leave themselves and turn every later diff into
+noise. The old file is kept as `MiSTer.ini.bak` (deliberately not
+`MiSTer_backup.ini` - `cfg_get_name()` scans the root for that pattern and would
+offer the backup as a fourth ini to boot from), and a backup that cannot be
+written stops the whole thing.
+
+Assignments are set **wherever they appear**, including in a core or `[video=]`
+section. Those are parsed after `[MiSTer]` and win, so fixing only the first one
+would leave the pop-up on in that core. Keys that appear nowhere are appended
+under a `[MiSTer]` header of their own, because the file may well end inside a
+core section.
+
+No restart is needed. The firmware re-execs on every core switch and so re-reads
+the ini anyway; `ini_apply()` also pokes the `cfg` field behind each setting, so
+the session already running is under the new values too. That is what the panel
+says, and it is read off the table rather than asserted - a setting with no `cfg`
+field would make it say the opposite.
 
 ## The index cache
 
