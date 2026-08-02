@@ -5438,8 +5438,17 @@ static void draw_running_warning(const chome_profile *p)
 
 	gfx_fill(0, 0, p->w, h, COL_RED);
 	gfx_fill(0, h, p->w, (s > 1) ? 2 : 1, COL_SHADOW);
-	gfx_text_c("STILL PLAYING - this system cannot pause your game",
-		p->w / 2, (h - 7 * s) / 2, s, COL_WHITE, 0);
+
+	/*
+	  Two wordings, because gfx_text_c() centres and a line too long for the canvas
+	  loses both its ends. On the CRT the full sentence came out as "PLAYING - this
+	  system cannot pause your", which drops the one word that carries the warning.
+	*/
+	const char *msg = "STILL PLAYING - this system cannot pause your game";
+	int room = (p->w - 8 * s) / (8 * s);
+	if ((int)strlen(msg) > room) msg = "STILL PLAYING - NOT PAUSED";
+
+	gfx_text_c(gfx_clip(msg, s, p->w - 8 * s), p->w / 2, (h - 7 * s) / 2, s, COL_WHITE, 0);
 }
 
 // Runs every frame in every core, so a registered save finishes whether the menu is
