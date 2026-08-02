@@ -19,6 +19,8 @@ console log: every module prints what it decided.
 | `chome_lib.cpp` | Systems table, background scan, game index, shelf views, favourites/play counts, suspend-slot state |
 | `chome_art.cpp` | Cover art: local lookup, lazy decode, LRU cache, optional online fetch |
 | `chome_video.cpp` | Video looks: preset/filter/mask/gamma generation, per-system defaults, previews |
+| `chome_ini.cpp` | The `MiSTer.ini` settings this front-end assumes, and a rewrite that leaves the rest of the player's file alone |
+| `chome_opt.cpp` | The `MiSTer.ini` options the player may edit: labels, defaults, ranges, and what a value is worth changing to |
 | `chome_ui.cpp` | Screens, navigation, launch |
 | `test/` | Host harness: compiles the modules unmodified against fakes, asserts behaviour, renders every screen to PNG |
 
@@ -231,6 +233,163 @@ feature and the first thing to tune on hardware.** A full aperture grille masks 
 of three channels per pixel; stacked with scanlines it can get dark. The shipped
 depth is moderate (dimming to about 73% at the darkest point).
 
+## Best Settings
+
+Options ▸ Best Settings writes the `MiSTer.ini` keys this front-end
+assumes. All three exist for the same reason: without them a classic-OSD panel
+appears over the player's game, which is the one thing the front-end exists to
+prevent.
+
+| Key | Set to | Why |
+|---|---|---|
+| `video_info` | `0` | The mode banner. Every core prints its resolution and refresh over the picture when the mode changes - so it is the first thing seen after launching a game |
+| `controller_info` | `0` | The button map. `input.cpp` already suppresses this while the front-end owns the screen, but the front-end is not up in a game core, so plugging a pad mid-session still draws it |
+| `disable_autofire` | `1` | A held face button plus the menu button toggles autofire and announces it in the same panel. Reachable by accident, invisible once on, and with no way back a novice would find |
+
+**The rule that decided the set** is that a setting which changes how the machine
+*behaves* outside the front-end is not ours to rewrite. That ruled out clearing
+`bootcore` (changes what happens at power-on), `fb_terminal=0` (also removes
+Scripts and Help from the classic menu, which Options deliberately still hands
+off to), `vga_scaler` / `direct_video` (video routing; getting it wrong is a
+black screen), `gamepad_defaults` (silently moves every button in every core)
+and `vscale_mode`. The reasoning is in `chome_ini.cpp` beside the table so it is
+not re-argued.
+
+The screen lists what will change before writing anything, and takes the two
+presses that everything unrecoverable here takes. The left column is an outcome
+the player can judge; the right column is the exact line that will be written,
+for anyone who wants to know what is being done to their file.
+
+**The file is the player's.** Everything not being set is copied through byte for
+byte - line endings, comments, ordering, unknown keys, sections we have never
+heard of. `MiSTer.ini` is CRLF and hand-edited, and a rewrite that reflowed it
+would lose the notes people leave themselves and turn every later diff into
+noise. The old file is kept as `MiSTer.ini.bak` (deliberately not
+`MiSTer_backup.ini` - `cfg_get_name()` scans the root for that pattern and would
+offer the backup as a fourth ini to boot from), and a backup that cannot be
+written stops the whole thing.
+
+Assignments are set **wherever they appear**, including in a core or `[video=]`
+section. Those are parsed after `[MiSTer]` and win, so fixing only the first one
+would leave the pop-up on in that core. Keys that appear nowhere are appended
+under a `[MiSTer]` header of their own, because the file may well end inside a
+core section.
+
+No restart is needed. The firmware re-execs on every core switch and so re-reads
+the ini anyway; `ini_apply()` also pokes the `cfg` field behind each setting, so
+the session already running is under the new values too. That is what the panel
+says, and it is read off the table rather than asserted - a setting with no `cfg`
+field would make it say the opposite.
+
+## More Settings
+
+Options ▸ More Settings edits `MiSTer.ini` directly - the screen next to Best
+Settings, which writes a fixed set without asking. Eleven options today, across
+three groups (Picture, Controllers, This Menu), in one flat list that scrolls;
+the group of the row under the cursor is in the panel header, which is how the
+grouping shows without spending rows on headings.
+
+Left and right change a value, X puts it back, and nothing is written until
+**Save Changes** at the bottom of the list is confirmed twice. Leaving with
+unsaved edits asks before throwing them away - the alternative, saving on the way
+out, is the worse surprise.
+
+**A value that is not the recommended one is amber**, and the line under the list
+names what it usually is. For most options "recommended" is simply the machine's
+default; for the two this front-end has an opinion about - `disable_autofire` and
+`controller_info`, both in the Best Settings set - it is what Best Settings
+writes. The two tables would otherwise contradict each other on screen, so the
+harness checks they agree.
+
+### Where the metadata lives, and why not in cfg.cpp
+
+`ini_var[]` in `cfg.cpp` already has every option's name, type and range, and
+nothing else: no labels, no defaults (those are assignments at the top of
+`cfg_parse()`), no grouping. So `chome_opt.cpp` carries a table of its own,
+copying the range and the default by hand. That duplication is the cost of not
+touching firmware-wide code for a front-end's benefit; what the harness can check,
+it does.
+
+### What is not offered
+
+Nothing that can leave the machine with no picture and no way back:
+`vga_scaler`, `direct_video`, `vga_mode`, `forced_scandoubler`, `video_mode`,
+`fb_terminal`, `bootcore` and `main`. The audience for this front-end cannot ssh
+in to undo a black screen. `gamepad_defaults` is out for the same reason in
+miniature - it silently moves every button in every core.
+
+Every value is picked from a list or stepped inside the range `cfg.cpp` declares,
+so nothing here can write a value the parser will reject. That is not tidiness:
+`ini_parse_numeric()` raises a `cfg_error()` for an out-of-range value and
+`user_io.cpp` shows those as an `Info()` panel over the game for five seconds on
+the next core load - a classic-OSD element, which is the thing the front-end
+exists to prevent. A file that already holds an out-of-range value is shown
+clamped, because that is the value the firmware will use.
+
+The picture options (`vscale_mode`, brightness, contrast, colour,
+`hdmi_limited`, `hdmi_game_mode`) **disappear when the scaler's output is not what
+reaches the screen**, on the same `video_scaler_is_visible()` test that drops the
+Display entry from the menu bar, and for the same reason: on `direct_video` or an
+analog-only set they change nothing at all.
+
+Only what changed is written. Writing the whole table would plant a dozen lines in
+somebody's ini for things they never touched, and freeze today's defaults into a
+file that would otherwise follow the firmware. The write itself is
+`chome_ini.cpp`'s - same backup, same binary CRLF-preserving rewrite, same
+`.bak` - so there is one ini writer here, not two.
+
+**Widening the set is a table edit**, and the shape of the entry says what is
+needed: a key, a label, a sentence, a range, a default, and a `cfg` field to poke
+so this session agrees with the file. An option whose worst case is a machine the
+player cannot recover would need to say so on screen before it is set, the way
+closing a game does; nothing in the table today does.
+
+## Wi-Fi and Controllers: the screens where you wait
+
+These two are the only places in the front-end where the player asks for something and
+then has to stand there. Both are built from the same three pieces, which live beside
+`draw_rows()` in `chome_ui.cpp` and are deliberately general - the rest of Options
+wants the same treatment and a second copy would drift.
+
+| Piece | What it is |
+|---|---|
+| `draw_listrow()` | A row with an icon column, a title, a **second line** saying what the thing is, a state chip on the right and a colour stripe on the left. The stripe survives selection, so the one row the player is looking at is not the one row that stops saying what it is |
+| `draw_section()` | A heading and a rule over a group of rows, for one line |
+| `draw_progress()` | The mark, the headline, a **progress track** and the guidance, centred in the panel |
+
+What each screen gained:
+
+- **Wi-Fi** has a status band across the top - signal bars, the network, the address -
+  and each row says "Connected", "Needs a password" or "Open" instead of leaving that
+  to a padlock. A join is a progress screen with named steps.
+- **Controllers** groups the list into *ready to play* and *paired, not awake*, with a
+  player chip (`P1`) or `ASLEEP` on the right and what to do about it underneath. "Add
+  a Controller" is **pinned** to the foot of the panel and the list scrolls above it,
+  so it is reachable at any number of pads rather than at up to five of them.
+
+### The animation is a state, not a decoration
+
+`gfx_spinner()` and `gfx_track()` (`chome_gfx.cpp`) are the only animated things here
+and both are driven by what a real child process reported:
+
+- `bt_pair_step()` reads `btctl`'s own commentary - found, pairing, connecting, done -
+  so the track advancing is the pairing advancing, and a pairing that stalls stops the
+  track. A failure is left showing **how far it got**, because "it never saw the pad"
+  and "it paired and could not connect" are different things to try next.
+- `net_join_phase()` is the join child's own report. It writes one digit to
+  `/tmp/chome_join.txt` after each step and the parent reads it once a frame. Putting
+  the old network back is drawn as *no* progress rather than as a nearly-full bar - it
+  is not step five of joining, it is the opposite of it.
+
+`ui_busy()` decides whether anything turns, and returns 0 unless a scan, a join or a
+pairing is genuinely in flight. Nothing spins because a screen is open: an indicator
+that always spins teaches people to ignore it, and then it cannot do the one job it
+has, which is to say "this has not hung". A busy screen repaints at `GFX_SPIN_MS`
+(100 ms), not at frame rate - the ring has eight positions and a repaint is a full
+compose and blit, which matters over the minute a pairing can take.
+
+Neither indicator is an icon and neither wanted to be; see `ICONS.md`.
+
 ## The index cache
 
 Every core switch re-execs the binary, so without a cache the first menu open
@@ -295,7 +454,7 @@ backwards - what the legend shows is what the key does.
 | D-pad | arrows | move / reveal menu bar (up) / suspend points (down) |
 | A | Enter | start, resume, open folder, confirm |
 | B | Esc | back, leave folder, resume |
-| X | Tab | delete a suspend point (two presses) |
+| X | Tab | delete a suspend point (two presses), or put a setting back to its usual value |
 | Y | Backspace | favourite, or save into a slot in-game |
 | Select | ` (backtick) | sort |
 | L / R | - / = | jump one screenful |

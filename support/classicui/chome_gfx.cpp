@@ -200,6 +200,115 @@ void gfx_scrim(int x, int y, int w, int h, uint32_t col, int step)
 	gfx_damage(ox, oy, ow, oh);
 }
 
+/* ------------------------------------------------------------ activity ---- */
+
+/*
+  A busy indicator and a progress track, both drawn from rectangles.
+
+  They are here rather than in an icon header for the reason ICONS.md already gives
+  for the Wi-Fi signal bars and the Display screen's radio dots: a gauge whose state
+  is the whole point cannot be a fixed picture. Nothing pictorial is drawn by hand in
+  this front-end, and neither of these is a picture of anything - one is eight dots on
+  a circle and the other is a row of boxes.
+
+  Both take a millisecond clock rather than counting frames. Frames are only drawn
+  when something changed, so a frame counter would run at whatever rate the rest of
+  the UI happened to repaint at, and the same animation would be a different speed on
+  a busy screen than on an idle one.
+*/
+
+/*
+  Eight positions on a circle of radius 128, quantised to whole pixels by the caller's
+  radius. Eight and not more: at the radius this is drawn at - eight pixels at 240p -
+  twelve dots overlap into a smudged ring, and the point of the comet is that you can
+  see which way it is going.
+*/
+static const int spin_x[GFX_SPIN_DOTS] = {    0,   90,  128,   90,    0,  -90, -128,  -90 };
+static const int spin_y[GFX_SPIN_DOTS] = { -128,  -90,    0,   90,  128,   90,    0,  -90 };
+
+/*
+  How bright each dot is, by how far behind the head it sits. Falls off fast: an even
+  ring reads as a decoration, and only a clear head and a short tail read as rotation.
+  The last two are dark on purpose, so there is a gap the eye can follow round.
+*/
+static const int spin_fade[GFX_SPIN_DOTS] = { 255, 190, 130, 80, 45, 20, 0, 0 };
+
+void gfx_spinner(int cx, int cy, int r, int dot, unsigned long ms, uint32_t hot, uint32_t cold)
+{
+	if (r < 2) return;
+	if (dot < 1) dot = 1;
+
+	int head = (int)((ms / GFX_SPIN_MS) % GFX_SPIN_DOTS);
+
+	for (int i = 0; i < GFX_SPIN_DOTS; i++)
+	{
+		int back = (head - i + GFX_SPIN_DOTS) % GFX_SPIN_DOTS;
+		int a = spin_fade[back];
+
+		int x = cx + (spin_x[i] * r) / 128 - dot / 2;
+		int y = cy + (spin_y[i] * r) / 128 - dot / 2;
+
+		/*
+		  The head is filled, not blended. gfx_blend() at alpha 255 divides by 256 and
+		  lands one short on every channel, so a blended head is nearly but not exactly
+		  the colour it was asked for - which is invisible on screen and matters to
+		  anything reading pixels back, the harness included.
+		*/
+		if (a >= 255) { gfx_fill(x, y, dot, dot, hot); continue; }
+
+		gfx_fill(x, y, dot, dot, cold);
+		if (a) gfx_blend(x, y, dot, dot, hot, a);
+	}
+}
+
+/*
+  A progress track of `nseg` boxes, `done` of them finished.
+
+  The segment that is currently being worked on is not filled - it has a block
+  travelling across it instead, because the step it stands for has no measurable
+  progress inside it and a bar that crept forward would be inventing one. So the track
+  says truthfully "three of these five steps are behind us and the fourth is running".
+
+  done >= nseg fills the lot and stops moving, which is what a finished job looks like.
+
+  `live` is the caller's, not derived from `done`, because the two say different things
+  and the difference is the point: a job that failed at step two and a job working on
+  step two have the same `done`, and only one of them should still be moving. A track
+  that swept regardless would say "still going" over a pairing that had given up.
+*/
+void gfx_track(int x, int y, int w, int h, int nseg, int done, int live, unsigned long ms,
+	uint32_t fill, uint32_t track, uint32_t glow)
+{
+	if (nseg < 1 || w < nseg * 3 || h < 1) return;
+
+	int gap = (h / 3) + 1;
+	int segw = (w - gap * (nseg - 1)) / nseg;
+	if (segw < 2) { segw = 2; gap = 0; }
+
+	for (int i = 0; i < nseg; i++)
+	{
+		int sx = x + i * (segw + gap);
+
+		if (i < done) { gfx_fill(sx, y, segw, h, fill); continue; }
+
+		gfx_fill(sx, y, segw, h, track);
+		if (i != done || !live) continue;
+
+		// The block sweeps one segment's width every GFX_SWEEP_MS, and is a third of
+		// the segment wide so there is always track visible either side of it.
+		int bw = segw / 3;
+		if (bw < 2) bw = 2;
+
+		int span = segw + bw;
+		int at = (int)((ms % GFX_SWEEP_MS) * (unsigned long)span / GFX_SWEEP_MS) - bw;
+
+		int bx = sx + at, bwc = bw;
+		if (bx < sx) { bwc += bx - sx; bx = sx; }
+		if (bx + bwc > sx + segw) bwc = sx + segw - bx;
+		if (bwc > 0) gfx_fill(bx, y, bwc, h, glow);
+	}
+}
+
 /* ---------------------------------------------------------------- text ---- */
 
 // Up/down/left/right arrows in the same column-major format as charrom:
