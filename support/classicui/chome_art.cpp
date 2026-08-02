@@ -380,10 +380,33 @@ static uint32_t thumb_clock = 0;
   work". A miss on a file that has not changed is only the same decode again.
 
   mtime alone will not do: the card is FAT, whose timestamps are granular to two seconds, and
-  the picture is rewritten a moment after the one before it. The size goes with it, and the
-  two together are wrong only for a rewrite that is byte-identical in the same second - which
-  is a picture that looks the same anyway.
+  the picture is rewritten a moment after the one before it. So the size goes with it.
+
+  Even the pair is a guess, and it guesses wrong on the case that matters most. Two frames of
+  one game compress to the same number of bytes often enough - they are the same scene, the
+  same palette, a sprite or two apart - and inside one FAT timestamp that is a hit on a file
+  whose contents changed. He saw it: save over a suspend point twice and the tile still shows
+  the first moment.
+
+  Whoever rewrites one of these pictures knows they did, so they say so through art_forget()
+  and no guessing is involved. The stat check stays for pictures that change without us -
+  cover art dropped onto the card while the shelf is up.
 */
+// Drops every decode of this file, whatever size it was asked for.
+void art_forget(const char *fullpath)
+{
+	if (!fullpath || !*fullpath) return;
+
+	for (int i = 0; i < THUMB_CACHE; i++)
+	{
+		thumb_slot *t = &thumbs[i];
+		if (strcmp(t->path, fullpath)) continue;
+
+		free(t->data);
+		memset(t, 0, sizeof(*t));
+	}
+}
+
 const uint32_t *art_thumb(const char *fullpath, int w, int h)
 {
 	if (!fullpath || !*fullpath || w < 1 || h < 1) return 0;

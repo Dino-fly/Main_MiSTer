@@ -49,4 +49,7 @@ int  art_cache_bytes();
 // Small ring cache keyed by path; decoded on demand at w x h.
 const uint32_t *art_thumb(const char *fullpath, int w, int h);
 
+// Forget every decode of this file - call it after rewriting one.
+void art_forget(const char *fullpath);
+
 #endif

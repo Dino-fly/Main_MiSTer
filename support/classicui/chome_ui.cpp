@@ -5189,7 +5189,10 @@ static int ss_write_thumb(const chome_item *it, int slot)
 	int oh = (int)(((long long)ow * ig_shot_h) / ig_shot_w);
 	if (oh < 1) oh = 1;
 
-	return write_screenshot(png, (const uint8_t *)ig_shot, ig_shot_w, ig_shot_h, ow, oh) ? 1 : 0;
+	if (!write_screenshot(png, (const uint8_t *)ig_shot, ig_shot_w, ig_shot_h, ow, oh)) return 0;
+
+	art_forget(png);        // the tile is looking at the moment we just replaced
+	return 1;
 }
 
 /*
