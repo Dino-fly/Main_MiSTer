@@ -61,6 +61,13 @@ static unsigned long ig_freeze_at = 0;       // wall clock when it was, so a sta
 static int pend_slot = -1;
 static int pend_failed = -1;                 // slot whose save gave up, for one message
 static int ig_selected_running = 0;          // shelf parked on the running game
+/*
+  The in-game menu's own "nothing is in memory yet". Separate from first_entry
+  because on the device the two never live in the same process: the menu core's
+  shelf is one MiSTer, and a game core's is the one that re-exec'd over it, so each
+  has to read the session record once for itself.
+*/
+static int ig_first_open = 1;
 static unsigned long ig_close_until = 0;     // "press A again to close the game"
 static int wifi_row = 0;                     // which network is picked
 static int wifi_top = 0;                     // first one on screen
@@ -4290,7 +4297,24 @@ static int ig_open()
 		vp_install();
 		inited = 1;
 	}
-	view_rebuild(1);
+
+	/*
+	  Where the player was, on the first open in this core. Launching re-execs MiSTer,
+	  so the shelf statics here start at their defaults - the unfiltered root - and the
+	  view the game was started from only exists in the session record. Without this
+	  the menu came back on the root shelf with the running game selected, because
+	  ig_select_running() below searches whatever view happens to be built and parks on
+	  the game wherever it finds it: the selection looks right, so the wrong view is the
+	  only symptom. Later opens keep what is in memory, since by then it is the player's
+	  own browsing.
+	*/
+	if (ig_first_open)
+	{
+		ig_first_open = 0;
+		if (!session_restore()) view_rebuild(1);
+	}
+	else view_rebuild(1);
+
 	art_init(theme_get()->sel_w, theme_get()->sel_h);
 
 	ig_paused = ss_pause_engage();
