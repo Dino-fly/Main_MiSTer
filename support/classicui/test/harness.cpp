@@ -453,6 +453,14 @@ static void walk_profile(const char *tag, int profile, int w, int h)
 	snprintf(name, sizeof(name), "%s-2-home-game", tag);
 	dump(name);
 
+	/*
+	  The strip has to be captured on a game whose core has save states, and the first
+	  game of the shelf is Bonk's - a TurboGrafx, which has none (chome_lib's table). On
+	  that one the strip is the "no save states" message, so these two dumps would show
+	  nothing about the tiles or the delete prompt. Super Metroid has two states and a
+	  thumbnail. Back to the first game afterwards, so the rest of the walk is unchanged.
+	*/
+	select_titled("Super Metroid");
 	press(KEY_DOWN, 25);
 	snprintf(name, sizeof(name), "%s-3-suspend", tag);
 	dump(name);
@@ -461,6 +469,17 @@ static void walk_profile(const char *tag, int profile, int w, int h)
 	snprintf(name, sizeof(name), "%s-4-suspend-delete-armed", tag);
 	dump(name);
 	press(KEY_ESC, 10);
+
+	// The same strip on a core with no save states, which is what a Neo Geo or a Mega
+	// Drive player sees at every profile.
+	select_titled("Bonk");
+	press(KEY_DOWN, 25);
+	snprintf(name, sizeof(name), "%s-3b-suspend-no-states", tag);
+	dump(name);
+	press(KEY_ESC, 10);
+
+	select_first_game();
+	frame(10);
 
 	press(KEY_GRAVE, 20);
 	snprintf(name, sizeof(name), "%s-5-sort", tag);
@@ -1293,6 +1312,116 @@ static void assert_save_on_pausing_core()
 	unlink(slot2);
 }
 
+static int fav_count()
+{
+	int n = 0;
+	for (int i = 0; i < lib_item_count(); i++) if (lib_item(i)->fav) n++;
+	return n;
+}
+
+/*
+  B at the top of the shelf jumps to the leftmost entry.
+
+  Favourites and Systems are the first cards of a row that is hundreds of games long, and
+  walking left to them one card at a time is what this saves - so at the top level B is a
+  navigation key, not a way out. Two neighbours have to survive it, and both are checked
+  here because each one is a behaviour someone relies on:
+
+  - inside a folder B still means "up one level", since back() pops the nav stack before
+    anything else and this only concerns the level where there is nothing to pop;
+  - in a game core B used to close the in-game menu from here. It cannot do both, so
+    going back to the game is the menu button's job alone now.
+
+  There is no accessor for the shelf selection, so it is read the way the shelf itself
+  offers: Y does nothing on a folder, and A on the leftmost card opens Favourites - made
+  unmistakable by leaving exactly one favourite in the library.
+*/
+static void assert_back_leftmost()
+{
+	printf("\n== B jumps to the leftmost entry ==\n");
+
+	harness_set_menu_core(1);
+	harness_set_fb_supported(1);
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+
+	chome_leave();
+	press(KEY_MENU, 20);
+	frame(6);
+
+	// Out to the root shelf, whatever the previous section was browsing.
+	for (int i = 0; i < 4; i++) press(KEY_ESC, 6);
+	int root_n = lib_view_count();
+	const chome_entry *first = lib_view_entry(0);
+	check(first && first->kind == ENT_FOLDER && !strcmp(first->label, "Favourites"),
+		"the leftmost entry of the root shelf is Favourites");
+
+	// One favourite, and only one: the Favourites view is then a shelf of exactly 1,
+	// which is neither the root shelf nor any system's.
+	for (int i = 0; i < lib_item_count(); i++) if (lib_item(i)->fav) lib_toggle_fav(lib_item(i));
+	chome_item *fav = lib_item(0);
+	lib_toggle_fav(fav);
+	check(fav_count() == 1, "the library has one favourite to look for");
+
+	// Far enough out that no single left press could account for coming back.
+	for (int i = 0; i < 12; i++) press(KEY_RIGHT, 3);
+	press(KEY_ESC, 8);
+
+	int favs = fav_count();
+	press(KEY_BACKSPACE, 8);                  // Y favourites the selected game
+	check(fav_count() == favs, "B left the cursor on a folder, not on a game");
+
+	press(KEY_ENTER, 10);
+	const chome_entry *e = lib_view_entry(0);
+	check(lib_view_count() == 1 && e && e->kind == ENT_GAME && lib_item(e->game) == fav,
+		"and that folder is Favourites, so B went all the way left");
+
+	// Inside a folder B is unchanged: one level up, not a jump.
+	press(KEY_ESC, 10);
+	check(lib_view_count() == root_n, "B comes back out of Favourites");
+
+	press(KEY_RIGHT, 8);                      // Systems, the second card
+	press(KEY_ENTER, 10);
+	int sysn = lib_view_count();
+	check(sysn > 0 && lib_view_entry(0)->kind == ENT_FOLDER, "the Systems folder is open");
+	press(KEY_ENTER, 10);                     // into the first system
+	check(lib_view_count() != sysn, "and a system inside it");
+	press(KEY_ESC, 10);
+	check(lib_view_count() == sysn, "B goes up one level, back to Systems");
+	press(KEY_ESC, 10);
+	check(lib_view_count() == root_n, "and up again, to the root");
+
+	lib_toggle_fav(fav);                      // leave the library as it was found
+
+	/*
+	  And in a game core, where B on the shelf used to be the way back to the game.
+	*/
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "gb\nTetris (World).gb\n"); fclose(f); }
+	}
+
+	harness_set_menu_core(0);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+	chome_handle(0);
+	if (chome_ingame_active()) press(KEY_MENU, 14);
+	frame(6);
+
+	press(KEY_MENU, 20);
+	check(chome_ingame_active(), "the in-game menu is up over the game");
+
+	// The first press jumps left; the rest have nowhere to go and must still not close
+	// it - the shelf is already at the top level, so nav_pop() has nothing to do.
+	for (int i = 0; i < 4; i++) press(KEY_ESC, 8);
+	check(chome_ingame_active(), "B on the shelf no longer drops the player back into the game");
+
+	press(KEY_MENU, 16);
+	frame(8);
+	check(!chome_ingame_active(), "and the menu button is still the way back to it");
+}
+
 static void assert_slot_match()
 {
 	printf("\n== which option is the savestate slot ==\n");
@@ -1340,6 +1469,337 @@ static void assert_slot_match()
 		snprintf(p2, sizeof(p2), "%s/savestates/Gameboy/Tetris (World)_%d.ss", ROOT, i);
 		unlink(p2);
 	}
+}
+
+// CH_SS_* of a system by id, so the table can be asserted without a screen.
+static int sys_savestates(const char *id)
+{
+	for (int i = 0; i < lib_sys_count(); i++)
+		if (!strcasecmp(lib_sys(i)->id, id)) return lib_sys(i)->savestates;
+	return -1;
+}
+
+/*
+  The legend's silhouette: which pixels are painted, ignoring what colour they were painted
+  with. harness_fb_hash() mixes shape and colour into one number, so it says "the legend
+  changed" and cannot say which of the two changed - and for the lettered pads that is the
+  whole question, because a Nintendo pad and an Xbox pad share one set of letter grids and
+  differ in both the letter and its colour at once.
+
+  Ink is anything that is neither the background nor the near-black chip the glyph sits on,
+  so a red disc and a green disc hash alike while an A and a B do not. gfx_fill() writes
+  colours through unblended, which is what makes an exact comparison legitimate here.
+*/
+static unsigned long legend_shape(int y0, int y1)
+{
+	const uint32_t *fb = harness_fb_shown();
+	int w = gfx_w(), h = gfx_h();
+	if (!fb || w < 1 || h < 1) return 0;
+
+	if (y0 < 0) y0 = 0;
+	if (y1 > h) y1 = h;
+
+	unsigned long v = 1469598103934665603UL;
+	for (int y = y0; y < y1; y++)
+	{
+		for (int x = 0; x < w; x++)
+		{
+			uint32_t px = fb[(size_t)y * w + x];
+			int ink = (px != COL_BG && px != COL_BGDARK && px != COL_BTN_CHIP);
+			v ^= (unsigned long)ink;
+			v *= 1099511628211UL;
+		}
+	}
+	return v;
+}
+
+/*
+  What the suspend strip is showing, read back off the framebuffer, because there is no
+  other way to ask: slots and message are two branches of one draw and neither leaves a
+  flag behind. Two counts, each over the strip's own band (the strip paints over the pips
+  and the legend paints over the strip, so the band holds nothing else):
+
+  - slot pixels: COL_DIM, which in the strip is only the empty tiles' frames and the "1 2
+    3" captions under them. Every slot layout has some, the message has none.
+  - message pixels: COL_PANELHI below the header line, which is only the message itself.
+*/
+static void strip_pixels(int *slots, int *message)
+{
+	const chome_profile *p = theme_get();
+	uint32_t *fb = harness_fb_shown();
+	int w = gfx_w(), h = gfx_h();
+
+	*slots = *message = 0;
+	if (!fb || w < 1 || h < 1) return;
+
+	int top = p->h - p->safe_y - p->strip_h;
+	int bot = p->y_legend - 6 * p->ts_ui;
+	int msg_top = top + 18 * p->ts_ui;
+	if (top < 0) top = 0;
+	if (bot > h) bot = h;
+
+	for (int y = top; y < bot; y++)
+	{
+		for (int x = 0; x < w; x++)
+		{
+			uint32_t c = fb[(size_t)y * w + x] | 0xff000000u;
+			if (c == COL_DIM) (*slots)++;
+			else if (c == COL_PANELHI && y >= msg_top) (*message)++;
+		}
+	}
+}
+
+/*
+  Backlog 6: a system whose core has no save states says so before the player has spent
+  an hour on it, from the shelf as well as from inside the game. On the shelf no core is
+  loaded and no CONF_STR has been read, so the answer can only come from the measured
+  table in chome_lib - and that table must never outrank a core that is actually running,
+  in either direction.
+*/
+static void assert_no_savestates()
+{
+	printf("\n== systems with no save states ==\n");
+
+	// The table itself, including the state that promises nothing either way. SMS was
+	// never measured, so nothing in the UI may claim anything about it.
+	check(sys_savestates("nes") == CH_SS_YES, "a system measured with save states says so");
+	check(sys_savestates("md") == CH_SS_NO, "one measured without them says so");
+	check(sys_savestates("sms") == CH_SS_UNKNOWN, "an unmeasured system claims neither");
+
+	harness_set_menu_core(1);
+	harness_set_fb_supported(1);
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+	chome_leave();
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 40 && lib_scanning(); i++) frame(2);
+	frame(20);
+
+	int slots = 0, msg = 0;
+
+	// From the shelf, with no core loaded: the Mega Drive core has none.
+	check(select_titled("Streets of Rage 2") != 0, "a Mega Drive game is on the shelf");
+	press(KEY_DOWN, 25);
+	strip_pixels(&slots, &msg);
+	printf("  mega drive from the shelf: slot pixels %d, message pixels %d\n", slots, msg);
+	check(slots == 0, "the shelf strip offers no slots for a core with no save states");
+	check(msg > 0, "and says so instead");
+	dump("no-savestates-shelf");
+	press(KEY_ESC, 10);
+
+	// ...and the same strip on a system that has them, so the message is not simply
+	// always on from the shelf.
+	check(select_titled("Super Metroid") != 0, "a SNES game is on the shelf");
+	press(KEY_DOWN, 25);
+	strip_pixels(&slots, &msg);
+	printf("  snes from the shelf: slot pixels %d, message pixels %d\n", slots, msg);
+	check(slots > 0, "a system that has save states still shows its slots");
+	check(msg == 0, "with nothing written over them");
+	press(KEY_ESC, 10);
+
+	/*
+	  In its own core the CONF_STR wins, both ways round. A Mega Drive rebuilt from a
+	  newer upstream would gain save states without this table being touched, and the
+	  running core has to be believed over it - that is the whole reason the table is only
+	  consulted from the shelf.
+	*/
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "md\nStreets of Rage 2 (Europe).bin\n"); fclose(f); }
+	}
+
+	harness_set_menu_core(0);
+	chome_handle(0);
+	if (chome_ingame_active()) press(KEY_MENU, 14);
+	frame(6);
+
+	harness_set_confstr(1);                   // this core does have savestates
+	press(KEY_MENU, 20);
+	check(chome_ingame_active(), "the menu opens over a Mega Drive game");
+	for (int i = 0; i < 40 && lib_scanning(); i++) frame(2);
+	frame(20);
+
+	press(KEY_DOWN, 25);
+	strip_pixels(&slots, &msg);
+	printf("  mega drive core with savestates: slot pixels %d, message pixels %d\n", slots, msg);
+	check(slots > 0 && msg == 0, "a running core with save states outranks the table");
+	dump("no-savestates-live-override");
+	press(KEY_ESC, 10);
+	press(KEY_MENU, 16);
+	frame(8);
+
+	/*
+	  And the mirror, which is where this message started: a Game Boy is marked as having
+	  save states, but the core running is the one that answers, so a core that reports
+	  none gets the message even though the table says otherwise.
+	*/
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "gb\nTetris (World).gb\n"); fclose(f); }
+	}
+
+	chome_handle(0);
+	if (chome_ingame_active()) press(KEY_MENU, 14);
+	frame(6);
+
+	harness_set_confstr(0);                   // no savestate entries at all
+	press(KEY_MENU, 20);
+	check(chome_ingame_active(), "the menu opens over the Game Boy game");
+	frame(20);
+
+	press(KEY_DOWN, 25);
+	strip_pixels(&slots, &msg);
+	printf("  game boy core without savestates: slot pixels %d, message pixels %d\n", slots, msg);
+	check(msg > 0 && slots == 0, "a running core without them is believed over the table too");
+	press(KEY_ESC, 10);
+	press(KEY_MENU, 16);
+	frame(8);
+
+	harness_set_confstr(1);
+	harness_set_menu_core(1);
+	chome_leave();
+	gfx_shutdown();
+}
+
+/*
+  The shelf must come back in the view the game was launched from. He was browsing the
+  NES system view, started Contra, opened the menu over it and got the all-games shelf
+  with Contra selected - which looks nearly right, and is a long walk back to where he
+  was.
+
+  Two things this has to arrange, because on the device they come for free. A game core
+  is a *fresh* MiSTer - launching re-execs - so its shelf statics are at their defaults
+  and the launched-from view exists only in the session record; here the same state is
+  reached by walking back out to the root shelf after the launch, which leaves exactly
+  what a re-exec leaves: root in memory, the system view on disk. And the record is read
+  once per process, so this has to be the first in-game open of the run - if a later
+  section is ever moved in front of it, these checks fail rather than quietly stop
+  meaning anything.
+*/
+static void assert_ingame_view()
+{
+	printf("\n== the launched-from view survives the game ==\n");
+
+	harness_set_menu_core(1);
+	harness_set_fb_supported(1);
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+
+	chome_leave();
+	press(KEY_MENU, 20);
+	frame(6);
+
+	int gbsys = -1;
+	for (int i = 0; i < lib_sys_count(); i++) if (!strcmp(lib_sys(i)->id, "gb")) gbsys = i;
+	if (gbsys < 0) { check(0, "the systems table has Game Boy"); return; }
+
+	// Systems is the second entry of the root shelf, and Game Boy has two games -
+	// so a shelf of two is unmistakably that view and not the unfiltered root.
+	for (int i = 0; i < 30; i++) press(KEY_LEFT, 2);
+	press(KEY_RIGHT, 6);
+	press(KEY_ENTER, 10);
+
+	int folder = -1;
+	for (int i = 0; i < lib_view_count(); i++)
+	{
+		const chome_entry *e = lib_view_entry(i);
+		if (e && e->sysidx == gbsys) { folder = i; break; }
+	}
+	if (folder < 0) { check(0, "the Systems folder lists Game Boy"); return; }
+
+	for (int i = 0; i < folder; i++) press(KEY_RIGHT, 4);
+	press(KEY_ENTER, 12);
+
+	int sysn = lib_view_count();
+	printf("  the Game Boy shelf holds %d entries\n", sysn);
+	check(sysn == 2 && lib_view_entry(0)->kind == ENT_GAME, "the Game Boy system view is up");
+	dump("ingameview-1-launched-from");
+
+	// Tetris sorts first, and it is the game the in-game sections run.
+	harness_clear_launch();
+	press(KEY_ENTER, 4);
+	frame(80);                                // let the 900ms curtain elapse
+	check(strstr(harness_last_launch(), ".mgl") != 0, "a game was launched from that view");
+
+	{
+		FILE *f = fopen(ROOT "/config/classicui_session.cfg", "rb");
+		check(f != 0, "the launch wrote a session record");
+		if (f)
+		{
+			uint32_t magic = 0;
+			int fields[3] = {};
+			size_t got = fread(&magic, sizeof(magic), 1, f);
+			got += fread(fields, sizeof(fields), 1, f);
+			fclose(f);
+			printf("  session: view=%d sys=%d sort=%d\n", fields[0], fields[1], fields[2]);
+			check(got == 2 && fields[0] == VIEW_SYS && fields[1] == gbsys,
+				"and it holds the system view, not the root");
+		}
+	}
+
+	// The fresh process a launch really gets: nothing in memory but the root shelf.
+	press(KEY_ESC, 10);
+	press(KEY_ESC, 10);
+	check(lib_view_count() > sysn && lib_view_entry(0)->kind == ENT_FOLDER,
+		"the shelf is walked back to the root, as a re-exec would leave it");
+
+	// ...and now the game core, with the record from the launch still on the card.
+	harness_set_menu_core(0);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+	chome_handle(0);
+	press(KEY_MENU, 20);
+	check(chome_ingame_active(), "the menu opens over the game");
+	for (int i = 0; i < 40 && lib_scanning(); i++) frame(2);
+	frame(20);
+
+	int n = lib_view_count();
+	int only_gb = (n > 0);
+	for (int i = 0; i < n; i++)
+	{
+		const chome_entry *e = lib_view_entry(i);
+		if (!e || e->kind != ENT_GAME) { only_gb = 0; break; }
+		chome_item *it = lib_item(e->game);
+		if (!it || it->sysidx != gbsys) { only_gb = 0; break; }
+	}
+	printf("  the in-game shelf holds %d entries\n", n);
+	check(n == sysn && only_gb, "the in-game shelf is the view the game was launched from");
+	dump("ingameview-2-back-in-that-view");
+
+	/*
+	  And the selection is still the running game, inside that view - the point being
+	  that ig_select_running() now searches the restored view rather than the default
+	  one. Read through the favourite toggle, which acts on the selected game: there is
+	  no other way in from here to ask what the shelf is parked on.
+	*/
+	chome_item *tetris = 0;
+	for (int i = 0; i < lib_item_count(); i++)
+	{
+		chome_item *it = lib_item(i);
+		if (!strcmp(it->title, "Tetris")) tetris = it;
+	}
+	if (tetris)
+	{
+		int was = tetris->fav;
+		press(KEY_BACKSPACE, 8);
+		check(tetris->fav != was, "and it is parked on the running game");
+		press(KEY_BACKSPACE, 8);              // leave the library as it was found
+		check(tetris->fav == was, "with the favourite put back");
+	}
+	else check(0, "found Tetris in the index");
+
+	press(KEY_MENU, 16);
+	frame(8);
+	check(!chome_ingame_active(), "and the menu closes back into the game");
+
+	// The rest of the run expects the root shelf, so walk out of the restored view.
+	harness_set_menu_core(1);
+	chome_handle(0);
+	press(KEY_ESC, 10);
+	press(KEY_ESC, 10);
+	check(lib_view_entry(0)->kind == ENT_FOLDER, "the root shelf is back for what follows");
 }
 
 static void assert_ingame()
@@ -1450,13 +1910,15 @@ static void assert_ingame()
 	press(KEY_MENU, 20);
 	check(harness_pulses_on("S") >= 1, "the freeze still reaches the save bit with SD off");
 	check(harness_opt_val("V") == 1, "and puts the SD-card option back where it was");
-	press(KEY_ESC, 16);
+	press(KEY_MENU, 16);
 
 	harness_set_opt("V", 0);
 	harness_reset_status();
 	press(KEY_MENU, 20);
 	check(harness_pulses_on("S") == 1, "opening freezes the game with a save");
-	press(KEY_ESC, 16);
+	// The menu button, not B: B is the shelf's own navigation key now. See
+	// assert_back_leftmost().
+	press(KEY_MENU, 16);
 	check(harness_pulses_on("T") == 1, "and closing restores it, so nothing advanced");
 
 	/*
@@ -1581,7 +2043,7 @@ static void assert_ingame()
 		struct stat st;
 		check(stat("/tmp/classicui_current", &st) != 0,
 			"a launch record naming another core is dropped, not believed");
-		press(KEY_ESC, 10);
+		press(KEY_MENU, 10);                      // back to the game; B no longer does this
 
 		// Leave it in a game, as this section found it, and put back a record that does
 		// match the running core - what follows needs a running game to put away.
@@ -1705,6 +2167,87 @@ static void assert_ingame()
 		if (h) { if (fread(got2, 1, sizeof(got2) - 1, h)) {} fclose(h); }
 		check(!strcmp(got2, "HELD-AGAIN"), "and the copy happens the moment the state lands");
 		check(harness_status_pulses() == 0, "still without asking the core for anything");
+
+		/*
+		  Saving over a state that is already in the slot.
+
+		  Slot 2 holds one now, and the strip has already decoded its picture - which is what
+		  he found broken. Replacing the state has to replace what the tile shows, or the
+		  player is left looking at the moment that was just overwritten and reads it as the
+		  save having done nothing.
+		*/
+		{
+			const char *ss2 = ROOT "/savestates/Gameboy/Tetris (World)_2.ss";
+			const char *png2 = ROOT "/savestates/Gameboy/Tetris (World)_2.png";
+			const int tw = 200, th = 150;
+
+			/*
+			  The picture of the state that is in there, read the way the tile reads it.
+
+			  Everything here happens inside one second, which is the point: it is what made
+			  the second cache visible. imlib2 decides whether its own copy is still good from
+			  the file's mtime, so the rewrite below is invisible to it - and on the card that
+			  is a two-second window, not a one-second one.
+			*/
+			make_cover(png2, 240, 180, 0xffb02040);
+			const uint32_t *shown = art_thumb(png2, tw, th);
+			check(shown != 0, "the picture of the state already in the slot is on screen");
+
+			uint32_t *was = (uint32_t*)malloc((size_t)tw * th * 4);
+			if (shown && was) memcpy(was, shown, (size_t)tw * th * 4);
+
+			// A new held moment, and the same button on the same slot.
+			FILE *third = fopen(ROOT "/savestates/Gameboy/Tetris (World)_4.ss", "wb");
+			if (third) { fprintf(third, "HELD-THIRD"); fclose(third); }
+
+			harness_reset_status();
+			harness_reset_ss_copy();
+			press(KEY_BACKSPACE, 12);
+			frame(20);
+
+			char got3[32] = {};
+			FILE *r3 = fopen(ss2, "rb");
+			if (r3) { if (fread(got3, 1, sizeof(got3) - 1, r3)) {} fclose(r3); }
+			check(!strcmp(got3, "HELD-THIRD"), "the new moment replaces the state already in the slot");
+			check(harness_ss_copy_to() == 1, "and replaces it in the core's memory too");
+			check(harness_ss_copy_from() == 3, "from the slot the game is held still in");
+			check(harness_status_pulses() == 0, "and still asks the core for nothing");
+
+			const uint32_t *now = art_thumb(png2, tw, th);
+			check(now && was && memcmp(now, was, (size_t)tw * th * 4) != 0,
+				"and the tile shows the new picture, not the one it had cached");
+			free(was);
+
+			/*
+			  The same overwrite with the held state not written yet, which is what every
+			  menu open but the first looks like: the request waits. Nothing may be lost
+			  while it does - the state in the slot is still the one to load until the new
+			  one is there to replace it.
+			*/
+			{
+				struct timeval tv[2];
+				tv[0].tv_sec = tv[1].tv_sec = (long)time(0) - 3600;
+				tv[0].tv_usec = tv[1].tv_usec = 0;
+				utimes(ROOT "/savestates/Gameboy/Tetris (World)_4.ss", tv);
+			}
+			harness_reset_ss_copy();
+			press(KEY_BACKSPACE, 12);
+
+			char held3[32] = {};
+			FILE *r4 = fopen(ss2, "rb");
+			if (r4) { if (fread(held3, 1, sizeof(held3) - 1, r4)) {} fclose(r4); }
+			check(!strcmp(held3, "HELD-THIRD"), "a save that is still waiting leaves the old state in place");
+
+			FILE *fourth = fopen(ROOT "/savestates/Gameboy/Tetris (World)_4.ss", "wb");
+			if (fourth) { fprintf(fourth, "HELD-FOURTH"); fclose(fourth); }
+			frame(30);
+
+			char got4[32] = {};
+			FILE *r5 = fopen(ss2, "rb");
+			if (r5) { if (fread(got4, 1, sizeof(got4) - 1, r5)) {} fclose(r5); }
+			check(!strcmp(got4, "HELD-FOURTH"), "and replaces it once the core writes the held state");
+			check(harness_ss_copy_to() == 1, "with the memory copy following the file again");
+		}
 
 		unlink(ROOT "/savestates/Gameboy/Tetris (World)_4.ss");
 	}
@@ -1939,10 +2482,15 @@ int main()
 
 	walk_looks();
 	assert_launch();
+	// Before every other in-game section: the session record is read once per process,
+	// and this is the one that cares which process read it. See its own comment.
+	assert_ingame_view();
 	assert_ingame();
 	assert_save_on_pausing_core();
 	assert_freeze_off();
+	assert_back_leftmost();
 	assert_slot_match();
+	assert_no_savestates();
 	assert_menu_repeat();
 	assert_input_labels();
 	assert_overscan();
@@ -2623,8 +3171,8 @@ int main()
 		{
 			{ "psx_triangle", COL_BTN_TRIANGLE }, { "psx_circle", COL_BTN_CIRCLE },
 			{ "psx_square",   COL_BTN_SQUARE   }, { "psx_cross",  COL_BTN_CROSS  },
-			{ "btn_a", COL_BTN_A }, { "btn_b", COL_BTN_B },
-			{ "btn_x", COL_BTN_X }, { "btn_y", COL_BTN_Y },
+			{ "btn_a", COL_SNES_A }, { "btn_b", COL_SNES_B },
+			{ "btn_x", COL_SNES_X }, { "btn_y", COL_SNES_Y },
 			{ "dpad_up", COL_WHITE }, { "dpad_down", COL_WHITE }, { "dpad_lr", COL_WHITE },
 			{ "btn_start", COL_WHITE }, { "btn_select", COL_WHITE },
 		};
@@ -2671,12 +3219,78 @@ int main()
 	}
 
 	/*
+	  The three lettered palettes side by side. There is one set of four letter grids and
+	  three ways to colour it, so this is the only place the difference between a Nintendo
+	  pad and an Xbox one can be seen at all - by eye, since a hash cannot say "that green
+	  is on the wrong button".
+	*/
+	printf("\n== lettered palettes ==\n");
+	{
+		struct { const char *name; uint32_t col[4]; } pal[] =
+		{
+			{ "SNES  A red   B amber X blue Y green",
+				{ COL_SNES_A, COL_SNES_B, COL_SNES_X, COL_SNES_Y } },
+			{ "XBOX  A green B red   X blue Y amber",
+				{ COL_XBOX_A, COL_XBOX_B, COL_XBOX_X, COL_XBOX_Y } },
+			{ "PLAIN an unrecognised pad - no colour is invented",
+				{ COL_BTN_PLAIN, COL_BTN_PLAIN, COL_BTN_PLAIN, COL_BTN_PLAIN } },
+		};
+
+		// The two lettered families must not end up with the same colour on the same
+		// letter, or the whole Xbox set is a no-op the legend hashes below cannot catch.
+		check(COL_XBOX_A != COL_SNES_A && COL_XBOX_B != COL_SNES_B
+			&& COL_XBOX_Y != COL_SNES_Y, "Xbox and Nintendo letters are coloured apart");
+
+		static const char *letters[4] = { "btn_a", "btn_b", "btn_x", "btn_y" };
+
+		harness_set_fb(1280, 720);
+		gfx_shutdown();
+		theme_update(1280, 720, 1);
+		if (gfx_begin())
+		{
+			gfx_fill(0, 0, 1280, 720, COL_BGDARK);
+			gfx_text("LETTERED PALETTES - 1x (240p), 2x, 4x", 30, 22, 2, COL_WHITE, 0);
+
+			for (int p = 0; p < 3; p++)
+			{
+				int y0 = 70 + p * 190;
+				gfx_text(pal[p].name, 40, y0, 2, COL_DIM, 0);
+
+				for (int k = 0; k < 4; k++)
+				{
+					const btn12_def *d = 0;
+					for (size_t i = 0; i < sizeof(btn12s) / sizeof(btn12s[0]); i++)
+						if (!strcmp(btn12s[i].name, letters[k])) d = &btn12s[i];
+					if (!d) { check(0, letters[k]); continue; }
+
+					int x = 40 + k * 300;
+					for (int zoom = 1; zoom <= 4; zoom *= 2)
+					{
+						int y = y0 + 30 + (52 - BTN12 * zoom) / 2;
+						for (int gy = 0; gy < BTN12; gy++)
+							for (int gx = 0; gx < BTN12; gx++)
+							{
+								char c = d->rows[gy][gx];
+								if (c == '.') continue;
+								gfx_fill(x + gx * zoom, y + gy * zoom, zoom, zoom,
+									(c == 'c') ? pal[p].col[k] : COL_BTN_CHIP);
+							}
+						x += BTN12 * zoom + 24;
+					}
+				}
+			}
+			gfx_end();
+			dump("buttons-palettes");
+		}
+	}
+
+	/*
 	  Prompts that follow the controller. A PlayStation pad has no A or B written on
 	  it, so the legend names the shapes instead. There is no way to read the legend
 	  back out of the front-end, so this is checked the way a person would: the same
 	  screen photographed with each controller, and the pictures have to differ.
 	*/
-	printf("\n== playstation prompts ==\n");
+	printf("\n== controller prompts ==\n");
 	{
 		harness_set_menu_core(1);
 		harness_set_fb(1280, 720);
@@ -2688,6 +3302,19 @@ int main()
 		harness_set_pad_name("Generic USB Gamepad");
 		press(KEY_MENU, 20);
 		frame(10);
+
+		/*
+		  Park on a game rather than trusting whatever the last section left: a folder
+		  gets a different legend, and Down on one only nudges - so the Down/Up used
+		  below to force a redraw would land on the menu bar instead of coming back
+		  here, and the hashes would be of two different screens.
+		*/
+		for (int i = 0; i < 30; i++) press(KEY_LEFT, 2);
+		int lead = 0;
+		while (lead < lib_view_count() && lib_view_entry(lead)->kind != ENT_GAME) lead++;
+		for (int i = 0; i < lead; i++) press(KEY_RIGHT, 6);
+		frame(10);
+
 		dump("prompts-1-generic");
 		unsigned long generic = harness_fb_hash(660, 720);
 
@@ -2700,10 +3327,53 @@ int main()
 		check(psx != generic, "a SNAC pad changes the prompts");
 
 		/*
+		  All four sets, plus the fallback, have to be told apart on the screen - a layout
+		  that resolves correctly and then draws the same legend as another one is no use to
+		  the player. Same shelf, same selection, five controllers, five different pictures.
+
+		  The Nintendo and Xbox pads are the pair that matters: they share one set of letter
+		  grids and differ only in which letter is which colour, so if the palettes were ever
+		  collapsed into one these two hashes would be equal and nothing else here would say
+		  so. "Generic USB Gamepad" is the fallback on purpose - it names a brand and not a
+		  layout, which is exactly the case pad_layout() must decline to guess at.
+		*/
+		harness_set_pad_name("Nintendo Switch Pro Controller");
+		press(KEY_DOWN, 10);
+		press(KEY_UP, 10);
+		frame(10);
+		dump("prompts-6-snes");
+		unsigned long snes = harness_fb_hash(660, 720);
+
+		harness_set_pad_name("Microsoft X-Box 360 pad");
+		press(KEY_DOWN, 10);
+		press(KEY_UP, 10);
+		frame(10);
+		dump("prompts-7-xbox");
+		unsigned long xbox = harness_fb_hash(660, 720);
+
+		harness_set_input_pad(0);
+		press(KEY_DOWN, 10);
+		press(KEY_UP, 10);
+		frame(10);
+		dump("prompts-8-keyboard");
+		unsigned long kbd = harness_fb_hash(660, 720);
+		harness_set_input_pad(1);
+
+		check(snes != psx,     "a Nintendo pad is not given PlayStation shapes");
+		check(xbox != snes,    "an Xbox pad is not given a Nintendo pad's colours");
+		check(xbox != psx,     "an Xbox pad is not given PlayStation shapes");
+		check(generic != snes, "an unrecognised pad is not guessed to be a Nintendo one");
+		check(generic != xbox, "an unrecognised pad is not guessed to be an Xbox one");
+		check(kbd != psx && kbd != snes && kbd != xbox && kbd != generic,
+			"a keyboard gets named keys rather than any pad's buttons");
+
+		/*
 		  And at 240p, which is the size that matters: the legend draws each button at
 		  its native twelve pixels there, one framebuffer pixel per glyph pixel, so what
 		  reaches the TV is exactly the grid in chome_btn12.h.
 		*/
+		// Named rather than inherited from the block above, which leaves an Xbox pad in hand.
+		harness_set_pad_name("MiSTer SNAC Pad 1");
 		harness_set_fb(320, 240);
 		gfx_shutdown();
 		theme_update(320, 240, 3);
@@ -2712,14 +3382,22 @@ int main()
 		frame(12);
 		dump("prompts-4-psx-240p");
 
-		// The same 240p legend with a pad that has letters on it, which is the other half
-		// of the pair: lettered buttons drawn the same way, in a Super Famicom's colours.
-		harness_set_pad_name("Generic USB Gamepad");
+		// The same 240p legend on each lettered pad, which is the other half of the pair:
+		// lettered buttons drawn the same way, in a Super Famicom's colours and then an
+		// Xbox's. Two dumps rather than one because the difference is only colour, and
+		// colour at 240p on a CRT is the thing that has to be judged by eye.
+		harness_set_pad_name("SNES Controller");
 		press(KEY_DOWN, 10);
 		press(KEY_UP, 10);
 		frame(12);
 		dump("prompts-5-letters-240p");
 		check(harness_fb_hash(0, 240) != 0, "the lettered 240p legend drew something");
+
+		harness_set_pad_name("Xbox Wireless Controller");
+		press(KEY_DOWN, 10);
+		press(KEY_UP, 10);
+		frame(12);
+		dump("prompts-9-xbox-240p");
 
 		harness_set_fb(1280, 720);
 		gfx_shutdown();
@@ -2750,6 +3428,52 @@ int main()
 		check(harness_fb_hash(660, 720) != before, "a remapped pad is described as remapped");
 
 		harness_swap_pad_faces();
+
+		/*
+		  The same again on a lettered pad: a prompt follows the pad's own map there too, so
+		  moving which code SYS_BTN_A is bound to has to move the letter with it.
+		*/
+		harness_set_pad_name("Microsoft X-Box 360 pad");
+		press(KEY_DOWN, 10);
+		press(KEY_UP, 10);
+		frame(10);
+		unsigned long xbox_before = harness_fb_hash(660, 720);
+		unsigned long xbox_east = legend_shape(660, 720);
+		harness_swap_pad_faces();
+		press(KEY_DOWN, 10);
+		press(KEY_UP, 10);
+		frame(10);
+		dump("prompts-10-xbox-remapped");
+		check(harness_fb_hash(660, 720) != xbox_before,
+			"a lettered prompt follows the pad's own button map");
+
+		/*
+		  And here is the Xbox layout itself, rather than just its colours.
+
+		  A code is read as a position on the pad and then through that layout's diamond, so
+		  the *east* button - which is what MiSTer's default map confirms with - is B on an
+		  Xbox pad and A on a Nintendo one. That difference is a different letter, not a
+		  different colour, and harness_fb_hash() cannot tell those apart; legend_shape()
+		  ignores colour, so these two checks are about the diamond and nothing else.
+
+		  Read as the code's legacy letter name instead - the reading this replaced - both
+		  pads would draw B on east, so the first check would pass wrongly by drawing the
+		  Xbox letter on a Nintendo pad, and the second would fail.
+		*/
+		unsigned long xbox_south = legend_shape(660, 720);   // A/B swapped: now the south button
+		harness_swap_pad_faces();
+
+		harness_set_pad_name("Nintendo Switch Pro Controller");
+		press(KEY_DOWN, 10);
+		press(KEY_UP, 10);
+		frame(10);
+		unsigned long snes_east = legend_shape(660, 720);
+
+		check(snes_east != xbox_east,
+			"the east button is a different letter on a Nintendo pad than on an Xbox one");
+		check(snes_east == xbox_south,
+			"and Nintendo's east letter is the one Xbox prints on south - the diamond is swapped");
+
 		harness_set_pad_name("Generic USB Gamepad");
 		press(KEY_ESC, 10);
 		frame(6);
