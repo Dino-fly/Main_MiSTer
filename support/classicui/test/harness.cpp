@@ -4857,6 +4857,33 @@ int main()
 		  The trap in matching that first name loosely: this one contains it and is an
 		  Xbox pad. It is caught earlier, and this is here so it stays caught.
 		*/
+		/*
+		  The identity, for the pads no name pattern will ever reach. Each of these three
+		  makers puts one lettering on everything it ships, so the vendor id decides it
+		  outright - and the name given here is deliberately useless, because that is the
+		  case this exists for.
+		*/
+		harness_set_pad_name("Controller");
+		harness_set_pad_vidpid(0x054c0ce6);            // Sony DualSense
+		press(KEY_DOWN, 10);
+		press(KEY_UP, 10);
+		frame(10);
+		check(harness_fb_hash(660, 720) == psx, "a Sony vendor id means PlayStation prompts");
+
+		harness_set_pad_vidpid(0x057e2009);            // Nintendo Switch Pro
+		press(KEY_DOWN, 10);
+		press(KEY_UP, 10);
+		frame(10);
+		check(harness_fb_hash(660, 720) == snes, "a Nintendo one means Nintendo prompts");
+
+		harness_set_pad_vidpid(0x045e02ea);            // Microsoft Xbox One S
+		press(KEY_DOWN, 10);
+		press(KEY_UP, 10);
+		frame(10);
+		check(harness_fb_hash(660, 720) == xbox, "and a Microsoft one means Xbox prompts");
+
+		harness_set_pad_vidpid(0);                     // back to deciding by name
+
 		harness_set_pad_name("Xbox Wireless Controller");
 		press(KEY_DOWN, 10);
 		press(KEY_UP, 10);

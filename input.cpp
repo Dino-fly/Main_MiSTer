@@ -2193,6 +2193,17 @@ const char *input_menu_key_devname()
 }
 
 /*
+  The same device's USB identity, packed vid<<16|pid, or 0 when there is no device.
+  A front-end choosing button pictures wants this before the name: the maker is in
+  the identity even on the Bluetooth pads whose names carry no maker at all.
+*/
+uint32_t input_menu_key_vidpid()
+{
+	if (menu_key_dev < 0 || menu_key_dev >= NUMDEV) return 0;
+	return ((uint32_t)input[menu_key_dev].vid << 16) | input[menu_key_dev].pid;
+}
+
+/*
   Which physical button that device has mapped to one of the SYS_BTN_* menu buttons.
   A front-end labelling its prompts needs this rather than a convention: the mapping
   is the user's, and a pad they have remapped must still be described correctly.
