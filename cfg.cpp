@@ -110,6 +110,7 @@ static const ini_var_t ini_vars[] =
 	{ "WAITMOUNT", (void*)(&(cfg.waitmount)), STRING, 0, sizeof(cfg.waitmount) - 1 },
 	{ "RUMBLE", (void *)(&(cfg.rumble)), UINT8, 0, 1 },
 	{ "SNAC_PAD", (void *)(&(cfg.snac_pad)), UINT8, 0, 2 },
+	{ "SNAC_PSX", (void *)(&(cfg.snac_psx)), UINT8, 0, 1 },
 	{ "WHEEL_FORCE", (void*)(&(cfg.wheel_force)), UINT8, 0, 100 },
 	{ "WHEEL_RANGE", (void*)(&(cfg.wheel_range)), UINT16, 0, 1000 },
 	{ "HDMI_GAME_MODE", (void *)(&(cfg.hdmi_game_mode)), UINT8, 0, 1 },
