@@ -9,7 +9,30 @@ works, and the classic menu is one deliberate choice away on **Options ▸ Advan
 Settings**.
 
 All the pictures below are rendered by the test harness from the real UI code, so
-they are exactly what the code draws.
+they are exactly what the code draws. The section at the end is different: those are
+photographs of the thing running, taken off a real MiSTer.
+
+---
+
+## On a real machine
+
+Captured from a DE10-Nano over its analog output at 320x240 - which is why they are
+small and why the Display screen is missing from them. See
+[Systems that cannot save](#systems-that-cannot-save) and the note on 240p below.
+
+| | |
+|---|---|
+| ![Shelf](img/device/shelf.png) | ![Shelf](img/device/shelf-zelda.png) |
+| The shelf, with cover art off the card | The game that is running, picked out |
+| ![Systems](img/device/systems.png) | ![Saves](img/device/saves.png) |
+| Browsing by system | Suspend points, each with the moment it holds |
+| ![Options](img/device/options.png) | ![Controllers](img/device/controllers.png) |
+| Options | Every controller the machine can see |
+| ![Controller test](img/device/controller-test.png) | ![Still playing](img/device/still-playing.png) |
+| Testing a pad | A core that cannot pause says so |
+
+The Display screen is deliberately absent at 240p: the preview tiles would come out
+about 66px wide, which is too small to judge a filter by. It is there on HDMI.
 
 ---
 
