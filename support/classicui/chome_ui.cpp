@@ -3090,7 +3090,15 @@ static void back()
 	{
 	case SCR_HOME:
 		if (nav_pop()) break;
-		if (ig_active) ig_close(1);             // nothing to go back to but the game
+
+		/*
+		  Top of the shelf: B is a navigation key, not a way out. What it saves is the
+		  walk left to Favourites and Systems, which sit at the head of a row of
+		  hundreds of games - so it jumps to the leftmost entry, and deliberately not to
+		  the menu bar. In a game core it used to close the menu from here; going back to
+		  the game is the menu button's job now, so that no longer competes with this.
+		*/
+		if (sel > 0) { sel = 0; slot_idx = 0; mark_dirty(); }
 		else nudge();
 		break;
 
