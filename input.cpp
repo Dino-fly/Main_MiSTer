@@ -2299,35 +2299,6 @@ static void joy_apply_deadzone(int* x, int* y, const devInput* dev, const int st
 
 static bool osd_autofire_consumed[NUMPLAYERS] = {};
 
-/*
-  A PSX pad on SNAC has no menu button, so snacpad.cpp makes one: it synthesises
-  BTN_MODE - the code the default menu map opens the OSD with - out of Select+Start,
-  and emits the two real buttons alongside it. What arrives here is therefore a held
-  two-button chord followed by the OSD button, which is exactly the gesture that
-  toggles autofire, so Select+Start turned autofire on for Start, consumed the OSD
-  press, and the menu never opened.
-
-  Select and Start are part of the menu gesture on that pad, so they must not be
-  remembered as an autofire chord - the same reason the call site already excludes the
-  OSD combo's own two codes. Only while BTN_MODE is still what opens the menu, though:
-  remap the OSD combo on this pad and that exclusion covers whatever it was remapped
-  to, and nothing here should second-guess it.
-
-  What is given up is autofire on Select and Start, and only on a SNAC pad.
-  cfg.disable_autofire is deliberately not consulted - that is the global off switch,
-  and this is about one pad's menu button, not about autofire in general.
-*/
-static int is_snac_menu_chord(int dev, uint16_t code)
-{
-	if (code != BTN_SELECT && code != BTN_START) return 0;
-	if (input[dev].mmap[SYS_BTN_OSD_KTGL + 1] != BTN_MODE
-		&& input[dev].mmap[SYS_BTN_OSD_KTGL + 2] != BTN_MODE) return 0;
-
-	// The pad is a uinput device snacpad.cpp names, not a USB device with a vid/pid
-	// of its own - the name is what identifies it. Same match as pad_is_psx().
-	return strcasestr(input[dev].name, "SNAC") ? 1 : 0;
-}
-
 // returns true if autofire was toggled which also means input was consumed.
 static bool handle_autofire_toggle(int num, uint32_t mask, uint32_t code, char press, int bnum, int dont_save)
 {
@@ -3923,14 +3894,10 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 						input[dev].has_map = 1;
 					}
 
-					int no_autofire_chord = (ev->code == input[dev].mmap[SYS_BTN_OSD_KTGL + 1]
-						|| ev->code == input[dev].mmap[SYS_BTN_OSD_KTGL + 2]
-						|| is_snac_menu_chord(dev, ev->code));
-
 					for (uint i = 0; i < BTN_NUM; i++)
 					{
 						if (ev->code == (input[dev].map[i] & 0xFFFF) || ev->code == (input[dev].map[i] >> 16)) {
-							if (ev->value <= 1) joy_digital(input[dev].num, 1 << i, origcode, ev->value, i, no_autofire_chord);
+							if (ev->value <= 1) joy_digital(input[dev].num, 1 << i, origcode, ev->value, i, (ev->code == input[dev].mmap[SYS_BTN_OSD_KTGL + 1] || ev->code == input[dev].mmap[SYS_BTN_OSD_KTGL + 2]));
 						}
 					}
 
