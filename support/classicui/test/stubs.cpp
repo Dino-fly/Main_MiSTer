@@ -142,6 +142,14 @@ int FileLoad(const char *name, void *buf, int size)
 	return n;
 }
 
+/*
+  Which MiSTer.ini is in use. The real cfg_get_name() scans the card for MiSTer_*.ini
+  and offers them as alternates; nothing in the harness exercises that, and the
+  Best Settings screen only needs a name to hang off getRootDir().
+*/
+uint16_t altcfg(int) { return 0; }
+const char *cfg_get_name(uint8_t) { return "MiSTer.ini"; }
+
 /* ---------------------------------------------------- fake framebuffers --- */
 
 static int fb_supported = 1;
@@ -173,16 +181,28 @@ uint32_t *harness_fb_shown() { return fb[presented]; }
 */
 unsigned long harness_fb_hash(int y0, int y1)
 {
+	return harness_fb_hash_box(0, y0, fbw, y1);
+}
+
+/*
+  The same, bounded horizontally. A full-width band takes in the shelf either side of a
+  centred panel, and the shelf is not the subject when a panel is: a card finishing its
+  decode would read as the panel having changed.
+*/
+unsigned long harness_fb_hash_box(int x0, int y0, int x1, int y1)
+{
 	const uint32_t *p = fb[presented];
 	if (!p) return 0;
 
 	if (y0 < 0) y0 = 0;
 	if (y1 > fbh) y1 = fbh;
+	if (x0 < 0) x0 = 0;
+	if (x1 > fbw) x1 = fbw;
 
 	unsigned long h = 1469598103934665603UL;
 	for (int y = y0; y < y1; y++)
 	{
-		for (int x = 0; x < fbw; x++)
+		for (int x = x0; x < x1; x++)
 		{
 			h ^= p[(size_t)y * fbw + x];
 			h *= 1099511628211UL;
@@ -597,6 +617,45 @@ int input_pad_list(pad_info *out, int max)
 	int n = 0;
 	for (int i = 0; i < n_fake_pads && n < max; i++) out[n++] = fake_pads[i];
 	return n;
+}
+
+/*
+  What the real one reads off a live device. There is no device here, so the harness
+  writes the state a pad would be in and the tester is asked to draw it - which is the
+  only part of the tester that can be checked without a hand on a controller.
+*/
+static pad_state fake_state[8];
+static int fake_state_on[8];
+
+void harness_clear_pad_state()
+{
+	memset(fake_state, 0, sizeof(fake_state));
+	memset(fake_state_on, 0, sizeof(fake_state_on));
+}
+
+void harness_set_pad_state(int player, uint32_t held, const uint16_t *codes, int sticks, int lx, int ly)
+{
+	if (player < 1 || player > 8) return;
+
+	pad_state *st = &fake_state[player - 1];
+	memset(st, 0, sizeof(*st));
+	st->held = held;
+	st->sticks = sticks;
+	st->lx = lx;
+	st->ly = ly;
+	if (codes) for (int i = 0; i < PAD_STATE_BTNS; i++) st->code[i] = codes[i];
+
+	fake_state_on[player - 1] = 1;
+}
+
+int input_pad_state(int player, pad_state *out)
+{
+	if (!out) return 0;
+	memset(out, 0, sizeof(*out));
+	if (player < 1 || player > 8 || !fake_state_on[player - 1]) return 0;
+
+	*out = fake_state[player - 1];
+	return 1;
 }
 
 /*

@@ -14,6 +14,11 @@ const chome_profile *theme_get()
 	return &P;
 }
 
+void theme_invalidate()
+{
+	P.name = 0;
+}
+
 void theme_update(int w, int h, int force)
 {
 	static int last_force = -1;

@@ -80,6 +80,16 @@ text caret on the keyboard are drawn from rectangles here. They are gauges and
 controls whose *state* is the whole point - a four-level bar cannot be a fixed
 picture - not pictures of things.
 
+The two activity indicators in `chome_gfx.cpp` are there for the same reason. The
+busy ring (`gfx_spinner`) is eight squares on a circle with a bright head and a
+fading tail, and the progress track (`gfx_track`) is a row of boxes with a block
+sweeping across the one being worked on. Both are *animated by real state* - the step
+a `btctl` pairing has reached, the step the Wi-Fi join child has reported - and an
+icon set cannot supply either: an icon is a fixed drawing and the whole content of
+these is that they are not fixed. Neither is a picture of anything, and neither
+replaces one; the licensed Bluetooth rune and the signal bars are still what the two
+screens put in the middle of the ring.
+
 ## Why these two
 
 They are already flat single-colour silhouettes with their details cut out as

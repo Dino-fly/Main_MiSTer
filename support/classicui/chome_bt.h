@@ -86,6 +86,20 @@ int  bt_pair_state();
 int  bt_pair_done();                // how many have paired since it started
 
 /*
+  How far along the current controller is, 0..BTP_STEPS, for the progress track on the
+  pairing screen. The five states above say what kind of thing is happening; this says
+  how much of it is behind us, which is the question somebody holding two buttons down
+  is actually asking.
+
+  It is a reading of the same btctl lines the state machine already parses, not a
+  timer: a pairing that stalls stops advancing, which is the whole point of showing it.
+  A failure leaves the step where it got to, so the screen can say how far it got.
+*/
+#define BTP_STEPS 4                 // looking -> found -> pairing -> connecting -> ready
+int  bt_pair_step();
+const char *bt_pair_step_name(int step);
+
+/*
   The controller the conversation is about, and one line of plain language about it.
   Both are empty until something is found.
 */
@@ -134,5 +148,15 @@ void bt_ingest_paired(const char *text);
 */
 int bt_ingest_progress(const char *line);
 void bt_progress_reset();
+
+/*
+  Answers bt_present() with `on` instead of asking sysfs; -1 gives the real answer back.
+
+  The one seam here that is not a parser. bt_present() stats a directory under /sys,
+  which a container cannot conjure up, and the parts of the Controllers screen that only
+  exist when there is a radio - the entry that adds a controller, chief among them - are
+  otherwise unreachable from a harness.
+*/
+void bt_force_present(int on);
 
 #endif

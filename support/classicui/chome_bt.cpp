@@ -25,8 +25,14 @@
   socket. The adapter's presence is a directory in sysfs, which is a stat - and this
   is asked on every frame the screen is open.
 */
+static int present_forced = -1;
+
+void bt_force_present(int on) { present_forced = on; }
+
 int bt_present()
 {
+	if (present_forced >= 0) return present_forced;
+
 	struct stat st;
 	return (!stat(ADAPTER, &st) && S_ISDIR(st.st_mode)) ? 1 : 0;
 }
@@ -259,6 +265,21 @@ static char pg_mac[18] = {};
 static char pg_detail[96] = {};
 static int  pg_done = 0;
 
+/*
+  How far the controller currently being worked on has got, for the progress track.
+
+  Only ever moves forward within one controller, and is put back to nothing when btctl
+  goes back to looking - a skipped phone, or the next pad in the loop. Without that
+  monotonic rule the track would jump backwards on "Searching...", which btctl emits
+  in the middle of a pairing it is still working on.
+*/
+static int pg_step = 0;
+
+static void pg_at(int step)
+{
+	if (step > pg_step) pg_step = step;
+}
+
 // Checking that a pairing turned into a working link, and nudging it if it did not.
 static unsigned long pg_verify = 0;
 static int pg_tries = 0;
@@ -270,6 +291,7 @@ void bt_progress_reset()
 	pg_mac[0] = 0;
 	pg_detail[0] = 0;
 	pg_done = 0;
+	pg_step = 0;
 	pg_verify = 0;
 	pg_tries = 0;
 }
@@ -294,6 +316,7 @@ int bt_ingest_progress(const char *line)
 		while (*v == ' ') v++;
 		snprintf(pg_name, sizeof(pg_name), "%s", v);
 		pg_state = BTP_WORKING;
+		pg_at(1);
 		pg_say("Found it");
 		return pg_state;
 	}
@@ -318,6 +341,7 @@ int bt_ingest_progress(const char *line)
 		pg_state = BTP_LOOKING;
 		pg_say("That is not a controller - still looking");
 		pg_name[0] = 0;
+		pg_step = 0;
 		return pg_state;
 	}
 
@@ -329,15 +353,16 @@ int bt_ingest_progress(const char *line)
 		  stall, and it is rare enough not to be worth a keypad.
 		*/
 		pg_state = BTP_PIN;
+		pg_at(2);
 		pg_say("This controller wants a code - trying 0000");
 		return pg_state;
 	}
 
-	if (!strcmp(t, "Removing existing pair...")) { pg_state = BTP_WORKING; pg_say("Forgetting the old pairing"); return pg_state; }
-	if (!strcmp(t, "Searching..."))              { pg_state = BTP_WORKING; pg_say("Looking again");             return pg_state; }
-	if (!strcmp(t, "Pairing..."))                { pg_state = BTP_WORKING; pg_say("Pairing");                   return pg_state; }
-	if (!strcmp(t, "Trusting..."))               { pg_state = BTP_WORKING; pg_say("Almost there");              return pg_state; }
-	if (!strcmp(t, "Connecting..."))             { pg_state = BTP_WORKING; pg_say("Connecting");                return pg_state; }
+	if (!strcmp(t, "Removing existing pair...")) { pg_state = BTP_WORKING; pg_at(2); pg_say("Forgetting the old pairing"); return pg_state; }
+	if (!strcmp(t, "Searching..."))              { pg_state = BTP_WORKING;           pg_say("Looking again");             return pg_state; }
+	if (!strcmp(t, "Pairing..."))                { pg_state = BTP_WORKING; pg_at(2); pg_say("Pairing");                   return pg_state; }
+	if (!strcmp(t, "Trusting..."))               { pg_state = BTP_WORKING; pg_at(3); pg_say("Almost there");              return pg_state; }
+	if (!strcmp(t, "Connecting..."))             { pg_state = BTP_WORKING; pg_at(3); pg_say("Connecting");                return pg_state; }
 
 	if (!strcmp(t, "Done."))
 	{
@@ -350,6 +375,7 @@ int bt_ingest_progress(const char *line)
 		*/
 		pg_state = BTP_OK;
 		pg_done++;
+		pg_at(BTP_STEPS);
 		pg_say("Paired - checking it is awake");
 		pg_verify = GetTimer(1500);
 		pg_tries = 0;
@@ -381,6 +407,21 @@ void bt_pair_ack()
 
 int bt_pair_state() { return pg_state; }
 int bt_pair_done() { return pg_done; }
+int bt_pair_step() { return pg_step; }
+
+const char *bt_pair_step_name(int step)
+{
+	// Named for what the player is waiting for, not for what btctl calls it: nobody
+	// outside BlueZ knows what trusting a device means.
+	switch (step)
+	{
+	case 0: return "Looking";
+	case 1: return "Found it";
+	case 2: return "Pairing";
+	case 3: return "Connecting";
+	}
+	return "Ready";
+}
 const char *bt_pair_name() { return pg_name; }
 const char *bt_pair_detail() { return pg_detail; }
 

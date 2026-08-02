@@ -20,6 +20,8 @@
 #include "chome_osk.h"
 #include "chome_net.h"
 #include "chome_bt.h"
+#include "chome_ini.h"
+#include "chome_opt.h"
 
 #include "../../cfg.h"
 #include "../../user_io.h"
@@ -77,6 +79,48 @@ static int pwr_row = 0;                      // Restart / Shut Down
 static int pwr_arm = -1;                     // ...and which one is one press from happening
 static unsigned long pwr_until = 0;
 
+/*
+  Best Settings: the MiSTer.ini keys this front-end assumes, and what writing
+  them would change. Read from the card when the screen that shows it is opened -
+  never per frame, because the answer only moves when we move it.
+*/
+static ini_change ini_list[INI_WANT_MAX];
+static int ini_n = 0;                        // settings that disagree with the file
+static int ini_armed = 0;                    // one press from rewriting the file
+static unsigned long ini_until = 0;
+static int ini_wrote = -1;                   // -1 idle, >= 0 how many were written, < -1 failed
+static int ini_needs_restart = 0;            // ...and whether that is enough on its own
+
+// Re-reads the ini. Cheap enough to do on every entry to a screen that shows it, and
+// nowhere near cheap enough to do per frame.
+static void ini_refresh()
+{
+	ini_n = ini_plan(ini_path(), ini_list, INI_WANT_MAX);
+	ini_armed = 0;
+	ini_wrote = -1;
+}
+
+/*
+  More Settings: the curated slice of MiSTer.ini a player is allowed to edit. The table
+  and the file handling are chome_opt.cpp's; what lives here is where the cursor is and
+  the two-press arming, the same as every other screen that writes something.
+
+  The view is rebuilt on entry rather than per frame - it depends on the video path,
+  which cannot change while a menu is up over it - and the row indices below index the
+  view, not the table, so a hidden option never has a row.
+*/
+static int set_view[OPT_MAX];
+static int set_nview = 0;
+static int set_row = 0;
+static int set_top = 0;                      // first row drawn, for a list that scrolls
+static int set_arm = 0;                      // one press from writing
+static unsigned long set_arm_until = 0;
+static int set_quit_arm = 0;                 // ...and one from throwing the edits away
+static unsigned long set_quit_until = 0;
+static int set_wrote = -1;                   // -1 nothing written yet, else how many
+static int set_failed = 0;
+static int set_odd = 0;                      // options not at their recommended value
+
 static int pads_row = 0;                     // which controller is picked
 static int pads_forget_arm = -1;             // ...and whether forgetting it is armed
 static unsigned long pads_forget_until = 0;
@@ -92,6 +136,7 @@ struct pad_row
 	int  player;                     // 0 when paired but not connected
 	int  kind;                       // PAD_*
 	int  connected;
+	int  is_add;                     // the "Add a Controller" entry, always last
 	char name[64];
 	char mac[24];                    // Bluetooth only
 };
@@ -99,6 +144,20 @@ struct pad_row
 static int pads_build(pad_row *out, int max);
 static int pads_sel(pad_row *out);
 static int pads_count();
+
+/*
+  The controller tester holds on to what *names* a pad, not to the row it was opened
+  from. A pad that was asleep when the player picked it wakes up when they press a
+  button on it - which is the whole point of the screen - and is a different row by
+  then, with a player number it did not have. So the row is looked up again every
+  frame and only the identity survives.
+*/
+static char padtest_name[64];
+static char padtest_mac[24];
+static int  padtest_kind = PAD_WIRED;
+static int  padtest_back_arm = 0;               // B once lights B; B again leaves
+static unsigned long padtest_back_until = 0;
+static unsigned padtest_seen = 0;               // signature of the live state on screen
 static int wifi_pick_secure = 0;
 static unsigned wifi_seen = 0;               // signature of the network state on screen
 
@@ -146,9 +205,12 @@ static void ref_shot_path(const char *sysid, const char *rompath, char *out, int
 #define SCR_WIFI    10
 #define SCR_PADS    11
 #define SCR_POWER   12
+#define SCR_INI     13
+#define SCR_PADTEST 14
+#define SCR_SET     15
 
 // Rows on the Options panel. Several places step over them.
-#define OPT_ROWS    7
+#define OPT_ROWS    9
 
 /*
   Savestate slots.
@@ -334,6 +396,10 @@ static int opt_row = 0;
 static int look_row = 0;
 
 static double bar_y = 0, strip_y = 0, curtain = 0;
+
+// The last position an activity indicator was painted at, so a busy screen repaints
+// when the ring moves and not once per frame. See ui_busy().
+static unsigned long anim_seen = 0;
 static unsigned long launch_at = 0;
 static unsigned long nudge_until = 0;
 static unsigned long last_ms = 0;
@@ -1102,11 +1168,13 @@ static const char *btn(int which)
 #define PAD_XBOX  3
 #define PAD_PLAIN 4
 
-static int pad_layout()
+/*
+  By name, so the controller tester can ask about the pad it is showing rather than the
+  one the last menu key came from - on that screen they are usually the same pad and the
+  one time they are not is the one time it matters.
+*/
+static int pad_layout_of(const char *n)
 {
-	if (!using_pad) return PAD_KBD;
-
-	const char *n = input_menu_key_devname();
 	if (!n || !*n) return PAD_PLAIN;
 
 	// A SNAC pad is a uinput device snacpad.cpp names; a USB Sony pad says so too,
@@ -1129,6 +1197,12 @@ static int pad_layout()
 		|| strcasestr(n, "Switch Pro")) return PAD_SNES;
 
 	return PAD_PLAIN;
+}
+
+static int pad_layout()
+{
+	if (!using_pad) return PAD_KBD;
+	return pad_layout_of(input_menu_key_devname());
 }
 
 // Indexed by LBL_A..LBL_Y, which is also the letter order.
@@ -1177,18 +1251,20 @@ static uint32_t letter_col(int layout, int letter)
 
 struct prompt { const char *text; const char *pic; uint32_t col; };
 
-static prompt btn_prompt(int which)
+// Which menu button each LBL_* is, in LBL order. The tester walks it too.
+static const int lbl_sysbtn[LBL_COUNT] =
+	{ SYS_BTN_A, SYS_BTN_B, SYS_BTN_X, SYS_BTN_Y, SYS_BTN_SELECT };
+
+/*
+  Split from btn_prompt() so the controller tester can ask the same question about a
+  button code it read from a different pad. Everything about which shape goes where is
+  in here; btn_prompt() only supplies the pad.
+*/
+static prompt prompt_for_code(int layout, int which, uint16_t code)
 {
 	prompt out = { btn(which), 0, 0 };   // no shape and no colour: a named key, not a button
 	if (which < 0 || which >= LBL_COUNT) return out;
-
-	int layout = pad_layout();
 	if (layout == PAD_KBD) return out;
-
-	static const int sysbtn[LBL_COUNT] =
-		{ SYS_BTN_A, SYS_BTN_B, SYS_BTN_X, SYS_BTN_Y, SYS_BTN_SELECT };
-
-	uint16_t code = input_menu_key_btn(sysbtn[which]);
 
 	if (layout == PAD_PSX)
 	{
@@ -1213,6 +1289,12 @@ static prompt btn_prompt(int which)
 		out.col = letter_col(layout, letter);
 	}
 	return out;
+}
+
+static prompt btn_prompt(int which)
+{
+	if (which < 0 || which >= LBL_COUNT) return prompt_for_code(PAD_KBD, which, 0);
+	return prompt_for_code(pad_layout(), which, input_menu_key_btn(lbl_sysbtn[which]));
 }
 
 // dim marks a prompt that is on screen but not available - a save already registered and
@@ -1458,22 +1540,43 @@ static int build_legend(legend_pair *out, int max)
 			if (n < max) { out[n++] = lp(LBL_B, "Done", "Done"); }
 			break;
 		}
-		// Same condition as the panel: a list on screen means there is an adapter.
-		if ((bt_present() || bt_count()) && n < max) { out[n++] = lp(LBL_A, "Add a Controller", "Add"); }
 		{
 			/*
-			  Both of these are things you can only do to a wireless pad. A wired one is
-			  listed so the player can see it is there, and there is nothing to offer for
-			  it - saying so by offering nothing is the point.
+			  A now says what the row under the cursor does, because adding a controller is
+			  a row of its own rather than a shortcut. Everything else here is a thing you
+			  can only do to a wireless pad; a wired one is listed so the player can see it
+			  is there, and offering nothing for it is how the screen says so.
 			*/
 			pad_row sel;
-			if (pads_sel(&sel) && sel.kind == PAD_BT)
+			if (pads_sel(&sel))
 			{
-				if (!sel.connected && n < max) { out[n++] = lp(LBL_Y, "Wake It Up", "Wake"); }
-				if (n < max) { out[n++] = lp(LBL_X, "Forget", "Forget"); }
+				if (sel.is_add)
+				{
+					if (n < max) { out[n++] = lp(LBL_A, "Add a Controller", "Add"); }
+				}
+				else
+				{
+					if (n < max) { out[n++] = lp(LBL_A, "Test It", "Test"); }
+
+					if (sel.kind == PAD_BT)
+					{
+						if (!sel.connected && n < max) { out[n++] = lp(LBL_Y, "Wake It Up", "Wake"); }
+						if (n < max) { out[n++] = lp(LBL_X, "Forget", "Forget"); }
+					}
+				}
 			}
 		}
 		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
+		break;
+
+	case SCR_PADTEST:
+		/*
+		  Nothing but the way out: every button on the pad is the thing being tested, so
+		  none of them may also mean something. B does not either until it has been
+		  pressed once and seen to light up - hence "twice", and hence the panel's own
+		  footer saying it a second time, since that is where the player is looking.
+		*/
+		if (n < max) { out[n++] = lp(LBL_B, "Back Twice", "Back"); }
 		break;
 	case SCR_DISPLAY:
 		if (n < max) { out[n++] = { CH_LEFT CH_RIGHT, "dpad_lr", "Choose", "Sel", 0, COL_WHITE }; }
@@ -1483,6 +1586,25 @@ static int build_legend(legend_pair *out, int max)
 	case SCR_OPTIONS:
 		if (n < max) { out[n++] = { CH_LEFT CH_RIGHT, "dpad_lr", "Change", "Chg", 0, COL_WHITE }; }
 		if (n < max) { out[n++] = lp(LBL_A, "Select", "OK"); }
+		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
+		break;
+	case SCR_SET:
+		/*
+		  The Save row is the one row where A means something, so it is the only row that
+		  offers it. Everywhere else the pair that matters is left/right to change and X
+		  to put the value back - and at 240p only the first three survive, which is why
+		  those three are first.
+		*/
+		if (set_row >= set_nview)
+		{
+			// ...and only while there is something to save, or the row would keep
+			// offering a press that does nothing but shake the panel.
+			if (opt_dirty() && n < max) { out[n++] = lp(LBL_A, "Save", "Save"); }
+			if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
+			break;
+		}
+		if (n < max) { out[n++] = { CH_LEFT CH_RIGHT, "dpad_lr", "Change", "Chg", 0, COL_WHITE }; }
+		if (n < max) { out[n++] = lp(LBL_X, "Usual Value", "Usual"); }
 		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
 		break;
 	case SCR_ABOUT:
@@ -1672,10 +1794,21 @@ static int wrap_text(const char *src, int cols, char out[4][64], int maxlines)
 		memcpy(out[n] + cur, st, wl);
 		out[n][cur + wl] = 0;
 	}
-	return n + 1;
+
+	// The break above leaves n at maxlines when the text did not fit, and returning
+	// n + 1 there told the caller about a line that was never written - which drew
+	// whatever was in the array. Text that overflows is cut, not garnished.
+	return (n < maxlines) ? n + 1 : maxlines;
 }
 
-static void draw_rows(const panel_box *b, const char *const *rows, const char *const *vals, int n, int idx)
+/*
+  vcol is per-row and optional: 0 there, or a null array, leaves a value in the colour
+  it would have had. It exists for the settings screen, which colours a value that is
+  not the recommended one - and that colour has to survive the row being selected, or
+  the one row the player is looking at would be the one that stopped saying so.
+*/
+static void draw_rows_c(const panel_box *b, const char *const *rows, const char *const *vals,
+	const uint32_t *vcol, int n, int idx)
 {
 	int rowh = 12 * b->s;
 	for (int i = 0; i < n; i++)
@@ -1697,10 +1830,224 @@ static void draw_rows(const panel_box *b, const char *const *rows, const char *c
 			snprintf(v, sizeof(v), "%s", vals[i]);
 			for (char *q = v; *q; q++) *q = (char)toupper((unsigned char)*q);
 			int vw = gfx_text_w(v, b->s);
-			gfx_text(v, b->x + b->w - 6 * b->s - vw, y, b->s, on ? COL_WHITE : COL_PANELLO, 0);
+			uint32_t col = (vcol && vcol[i]) ? vcol[i] : (on ? COL_WHITE : COL_PANELLO);
+			gfx_text(v, b->x + b->w - 6 * b->s - vw, y, b->s, col, 0);
 		}
 	}
 }
+
+static void draw_rows(const panel_box *b, const char *const *rows, const char *const *vals, int n, int idx)
+{
+	draw_rows_c(b, rows, vals, 0, n, idx);
+}
+
+/* ------------------------------------------------------- lists that wait -- */
+
+/*
+  The furniture the two screens where the player has to *wait* are built from: Wi-Fi
+  and Controllers. Both were a column of text rows, which is the right shape for a
+  settings list and the wrong one here - a row on these screens is a thing in the room
+  with a state, not a value.
+
+  Kept general rather than written twice, and general on purpose: the same treatment
+  is what the rest of Options wants, and a second copy of it would be a second set of
+  paddings to get out of step.
+*/
+
+// The animation clock. One place, so every indicator on screen turns together.
+static unsigned long anim_ms() { return GetTimer(0); }
+
+/*
+  Two lines and the air round them, in units of s. Wider than a settings row (12)
+  because the second line is the whole point: it is where "paired, not awake" and
+  "needs a password" go, which is what the old screens said in a column of symbols and
+  abbreviations.
+
+  Twenty-one and not twenty: the second line sits at 9 and is 8 tall, so a highlight
+  that stopped at 20 cut the bottom two rows of pixels off it - and the one row that
+  looked wrong was the row the player had selected.
+*/
+#define LIST_ROWH 21
+#define LIST_GUT  12                         // the icon column, in units of s
+
+static int chip_w(const char *text, int s)
+{
+	return gfx_text_w(text, s) + 6 * s;
+}
+
+/*
+  A state word in a filled box. The ink is chosen from how light the box is rather
+  than fixed: these boxes run from COL_DIM to COL_GREEN and either ink alone is
+  unreadable on half of them.
+*/
+static void draw_chip(int x, int y, int s, const char *text, uint32_t bg)
+{
+	int lum = (int)((((bg >> 16) & 0xff) * 77 + ((bg >> 8) & 0xff) * 151 + (bg & 0xff) * 28) >> 8);
+	gfx_fill(x, y - 2 * s, chip_w(text, s), 12 * s, bg);
+	gfx_text(text, x + 3 * s, y, s, (lum > 140) ? COL_INK : COL_WHITE, 0);
+}
+
+struct list_row
+{
+	const char *title;
+	const char *sub;                     // the second line, or 0 for one line
+	const char *chip;                    // one word about its state, or 0
+	uint32_t chip_col;
+	const char *icon;                    // pictogram name, or 0
+	int gut;                             // reserve the icon column even with no icon
+	int busy;                            // spin in the icon column: this row is working
+	uint32_t accent;                     // left stripe, or 0
+	uint32_t sel_col;                    // the highlight when selected; 0 means COL_BLUE
+	int rule;                            // a separator above this row
+	int rsvd;                            // pixels kept clear at the right for the caller
+};
+
+/*
+  Draws one row and returns the left edge of the reserved area, so a caller with its
+  own gauge to draw - the Wi-Fi list's padlock and signal bars - can put it there
+  without duplicating the arithmetic.
+*/
+static int draw_listrow(const panel_box *b, int y, const list_row *r, int on, unsigned long ms)
+{
+	int s = b->s;
+	int x = b->x + 4 * s;
+	int w = b->w - 8 * s;
+	int h = LIST_ROWH * s - s;               // covers both lines; one pixel of gap below
+
+	if (r->rule) gfx_fill(x, y - 5 * s, w, s, COL_PANELLO);
+
+	// The highlight is the caller's, so a row that is armed for something destructive
+	// can be red under the cursor without a second code path drawing it.
+	if (on) gfx_fill(x, y - 2 * s, w, h, r->sel_col ? r->sel_col : COL_BLUE);
+
+	/*
+	  The stripe survives selection, which is why the state is a stripe and not the
+	  row colour: the one row the player is looking at must not be the one row that
+	  stops saying what it is.
+	*/
+	if (r->accent) gfx_fill(x, y - 2 * s, 2 * s, h, r->accent);
+
+	uint32_t ink = on ? COL_WHITE : COL_INK;
+	uint32_t dim = on ? COL_PANELHI : COL_DIM;
+
+	int tx = x + 5 * s;
+	if (r->icon || r->busy || r->gut)
+	{
+		int box = 8 * s;
+		int cy = y - 2 * s + h / 2;
+
+		if (r->busy) gfx_spinner(tx + box / 2, cy, box / 2 + s, s, ms, on ? COL_WHITE : COL_BLUE,
+			on ? COL_BLUE : COL_PANELLO);
+		else if (r->icon) picto(r->icon, tx, cy - box / 2, box, on ? COL_WHITE : COL_PANELLO);
+
+		tx += LIST_GUT * s;
+	}
+
+	int rx = x + w - 4 * s - r->rsvd;
+	if (r->chip)
+	{
+		int cw = chip_w(r->chip, s);
+		draw_chip(rx - cw, y + (r->sub ? s : 0), s, r->chip, r->chip_col);
+		rx -= cw + 4 * s;
+	}
+
+	gfx_text(gfx_clip(r->title, s, rx - tx), tx, y, s, ink, 0);
+	if (r->sub) gfx_text(gfx_clip(r->sub, s, rx - tx), tx, y + 9 * s, s, dim, 0);
+
+	return x + w - 4 * s - r->rsvd;
+}
+
+// A heading over a group of rows: the word, then a rule out to the edge. Costs one
+// line, which is what makes grouping affordable on a panel sized for six rows.
+#define LIST_SECH 10
+
+static void draw_section(const panel_box *b, int y, const char *text)
+{
+	int s = b->s;
+
+	char up[48];
+	snprintf(up, sizeof(up), "%s", text);
+	for (char *q = up; *q; q++) *q = (char)toupper((unsigned char)*q);
+
+	// The word darker than its rule: at COL_PANELLO on COL_PANEL the heading was fainter
+	// than the second line of the rows under it, which inverts what leads what.
+	gfx_text(up, b->x + 6 * s, y, s, COL_DIM, 0);
+
+	int tw = 6 * s + gfx_text_w(up, s) + 4 * s;
+	if (tw < b->w - 8 * s) gfx_fill(b->x + tw, y + 4 * s, b->w - tw - 6 * s, s, COL_PANELLO);
+}
+
+/*
+  The panel a player is looking at while something is happening to their machine.
+
+  Three things, in the order the questions arrive: what is going on (the mark and the
+  headline), how far along it is (the track), and what they should do about it (the
+  body). The mark orbits while - and only while - the work is really running, which is
+  the difference between a screen that is thinking and a screen that has hung. Both
+  callers pass a step that came out of the tool's own output, so the track stopping is
+  the job stopping.
+*/
+#define PMARK_BT   0
+#define PMARK_WIFI 1
+
+static void draw_bars(int x, int y, int s, int dbm, uint32_t on, uint32_t off);
+
+static void draw_progress(const panel_box *b, int mark, const char *head, const char *body,
+	int nseg, int step, const char *stepname, int busy, uint32_t tone, unsigned long ms)
+{
+	int s = b->s;
+	int cx = b->x + b->w / 2;
+	int box = 16 * s;
+
+	char lines[4][64];
+	int nl = wrap_text(body, (b->w - 16 * s) / (8 * s), lines, 3);
+
+	/*
+	  Centred in what it was given rather than starting at the top. The panel is sized
+	  for the longest message either caller can produce - a panel that resized as the
+	  wording changed under it would be worse than the space it saved - so a short one
+	  leaves room over, and room split above and below reads as a centred dialog where
+	  the same room all at the bottom reads as a panel that has lost something.
+
+	  Never above 10*s from the top: the ring is drawn wider than the mark it goes
+	  round, and its top would otherwise cross the panel header.
+	*/
+	int used = 10 * s + box + 8 * s + 13 * s + 8 * s + 14 * s + nl * 10 * s;
+	int y = b->y + ((b->h - 12 * s) - used) / 2;    // 12*s is the footer both callers keep
+	if (y < b->y + 10 * s) y = b->y + 10 * s;
+
+	/*
+	  Wi-Fi has no pictogram - the set has none and the list's own signal bars are the
+	  mark this screen already uses - so it is drawn at full strength, at the size the
+	  Bluetooth rune occupies, and means "a wireless network" rather than "this much
+	  signal". Nothing here is a new drawing: see ICONS.md on why the bars are not one.
+	*/
+	if (mark == PMARK_WIFI) draw_bars(cx - 12 * s, y, 2 * s, 0, tone, tone);
+	else picto("bluetooth", cx - box / 2, y, box, tone);
+
+	if (busy) gfx_spinner(cx, y + box / 2, box * 3 / 4 + 2 * s, 2 * s, ms, tone, COL_PANELLO);
+
+	y += box + 8 * s;
+	gfx_text_c(gfx_clip(head, s, b->w - 12 * s), cx, y, s, tone, 0);
+
+	y += 13 * s;
+	gfx_track(b->x + 12 * s, y, b->w - 24 * s, 4 * s, nseg, step, busy, ms,
+		COL_GREEN, COL_PANELLO, COL_WHITE);
+
+	y += 8 * s;
+	if (stepname) gfx_text_c(stepname, cx, y, s, COL_INK, 0);
+
+	y += 14 * s;
+	// COL_DIM, the same weight the second line of a list row has, and for the same
+	// reason: it is the explanation under the thing, not the thing. It also reads on
+	// this panel, which COL_PANELHI - light grey on light grey - barely did.
+	for (int i = 0; i < nl; i++) gfx_text_c(lines[i], cx, y + i * 10 * s, s, COL_DIM, 0);
+}
+
+// What draw_progress needs below the panel header: the sum of the steps above, with
+// room for three wrapped lines of body. Kept as one number because both callers size
+// their panel from it and the two must not drift apart.
+#define PROGRESS_H(s) (100 * (s))
 
 static void draw_suspend(const chome_profile *p)
 {
@@ -1957,8 +2304,8 @@ static void draw_options_panel(const chome_profile *p)
 {
 	panel_box b = draw_panel(p, "Options");
 
-	static const char *rows_menu[] = { "Cover Art", "Rescan Library", "Reinstall Looks", "Menu Layout", "Controllers", "Wi-Fi", "Advanced Settings" };
-	static const char *rows_game[] = { "Cover Art", "Rescan Library", "Reinstall Looks", "Menu Layout", "Controllers", "Wi-Fi", "Close Game" };
+	static const char *rows_menu[] = { "Cover Art", "Rescan Library", "Reinstall Looks", "Menu Layout", "Controllers", "Wi-Fi", "Best Settings", "More Settings", "Advanced Settings" };
+	static const char *rows_game[] = { "Cover Art", "Rescan Library", "Reinstall Looks", "Menu Layout", "Controllers", "Wi-Fi", "Best Settings", "More Settings", "Close Game" };
 	const char *const *rows = ig_active ? rows_game : rows_menu;
 	char v1[32];
 	if (lib_scanning()) snprintf(v1, sizeof(v1), "%d...", lib_scan_progress());
@@ -1987,6 +2334,18 @@ static void draw_options_panel(const chome_profile *p)
 	else if (!bt_count()) snprintf(v3, sizeof(v3), "Set Up >");
 	else snprintf(v3, sizeof(v3), "%d Wireless", bt_count());
 
+	// And what the Best Settings row says: how many of them the ini disagrees
+	// with, so a player who has already run it is told there is nothing to do here.
+	char v4[32];
+	if (!ini_n) snprintf(v4, sizeof(v4), "All Set");
+	else snprintf(v4, sizeof(v4), "%d To Change >", ini_n);
+
+	// And what the More Settings row says: how many of the options it offers are away
+	// from their default - the same count the amber on that screen is made of.
+	char v5[32];
+	if (!set_odd) snprintf(v5, sizeof(v5), "All Default");
+	else snprintf(v5, sizeof(v5), "%d Changed >", set_odd);
+
 	const char *vals[] = {
 		cfg.classicui_artfetch ? "Fetch Missing" : "Local Only",
 		v1,
@@ -1994,6 +2353,8 @@ static void draw_options_panel(const chome_profile *p)
 		cfg.classicui_profile == 0 ? "Auto" : theme_get()->name,
 		v3,
 		v2,
+		v4,
+		v5,
 		ig_active ? (closing ? "Again To Confirm" : "Back To Menu") : "Classic Menu >"
 	};
 
@@ -2027,12 +2388,68 @@ static void draw_bars(int x, int y, int s, int dbm, uint32_t on, uint32_t off)
 	}
 }
 
-#define WIFI_VIS 6                           // rows on screen; the panel is sized for them
+/*
+  Five, not six: the rows carry two lines now, and a network's row says what it is -
+  "connected", "needs a password", "open" - instead of leaving that to a padlock the
+  player has to know the meaning of. The sixth row was worth less than the sentence.
+*/
+#define WIFI_VIS 5
+
+/*
+  The band across the top: where this machine stands, in the two facts anybody asks
+  for. It is a band and not a line of text because it is not one of the rows - it is
+  what the rows are for.
+*/
+static void draw_wifi_hero(const panel_box *b, unsigned long ms)
+{
+	int s = b->s;
+	int h = 24 * s;
+
+	gfx_fill(b->x, b->y, b->w, h, COL_PANELHI);
+	gfx_fill(b->x, b->y + h - s, b->w, s, COL_PANELLO);
+
+	const net_link *l = net_link_now();
+	int bx = b->x + 8 * s;
+	int tx = bx + 30 * s;                    // the bars are 22 wide; 26 left them touching
+
+	const char *head, *sub;
+	char buf[96];
+
+	if (l->up)
+	{
+		head = l->ssid;
+		if (l->ip[0]) { snprintf(buf, sizeof(buf), "%s", l->ip); sub = buf; }
+		else sub = "Getting an address";
+	}
+	else if (!net_present()) { head = "No Wi-Fi adapter"; sub = "Plug one into the USB port"; }
+	else if (net_scanning())  { head = "Looking for networks"; sub = "This takes a few seconds"; }
+	else { head = "Not connected"; sub = net_count() ? "Pick a network below" : "No networks found"; }
+
+	/*
+	  The bars show the link and only the link. Greyed out when there is not one, so the
+	  band reads at a glance from across the room without anybody parsing the words -
+	  which is the same job the bars do in the list.
+	*/
+	draw_bars(bx, b->y + 6 * s, 2 * s, l->up ? l->signal : -100,
+		l->up ? COL_GREEN : COL_PANELLO, COL_PANEL);
+
+	/*
+	  And the ring, only while a scan is really running. It is here rather than in the
+	  footer because this band is where the eye already is, and a scan that finishes
+	  changes the words right underneath it.
+	*/
+	if (net_scanning() && !l->up)
+		gfx_spinner(bx + 12 * s, b->y + 10 * s, 14 * s, 2 * s, ms, COL_BLUE, COL_PANEL);
+
+	gfx_text(gfx_clip(head, s, b->w - (tx - b->x) - 8 * s), tx, b->y + 4 * s, s, COL_INK, 0);
+	gfx_text(gfx_clip(sub, s, b->w - (tx - b->x) - 8 * s), tx, b->y + 14 * s, s, COL_DIM, 0);
+}
 
 static void draw_wifi(const chome_profile *p)
 {
 	int s = p->ts_ui;
-	int rowh = 14 * s;                       // a list aimed at with a pad, not a mouse
+	int rowh = LIST_ROWH * s;                // a list aimed at with a pad, not a mouse
+	unsigned long ms = anim_ms();
 
 	/*
 	  Sized for a fixed number of rows rather than for the screen or for however many
@@ -2042,37 +2459,32 @@ static void draw_wifi(const chome_profile *p)
 	int w = p->w - 2 * p->inset;
 	if (w > 44 * 8 * s) w = 44 * 8 * s;
 
-	int h = (10 * s + 6) + 16 * s + WIFI_VIS * rowh + 6 * s;
+	int hdr = 10 * s + 6;
+	int foot = 12 * s;
+
+	int js = net_join_state();
+
+	/*
+	  A join owns the whole panel, and the panel is sized for it rather than for the
+	  list underneath: a progress screen squeezed into a list's height had its body text
+	  running off the bottom at 240p.
+	*/
+	int h = (js != JOIN_IDLE) ? hdr + PROGRESS_H(s) + foot
+	                          : hdr + 24 * s + 6 * s + WIFI_VIS * rowh + foot + 6 * s;
 	if (h > p->h - 2 * p->safe_y) h = p->h - 2 * p->safe_y;
 
 	panel_box b = draw_panel_ex(p, w, h, "Wi-Fi");
 
-	const net_link *l = net_link_now();
-	char st[96];
-	if (l->up && l->ip[0]) snprintf(st, sizeof(st), "On %s   %s", l->ssid, l->ip);
-	else if (l->up) snprintf(st, sizeof(st), "On %s   getting an address", l->ssid);
-	else if (!net_present()) snprintf(st, sizeof(st), "No Wi-Fi adapter is plugged in");
-	else snprintf(st, sizeof(st), "Not connected");
-	gfx_text(gfx_clip(st, s, b.w - 12 * s), b.x + 6 * s, b.y + 3 * s, s, COL_INK, 0);
-	gfx_fill(b.x + 6 * s, b.y + 13 * s, b.w - 12 * s, s, COL_PANELLO);
-
-	int y0 = b.y + 18 * s;
-	int foot = 12 * s;
-	int vis = (b.y + b.h - 4 * s - y0) / rowh;
-	if (vis > WIFI_VIS) vis = WIFI_VIS;
-	if (vis < 1) vis = 1;
-
 	// While a join is running, or as soon as it has finished, that is the only thing
 	// worth saying: the list underneath is about to be wrong either way.
-	int js = net_join_state();
 	if (js != JOIN_IDLE)
 	{
 		const char *head;
-		uint32_t col = COL_INK;
+		uint32_t tone = COL_INK;
 
 		if (js == JOIN_WORK) head = "Connecting";
-		else if (js == JOIN_OK) { head = "Connected"; col = COL_GREEN; }
-		else { head = "Could not connect"; col = COL_RED; }
+		else if (js == JOIN_OK) { head = "Connected"; tone = COL_GREEN; }
+		else { head = "Could not connect"; tone = COL_RED; }
 
 		char body[128];
 		if (js == JOIN_WORK)
@@ -2084,13 +2496,18 @@ static void draw_wifi(const chome_profile *p)
 		else
 			snprintf(body, sizeof(body), "%s Your old network was put back.", net_join_detail());
 
-		int cy = b.y + b.h / 2 - 12 * s;
-		gfx_text_c(head, b.x + b.w / 2, cy, s, col, 0);
+		/*
+		  The step comes from the child doing the work, so the track advancing is the job
+		  advancing and the track sitting still is the job sitting still. Rolling back is
+		  drawn as no progress at all rather than as a nearly-full bar: it is not step five
+		  of joining, it is the opposite of it.
+		*/
+		int phase = net_join_phase();
+		int step = (js == JOIN_OK) ? JOIN_STEPS : (phase == JOIN_ROLLBACK) ? 0 : phase;
 
-		char lines[4][64];
-		int nl = wrap_text(body, (b.w - 16 * s) / (8 * s), lines, 3);
-		for (int i = 0; i < nl; i++)
-			gfx_text_c(lines[i], b.x + b.w / 2, cy + (i + 2) * 10 * s, s, COL_INK, 0);
+		draw_progress(&b, PMARK_WIFI, head, body, JOIN_STEPS, step,
+			net_join_phase_name(js == JOIN_OK ? JOIN_STEPS : phase),
+			js == JOIN_WORK, tone, ms);
 
 		if (js != JOIN_WORK)
 			btn_hint_c(b.x + b.w / 2, b.y + b.h - foot, s, COL_PANELLO, "", LBL_A, "OK");
@@ -2109,11 +2526,26 @@ static void draw_wifi(const chome_profile *p)
 		return;
 	}
 
+	draw_wifi_hero(&b, ms);
+
+	int y0 = b.y + 24 * s + 6 * s;
+	int vis = (b.y + b.h - foot - 2 * s - y0) / rowh;
+	if (vis > WIFI_VIS) vis = WIFI_VIS;
+	if (vis < 1) vis = 1;
+
 	int n = net_count();
 	if (!n)
 	{
+		/*
+		  An empty list with a radio present. The ring is the whole message here: a scan
+		  takes seconds and the words alone gave no sign it had not simply given up.
+		*/
+		int cy = b.y + b.h / 2;
+		if (net_scanning()) gfx_spinner(b.x + b.w / 2, cy - 14 * s, 9 * s, 2 * s, ms, COL_BLUE, COL_PANELLO);
+
 		gfx_text_c(net_scanning() ? "Looking for networks" : "No networks found",
-			b.x + b.w / 2, b.y + b.h / 2, s, COL_INK, 0);
+			b.x + b.w / 2, cy, s, COL_INK, 0);
+
 		if (!net_scanning())
 			btn_hint_c(b.x + b.w / 2, b.y + b.h - foot, s, COL_PANELLO, "", LBL_X, "LOOK AGAIN");
 		return;
@@ -2124,8 +2556,8 @@ static void draw_wifi(const chome_profile *p)
 	if (wifi_row < wifi_top) wifi_top = wifi_row;
 	if (wifi_row >= wifi_top + vis) wifi_top = wifi_row - vis + 1;
 
-	int bx = b.x + b.w - 8 * s - 12 * s;         // the bars
-	int lx = bx - 11 * s;                        // the padlock
+	// The padlock and the four bars, kept clear of the text by the row helper.
+	int rsvd = 23 * s;
 
 	for (int i = 0; i < vis && wifi_top + i < n; i++)
 	{
@@ -2135,22 +2567,48 @@ static void draw_wifi(const chome_profile *p)
 		int on = (wifi_top + i == wifi_row);
 		int y = y0 + i * rowh;
 
-		if (on) gfx_fill(b.x + 4 * s, y - 3 * s, b.w - 8 * s, rowh - 2 * s, COL_BLUE);
+		const net_link *l = net_link_now();
+
+		list_row r;
+		memset(&r, 0, sizeof(r));
+		r.title = a->ssid;
+		r.rsvd = rsvd;
+
+		/*
+		  What the second line says is what the player would otherwise have had to work
+		  out from a dot and a padlock. The one we are on gets its address, because that
+		  is the fact somebody on this screen came looking for.
+		*/
+		if (a->current)
+		{
+			r.accent = COL_GREEN;
+			r.sub = (l->up && l->ip[0]) ? l->ip : "Connected";
+		}
+		else r.sub = a->secure ? "Needs a password" : "Open - no password";
+
+		// The row helper hands back the left edge of what it kept clear, so the padlock
+		// and the bars land inside that and flush with the panel's own right margin.
+		int rx = draw_listrow(&b, y, &r, on, ms);
 
 		uint32_t ink = on ? COL_WHITE : COL_INK;
-
-		// A dot marks the one we are on, rather than the word "connected" competing
-		// with the name for the same row.
-		if (a->current) gfx_fill(b.x + 8 * s, y + 2 * s, 4 * s, 4 * s, ink);
-
-		gfx_text(gfx_clip(a->ssid, s, lx - (b.x + 16 * s) - 2 * s), b.x + 16 * s, y, s, ink, 0);
-
-		if (a->secure) gfx_text(CH_LOCK, lx, y, s, ink, 0);
-		draw_bars(bx, y, s, a->signal, ink, on ? COL_PANELLO : COL_PANELHI);
+		if (a->secure) gfx_text(CH_LOCK, rx, y + 5 * s, s, ink, 0);
+		draw_bars(rx + 11 * s, y + 5 * s, s, a->signal, ink, on ? COL_PANELLO : COL_PANEL);
 	}
 
+	/*
+	  A scan running while there is already a list to look at. The ring goes beside the
+	  words rather than replacing them: the list stays usable while more arrive, and the
+	  only thing that needs saying is that more may still be coming.
+	*/
 	if (net_scanning())
-		gfx_text_c("Looking for more", b.x + b.w / 2, b.y + b.h - foot, s, COL_PANELLO, 0);
+	{
+		const char *msg = "LOOKING FOR MORE";
+		int tw = gfx_text_w(msg, s);
+		int cx = b.x + b.w / 2;
+
+		gfx_spinner(cx - tw / 2 - 8 * s, b.y + b.h - foot + 3 * s, 5 * s, s, ms, COL_BLUE, COL_PANELLO);
+		gfx_text(msg, cx - tw / 2, b.y + b.h - foot, s, COL_PANELLO, 0);
+	}
 	else if (n > vis)
 	{
 		char more[48];
@@ -2172,7 +2630,46 @@ static void draw_wifi(const chome_profile *p)
   paired list, and a screen that showed them would invite the question of what to do
   about them - which is nothing.
 */
+/*
+  Six, not five: adding a controller is a row of its own now, so five visible rows means
+  a fifth controller pushes it out of sight - and an entry nobody can see is worse than
+  the shortcut it replaced. Five controllers plus the entry is more than any living room
+  has.
+*/
+/*
+  Five row-heights of list, and the rows carry two lines each now.
+
+  The sixth was there so that a fifth controller could not push "Add a Controller" off
+  the bottom, an entry nobody can see being worse than the shortcut it replaced. That
+  is solved properly here instead: the entry is **pinned** to the foot of the panel and
+  the controllers scroll above it, so it is on screen at any number of pads rather than
+  at up to five of them. Four controllers show at once and the rest scroll, which is
+  the shape the panel would want anyway - the action belongs at the bottom, not in the
+  middle of a list it is not part of.
+*/
 #define PADS_VIS 5
+
+/*
+  Which heading a row belongs under. Three groups, in the order somebody scanning the
+  screen wants them: what is working, what is paired but asleep, and the way to add
+  another. It is also the sort key pads_build() uses, so the two cannot disagree.
+*/
+#define PG_READY  0
+#define PG_ASLEEP 1
+#define PG_ADD    2
+
+static int pads_group(const pad_row *r)
+{
+	if (r->is_add) return PG_ADD;
+	return r->player ? PG_READY : PG_ASLEEP;
+}
+
+static const char *pads_group_name(int g)
+{
+	// The add row gets no heading - a rule above it is enough, and a heading would
+	// read as the name of a group with one thing in it.
+	return (g == PG_READY) ? "Ready to play" : (g == PG_ASLEEP) ? "Paired, not awake" : 0;
+}
 
 /*
   Wired pads have nothing to set up, which was the argument for leaving them out - but he
@@ -2221,6 +2718,45 @@ static int pads_build(pad_row *out, int max)
 		snprintf(r->mac, sizeof(r->mac), "%s", d->mac);
 	}
 
+	/*
+	  Adding one is the last entry rather than a button on the legend. Derek's call, and
+	  the right one: a shortcut is a thing you have to be told about, and the row above it
+	  has just shown the player what a controller looks like on this screen. It also frees
+	  A to mean the obvious thing on a controller row - open it - which is what the tester
+	  needed.
+
+	  Only with a radio to do it with. bt_count() alone is a card that still remembers
+	  pairings from a dongle that is not plugged in; offering to pair with it would take
+	  the player to a panel that can only fail.
+	*/
+	/*
+	  Grouped before the entry that adds one goes on the end, so the screen can put a
+	  heading over each group and the row indices the handlers use are the ones on
+	  screen. It comes out grouped already on every arrangement seen so far - the pads
+	  with player numbers are read from one source and the sleeping ones from another -
+	  but "already sorted" is not a property of the two sources, it is a coincidence of
+	  them, and a heading over a list that turns out not to be grouped is a lie.
+
+	  Insertion sort, stable, on a handful of rows: within a group the order the two
+	  sources gave them is worth keeping, because that is player order.
+	*/
+	for (int i = 1; i < n; i++)
+	{
+		pad_row tmp = out[i];
+		int g = pads_group(&tmp);
+		int j = i;
+		while (j > 0 && pads_group(&out[j - 1]) > g) { out[j] = out[j - 1]; j--; }
+		out[j] = tmp;
+	}
+
+	if (bt_present() && n < max)
+	{
+		pad_row *r = &out[n++];
+		memset(r, 0, sizeof(*r));
+		r->is_add = 1;
+		snprintf(r->name, sizeof(r->name), "Add a Controller");
+	}
+
 	return n;
 }
 
@@ -2248,20 +2784,94 @@ static int pads_count()
 static void draw_pads(const chome_profile *p)
 {
 	int s = p->ts_ui;
-	int rowh = 14 * s;
+	int rowh = LIST_ROWH * s;
+	unsigned long ms = anim_ms();
 
 	int w = p->w - 2 * p->inset;
 	if (w > 44 * 8 * s) w = 44 * 8 * s;
 
-	int h = (10 * s + 6) + 16 * s + PADS_VIS * rowh + 6 * s;
+	int hdr = 10 * s + 6;
+	int foot = 12 * s;
+
+	int pairing = (bt_pairing() || bt_pair_state() != BTP_IDLE);
+
+	/*
+	  Two heights, because the two things this screen does want different shapes: a
+	  list wants rows, a pairing wants room for a mark, a track and three lines of what
+	  to do with your hands. The pairing panel used to be squeezed into the list's
+	  height, which is why it had no footer.
+	*/
+	int h = pairing ? hdr + PROGRESS_H(s) + foot
+	                : hdr + 18 * s + PADS_VIS * rowh + 2 * LIST_SECH * s + foot + 4 * s;
 	if (h > p->h - 2 * p->safe_y) h = p->h - 2 * p->safe_y;
 
 	panel_box b = draw_panel_ex(p, w, h, "Controllers");
-	int foot = 12 * s;
 
-	// Nothing to show *and* no adapter is the only case worth explaining hardware for;
-	// a list on screen is proof enough that there is one. Same as the Wi-Fi panel.
-	if (!bt_present() && !bt_count())
+	// Pairing mode owns the screen while it is on: the list underneath is what this is
+	// about to change, and the player is holding a button down waiting to be told.
+	/*
+	  Any state but idle owns the screen, not just a running one: pairing mode now ends
+	  itself the moment a controller works, and the result has to stay up to be read.
+	*/
+	if (pairing)
+	{
+		int st = bt_pair_state();
+
+		const char *head = "Hold the buttons on your controller";
+		uint32_t tone = COL_INK;
+
+		if (st == BTP_WORKING || st == BTP_PIN) { head = bt_pair_name()[0] ? bt_pair_name() : "Found a controller"; }
+		else if (st == BTP_OK) { head = "Paired"; tone = COL_GREEN; }
+		else if (st == BTP_FAIL) { head = "Not paired"; tone = COL_RED; }
+
+		/*
+		  Which buttons, per pad, is a table this does not have - so it says the thing
+		  that is true of all of them rather than guessing at one. The detail line
+		  underneath is btctl's own progress, in words a player can act on.
+		*/
+		const char *body = bt_pair_detail();
+
+		/*
+		  ...unless btctl's commentary is the same words the track is already labelled
+		  with, which "Found it" and "Pairing" both are. Two lines saying the same thing
+		  is not progress, and what is worth saying while nothing new has happened is
+		  what the player's hands should be doing.
+		*/
+		if (!body[0] || !strcasecmp(body, bt_pair_step_name(bt_pair_step())))
+			body = "Most controllers pair by holding two buttons until the light flashes quickly.";
+
+		/*
+		  The track is read off btctl's own commentary (bt_pair_step), so it advances
+		  when the pairing advances and stops when it stops. A failure is left showing
+		  how far it got rather than emptied, because "it got as far as connecting" and
+		  "it never saw the pad" are different things to try next.
+		*/
+		int step = bt_pair_step();
+		int busy = (st == BTP_LOOKING || st == BTP_WORKING || st == BTP_PIN);
+
+		draw_progress(&b, PMARK_BT, head, body, BTP_STEPS,
+			(st == BTP_FAIL) ? step : step, bt_pair_step_name(step), busy, tone, ms);
+
+		if (bt_pair_done() > 0)
+		{
+			char done[64];
+			snprintf(done, sizeof(done), (bt_pair_done() == 1) ? "%d controller ready" : "%d controllers ready",
+				bt_pair_done());
+			gfx_text_c(done, b.x + b.w / 2, b.y + b.h - foot, s, COL_GREEN, 0);
+		}
+		return;
+	}
+
+	pad_row rows[PADS_MAX];
+	int n = pads_build(rows, PADS_MAX);
+
+	/*
+	  An empty list now means no adapter *and* nothing plugged in, since the adapter puts
+	  "Add a Controller" in the list on its own. So the two empty states collapse into the
+	  one sentence that explains the hardware - and the wired pads, which used to be hidden
+	  behind that sentence whenever no dongle was present, are listed as they should be.
+	*/
+	if (!n)
 	{
 		char lines[4][64];
 		int nl = wrap_text("This MiSTer has no Bluetooth adapter. A controller plugged into "
@@ -2272,153 +2882,382 @@ static void draw_pads(const chome_profile *p)
 		return;
 	}
 
-	// Pairing mode owns the screen while it is on: the list underneath is what this is
-	// about to change, and the player is holding a button down waiting to be told.
-	/*
-	  Any state but idle owns the screen, not just a running one: pairing mode now ends
-	  itself the moment a controller works, and the result has to stay up to be read.
-	*/
-	if (bt_pairing() || bt_pair_state() != BTP_IDLE)
+	// The count is of controllers; the entry that adds one is not a controller.
+	int nreal = 0, nplay = 0;
+	for (int i = 0; i < n; i++)
 	{
-		int st = bt_pair_state();
-
-		const char *head = "Hold the buttons on your controller";
-		uint32_t col = COL_INK;
-
-		if (st == BTP_WORKING || st == BTP_PIN) { head = bt_pair_name()[0] ? bt_pair_name() : "Found a controller"; }
-		else if (st == BTP_OK) { head = "Paired"; col = COL_GREEN; }
-		else if (st == BTP_FAIL) { head = "Not paired"; col = COL_RED; }
-
-		int cy = b.y + 16 * s;
-		picto("bluetooth", b.x + b.w / 2 - 8 * s, cy, 16 * s,
-			(st == BTP_OK) ? COL_GREEN : (st == BTP_FAIL) ? COL_RED : COL_PANELHI);
-
-		cy += 22 * s;
-		gfx_text_c(gfx_clip(head, s, b.w - 12 * s), b.x + b.w / 2, cy, s, col, 0);
-
-		/*
-		  Which buttons, per pad, is a table this does not have - so it says the thing
-		  that is true of all of them rather than guessing at one. The detail line
-		  underneath is btctl's own progress, in words a player can act on.
-		*/
-		const char *body = bt_pair_detail();
-		if (!body[0]) body = "Most controllers pair by holding two buttons until the light flashes quickly.";
-
-		cy += 18 * s;
-		char lines[4][64];
-		int nl = wrap_text(body, (b.w - 16 * s) / (8 * s), lines, 3);
-		for (int i = 0; i < nl; i++)
-			gfx_text_c(lines[i], b.x + b.w / 2, cy + i * 10 * s, s, COL_PANELHI, 0);
-
-		/*
-		  No footer repeating the buttons: the legend along the bottom of the screen is up
-		  the whole time this panel is, and three wrapped lines plus a count plus a footer
-		  do not fit in a panel sized for a list. The Wi-Fi panel can afford one because
-		  its message is shorter.
-		*/
-		if (bt_pair_done() > 0)
-		{
-			char done[64];
-			snprintf(done, sizeof(done), (bt_pair_done() == 1) ? "%d controller ready" : "%d controllers ready",
-				bt_pair_done());
-			gfx_text_c(done, b.x + b.w / 2, b.y + b.h - 9 * s, s, COL_GREEN, 0);
-		}
-		return;
+		if (rows[i].is_add) continue;
+		nreal++;
+		if (rows[i].player) nplay++;
 	}
 
-	pad_row rows[PADS_MAX];
-	int n = pads_build(rows, PADS_MAX);
-
-	int nplay = 0;
-	for (int i = 0; i < n; i++) if (rows[i].player) nplay++;
-
-	char hdr[96];
-	if (!n) snprintf(hdr, sizeof(hdr), "No controllers found");
-	else if (nplay == n) snprintf(hdr, sizeof(hdr), (n == 1) ? "%d controller ready" : "%d controllers ready", n);
-	else snprintf(hdr, sizeof(hdr), "%d ready, %d asleep", nplay, n - nplay);
-	gfx_text(gfx_clip(hdr, s, b.w - 12 * s), b.x + 6 * s, b.y + 3 * s, s, COL_INK, 0);
+	char hdrtext[96];
+	if (!nreal) snprintf(hdrtext, sizeof(hdrtext), "No controllers found");
+	else if (nplay == nreal) snprintf(hdrtext, sizeof(hdrtext), (nreal == 1) ? "%d controller ready" : "%d controllers ready", nreal);
+	else snprintf(hdrtext, sizeof(hdrtext), "%d ready, %d asleep", nplay, nreal - nplay);
+	gfx_text(gfx_clip(hdrtext, s, b.w - 12 * s), b.x + 6 * s, b.y + 3 * s, s, COL_INK, 0);
 	gfx_fill(b.x + 6 * s, b.y + 13 * s, b.w - 12 * s, s, COL_PANELLO);
 
 	int y0 = b.y + 18 * s;
+	int ybot = b.y + b.h - foot - 2 * s;
 
-	if (!n)
-	{
-		/*
-		  No letter in the sentence: the legend below already offers the button, and only
-		  when there is an adapter to use it on. Promising a wireless controller to
-		  somebody with no adapter plugged in is worse than saying nothing.
-		*/
-		char lines[4][64];
-		int nl = wrap_text(bt_present()
-			? "Plug a controller into the USB port, or add a wireless one."
-			: "Plug a controller into the USB port. No wireless adapter is plugged in.",
-			(b.w - 16 * s) / (8 * s), lines, 3);
-		for (int i = 0; i < nl; i++)
-			gfx_text_c(lines[i], b.x + b.w / 2, b.y + b.h / 2 - 4 * s + i * 10 * s, s, COL_PANELHI, 0);
-		return;
-	}
+	/*
+	  The entry that adds a controller is pinned to the foot of the panel and the
+	  controllers scroll above it, so it is reachable at any number of pads. pads_build()
+	  always puts it last, which is also where the cursor reaches it from the bottom of
+	  the list, so the pinning is only about where it is drawn.
+	*/
+	int addrow = (n && rows[n - 1].is_add) ? n - 1 : -1;
+	int nlist = (addrow >= 0) ? n - 1 : n;
+	if (addrow >= 0) ybot -= rowh;
 
-	int vis = (b.y + b.h - 4 * s - y0) / rowh;
-	if (vis > PADS_VIS) vis = PADS_VIS;
+	/*
+	  How many rows fit, allowing for the headings, which cost a line each. Worked out
+	  against the worst case of both headings being on screen rather than measured
+	  against this particular list: the count is also what decides where the list is
+	  scrolled to, and a window that changed size as the selection moved through it
+	  would scroll under the player's cursor.
+	*/
+	int vis = (ybot - y0 - 2 * LIST_SECH * s) / rowh;
+	if (vis > PADS_VIS - (addrow >= 0 ? 1 : 0)) vis = PADS_VIS - (addrow >= 0 ? 1 : 0);
 	if (vis < 1) vis = 1;
 
 	if (pads_row >= n) pads_row = n - 1;
 	if (pads_row < 0) pads_row = 0;
 
+	/*
+	  Scrolled by the cursor when it is on a controller. The pinned entry is not in the
+	  scrolling area at all, so when the cursor is on it the list holds at its end -
+	  which is where the cursor came from, and which keeps the last controller beside
+	  the entry that would add another.
+	*/
 	int top = 0;
-	if (pads_row >= vis) top = pads_row - vis + 1;
+	if (pads_row < nlist && pads_row >= vis) top = pads_row - vis + 1;
+	else if (pads_row == addrow && nlist > vis) top = nlist - vis;
 
 	int armed = (pads_forget_arm >= 0 && !CheckTimer(pads_forget_until));
 
-	for (int i = 0; i < vis && top + i < n; i++)
+	int y = y0;
+	int lastg = -1;
+	int shown = 0;
+
+	/*
+	  Capped at `vis` as well as at the room left, so the count in the footer is the
+	  count on screen. Without the cap a list with only one heading in view drew a row
+	  more than the scrolling arithmetic believed was there, and said "1 of 5" over five
+	  visible rows.
+	*/
+	for (int i = top; i < nlist && shown < vis; i++)
 	{
-		const pad_row *r = &rows[top + i];
+		const pad_row *r = &rows[i];
+		int g = pads_group(r);
 
-		int on = (top + i == pads_row);
-		int y = y0 + i * rowh;
+		int need = rowh + ((g != lastg && pads_group_name(g)) ? LIST_SECH * s : 0);
+		if (y + need > ybot) break;
 
-		if (on) gfx_fill(b.x + 4 * s, y - 3 * s, b.w - 8 * s, rowh - 2 * s,
-			(armed && pads_forget_arm == top + i) ? COL_RED : COL_BLUE);
+		if (g != lastg)
+		{
+			const char *nm = pads_group_name(g);
+			if (nm) { draw_section(&b, y, nm); y += LIST_SECH * s; }
+			lastg = g;
+		}
 
-		uint32_t ink = on ? COL_WHITE : COL_INK;
+		const char *how = (r->kind == PAD_BT) ? "Wireless"
+			: (r->kind == PAD_SNAC) ? "SNAC port" : "Plugged in";
+
+		list_row lr;
+		memset(&lr, 0, sizeof(lr));
+		lr.gut = 1;
+		lr.icon = (r->kind == PAD_BT) ? "bluetooth" : 0;
+		lr.title = r->name;
+
+		char sub[80], chip[8];
 
 		/*
-		  The player number is the useful thing on the left, not a connected dot: a row
-		  with a number is a controller a game can be played with, and one without is a
-		  pad that is paired and not awake. So it says which player it is, and says
-		  nothing where there is nothing to say.
+		  The player number was a two-letter column on the left and "--" where there was
+		  none, which is a symbol somebody has to be taught. It is a chip on the right
+		  saying P1, or the word ASLEEP - and the second line says what to do about it,
+		  which is the thing the old row could not say at all.
 		*/
 		if (r->player)
 		{
-			char pl[8];
-			snprintf(pl, sizeof(pl), "P%d", r->player);
-			gfx_text(pl, b.x + 8 * s, y, s, on ? COL_WHITE : COL_GREEN, 0);
+			snprintf(chip, sizeof(chip), "P%d", r->player);
+			snprintf(sub, sizeof(sub), "%s", how);
+			lr.chip = chip;
+			lr.chip_col = COL_GREEN;
+			lr.accent = COL_GREEN;
 		}
 		else
 		{
-			gfx_text("--", b.x + 8 * s, y, s, on ? COL_WHITE : COL_DIM, 0);
+			// Short enough to survive the chip beside it at 240p, where the row is
+			// twenty-odd characters wide: longer wordings came out clipped to
+			// "Press a button to wake >".
+			snprintf(sub, sizeof(sub), "Press a button on it");
+			lr.chip = "ASLEEP";
+			lr.chip_col = COL_PANELLO;
 		}
 
-		int rx = b.x + b.w - 8 * s;          // right edge for the how-connected marker
-		int nx = b.x + 32 * s;               // clear of the player column
-		gfx_text(gfx_clip(r->name, s, (rx - 10 * s) - nx), nx, y, s, ink, 0);
+		lr.sub = sub;
 
-		if (r->kind == PAD_BT)
-			picto("bluetooth", rx - 8 * s, y, 8 * s, on ? COL_WHITE : COL_PANELHI);
-		else
-			gfx_text((r->kind == PAD_SNAC) ? "SNAC" : "USB",
-				rx - ((r->kind == PAD_SNAC) ? 32 * s : 24 * s), y, s, on ? COL_WHITE : COL_PANELHI, 0);
+		// Armed to be forgotten: the row itself turns red, which is the same language
+		// the suspend strip uses for the same two-press confirmation.
+		if (armed && pads_forget_arm == i) lr.sel_col = COL_RED;
+
+		draw_listrow(&b, y, &lr, i == pads_row, ms);
+		y += rowh;
+		shown++;
+	}
+
+	if (addrow >= 0)
+	{
+		/*
+		  The wireless mark goes in the icon column, where every other row's mark says how
+		  that controller is attached. Here it says what kind of controller this would
+		  add, which is the same column doing the same job.
+		*/
+		list_row lr;
+		memset(&lr, 0, sizeof(lr));
+		lr.gut = 1;
+		lr.icon = "bluetooth";
+		lr.title = rows[addrow].name;
+		lr.sub = "Put a controller into pairing mode";
+		lr.accent = COL_BLUE;
+		lr.rule = 1;                         // an action, not another controller
+
+		draw_listrow(&b, ybot + 3 * s, &lr, pads_row == addrow, ms);
 	}
 
 	if (armed)
 		btn_hint_c(b.x + b.w / 2, b.y + b.h - foot, s, COL_RED,
 			"PRESS", LBL_X, "AGAIN TO FORGET IT");
-	else if (n > vis)
+	else if (nlist > vis)
 	{
+		// Counts controllers, not entries: the pinned one is always on screen, so
+		// including it would say "5 of 6" while six things were visible.
 		char more[48];
-		snprintf(more, sizeof(more), "%d of %d", pads_row + 1, n);
+		int at = (pads_row < nlist) ? pads_row + 1 : nlist;
+		snprintf(more, sizeof(more), "%d of %d", at, nlist);
 		gfx_text_c(more, b.x + b.w / 2, b.y + b.h - foot, s, COL_PANELLO, 0);
 	}
+}
+
+/*
+  The controller tester.
+
+  What a player wants here is not diagnostics, it is two questions: does this pad work,
+  and which button is which. So it is a picture of a controller with every control on it,
+  each one lighting up as it is pressed, and nothing to read.
+
+  The face buttons are the pad's own shapes, resolved from the codes the device reports
+  (input_pad_state) through the very tables the legend uses - so a DualShock shows the
+  four shapes where they sit on a DualShock, and a Super Famicom pad shows its four
+  coloured letters. Nothing on this screen is a new drawing: the faces and the two pills
+  are the 12-pixel glyphs of chome_btn12.h, and the directions are the OSD font's own
+  arrow codes.
+
+  The pad is looked up again on every frame rather than captured on the way in, because
+  the interesting case is a controller that was asleep: pressing a button on it is how it
+  gets a player number, and it must be this screen that shows that happening.
+*/
+static int padtest_find(pad_row *out)
+{
+	pad_row rows[PADS_MAX];
+	int n = pads_build(rows, PADS_MAX);
+
+	for (int i = 0; i < n; i++)
+	{
+		if (rows[i].is_add) continue;
+
+		/*
+		  The address is what survives a wireless pad going to sleep and coming back; a
+		  wired one has none, so its name and how it is attached are all there is - which
+		  is enough, since two identical wired pads differ only by player number and
+		  either one is a fair answer to "test this".
+		*/
+		int same = padtest_mac[0]
+			? (rows[i].mac[0] && !strcasecmp(rows[i].mac, padtest_mac))
+			: (rows[i].kind == padtest_kind && !strcmp(rows[i].name, padtest_name));
+
+		if (!same) continue;
+		*out = rows[i];
+		return 1;
+	}
+	return 0;
+}
+
+// One control's cell. Twelve pixels, the same grid the button glyphs are drawn on.
+#define PT_CELL 12
+
+/*
+  Lit is green behind the glyph, not a different glyph: the shape has to stay recognisable
+  while it is pressed, or the screen answers "which button is this" differently depending
+  on whether you are pressing it.
+*/
+static void pt_glyph(const char *pic, int x, int y, int s, uint32_t col, int held)
+{
+	const btn12_def *d = btn12_find(pic);
+	if (!d) return;
+
+	if (held) gfx_fill(x - s, y - s, btn12_w(d) * s + 2 * s, PT_CELL * s + 2 * s, COL_GREEN);
+	btn12_draw(d, x, y, s, col ? col : COL_WHITE, !held);
+}
+
+// The controls with no glyph of their own: the four directions and the two shoulders.
+static void pt_key(const char *text, int x, int y, int s, int held)
+{
+	gfx_fill(x - 2 * s, y - 2 * s, PT_CELL * s, PT_CELL * s, held ? COL_GREEN : COL_BTN_CHIP);
+	gfx_text(text, x, y, s, held ? COL_WHITE : COL_DIM, 0);
+}
+
+// Where a face button sits on the pad: 0 north, 1 east, 2 south, 3 west. -1 for a code
+// that is not one of the four, which is left to take whichever slot is still free.
+static int code_pos(uint16_t code)
+{
+	switch (code)
+	{
+	case BTN_CODE_NORTH: return 0;
+	case BTN_CODE_EAST:  return 1;
+	case BTN_CODE_SOUTH: return 2;
+	case BTN_CODE_WEST:  return 3;
+	}
+	return -1;
+}
+
+// A stick, as a box with the tip in it. -128..127 in, box coordinates out.
+static void pt_stick(int x, int y, int box, int s, int sx, int sy, int live)
+{
+	gfx_fill(x, y, box, box, COL_BGDARK);
+	gfx_frame_rect(x, y, box, box, live ? COL_PANELLO : COL_DIM, s);
+
+	int dot = 4 * s;
+	int span = box - dot - 2 * s;
+	int cx = x + s + ((sx + 128) * span) / 255;
+	int cy = y + s + ((sy + 128) * span) / 255;
+
+	// Centred is at rest and says nothing; off centre is the player moving it.
+	int moved = (sx < -8 || sx > 8 || sy < -8 || sy > 8);
+	gfx_fill(cx, cy, dot, dot, moved ? COL_GREEN : COL_PANELLO);
+}
+
+static void draw_padtest(const chome_profile *p)
+{
+	int s = p->ts_ui;
+
+	pad_row row;
+	int have = padtest_find(&row);
+	int player = have ? row.player : 0;
+
+	pad_state st;
+	int live = input_pad_state(player, &st);
+
+	const char *nm = (have && row.name[0]) ? row.name : padtest_name;
+	int layout = pad_layout_of(nm);
+
+	int w = p->w - 2 * p->inset;
+	if (w > 44 * 8 * s) w = 44 * 8 * s;
+
+	// The stick band is only there for a pad that has sticks. A SNAC pad is a digital
+	// PlayStation pad and two empty boxes would be a question it cannot answer.
+	int sticks = live && st.sticks;
+	int h = (10 * s + 6) + 25 * s + 46 * s + (sticks ? 30 * s : 0) + 16 * s;
+	if (h > p->h - 2 * p->safe_y) h = p->h - 2 * p->safe_y;
+
+	panel_box b = draw_panel_ex(p, w, h, "Controller Test");
+
+	int cy = b.y + 3 * s;
+	gfx_text_c(gfx_clip(nm[0] ? nm : "Controller", s, b.w - 12 * s), b.x + b.w / 2, cy, s, COL_INK, 0);
+
+	cy += 11 * s;
+	if (live)
+	{
+		char pl[32];
+		snprintf(pl, sizeof(pl), "Player %d", player);
+		gfx_text_c(pl, b.x + b.w / 2, cy, s, COL_GREEN, 0);
+	}
+	else
+	{
+		gfx_text_c(gfx_clip("Asleep - press a button on it", s, b.w - 12 * s),
+			b.x + b.w / 2, cy, s, COL_PANELLO, 0);
+	}
+
+	int y = cy + 14 * s;                       // top of the diagram band, 46*s tall
+	int dcx = b.x + b.w / 6;                   // d-pad
+	int mcx = b.x + b.w / 2;                   // Select and Start
+	int fcx = b.x + (5 * b.w) / 6;             // face buttons
+
+	uint32_t held = st.held;
+
+	// Shoulders, along the top, where they are on the pad.
+	pt_key("L", b.x + 10 * s, y, s, held & (1u << SYS_BTN_L));
+	pt_key("R", b.x + b.w - 20 * s, y, s, held & (1u << SYS_BTN_R));
+
+	pt_key(CH_UP,    dcx - 4 * s,  y + 6 * s,  s, held & (1u << SYS_BTN_UP));
+	pt_key(CH_LEFT,  dcx - 16 * s, y + 18 * s, s, held & (1u << SYS_BTN_LEFT));
+	pt_key(CH_RIGHT, dcx + 8 * s,  y + 18 * s, s, held & (1u << SYS_BTN_RIGHT));
+	pt_key(CH_DOWN,  dcx - 4 * s,  y + 30 * s, s, held & (1u << SYS_BTN_DOWN));
+
+	{
+		const btn12_def *d = btn12_find("btn_select");
+		if (d) pt_glyph("btn_select", mcx - btn12_w(d) * s / 2, y + 10 * s, s, 0,
+			held & (1u << SYS_BTN_SELECT));
+
+		d = btn12_find("btn_start");
+		if (d) pt_glyph("btn_start", mcx - btn12_w(d) * s / 2, y + 26 * s, s, 0,
+			held & (1u << SYS_BTN_START));
+	}
+
+	/*
+	  The four faces, placed by where the pad says they are rather than in a fixed order.
+	  A button whose code is none of the four - unmapped, or one of the HID pads that
+	  report their faces as BTN_THUMB and friends - takes whichever slot is still free, so
+	  every button the player can press is on the diagram even when its position is a
+	  guess. Better a guessed position than a missing button on a screen whose whole job
+	  is to prove the pad works.
+	*/
+	static const int slot_dx[4] = { -6, 8, -6, -20 };   // north, east, south, west
+	static const int slot_dy[4] = { 2, 16, 30, 16 };
+
+	int taken[4] = { -1, -1, -1, -1 };
+	for (int i = LBL_A; i <= LBL_Y; i++)
+	{
+		int pos = code_pos(st.code[lbl_sysbtn[i]]);
+		if (pos < 0 || taken[pos] >= 0)
+		{
+			pos = -1;
+			for (int j = 0; j < 4; j++) if (taken[j] < 0) { pos = j; break; }
+			if (pos < 0) continue;
+		}
+		taken[pos] = i;
+	}
+
+	for (int pos = 0; pos < 4; pos++)
+	{
+		int which = taken[pos];
+		if (which < 0) continue;
+
+		int sb = lbl_sysbtn[which];
+		prompt pr = prompt_for_code(layout, which, st.code[sb]);
+
+		const char *pic = pr.pic;
+		uint32_t col = pr.col;
+		if (!pic) { pic = letter_pic[which]; col = letter_col(layout, which); }
+
+		pt_glyph(pic, fcx + slot_dx[pos] * s, y + slot_dy[pos] * s, s, col,
+			held & (1u << sb));
+	}
+
+	if (sticks)
+	{
+		int box = 24 * s;
+		int sy = y + 48 * s;
+		pt_stick(b.x + b.w / 3 - box / 2, sy, box, s, st.lx, st.ly, 1);
+		pt_stick(b.x + (2 * b.w) / 3 - box / 2, sy, box, s, st.rx, st.ry, 1);
+	}
+
+	if (padtest_back_arm && !CheckTimer(padtest_back_until))
+		btn_hint_c(b.x + b.w / 2, b.y + b.h - 11 * s, s, COL_RED, "Press", LBL_B, "again to go back");
+	else
+		btn_hint_c(b.x + b.w / 2, b.y + b.h - 11 * s, s, COL_INK, "Press", LBL_B, "twice to go back");
 }
 
 /*
@@ -2472,6 +3311,288 @@ static void draw_power(const chome_profile *p)
 			(b.w - 16 * s) / (8 * s), lines, 2);
 		for (int i = 0; i < nl; i++)
 			gfx_text_c(lines[i], b.x + b.w / 2, ny + i * 10 * s, s, COL_PANELHI, 0);
+	}
+}
+
+/*
+  Best Settings.
+
+  Two levels on purpose. The left column is an outcome a player can judge - "hide the
+  resolution pop-up over a game" - and the right column is the line that will really be
+  written to their file. Nobody has to read the right column, and nobody who wants to
+  know what is being done to their configuration should have to guess.
+
+  It is a screen rather than an Options row that just acts, because this rewrites a file
+  the player may well have edited themselves: they see the whole list first, and it still
+  takes the two presses that everything unrecoverable takes here.
+*/
+#define INI_NOTE "A copy of the old file is kept, so this can be undone."
+
+static void draw_ini(const chome_profile *p)
+{
+	int s = p->ts_ui;
+	int rowh = 11 * s;
+	int done = (ini_wrote != -1);
+
+	int w = p->w - 2 * p->inset;
+	if (w > 46 * 8 * s) w = 46 * 8 * s;
+	int avail = w - 12 * s;
+
+	/*
+	  ts_tiny is ts_ui on every profile, so the two columns are told apart by colour
+	  rather than by size - and at 240p they do not both fit on a line at all. Measured
+	  rather than assumed: when the widest pair overflows, each setting takes two lines
+	  with its key indented under it, which is the one arrangement that keeps the
+	  written line visible on the canvas Derek's CRT actually gets.
+	*/
+	int stacked = 0;
+	for (int i = 0; i < ini_n; i++)
+	{
+		char kv[48];
+		snprintf(kv, sizeof(kv), "%s=%s", ini_list[i].want->key, ini_list[i].want->value);
+		if (gfx_text_w(ini_list[i].want->outcome, s) + gfx_text_w(kv, s) + 8 * s > avail) stacked = 1;
+	}
+
+	// Sized for its content, like Power, rather than taking the default panel.
+	int lines = done ? 3 : (ini_n ? ini_n * (stacked ? 2 : 1) : 1);
+	char note[4][64];
+	int nnote = done ? 0 : (ini_n ? wrap_text(INI_NOTE, avail / (8 * s), note, 3) : 0);
+
+	int h = (10 * s + 6) + 5 * s + lines * rowh + 6 * s + nnote * 9 * s + 6 * s + 12 * s;
+	if (h > p->h - 2 * p->safe_y) h = p->h - 2 * p->safe_y;
+
+	panel_box b = draw_panel_ex(p, w, h, "Best Settings");
+	int y = b.y + 5 * s;
+
+	if (done)
+	{
+		int failed = (ini_wrote < 0);
+		const char *bak = strrchr(ini_backup_path(), '/');
+		char l1[96], l2[96];
+
+		if (failed) snprintf(l1, sizeof(l1), "%s", ini_last_error());
+		else snprintf(l1, sizeof(l1), "%d setting%s changed", ini_wrote, ini_wrote == 1 ? "" : "s");
+		snprintf(l2, sizeof(l2), "Old file kept as %s", bak ? bak + 1 : ini_backup_path());
+
+		gfx_text(gfx_clip(l1, s, avail), b.x + 6 * s, y, s, failed ? COL_RED : COL_INK, 0);
+
+		if (!failed)
+		{
+			gfx_text(gfx_clip(l2, s, avail), b.x + 6 * s, y + rowh, s, COL_PANELLO, 0);
+
+			/*
+			  And the restart line, which has to be the truth rather than a
+			  reassurance. Every setting shipped today has a cfg field ini_apply()
+			  pokes as well as writing, so this session is already living under the
+			  new values; one without a field makes this say the opposite.
+			*/
+			gfx_text(gfx_clip(ini_needs_restart ? "A restart is needed for these"
+			                                    : "In effect now - no restart needed", s, avail),
+				b.x + 6 * s, y + 2 * rowh, s, COL_PANELLO, 0);
+		}
+
+		btn_hint_c(b.x + b.w / 2, b.y + b.h - 11 * s, s, COL_INK, "Press", LBL_B, "to close");
+		return;
+	}
+
+	if (!ini_n)
+	{
+		gfx_text_c(gfx_clip("Everything this menu wants is already set.", s, avail),
+			b.x + b.w / 2, y, s, COL_INK, 0);
+		btn_hint_c(b.x + b.w / 2, b.y + b.h - 11 * s, s, COL_INK, "Press", LBL_B, "to close");
+		return;
+	}
+
+	for (int i = 0; i < ini_n; i++)
+	{
+		const ini_want *wt = ini_list[i].want;
+
+		char kv[48];
+		snprintf(kv, sizeof(kv), "%s=%s", wt->key, wt->value);
+
+		if (stacked)
+		{
+			gfx_text(gfx_clip(wt->outcome, s, avail), b.x + 6 * s, y + 2 * i * rowh, s, COL_INK, 0);
+			gfx_text(gfx_clip(kv, s, avail - 8 * s), b.x + 14 * s, y + (2 * i + 1) * rowh, s, COL_PANELLO, 0);
+		}
+		else
+		{
+			int kvw = gfx_text_w(kv, s);
+			gfx_text(gfx_clip(wt->outcome, s, avail - kvw - 4 * s), b.x + 6 * s, y + i * rowh, s, COL_INK, 0);
+			gfx_text(kv, b.x + b.w - 6 * s - kvw, y + i * rowh, s, COL_PANELLO, 0);
+		}
+	}
+
+	int ny = y + lines * rowh + 6 * s;
+	for (int i = 0; i < nnote; i++)
+		gfx_text_c(note[i], b.x + b.w / 2, ny + i * 9 * s, s, COL_PANELHI, 0);
+
+	// The note stays put while arming so the panel does not resize under the player;
+	// only the line they are about to act on changes.
+	int armed = (ini_armed && !CheckTimer(ini_until));
+	if (armed) btn_hint_c(b.x + b.w / 2, b.y + b.h - 11 * s, s, COL_RED, "Press", LBL_A, "again to write");
+	else btn_hint_c(b.x + b.w / 2, b.y + b.h - 11 * s, s, COL_INK, "Press", LBL_A, "to change them");
+}
+
+/* ------------------------------------------------------- more settings ---- */
+
+#define SET_SAVE_NOTE "Writes the changes into MiSTer.ini. A copy is kept."
+
+/*
+  Read the card and count what is not at its recommended value. Rebuilt on the way in to
+  Options and to the screen itself, never per frame: which options apply depends on the
+  video path, which cannot change while a panel is up over it, and the values only move
+  when we move them.
+*/
+static void set_summary()
+{
+	set_nview = opt_view(set_view, OPT_MAX, video_scaler_is_visible());
+	opt_load(ini_path());
+
+	set_odd = 0;
+	for (int i = 0; i < set_nview; i++) if (!opt_is_rec(set_view[i])) set_odd++;
+}
+
+static void set_refresh()
+{
+	set_summary();
+
+	set_row = 0;
+	set_top = 0;
+	set_arm = 0;
+	set_quit_arm = 0;
+	set_wrote = -1;
+	set_failed = 0;
+}
+
+// A value moved. The last write's result stops being the news, and an armed save is
+// no longer a save of what the player armed it for.
+static void set_edited()
+{
+	set_wrote = -1;
+	set_failed = 0;
+	set_arm = 0;
+	mark_dirty();
+}
+
+static void draw_settings(const chome_profile *p)
+{
+	int s = p->ts_ui;
+	int rowh = 12 * s;
+
+	// The group of the row under the cursor, in the header. The list is flat - a novice
+	// scrolling one list beats a novice picking a category first - so this is how the
+	// grouping shows at all, and it costs no rows.
+	const opt_def *od = (set_row < set_nview) ? opt_at(set_view[set_row]) : 0;
+	char title[64];
+	if (od) snprintf(title, sizeof(title), "Settings - %s", opt_group_name(od->group));
+	else snprintf(title, sizeof(title), "Settings");
+
+	panel_box b = draw_panel(p, title);
+
+	// Three lines are reserved at the bottom: two for the selected row's sentence, one
+	// for whatever the screen has to say about it.
+	int foot = 3 * 10 * s + 4 * s;
+	int fit = (b.h - 5 * s - foot) / rowh;
+	if (fit < 1) fit = 1;
+
+	int nrows = set_nview + 1;                   // the options, then Save Changes
+	if (fit > nrows) fit = nrows;
+
+	if (set_row < set_top) set_top = set_row;
+	if (set_row >= set_top + fit) set_top = set_row - fit + 1;
+	if (set_top > nrows - fit) set_top = nrows - fit;
+	if (set_top < 0) set_top = 0;
+
+	const char *labels[OPT_MAX + 1];
+	const char *vals[OPT_MAX + 1];
+	uint32_t vcol[OPT_MAX + 1];
+	static char vbuf[OPT_MAX + 1][24];
+
+	int dirty = opt_dirty();
+	int n = 0;
+
+	for (int r = set_top; r < set_top + fit && n <= OPT_MAX; r++)
+	{
+		if (r < set_nview)
+		{
+			int i = set_view[r];
+			labels[n] = opt_at(i)->label;
+			vals[n] = opt_value_text(i, vbuf[n], sizeof(vbuf[n]));
+
+			// The whole colour code, in one line: amber is "not the value this menu
+			// recommends", which for most options is simply the machine's default.
+			vcol[n] = opt_is_rec(i) ? 0 : COL_YELLOW;
+		}
+		else
+		{
+			labels[n] = "Save Changes";
+			if (dirty) snprintf(vbuf[n], sizeof(vbuf[n]), "%d To Save", dirty);
+			else if (set_wrote > 0) snprintf(vbuf[n], sizeof(vbuf[n]), "Saved");
+			else snprintf(vbuf[n], sizeof(vbuf[n]), "Nothing To Save");
+			vals[n] = vbuf[n];
+			vcol[n] = (!dirty && set_wrote > 0) ? COL_GREEN : 0;
+		}
+		n++;
+	}
+
+	draw_rows_c(&b, labels, vals, vcol, n, set_row - set_top);
+
+	// Where the cursor is in a list that does not fit. Inside the value column's right
+	// margin, so it cannot land on a value.
+	if (nrows > fit)
+	{
+		int tx = b.x + b.w - 3 * s, ty = b.y + 3 * s, th = fit * rowh;
+		gfx_fill(tx, ty, 2 * s, th, COL_PANELLO);
+
+		int hh = th * fit / nrows;
+		if (hh < 4 * s) hh = 4 * s;
+		gfx_fill(tx, ty + (th - hh) * set_top / (nrows - fit), 2 * s, hh, COL_INK);
+	}
+
+	int fy = b.y + b.h - foot + 2 * s;
+	int cols = (b.w - 12 * s) / (8 * s);
+
+	char wrapped[4][64];
+	int nl = wrap_text(set_failed ? opt_error() : od ? od->help : SET_SAVE_NOTE, cols, wrapped, 2);
+	for (int i = 0; i < nl; i++)
+		gfx_text(wrapped[i], b.x + 6 * s, fy + i * 10 * s, s, set_failed ? COL_RED : COL_PANELLO, 0);
+
+	/*
+	  And the one line that changes. Order is by urgency: an armed action first, because
+	  the player is one press from it; then the result of the last write; then what the
+	  amber on the selected row means, which is the only place the colour is explained.
+	*/
+	int y3 = fy + 2 * 10 * s;
+
+	if (set_arm && !CheckTimer(set_arm_until))
+	{
+		btn_hint_c(b.x + b.w / 2, y3, s, COL_RED, "Press", LBL_A, "again to save");
+		return;
+	}
+	if (set_quit_arm && !CheckTimer(set_quit_until))
+	{
+		btn_hint_c(b.x + b.w / 2, y3, s, COL_RED, "Press", LBL_B, "again to lose the changes");
+		return;
+	}
+	if (set_row == set_nview && dirty)
+	{
+		btn_hint_c(b.x + b.w / 2, y3, s, COL_INK, "Press", LBL_A, "to save");
+		return;
+	}
+	if (!dirty && set_wrote > 0)
+	{
+		gfx_text_c(gfx_clip(opt_wrote_live() ? "SAVED - IN EFFECT NOW"
+		                                     : "SAVED - FROM THE NEXT GAME ON", s, b.w - 12 * s),
+			b.x + b.w / 2, y3, s, COL_GREEN, 0);
+		return;
+	}
+	if (od && !opt_is_rec(set_view[set_row]))
+	{
+		char u[64], rv[24];
+		snprintf(u, sizeof(u), "Usually %s", opt_rec_text(set_view[set_row], rv, sizeof(rv)));
+		for (char *q = u; *q; q++) *q = (char)toupper((unsigned char)*q);
+		gfx_text_c(gfx_clip(u, s, b.w - 12 * s), b.x + b.w / 2, y3, s, COL_YELLOW, 0);
 	}
 }
 
@@ -2779,7 +3900,8 @@ static void render()
 
 	int overlay = (screen == SCR_SORT || screen == SCR_DISPLAY || screen == SCR_OPTIONS ||
 		screen == SCR_ABOUT || screen == SCR_WIFI || screen == SCR_PADS ||
-		screen == SCR_POWER);
+		screen == SCR_POWER || screen == SCR_INI || screen == SCR_PADTEST ||
+		screen == SCR_SET);
 	if (overlay) gfx_scrim(0, 0, p->w, p->h, COL_BGDARK, 2);
 
 	draw_suspend(p);
@@ -2794,7 +3916,10 @@ static void render()
 	case SCR_ABOUT:   draw_about_panel(p); break;
 	case SCR_WIFI:    draw_wifi(p); break;
 	case SCR_POWER:   draw_power(p); break;
+	case SCR_INI:     draw_ini(p); break;
+	case SCR_SET:     draw_settings(p); break;
 	case SCR_PADS:    draw_pads(p); break;
+	case SCR_PADTEST: draw_padtest(p); break;
 	case SCR_LAUNCH:  draw_launch(p); break;
 	default: break;
 	}
@@ -2833,7 +3958,51 @@ static void go_screen(int s)
 	screen = s;
 	// Reading the link costs a process, so only do it while something is showing it.
 	net_watch(s == SCR_OPTIONS || s == SCR_WIFI);
-	bt_watch(s == SCR_OPTIONS || s == SCR_PADS);
+	// The tester counts: a wireless pad woken from inside it has to turn up in the list
+	// underneath, and bluetoothctl is the only thing that knows it has.
+	bt_watch(s == SCR_OPTIONS || s == SCR_PADS || s == SCR_PADTEST);
+	// The Options rows say how many settings the ini disagrees with and how many are
+	// away from their default, so both have to be read - once, on the way in, and not
+	// on every frame the rows are on screen.
+	if (s == SCR_OPTIONS) { ini_refresh(); set_summary(); }
+	mark_dirty();
+}
+
+// Opening the tester on the row under the cursor. Only what names the pad is kept -
+// see padtest_find() for why the row itself would go stale.
+static void padtest_open(const pad_row *r)
+{
+	snprintf(padtest_name, sizeof(padtest_name), "%s", r->name);
+	snprintf(padtest_mac, sizeof(padtest_mac), "%s", r->mac);
+	padtest_kind = r->kind;
+	padtest_back_arm = 0;
+	padtest_seen = 0;
+	go_screen(SCR_PADTEST);
+}
+
+/*
+  Every key while the tester is up, and none of them does anything - that is the point.
+  A screen that asks the player to press every button cannot also give those buttons
+  meanings, so the only way out is B, and B is armed rather than immediate so that it too
+  can be pressed and seen to light up. Same two-press idiom as forgetting a controller.
+*/
+static void padtest_key(uint32_t k)
+{
+	if (k == KEY_ESC || k == KEY_BACK)
+	{
+		if (padtest_back_arm && !CheckTimer(padtest_back_until))
+		{
+			padtest_back_arm = 0;
+			go_screen(SCR_PADS);
+			return;
+		}
+
+		padtest_back_arm = 1;
+		padtest_back_until = GetTimer(2500);
+	}
+
+	// Not even a nudge for the rest: the button lighting up is the feedback, and a panel
+	// that shook every time a button was tested would be unusable.
 	mark_dirty();
 }
 
@@ -2880,6 +4049,16 @@ static void move_h(int dir)
 		}
 		else { nudge(); return; }
 		break;
+	/*
+	  Left and right are how a setting is changed, which is why the value column is on
+	  this axis at all. On the Save row there is nothing to move: A is what it is for.
+	*/
+	case SCR_SET:
+		if (set_row >= set_nview) { nudge(); return; }
+		if (!opt_step_by(set_view[set_row], dir)) { nudge(); return; }
+		set_edited();
+		return;
+
 	case SCR_BROWSE:
 		nudge();
 		return;
@@ -2973,6 +4152,19 @@ static void move_v(int dir)
 		opt_row = (opt_row + dir + OPT_ROWS) % OPT_ROWS;
 		mark_dirty();
 		break;
+
+	case SCR_SET:
+	{
+		int n = set_nview + 1;
+		set_row = (set_row + dir + n) % n;
+
+		// Moving off disarms, as everywhere else here: reaching for another row means
+		// the player has stopped meaning to do the thing this one offered.
+		set_arm = 0;
+		set_quit_arm = 0;
+		mark_dirty();
+		break;
+	}
 
 	case SCR_PADS:
 	{
@@ -3126,6 +4318,16 @@ static void accept()
 			break;
 
 		case 6:
+			ini_refresh();
+			go_screen(SCR_INI);
+			break;
+
+		case 7:
+			set_refresh();
+			go_screen(SCR_SET);
+			break;
+
+		case 8:
 			if (!ig_active) { chome_leave(); break; }
 
 			// Closing the game loses unsaved progress, so it takes two presses.
@@ -3161,16 +4363,114 @@ static void accept()
 		mark_dirty();
 		break;
 
-	case SCR_PADS:
-		if (!bt_present()) { nudge(); break; }
+	case SCR_SET:
+	{
+		/*
+		  On a setting, A steps it forward - the same thing right does, so a player who
+		  only ever presses A can still change everything on the screen. A number wraps
+		  round at the top here where right stops, because A has no other meaning to
+		  fall back on and a value that cannot be got back to would be a trap.
+		*/
+		if (set_row < set_nview)
+		{
+			int i = set_view[set_row];
+			const opt_def *o = opt_at(i);
 
+			if (!opt_step_by(i, 1))
+			{
+				if (o->kind != OPT_NUMBER || opt_value(i) == o->lo) { nudge(); break; }
+				opt_set(i, o->lo);
+			}
+			set_edited();
+			break;
+		}
+
+		if (!opt_dirty()) { nudge(); break; }
+
+		// Rewriting the player's own ini takes two presses, as everything here that
+		// touches a real file does.
+		if (set_arm && !CheckTimer(set_arm_until))
+		{
+			set_arm = 0;
+			int w = opt_apply(ini_path());
+
+			if (w < 0) { set_failed = 1; set_wrote = -1; }
+			else
+			{
+				set_wrote = w;
+				set_failed = 0;
+
+				/*
+				  classicui_overscan is in the set and every layout metric is derived
+				  from it, so the theme has to be recomputed even though the canvas is
+				  exactly the size it was - which is the one case theme_update() skips.
+				*/
+				theme_invalidate();
+				theme_update(gfx_w(), gfx_h(), cfg.classicui_profile);
+				art_init(theme_get()->sel_w, theme_get()->sel_h);
+				gfx_damage_all();
+			}
+
+			set_summary();
+			if (set_row > set_nview) set_row = set_nview;
+			mark_dirty();
+			break;
+		}
+
+		set_arm = 1;
+		set_arm_until = GetTimer(3000);
+		mark_dirty();
+		break;
+	}
+
+	case SCR_INI:
+		// Once it has run, A is the way out as well as B - the result panel has nothing
+		// else to act on and a player who pressed A to get here will press A again.
+		if (ini_wrote != -1) { go_screen(SCR_OPTIONS); break; }
+		if (!ini_n) { nudge(); break; }
+
+		if (ini_armed && !CheckTimer(ini_until))
+		{
+			// Read before the write, because ini_apply() rewrites the file the plan was
+			// made from and the answer has to describe what was actually changed.
+			ini_needs_restart = ini_plan_restart(ini_list, ini_n);
+			ini_wrote = ini_apply(ini_path());
+			if (ini_wrote < 0) ini_wrote = -2;         // the result panel says why
+			ini_armed = 0;
+			mark_dirty();
+			break;
+		}
+
+		ini_armed = 1;
+		ini_until = GetTimer(3000);
+		mark_dirty();
+		break;
+
+	case SCR_PADS:
+	{
 		// While it is running, A is not the way out - B is, and the legend says so.
 		if (bt_pairing()) { nudge(); break; }
+
+		/*
+		  A finished pairing owns the screen, so A means what its panel offers - "Add
+		  Another" or "Try Again" - and not whatever row is selected in the list behind it.
+		  Checked before the row is read, or acknowledging a result would open the tester.
+		*/
+		if (bt_pair_state() == BTP_IDLE)
+		{
+			pad_row sel;
+			if (!pads_sel(&sel)) { nudge(); break; }
+
+			if (!sel.is_add) { padtest_open(&sel); break; }
+		}
+
+		if (!bt_present()) { nudge(); break; }
 
 		bt_pair_start();
 		if (!bt_pairing()) nudge();
 		mark_dirty();
 		break;
+	}
 
 	case SCR_WIFI:
 	{
@@ -3279,6 +4579,32 @@ static void back()
 	case SCR_POWER:
 		if (pwr_arm >= 0) { pwr_arm = -1; mark_dirty(); break; }   // first B cancels
 		go_screen(SCR_MENUBAR);
+		break;
+
+	case SCR_INI:
+		if (ini_armed) { ini_armed = 0; mark_dirty(); break; }     // first B cancels
+		go_screen(SCR_OPTIONS);
+		break;
+
+	case SCR_SET:
+		if (set_arm) { set_arm = 0; mark_dirty(); break; }         // first B cancels
+
+		/*
+		  Leaving with edits that were never written throws them away, and nothing on
+		  the way out would otherwise say so - the panel simply closes. So it asks, the
+		  same way closing a game does, rather than saving them on the way out: a write
+		  the player did not ask for is the worse of the two surprises.
+		*/
+		if (opt_dirty() && !(set_quit_arm && !CheckTimer(set_quit_until)))
+		{
+			set_quit_arm = 1;
+			set_quit_until = GetTimer(3000);
+			mark_dirty();
+			break;
+		}
+
+		set_quit_arm = 0;
+		go_screen(SCR_OPTIONS);
 		break;
 
 	case SCR_PADS:
@@ -4714,6 +6040,25 @@ static void enter()
 	art_init(theme_get()->sel_w, theme_get()->sel_h);
 }
 
+/*
+  Is there a job running that the player is waiting on, on the screen they are looking
+  at? Only these get an animated indicator, and only while they are really in flight -
+  an indicator that spins whenever a screen is open teaches people to ignore it, and
+  then it cannot do the one job it has, which is to say "this has not hung".
+*/
+static int ui_busy()
+{
+	if (screen == SCR_WIFI) return net_scanning() || net_join_state() == JOIN_WORK;
+
+	if (screen == SCR_PADS)
+	{
+		int st = bt_pair_state();
+		return bt_pairing() || st == BTP_LOOKING || st == BTP_WORKING || st == BTP_PIN;
+	}
+
+	return 0;
+}
+
 static void animate()
 {
 	unsigned long now = GetTimer(0);
@@ -4770,6 +6115,23 @@ static void animate()
 
 	if (!CheckTimer(nudge_until)) mark_dirty();
 	if (!CheckTimer(ig_close_until)) mark_dirty();
+
+	/*
+	  Keep the activity indicators turning - and only while something is really turning
+	  them. Everything folded in below is a job that is running right now in a forked
+	  child: a Wi-Fi scan, a join, a pairing conversation. Nothing here spins because a
+	  screen is open, so a screen with nothing happening on it still costs nothing.
+
+	  Throttled to the rate the ring actually moves rather than to the frame rate. The
+	  ring has eight positions and a repaint of this UI is a full compose and a blit, so
+	  painting between positions is work with nothing on the end of it - which matters
+	  most for a pairing, where this can run for a minute.
+	*/
+	if (ui_busy())
+	{
+		unsigned long ph = GetTimer(0) / GFX_SPIN_MS;
+		if (ph != anim_seen) { anim_seen = ph; mark_dirty(); }
+	}
 }
 
 /*
@@ -4927,6 +6289,18 @@ int chome_handle(uint32_t key)
 		if (k == last_key) key_run++;
 		else { key_run = 0; last_key = k; }
 
+		/*
+		  The tester is modal for the same reason the keyboard above it is: while it is up
+		  every button on the pad is the thing being tested, so none of them may also mean
+		  something. Intercepted here rather than case by case - move_h()'s default: moves
+		  the shelf behind the panel, which is the trap every modal screen here has hit.
+		*/
+		if (screen == SCR_PADTEST)
+		{
+			padtest_key(k);
+			return 1;
+		}
+
 		switch (k)
 		{
 		case KEY_LEFT:  move_h(-1); break;
@@ -5038,6 +6412,18 @@ int chome_handle(uint32_t key)
 					pads_forget_until = GetTimer(2500);
 				}
 				mark_dirty();
+				break;
+			}
+
+			/*
+			  X puts a setting back to the value this menu recommends, which is what the
+			  amber on the row is pointing at. Without it, undoing a value somebody had
+			  already put in the file means knowing what the default was.
+			*/
+			if (screen == SCR_SET)
+			{
+				if (set_row >= set_nview || !opt_reset(set_view[set_row])) { nudge(); break; }
+				set_edited();
 				break;
 			}
 
@@ -5166,10 +6552,17 @@ int chome_handle(uint32_t key)
 	{
 		static unsigned bt_seen = 0;
 
+		/*
+		  bt_present() is in here because the list has an entry that exists only when there
+		  is one: plug a dongle in with this screen open and nothing else about the state
+		  changes, so without it "Add a Controller" would not turn up until something else
+		  happened to repaint.
+		*/
 		unsigned sig = (unsigned)bt_count()
 			| ((unsigned)bt_pairing() << 8)
 			| ((unsigned)bt_pair_state() << 9)
-			| ((unsigned)bt_pair_done() << 12);
+			| ((unsigned)bt_pair_done() << 12)
+			| ((unsigned)bt_present() << 15);
 
 		for (const char *q = bt_pair_detail(); *q; q++) sig = sig * 31u + (unsigned char)*q;
 		for (const char *q = bt_pair_name(); *q; q++) sig = sig * 31u + (unsigned char)*q;
@@ -5177,6 +6570,41 @@ int chome_handle(uint32_t key)
 		if (sig != bt_seen)
 		{
 			bt_seen = sig;
+			mark_dirty();
+		}
+	}
+
+	/*
+	  And the tester, which needs it most of all: a stick moves without any key being
+	  delivered at all, and the buttons that are delivered are swallowed by padtest_key()
+	  before anything else looks at them. Folded rather than repainted every frame - an
+	  idle menu costing nothing is the reason this whole front-end is affordable, and a
+	  player looking at a pad they are not touching is idle.
+	*/
+	if (screen == SCR_PADTEST)
+	{
+		pad_row row;
+		pad_state st;
+		int have = padtest_find(&row);
+		int live = input_pad_state(have ? row.player : 0, &st);
+
+		/*
+		  `live` is in here on its own account: a pad waking up while the tester is open
+		  changes the whole panel from "asleep" to a diagram, and it can do that without
+		  a single bit of `held` changing - the first press is over by the time anything
+		  looks. The armed footer is in for a different reason: it expires on a timer, and
+		  nothing else would notice it had.
+		*/
+		unsigned sig = (unsigned)st.held
+			^ ((unsigned)(uint8_t)st.lx << 4) ^ ((unsigned)(uint8_t)st.ly << 12)
+			^ ((unsigned)(uint8_t)st.rx << 18) ^ ((unsigned)(uint8_t)st.ry << 24)
+			^ ((unsigned)(have ? row.player : 0) << 28)
+			^ ((unsigned)(live ? 1 : 0) << 30)
+			^ ((unsigned)(padtest_back_arm && !CheckTimer(padtest_back_until)) << 31);
+
+		if (sig != padtest_seen)
+		{
+			padtest_seen = sig;
 			mark_dirty();
 		}
 	}
