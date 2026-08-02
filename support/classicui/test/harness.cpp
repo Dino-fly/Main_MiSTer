@@ -4832,6 +4832,66 @@ int main()
 		dump("prompts-7-xbox");
 		unsigned long xbox = harness_fb_hash(660, 720);
 
+		/*
+		  The names these pads use over Bluetooth, which is how Dinofly's are paired. Read
+		  out of /var/lib/bluetooth on his own machine: a DualShock 4 announces itself as
+		  "Wireless Controller" and a Switch Pro as "Pro Controller" - no maker in either,
+		  which is all every other pattern has to go on. Both drew the fallback set until
+		  this, so the check is that they now draw the same prompts as the pad they are.
+		*/
+		harness_set_pad_name("Wireless Controller");
+		press(KEY_DOWN, 10);
+		press(KEY_UP, 10);
+		frame(10);
+		check(harness_fb_hash(660, 720) == psx,
+			"a DualShock 4 over Bluetooth gets PlayStation prompts");
+
+		harness_set_pad_name("Pro Controller");
+		press(KEY_DOWN, 10);
+		press(KEY_UP, 10);
+		frame(10);
+		check(harness_fb_hash(660, 720) == snes,
+			"and a Switch Pro over Bluetooth gets Nintendo ones");
+
+		/*
+		  The trap in matching that first name loosely: this one contains it and is an
+		  Xbox pad. It is caught earlier, and this is here so it stays caught.
+		*/
+		/*
+		  The identity, for the pads no name pattern will ever reach. Each of these three
+		  makers puts one lettering on everything it ships, so the vendor id decides it
+		  outright - and the name given here is deliberately useless, because that is the
+		  case this exists for.
+		*/
+		harness_set_pad_name("Controller");
+		harness_set_pad_vidpid(0x054c0ce6);            // Sony DualSense
+		press(KEY_DOWN, 10);
+		press(KEY_UP, 10);
+		frame(10);
+		check(harness_fb_hash(660, 720) == psx, "a Sony vendor id means PlayStation prompts");
+
+		harness_set_pad_vidpid(0x057e2009);            // Nintendo Switch Pro
+		press(KEY_DOWN, 10);
+		press(KEY_UP, 10);
+		frame(10);
+		check(harness_fb_hash(660, 720) == snes, "a Nintendo one means Nintendo prompts");
+
+		harness_set_pad_vidpid(0x045e02ea);            // Microsoft Xbox One S
+		press(KEY_DOWN, 10);
+		press(KEY_UP, 10);
+		frame(10);
+		check(harness_fb_hash(660, 720) == xbox, "and a Microsoft one means Xbox prompts");
+
+		harness_set_pad_vidpid(0);                     // back to deciding by name
+
+		harness_set_pad_name("Xbox Wireless Controller");
+		press(KEY_DOWN, 10);
+		press(KEY_UP, 10);
+		frame(10);
+		check(harness_fb_hash(660, 720) == xbox,
+			"while an Xbox Wireless Controller is still an Xbox pad");
+
+
 		harness_set_input_pad(0);
 		press(KEY_DOWN, 10);
 		press(KEY_UP, 10);

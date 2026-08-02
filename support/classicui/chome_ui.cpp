@@ -137,6 +137,7 @@ struct pad_row
 	int  kind;                       // PAD_*
 	int  connected;
 	int  is_add;                     // the "Add a Controller" entry, always last
+	uint16_t vid, pid;               // 0 for a paired pad that is not connected
 	char name[64];
 	char mac[24];                    // Bluetooth only
 };
@@ -1186,6 +1187,26 @@ static const char *btn(int which)
   one the last menu key came from - on that screen they are usually the same pad and the
   one time they are not is the one time it matters.
 */
+/*
+  Who made it, which is in the USB identity even when it is nowhere in the name.
+
+  This is the part a name cannot do. Sony, Nintendo and Microsoft each put one set of
+  markings on every pad they ship, so their vendor id settles the question outright -
+  and it keeps working for a pad nobody has added a name pattern for yet. Third-party
+  makers are deliberately absent: Hori and PDP and 8BitDo all ship both letterings, so
+  their vendor id says nothing and the name has to.
+*/
+static int vendor_layout(uint16_t vid)
+{
+	switch (vid)
+	{
+	case 0x054c: return PAD_PSX;      // Sony
+	case 0x057e: return PAD_SNES;     // Nintendo
+	case 0x045e: return PAD_XBOX;     // Microsoft
+	}
+	return -1;
+}
+
 static int pad_layout_of(const char *n)
 {
 	if (!n || !*n) return PAD_PLAIN;
@@ -1209,13 +1230,40 @@ static int pad_layout_of(const char *n)
 		|| strcasestr(n, "Nintendo") || strcasestr(n, "Joy-Con")
 		|| strcasestr(n, "Switch Pro")) return PAD_SNES;
 
+	/*
+	  What these pads actually call themselves over Bluetooth, which is neither their
+	  maker nor their model. Taken from Dinofly's own pairing records:
+
+	    Name=Wireless Controller     - a DualShock 4
+	    Name=Pro Controller          - a Switch Pro
+
+	  Both fell through to PAD_PLAIN, so two of the three pads he plays with were being
+	  offered lettered prompts on a machine that knows perfectly well what they are. Only
+	  the USB names carry a maker; every one of the patterns above needs one.
+
+	  Matched in full rather than as substrings, and last. "Xbox Wireless Controller" is
+	  a real name that contains the first of these and is not one, and it is already
+	  caught above - but a substring test here would still be a trap for the next name
+	  somebody adds.
+	*/
+	if (!strcasecmp(n, "Wireless Controller")) return PAD_PSX;
+	if (!strcasecmp(n, "Pro Controller")) return PAD_SNES;
+
 	return PAD_PLAIN;
+}
+
+// The identity first, the name second - see vendor_layout() and pad_layout_of().
+static int pad_layout_for(uint32_t vidpid, const char *name)
+{
+	int v = vendor_layout((uint16_t)(vidpid >> 16));
+	if (v >= 0) return v;
+	return pad_layout_of(name);
 }
 
 static int pad_layout()
 {
 	if (!using_pad) return PAD_KBD;
-	return pad_layout_of(input_menu_key_devname());
+	return pad_layout_for(input_menu_key_vidpid(), input_menu_key_devname());
 }
 
 // Indexed by LBL_A..LBL_Y, which is also the letter order.
@@ -2746,6 +2794,8 @@ static int pads_build(pad_row *out, int max)
 		r->player = pads[i].player;
 		r->kind = pads[i].kind;
 		r->connected = 1;
+		r->vid = pads[i].vid;
+		r->pid = pads[i].pid;
 		snprintf(r->name, sizeof(r->name), "%s",
 			bt_pad_label(pads[i].vid, pads[i].pid, pads[i].name));
 		snprintf(r->mac, sizeof(r->mac), "%s", pads[i].mac);
@@ -3202,7 +3252,7 @@ static void draw_padtest(const chome_profile *p)
 	int live = input_pad_state(player, &st);
 
 	const char *nm = (have && row.name[0]) ? row.name : padtest_name;
-	int layout = pad_layout_of(nm);
+	int layout = pad_layout_for(have ? (((uint32_t)row.vid << 16) | row.pid) : 0, nm);
 
 	int w = p->w - 2 * p->inset;
 	if (w > 44 * 8 * s) w = 44 * 8 * s;
@@ -5419,8 +5469,17 @@ static void draw_running_warning(const chome_profile *p)
 
 	gfx_fill(0, 0, p->w, h, COL_RED);
 	gfx_fill(0, h, p->w, (s > 1) ? 2 : 1, COL_SHADOW);
-	gfx_text_c("STILL PLAYING - this system cannot pause your game",
-		p->w / 2, (h - 7 * s) / 2, s, COL_WHITE, 0);
+
+	/*
+	  Two wordings, because gfx_text_c() centres and a line too long for the canvas
+	  loses both its ends. On the CRT the full sentence came out as "PLAYING - this
+	  system cannot pause your", which drops the one word that carries the warning.
+	*/
+	const char *msg = "STILL PLAYING - this system cannot pause your game";
+	int room = (p->w - 8 * s) / (8 * s);
+	if ((int)strlen(msg) > room) msg = "STILL PLAYING - NOT PAUSED";
+
+	gfx_text_c(gfx_clip(msg, s, p->w - 8 * s), p->w / 2, (h - 7 * s) / 2, s, COL_WHITE, 0);
 }
 
 // Runs every frame in every core, so a registered save finishes whether the menu is
