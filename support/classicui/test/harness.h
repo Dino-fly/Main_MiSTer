@@ -44,6 +44,7 @@ void harness_reset_analog_claims();
 int harness_neogeo_scanned();
 int harness_ss_copy_from();
 int harness_ss_copy_to();
+void harness_reset_ss_copy();
 
 const char *harness_last_launch();
 const char *harness_last_preset();
