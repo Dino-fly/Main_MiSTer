@@ -458,6 +458,26 @@ static int ig_is_running(const chome_item *it)
 	return (it->sysidx == ig_item.sysidx) && !strcmp(it->path, ig_item.path);
 }
 
+/*
+  True when this game's core is known to have no save states, so the strip can say so
+  instead of offering slots that can never fill.
+
+  Two sources, in this order on purpose. Inside its own running core the CONF_STR is
+  the truth and the table is not consulted at all: a core rebuilt from a newer upstream
+  can gain save states, and a stale "no" in chome_lib would then be a lie about the very
+  core that is answering. From the shelf there is no core loaded to ask, so the measured
+  table is all there is - and a system nobody measured (CH_SS_UNKNOWN) is left alone,
+  which shows the slots as before rather than guessing.
+*/
+static int no_savestates_for(const chome_item *it)
+{
+	if (!it) return 0;
+	if (ig_is_running(it)) return !ss_can_save() && !ss_can_load();
+
+	const chome_sys *s = lib_sys(it->sysidx);
+	return (s && s->savestates == CH_SS_NO);
+}
+
 static int slot_state(const chome_item *it, int n)
 {
 	if (!it) return 0;
@@ -1238,10 +1258,13 @@ static int build_legend(legend_pair *out, int max)
 		// Inside that very game the slots become live: A restores, Y writes.
 		int here = ig_is_running(cur_game());
 
-		// Nothing to offer for a core with no savestates - see draw_suspend().
-		if (here && !ss_can_save() && !ss_can_load())
+		// Nothing to offer for a core with no savestates - see draw_suspend(). Also from
+		// the shelf, where the answer comes from the table instead of the core.
+		if (no_savestates_for(cur_game()))
 		{
-			if (n < max) { out[n++] = lp(LBL_A, "Resume", "Play"); }
+			// From the shelf A starts the game rather than going back to it, and the
+			// only prompt on screen must not say otherwise.
+			if (n < max) { out[n++] = lp(LBL_A, here ? "Resume" : "Start", here ? "Play" : "Start"); }
 			if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
 			break;
 		}
@@ -1573,8 +1596,13 @@ static void draw_suspend(const chome_profile *p)
 	  these, and three slots marked EMPTY invite a player to try. Say it plainly instead:
 	  being told there is nothing to do here is a different thing from being told nothing,
 	  and pressing the button and having it silently refuse is the worst of the three.
+
+	  This is worth more from the shelf than it is in the game, which is where it started:
+	  a player who has not started the game yet is the one still deciding whether to trust
+	  it with an hour of their evening. See no_savestates_for() for where the answer comes
+	  from when there is no core loaded to ask.
 	*/
-	if (ig_is_running(it) && !ss_can_save() && !ss_can_load())
+	if (no_savestates_for(it))
 	{
 		/*
 		  Two lines, not three: the strip is only as tall as the row of slot tiles it

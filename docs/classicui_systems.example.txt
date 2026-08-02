@@ -4,7 +4,7 @@
 # built-in table entirely (the built-in list is only used when this file is
 # absent). One system per line, fields separated by "|":
 #
-#  id | name | badge | rbf | games dir | extensions | libretro name | type | index | delay | computer | tint
+#  id | name | badge | rbf | games dir | extensions | libretro name | type | index | delay | computer | tint | look | savestates
 #
 #  id            short internal id, any unique string
 #  name          shown to the user - this is the only name they ever see
@@ -19,6 +19,14 @@
 #  delay         seconds to wait after the core loads before sending the file
 #  computer      1 = lives under Computers and uses the file browser
 #  tint          RRGGBB plate colour for the generated fallback card
+#  look          optional video look: console, arcade, computer, vga, gb, gbc,
+#                gba, gg, lynx, ws, wsc, ngpc
+#  savestates    optional, "yes" or "no": whether that core has save states. Only
+#                fill it in for a core you have actually checked. It is what lets
+#                the Suspend Points strip say a system cannot save the player's
+#                place before they pick a slot and find out - so a wrong "no"
+#                hides working save states, and leaving it empty only means the
+#                strip says nothing until the game is running, which is safe.
 #
 # IMPORTANT: type and index come from the core's CONF_STR. Get them wrong and the
 # file is handed to the wrong slot, so the game will not boot. To check a core,

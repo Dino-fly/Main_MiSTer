@@ -453,6 +453,14 @@ static void walk_profile(const char *tag, int profile, int w, int h)
 	snprintf(name, sizeof(name), "%s-2-home-game", tag);
 	dump(name);
 
+	/*
+	  The strip has to be captured on a game whose core has save states, and the first
+	  game of the shelf is Bonk's - a TurboGrafx, which has none (chome_lib's table). On
+	  that one the strip is the "no save states" message, so these two dumps would show
+	  nothing about the tiles or the delete prompt. Super Metroid has two states and a
+	  thumbnail. Back to the first game afterwards, so the rest of the walk is unchanged.
+	*/
+	select_titled("Super Metroid");
 	press(KEY_DOWN, 25);
 	snprintf(name, sizeof(name), "%s-3-suspend", tag);
 	dump(name);
@@ -461,6 +469,17 @@ static void walk_profile(const char *tag, int profile, int w, int h)
 	snprintf(name, sizeof(name), "%s-4-suspend-delete-armed", tag);
 	dump(name);
 	press(KEY_ESC, 10);
+
+	// The same strip on a core with no save states, which is what a Neo Geo or a Mega
+	// Drive player sees at every profile.
+	select_titled("Bonk");
+	press(KEY_DOWN, 25);
+	snprintf(name, sizeof(name), "%s-3b-suspend-no-states", tag);
+	dump(name);
+	press(KEY_ESC, 10);
+
+	select_first_game();
+	frame(10);
 
 	press(KEY_GRAVE, 20);
 	snprintf(name, sizeof(name), "%s-5-sort", tag);
@@ -1452,6 +1471,163 @@ static void assert_slot_match()
 	}
 }
 
+// CH_SS_* of a system by id, so the table can be asserted without a screen.
+static int sys_savestates(const char *id)
+{
+	for (int i = 0; i < lib_sys_count(); i++)
+		if (!strcasecmp(lib_sys(i)->id, id)) return lib_sys(i)->savestates;
+	return -1;
+}
+
+/*
+  What the suspend strip is showing, read back off the framebuffer, because there is no
+  other way to ask: slots and message are two branches of one draw and neither leaves a
+  flag behind. Two counts, each over the strip's own band (the strip paints over the pips
+  and the legend paints over the strip, so the band holds nothing else):
+
+  - slot pixels: COL_DIM, which in the strip is only the empty tiles' frames and the "1 2
+    3" captions under them. Every slot layout has some, the message has none.
+  - message pixels: COL_PANELHI below the header line, which is only the message itself.
+*/
+static void strip_pixels(int *slots, int *message)
+{
+	const chome_profile *p = theme_get();
+	uint32_t *fb = harness_fb_shown();
+	int w = gfx_w(), h = gfx_h();
+
+	*slots = *message = 0;
+	if (!fb || w < 1 || h < 1) return;
+
+	int top = p->h - p->safe_y - p->strip_h;
+	int bot = p->y_legend - 6 * p->ts_ui;
+	int msg_top = top + 18 * p->ts_ui;
+	if (top < 0) top = 0;
+	if (bot > h) bot = h;
+
+	for (int y = top; y < bot; y++)
+	{
+		for (int x = 0; x < w; x++)
+		{
+			uint32_t c = fb[(size_t)y * w + x] | 0xff000000u;
+			if (c == COL_DIM) (*slots)++;
+			else if (c == COL_PANELHI && y >= msg_top) (*message)++;
+		}
+	}
+}
+
+/*
+  Backlog 6: a system whose core has no save states says so before the player has spent
+  an hour on it, from the shelf as well as from inside the game. On the shelf no core is
+  loaded and no CONF_STR has been read, so the answer can only come from the measured
+  table in chome_lib - and that table must never outrank a core that is actually running,
+  in either direction.
+*/
+static void assert_no_savestates()
+{
+	printf("\n== systems with no save states ==\n");
+
+	// The table itself, including the state that promises nothing either way. SMS was
+	// never measured, so nothing in the UI may claim anything about it.
+	check(sys_savestates("nes") == CH_SS_YES, "a system measured with save states says so");
+	check(sys_savestates("md") == CH_SS_NO, "one measured without them says so");
+	check(sys_savestates("sms") == CH_SS_UNKNOWN, "an unmeasured system claims neither");
+
+	harness_set_menu_core(1);
+	harness_set_fb_supported(1);
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+	chome_leave();
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 40 && lib_scanning(); i++) frame(2);
+	frame(20);
+
+	int slots = 0, msg = 0;
+
+	// From the shelf, with no core loaded: the Mega Drive core has none.
+	check(select_titled("Streets of Rage 2") != 0, "a Mega Drive game is on the shelf");
+	press(KEY_DOWN, 25);
+	strip_pixels(&slots, &msg);
+	printf("  mega drive from the shelf: slot pixels %d, message pixels %d\n", slots, msg);
+	check(slots == 0, "the shelf strip offers no slots for a core with no save states");
+	check(msg > 0, "and says so instead");
+	dump("no-savestates-shelf");
+	press(KEY_ESC, 10);
+
+	// ...and the same strip on a system that has them, so the message is not simply
+	// always on from the shelf.
+	check(select_titled("Super Metroid") != 0, "a SNES game is on the shelf");
+	press(KEY_DOWN, 25);
+	strip_pixels(&slots, &msg);
+	printf("  snes from the shelf: slot pixels %d, message pixels %d\n", slots, msg);
+	check(slots > 0, "a system that has save states still shows its slots");
+	check(msg == 0, "with nothing written over them");
+	press(KEY_ESC, 10);
+
+	/*
+	  In its own core the CONF_STR wins, both ways round. A Mega Drive rebuilt from a
+	  newer upstream would gain save states without this table being touched, and the
+	  running core has to be believed over it - that is the whole reason the table is only
+	  consulted from the shelf.
+	*/
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "md\nStreets of Rage 2 (Europe).bin\n"); fclose(f); }
+	}
+
+	harness_set_menu_core(0);
+	chome_handle(0);
+	if (chome_ingame_active()) press(KEY_MENU, 14);
+	frame(6);
+
+	harness_set_confstr(1);                   // this core does have savestates
+	press(KEY_MENU, 20);
+	check(chome_ingame_active(), "the menu opens over a Mega Drive game");
+	for (int i = 0; i < 40 && lib_scanning(); i++) frame(2);
+	frame(20);
+
+	press(KEY_DOWN, 25);
+	strip_pixels(&slots, &msg);
+	printf("  mega drive core with savestates: slot pixels %d, message pixels %d\n", slots, msg);
+	check(slots > 0 && msg == 0, "a running core with save states outranks the table");
+	dump("no-savestates-live-override");
+	press(KEY_ESC, 10);
+	press(KEY_MENU, 16);
+	frame(8);
+
+	/*
+	  And the mirror, which is where this message started: a Game Boy is marked as having
+	  save states, but the core running is the one that answers, so a core that reports
+	  none gets the message even though the table says otherwise.
+	*/
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "gb\nTetris (World).gb\n"); fclose(f); }
+	}
+
+	chome_handle(0);
+	if (chome_ingame_active()) press(KEY_MENU, 14);
+	frame(6);
+
+	harness_set_confstr(0);                   // no savestate entries at all
+	press(KEY_MENU, 20);
+	check(chome_ingame_active(), "the menu opens over the Game Boy game");
+	frame(20);
+
+	press(KEY_DOWN, 25);
+	strip_pixels(&slots, &msg);
+	printf("  game boy core without savestates: slot pixels %d, message pixels %d\n", slots, msg);
+	check(msg > 0 && slots == 0, "a running core without them is believed over the table too");
+	press(KEY_ESC, 10);
+	press(KEY_MENU, 16);
+	frame(8);
+
+	harness_set_confstr(1);
+	harness_set_menu_core(1);
+	chome_leave();
+	gfx_shutdown();
+}
+
 /*
   The shelf must come back in the view the game was launched from. He was browsing the
   NES system view, started Contra, opened the menu over it and got the all-games shelf
@@ -2280,6 +2456,7 @@ int main()
 	assert_freeze_off();
 	assert_back_leftmost();
 	assert_slot_match();
+	assert_no_savestates();
 	assert_menu_repeat();
 	assert_input_labels();
 	assert_overscan();

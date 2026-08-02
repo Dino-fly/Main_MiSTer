@@ -54,6 +54,14 @@ and the game will not boot. The built-in table uses the common values but they a
 not verified per core. Override without rebuilding by copying
 `docs/classicui_systems.example.txt` to `classicui_systems.txt` on the SD root.
 
+The same table records **whether each system's core has save states**
+(`CH_SS_YES`/`CH_SS_NO`/`CH_SS_UNKNOWN`), which is the only way the Suspend Points
+strip can say "this system cannot save your place" from the *shelf* - no core is
+loaded there, so there is no `CONF_STR` to read. In the running core the `CONF_STR`
+answers and the table is not consulted at all, so a rebuilt core that gains save
+states is believed over a stale `CH_SS_NO`. A system nobody has measured stays
+`CH_SS_UNKNOWN` and is promised nothing either way.
+
 ## The Display screen
 
 Laid out like the SNES Classic's: a row of preview tiles with a radio under each.
