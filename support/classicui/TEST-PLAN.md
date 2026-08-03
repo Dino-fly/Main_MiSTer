@@ -93,6 +93,47 @@ options, say so immediately — that is the failure mode that would need a reset
 
 ---
 
+## A7. The pause — new, and the reason for this session
+
+Built since the plan was written and **not verified on hardware at all**. The harness
+cannot see it: it proves the front-end asks for the hold and uses the core's pause, but the
+sequence that keeps `OSD_STATUS` high is a fabric fact, and swapping it for the old code
+leaves every check passing. Only your eyes settle this.
+
+The claim: on a core that pauses "while the OSD is open", opening our menu should now
+**actually stop the game** rather than freezing it with a savestate.
+
+**How to tell a real pause from the old freeze.** Both leave a still picture. The
+difference is that the freeze writes a state file and takes a moment; a pause is instant and
+writes nothing. Watch for a game with continuous motion - a demo loop, an attract mode - and
+open the menu at a moment you can recognise.
+
+| Step | I do | You look at | Report |
+|---|---|---|---|
+| A7.1 | **NES** game, let it run to something moving, open our menu | The game behind the menu | Is it **completely still**? Any motion at all - animation, scrolling, a blinking cursor? |
+| A7.2 | Close the menu | The game | Does it resume from exactly where it stopped, or jump forward as if it had kept running? |
+| A7.3 | Same on **Game Boy** | The game | Still? Resumes cleanly? |
+| A7.4 | Same on **GBA** | The game | Still? Resumes cleanly? |
+| A7.5 | Same on **Mega Drive** | The game | Still? And **is the red STILL PLAYING band gone?** It should be - the game is genuinely paused now |
+| A7.6 | **PSX** | The game | Still? |
+| A7.7 | **SNES** | The game | This one has *no* pause in the core, so it should still freeze with a state. Expect a still picture and the old behaviour |
+
+A7.5 is a double check: the warning band and the pause are decided by the same test, so if
+the band still shows on Mega Drive while the game is stopped, one of the two is wrong.
+
+**Then the thing I am most wary of.** `OSD_STATUS` is a signal cores may use for more than
+pausing, and what each does with it cannot be determined from source we do not have.
+
+| Step | I do | You look at | Report |
+|---|---|---|---|
+| A7.8 | On each core above, open the menu and leave it open ~30s, then close | The game and the sound | Anything odd on resume? Wrong audio, a hang, corrupted picture, lost input? |
+| A7.9 | Open the menu, save a suspend point, close | The game | Does it still resume correctly? (`Info("Saving the state")` sends an OSD_ALL command that can silently drop the pause) |
+
+A7.9 is a known fragility, not a guess - any `OSD_ALL` command clears the hold. If the game
+lurches forward after saving, that is what happened.
+
+---
+
 ## Part B — plug the HDMI screen in
 
 Everything here is hidden or untestable at 240p.
@@ -104,6 +145,7 @@ Everything here is hidden or untestable at 240p.
 | B3 | Open **Display** | The looks screen | It is hidden at 240p, so this is its first real outing. Do the preview tiles look right, and is the zoom enough to judge a filter by? |
 | B4 | Step through the looks | The game behind | Do they apply immediately, and does each look like its name? |
 | B5 | Open the core options screen | The panel | Anything clipped or misaligned at 720p? |
+| B6 | With HDMI attached and `vga_scaler=0`, open our menu | **The CRT**, not HDMI | Is there a dimmed box in the middle of the raw analog picture? This is the known cost of the pause change, and B6 is where it would show |
 
 B3 and B4 are the zoomed previews and the immediate-apply change from earlier — both were
 only ever verified by harness render and arithmetic, never by eye.
