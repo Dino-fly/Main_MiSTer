@@ -2048,11 +2048,19 @@ int process_ss(const char *rom_name, int enable)
 						FileClose(&f);
 						printf("Wrote %d bytes to file: %s\n", ret, ss_name);
 
-						// Thumbnail beside the savestate for Classic Home's suspend
-						// point strip. The core wrote the state itself and we only
-						// notice on the next poll, so this frame is up to a second
-						// later than the save - close enough for a thumbnail.
-						if (cfg.classicui && !hidden)
+						/*
+						  Thumbnail beside the savestate for Classic Home's suspend point
+						  strip - but only while that front-end is not on screen.
+
+						  When it is, it has already written one from the frame the player
+						  was actually looking at, and this would overwrite it with whatever
+						  the scaler holds up to a second later. On PSX that is black, which
+						  is how a suspend point came to show nothing at all: ours was right
+						  and this replaced it. On NES the same race happened to land on a
+						  usable frame, which is why it looked like a PSX-only fault.
+						*/
+						if (cfg.classicui && !hidden
+							&& !chome_active() && !chome_ingame_active())
 						{
 							char png[1024];
 							snprintf(png, sizeof(png), "%s", ss_name);
