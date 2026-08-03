@@ -288,6 +288,35 @@ looked at rather than assumed.
 
 ---
 
+## 5b. It is the running core's list, and only that
+
+Worth stating plainly because the harness screenshot invites the opposite reading.
+
+`core_opts_scan()` walks `user_io_get_confstr()`, which returns **the loaded core's**
+strings and nothing else. There is no combined table and no per-core list in the firmware;
+if a core is not running there is nothing to read, which is why the bar entry does not
+exist on the shelf.
+
+Measured on the device, same firmware, one after the other:
+
+| Core | Offered | Picture | System | Mask |
+|---|---|---|---|---|
+| SNES | 23 | 4 | 19 | `0056` |
+| Game Boy | 23 | 8 | 15 | `016a` |
+
+Game Boy's picture page: Super Game Boy, Extra Sprites, Inverted Color, Screen Shadow,
+Custom Palette, Frame Blend, GBC Colors, Super Game Boy + GBC. SNES's: Vertical Crop,
+Crop Offset, Force 256px, Pseudo Transparency. No overlap, because they are different
+cores' own options.
+
+The harness picture is a **synthetic fixture**: one fake core carrying options borrowed
+from several real ones, so a single test covers every awkward case in the grammar. It shows
+`Palette` beside `VI Deblur`, which no real core does. The dump is named
+`core-options-synthetic-fixture` for that reason, and the per-core screenshots under
+`docs/img/device/` are the honest examples.
+
+---
+
 ## 6. Suggested order of work
 
 1. A CONF_STR parser that yields (page, name, values, bit spec, mask condition) and
