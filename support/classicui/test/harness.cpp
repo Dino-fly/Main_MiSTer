@@ -1659,7 +1659,14 @@ static void assert_core_options_screen()
 
 	press(KEY_ENTER, 18);
 	frame(10);
-	dump("core-options");
+	/*
+	  Named for what it is. The fixture is a synthetic core carrying options borrowed from
+	  several real ones, so one pass covers every awkward case in the grammar - which means
+	  this picture shows Palette next to VI Deblur, a combination no real core has. Dinofly
+	  read it as the screen listing every core's options rather than the running one's; the
+	  device screenshots in docs/img/device are the ones that show real per-core lists.
+	*/
+	dump("core-options-synthetic-fixture");
 
 	const core_opt *first = core_opt_tier_at(CO_TIER_PICTURE, 0);
 	check(first != 0, "the screen opens on something");
