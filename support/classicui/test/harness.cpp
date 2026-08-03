@@ -1727,9 +1727,24 @@ static void assert_core_options_are_reachable()
 	check(harness_last_menu_key() == KEY_F12, "and asks for the classic OSD");
 
 	/*
-	  And the button is now the OSD's. Pressing it must not reopen the front-end over
-	  the settings screen the player just asked for.
+	  The key that asks for the OSD must not be taken by us on the way past.
+
+	  This is the bug Derek hit: Core Settings closed our menu, menu_key_set(KEY_F12) queued
+	  the key, and then this handler saw F12 first and read it as "open Classic Home". The
+	  OSD never appeared and the swallowed press is why the next one seemed to do nothing.
+
+	  Here the OSD has not appeared yet, which is the exact window that went wrong - so a
+	  menu press in it must leave us shut.
 	*/
+	press(KEY_MENU, 20);
+	frame(8);
+	check(!chome_ingame_active(), "and a press before the OSD appears is not taken by us");
+
+	/*
+	  And once it is up the button is the OSD's. Pressing it must not reopen the front-end
+	  over the settings screen the player just asked for.
+	*/
+	harness_set_osd_visible(1);
 	press(KEY_MENU, 20);
 	frame(8);
 	check(!chome_ingame_active(), "while the OSD is up the menu button is not ours");
