@@ -2157,11 +2157,20 @@ static void assert_no_savestates()
 {
 	printf("\n== systems with no save states ==\n");
 
-	// The table itself, including the state that promises nothing either way. SMS was
-	// never measured, so nothing in the UI may claim anything about it.
+	/*
+	  The table itself, including the state that promises nothing either way. Arcade is the
+	  unmeasured one: an .mra picks its own core, so there is nothing to have measured.
+
+	  SMS used to be the example here and is now CH_SS_YES - it gained save states upstream
+	  and our own dump shows them. Worth knowing that this check moved rather than broke:
+	  the table describes the cores on a card at a moment, so an entry changing is the
+	  system working, and a test naming one particular system as unmeasured will keep
+	  needing that.
+	*/
 	check(sys_savestates("nes") == CH_SS_YES, "a system measured with save states says so");
 	check(sys_savestates("md") == CH_SS_NO, "one measured without them says so");
-	check(sys_savestates("sms") == CH_SS_UNKNOWN, "an unmeasured system claims neither");
+	check(sys_savestates("sms") == CH_SS_YES, "and Master System, measured again, has them");
+	check(sys_savestates("arcade") == CH_SS_UNKNOWN, "an unmeasured system claims neither");
 
 	harness_set_menu_core(1);
 	harness_set_fb_supported(1);
