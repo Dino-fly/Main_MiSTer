@@ -864,6 +864,22 @@ static unsigned int last_menu_key = 0;
 char user_io_osd_is_visible() { return (char)osd_visible; }
 
 /*
+  Holding OSD_STATUS into the core with no overlay on screen. The harness records only what
+  the front-end asked for, which is enough to assert that a core with an OSD-tied pause is
+  now used rather than written off.
+
+  What it cannot check, and no test here can: that the SPI sequence in OsdStatusHold()
+  really keeps osd_status high. That depends on sys_top wiring only vga_osd's status to the
+  core and on EnableOsd_on() selecting the instance - both read in the fabric source, and
+  neither reachable from a stub. Replacing that sequence with the old OSD_ALL pair leaves
+  every check here passing. It has to be confirmed on hardware: a paused game visibly
+  stops, and nothing in a log will say so.
+*/
+static int osd_hold = 0;
+void OsdStatusHold(int on) { osd_hold = on ? 1 : 0; }
+int harness_osd_status_held() { return osd_hold; }
+
+/*
   Whether the classic menu is on screen. Distinct from user_io_osd_is_visible(), which is
   about key handling and which the front-end sets itself - the two were confused once, and
   it stopped the in-game menu opening on real hardware.

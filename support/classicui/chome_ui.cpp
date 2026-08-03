@@ -5837,19 +5837,19 @@ static int ss_pause_engage()
 	if (!h->found_pause) return 0;
 
 	/*
-	  A pause the core only honours while the OSD is on screen is no use here: the
-	  OSD draws over this UI, so holding it open to win the pause would put stale
-	  menu rows on top of everything. Setting the option alone changes nothing,
-	  since OSD_STATUS stays low - so say so rather than claim a pause that did not
-	  happen.
-	*/
-	if (h->pause_needs_osd)
-	{
-		printf("ClassicUI: this core only pauses while the OSD is open, so it keeps running\n");
-		return 0;
-	}
+	  A pause the core only honours while the OSD is on screen used to be a dead end here,
+	  because winning it meant drawing the OSD over this UI. It is not any more: the menu
+	  holds OSD_STATUS asserted with no overlay where it shows (OsdStatusHold), so such a
+	  core pauses like any other and the option is simply forced on below.
 
-	if (h->pause_is_option)
+	  That is worth more than the tidiness. It is what lets NES, Game Boy, GBA and Mega
+	  Drive be paused properly instead of held still by a savestate - and on those cores it
+	  retires freeze_engage(), which is the thing that exposes us to the SNES core's habit
+	  of dying when asked for a state at a bad moment.
+	*/
+	if (h->pause_needs_osd) printf("ClassicUI: pausing through OSD_STATUS, held without the OSD\n");
+
+	if (h->pause_is_option || h->pause_needs_osd)
 	{
 		ss_pause_prev = user_io_status_get(h->pause_opt, h->pause_ex);
 		if (ss_pause_prev == h->pause_on_val) return 1;              // already paused
@@ -6211,8 +6211,13 @@ static int ig_open()
 
 	// As in the menu core: input keeps arriving and the overlay ends up off, because
 	// it draws over this UI rather than under it.
-	OsdEnable(DISABLE_KEYBOARD);
-	OsdMenuCtl(0);
+	/*
+	  OSD_STATUS held, no overlay drawn where it would be seen. This is what a core that
+	  only pauses "while the OSD is open" needs - MiSTer has no pause command, that signal
+	  is the pause, and the old pair here (OsdEnable then OsdMenuCtl(0)) raised it and threw
+	  it straight back away. See OsdStatusHold().
+	*/
+	OsdStatusHold(1);
 
 	ig_mute_engage();             // before the freeze state, which takes a moment to write
 
@@ -6457,8 +6462,13 @@ static void enter()
 	  OSD_STATUS, and that is the only thing a core's "pause when the OSD is open"
 	  option watches. The two cannot both be had: see ss_pause_engage().
 	*/
-	OsdEnable(DISABLE_KEYBOARD);
-	OsdMenuCtl(0);
+	/*
+	  OSD_STATUS held, no overlay drawn where it would be seen. This is what a core that
+	  only pauses "while the OSD is open" needs - MiSTer has no pause command, that signal
+	  is the pause, and the old pair here (OsdEnable then OsdMenuCtl(0)) raised it and threw
+	  it straight back away. See OsdStatusHold().
+	*/
+	OsdStatusHold(1);
 
 	// On an analog-only setup the framebuffer reaches no screen until the scaler
 	// output is routed there. Ask before measuring: this resizes the framebuffer to

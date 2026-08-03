@@ -2429,11 +2429,18 @@ static void assert_ingame()
 	press(KEY_MENU, 20);
 	check(chome_ingame_active(), "menu button opens the front-end in a game core");
 	/*
-	  This core only pauses while the OSD is open, which is unusable here, so the
-	  menu holds it still with a state instead.
+	  This core pauses only while the OSD is open, which used to be unusable here - so the
+	  menu held it still with a savestate instead, and these two checks asserted exactly
+	  that. Both now say the opposite, because the menu holds OSD_STATUS asserted with no
+	  overlay where it shows, so the core's own pause works and no state is needed.
+
+	  Worth being clear that this is a behaviour change and not a test being bent to fit:
+	  the freeze is still the right answer for a core with no pause at all, and that path
+	  keeps its own coverage under the no-pause fixture.
 	*/
-	check(harness_pause_val() == 0, "an OSD-gated pause option is left alone");
-	check(harness_pulses_on("S") >= 1, "and the game is held still with a state");
+	check(harness_osd_status_held(), "OSD_STATUS is held so the core can honour its pause");
+	check(harness_pause_val() != 0, "an OSD-gated pause option is used, not written off");
+	check(harness_pulses_on("S") == 0, "and no savestate is taken to hold the game still");
 	/*
 	  ...and it is silenced while it runs on behind the still, because a game you can
 	  hear but not play reads as a fault.
@@ -2465,11 +2472,30 @@ static void assert_ingame()
 	dump("ingame-2-suspend");
 
 	/*
-	  This core pauses only on an OSD-gated option, which is unusable here, so the menu
-	  held it still with a state instead - and that means the moment the player wants is
-	  already being written. Saving is therefore a copy of it, not a second save: the core
-	  is not asked for anything, and the menu stays up.
+	  Everything from here to the end of this section is the freeze-and-copy path, which
+	  needs a core that cannot pause at all - so it switches to that fixture.
+
+	  It used to run on the fixture above, whose pause is the OSD-gated kind. That was
+	  unusable, so the menu froze the game with a state instead and these checks described
+	  it. OSD_STATUS is held without an overlay now, so that core pauses properly and never
+	  freezes - which is the point of the change, and it is why these had to move rather
+	  than be rewritten. The freeze is still exactly right for SNES, SMS, TG16, N64 and
+	  Neo Geo, which have no pause in the core at all, and this is now the coverage for it.
+
+	  With no pause, the moment the player wants is already being written by the freeze, so
+	  saving is a copy of it rather than a second save: the core is asked for nothing and
+	  the menu stays up.
 	*/
+	press(KEY_MENU, 16);
+	frame(6);
+	harness_set_confstr(2);
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 40 && lib_scanning(); i++) frame(2);
+	frame(16);
+	check(!harness_osd_status_held() || harness_pause_val() == 0,
+		"a core with no pause is not claimed to be paused");
+	press(KEY_DOWN, 20);
+
 	unlink(ROOT "/savestates/Gameboy/Tetris (World)_4.ss");
 	harness_reset_status();
 	press(KEY_BACKSPACE, 10);                 // Y saves into the slot
