@@ -5,14 +5,134 @@ Design rationale: `docs/CLASSIC_UI_PLAN.md`.
 
 Enable with `classicui=1` in `MiSTer.ini`. Default is off.
 
-**Running on hardware.** Brought up on a DE10-Nano against both a 15 kHz CRT over
-the analog board and an HDMI display: the shelf, launching, save states, the
-in-game menu, controllers, Wi-Fi and the settings screens all work there. Two
-faults that only a real machine could show up are fixed and worth knowing about -
-a per-frame diagnostic that filled `/tmp`, and a Wi-Fi adapter cached as absent
-because the front-end asked before the USB driver had created the interface.
+**Running on hardware.** Brought up on a DE10-Nano against both a 15 kHz CRT over the
+analog board and an HDMI display: the shelf, launching, save states, the in-game menu, core
+options, controllers, Wi-Fi and the settings screens all work there, and the pause was
+confirmed core by core on the television.
+
+Faults that only a real machine could show are listed in the changelog of each release.
+The pattern worth knowing, because it recurred: several came from using a shared firmware
+mechanism whose behaviour differed from what its name suggested - a flag this code sets
+itself, a state that is briefly true for another reason, a key consumed before the intended
+reader sees it. The harness cannot see any of those.
 
 For what it looks like and how to install it, see [GUIDE.md](GUIDE.md).
+
+## What it does
+
+Every picture below is a capture from a real DE10-Nano, taken over its analog output to a
+CRT — so they are 320×240 and they are what the thing actually looks like, not a mockup or
+a harness render. The harness renders live in [GUIDE.md](GUIDE.md); these do not.
+
+### A shelf of your games
+
+![The shelf](docs/img/device/shelf.png)
+![The shelf with cover art](docs/img/device/shelf-cover.png)
+
+Cover art, the system, and how many times you have played each game. Left and right walk the
+shelf; the shoulder buttons page it. The row begins with **Favourites** and **Systems**, and
+**B** from anywhere jumps back to them rather than making you walk.
+
+Art is found locally under `games/<System>/boxart/`, or downloaded on demand with
+`classicui_artfetch=1`. The library is indexed once and cached — 1430 items on the test
+machine — so later boots start instantly.
+
+### Browsing by system
+
+![Systems](docs/img/device/systems.png)
+
+Every system has an icon, from licensed sets rather than hand-drawn — see
+[ICONS.md](ICONS.md) for attribution.
+
+### Suspend points: save states you can see
+
+![Empty suspend points](docs/img/device/suspend-empty.png)
+![A saved suspend point](docs/img/device/suspend-saved.png)
+
+Press **down** on a game for its save states, each with a picture of the moment it holds —
+captured from the frame you were looking at when you opened the menu. **A** plays from that
+point, **Y** saves, **X** deletes (twice, deliberately), **down** locks a slot.
+
+The number of slots follows what the core actually offers, and the last one is reserved to
+hold the game still, so it is never shown as yours.
+
+### The whole front-end, from inside a game
+
+![A game running](docs/img/device/game.png)
+
+Press the menu button while playing and the entire front-end comes up over a still of your
+game — shelf, suspend points, settings, everything. The classic OSD never appears on its own.
+
+### The game is genuinely paused
+
+On a core that can pause, it is paused — not merely covered. MiSTer has no pause command:
+the signal cores pause on is derived from whether the classic OSD is open, which is exactly
+what this front-end replaces. It holds that signal asserted without drawing the OSD, so
+**NES, Game Boy, GBA, Mega Drive and PSX all stop** while the menu is up. Verified on
+hardware, core by core.
+
+Cores with no pause at all — SNES, Master System, TurboGrafx-16, N64, Neo Geo — are held
+still with a save state instead, and `classicui_freeze=0` opts out of that.
+
+![Still playing](docs/img/device/still-playing.png)
+
+And where a core can do neither, it says so, rather than leaving you to notice.
+
+### The core's own settings, in our UI
+
+![Core options on Game Boy](docs/img/device/core-options-gb.png)
+![Core options on SNES](docs/img/device/core-options-snes.png)
+
+The menu bar grows an entry named after the running system — `NES`, `SNES`, `GB`, `PSX` —
+which appears only while a core is loaded and only if that core published something worth
+offering. It reads the core's own CONF_STR, so the list is that core's and nothing else:
+Game Boy offers Super Game Boy and its palettes, SNES offers vertical crop and pseudo
+transparency, N64 offers its whole VI filter chain including deblur and antialias.
+
+Three pages. **Picture** first, because that is why anyone opens it. **System & Sound**
+second. **Risky** last — and an option lands there automatically when the core marks its own
+values unsafe, as PSX does with `(U) = unsafe -> can crash`.
+
+Changes apply at once and are kept in the same `<CORE>.CFG` the classic OSD writes.
+
+### Options, and the classic menu when you want it
+
+![Options](docs/img/device/options.png)
+![Options in a game](docs/img/device/options-ingame.png)
+
+**Best Settings** turns off the pop-ups that interrupt a game, showing exactly which lines
+of `MiSTer.ini` it will change and keeping a backup. **More Settings** edits the ini options
+worth editing, in words a person can read, with anything away from its usual value in amber.
+
+**Core Settings** hands the screen to the classic OSD for everything we deliberately do not
+duplicate. While it is up the menu button belongs to it, so you can always get back.
+
+### Controllers
+
+![Controllers](docs/img/device/controllers.png)
+![Controller test](docs/img/device/controller-test.png)
+
+Every controller the machine can see — USB, Bluetooth and SNAC — with its player number.
+Pairing is at the bottom of the list. Choose one to test it: press a button and it lights up
+on a diagram drawn in that pad's own button set.
+
+### Buttons look like the pad in your hands
+
+| PlayStation | Nintendo |
+|---|---|
+| ![PlayStation legend](docs/img/device/legend-psx.png) | ![Nintendo legend](docs/img/device/legend-nintendo.png) |
+
+| Xbox | Keyboard |
+|---|---|
+| ![Xbox legend](docs/img/device/legend-xbox.png) | ![Keyboard legend](docs/img/device/legend-keyboard.png) |
+
+Four sets, thirteen glyphs, drawn at twelve pixels square. The *position* belongs to the
+action, so the letter drawn is whatever is printed on your pad: the button that confirms is
+the east one, which Nintendo calls **A** and Xbox calls **B**. The set is chosen from the
+pad's USB vendor id first and its name second, which is what makes a DualShock 4 announcing
+itself as "Wireless Controller" over Bluetooth still get PlayStation shapes.
+
+---
 
 ## Shape
 
