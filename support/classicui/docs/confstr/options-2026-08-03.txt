@@ -1,271 +1,331 @@
 
 ==============================================================================
-NES
+NES  (37 settings)
 ==============================================================================
-  [[72:70]  ] System Type                Auto/NTSC/PAL/Dendy/Vs.      
-  [K        ] Cheats Enabled             On/Off                        cond=H2
-  [I        ] Autosave                   On/Off                       
-  [C        ] Savestates to SDCard       On/Off                       
-  [DE       ] Savestate Slot             1/2/3/4                      
-  [FH       ] Palette                    Kitrinx/Smooth/Wavebeam/Sony... page=Audio & Video
-  [IJ       ] Aspect ratio               Original/Full Screen/[ARC1]/... page=Audio & Video
-  [13       ] Scandoubler Fx             None/HQ2x/CRT 25%/CRT 50%/CR... page=Audio & Video
-  [78       ] Scale                      Normal/V-Integer/Narrower HV... page=Audio & Video
-  [[68:67]  ] Overscan                   Normal/Vertical Overscan/Bor... page=Audio & Video
-  [RS       ] Mask Edges                 Off/Left/Both/Auto           page=Audio & Video
-  [P        ] Extra Sprites              Off/On                       page=Audio & Video
-  [UV       ] Audio Enable               Both/Internal/Cart Expansion... page=Audio & Video
-  [9        ] Swap Joysticks             No/Yes                       page=Input Options
-  [A        ] Multitap                   Disabled/Enabled             page=Input Options
-  [JK       ] SNAC                       Off/Controllers/Zapper/3D Gl... page=Input Options
-  [02       ] Peripheral                 None/Zapper(Mouse)/Zapper(Jo... page=Input Options
-  [L        ] Famicom Keyboard           No/Yes                       page=Input Options
-  [L        ] Zapper Trigger             Mouse/Joystick               page=Input Options
-  [M        ] Crosshairs                 On/Off                       page=Input Options
-  [G        ] Disk Swap                  Auto/FDS button              page=Miscellaneous
-  [[17]     ] Disk Speed                 Fast/Original                page=Miscellaneous
-  [9        ] Pause when OSD is open     Off/On                       page=Miscellaneous
-  [[66:65]  ] RAM Clear                  No/$00/$FF/Random            page=Advanced
-  [[64]     ] PPU Reset Behavior         Famicom/NES                  page=Advanced
-  [Q        ] Video Dijitter             Enabled/Disabled             page=Advanced
-  [[69]     ] Debug Dots                 Off/On                       page=Advanced
+  [[72:70]]   System Type                Auto/NTSC/PAL/Dendy/Vs.            
+  [K]         Cheats Enabled             On/Off                             cond=H2
+  [I]         Autosave                   On/Off                             
+  [C]         Savestates to SDCard       On/Off                             
+  [DE]        Savestate Slot             1/2/3/4                            
+  [FH]        Palette                    Kitrinx/Smooth/Wavebeam/Sony CXA/P page=Audio & Video 
+  [IJ]        Aspect ratio               Original/Full Screen/[ARC1]/[ARC2] page=Audio & Video 
+  [13]        Scandoubler Fx             None/HQ2x/CRT 25%/CRT 50%/CRT 75%  page=Audio & Video 
+  [5]         Vertical Crop              Disabled/216p(5x)                  page=Audio & Video cond=d6
+  [36]        Crop Offset                0/2/4/8/10/12/-12/-10/-8/-6/-4/-2  page=Audio & Video cond=d6
+  [78]        Scale                      Normal/V-Integer/Narrower HV-Integ page=Audio & Video 
+  [[68:67]]   Overscan                   Normal/Vertical Overscan/Borders/E page=Audio & Video 
+  [RS]        Mask Edges                 Off/Left/Both/Auto                 page=Audio & Video 
+  [P]         Extra Sprites              Off/On                             page=Audio & Video 
+  [UV]        Audio Enable               Both/Internal/Cart Expansion/None  page=Audio & Video 
+  [9]         Swap Joysticks             No/Yes                             page=Input Options 
+  [A]         Multitap                   Disabled/Enabled                   page=Input Options 
+  [JK]        SNAC                       Off/Controllers/Zapper/3D Glasses  page=Input Options 
+  [02]        Peripheral                 None/Zapper(Mouse)/Zapper(Joy1)/Za page=Input Options 
+  [L]         Famicom Keyboard           No/Yes                             page=Input Options 
+  [L]         Zapper Trigger             Mouse/Joystick                     page=Input Options 
+  [M]         Crosshairs                 On/Off                             page=Input Options 
+  [G]         Disk Swap                  Auto/FDS button                    page=Miscellaneous 
+  [[17]]      Disk Speed                 Fast/Original                      page=Miscellaneous 
+  [9]         Pause when OSD is open     Off/On                             page=Miscellaneous 
+  [[66:65]]   RAM Clear                  No/$00/$FF/Random                  page=Advanced 
+  [[64]]      PPU Reset Behavior         Famicom/NES                        page=Advanced 
+  [Q]         Video Dijitter             Enabled/Disabled                   page=Advanced 
+  [[69]]      Debug Dots                 Off/On                             page=Advanced 
+  [[73]]      Switch 0                   Off/On                             cond=H8
+  [[74]]      Switch 1                   Off/On                             cond=H8
+  [[75]]      Switch 2                   Off/On                             cond=H8
+  [[76]]      Switch 3                   Off/On                             cond=H8
+  [[77]]      Switch 4                   Off/On                             cond=H8
+  [[78]]      Switch 5                   Off/On                             cond=H8
+  [[79]]      Switch 6                   Off/On                             cond=H8
+  [[80]]      Switch 7                   Off/On                             cond=H8
 
 ==============================================================================
-SNES
+SNES  (32 settings)
 ==============================================================================
-  [[50]     ] Save state to SD           On/Off                       
-  [[52:51]  ] Savestate Slot             1/2/3/4                      
-  [EF       ] Video Region               Auto/NTSC/PAL                
-  [13       ] ROM Header                 Auto/No Header/LoROM/HiROM/E... 
-  [O        ] Cheats Enabled             Yes/No                        cond=H2
-  [N        ] Autosave                   Off/On                        cond=D0
-  [01       ] Aspect Ratio               Original/Full Screen/[ARC1]/... page=Audio & Video
-  [9B       ] Scandoubler Fx             None/HQ2x/CRT 25%/CRT 50%/CR... page=Audio & Video
-  [89       ] Scale                      Normal/V-Integer/Narrower HV... page=Audio & Video
-  [A        ] Force 256px                Off/On                       page=Audio & Video
-  [G        ] Pseudo Transparency        Blend/Off                    page=Audio & Video
-  [JK       ] Stereo Mix                 None/25%/50%/100%            page=Audio & Video
-  [7        ] Swap Joysticks             No/Yes                       page=Input Options
-  [8        ] SNAC                       No/Yes                       page=Input Options
-  [[53]     ] State Ld/Sv                Start+Up/Down/Up/Down        page=Input Options
-  [B        ] Miracle Piano              No/Yes                       page=Input Options
-  [H        ] Multitap                   Disabled/Port2               page=Input Options
-  [56       ] Mouse                      None/Port1/Port2             page=Input Options
-  [PQ       ] Super Scope                Disabled/Joy1/Joy2/Mouse     page=Input Options
-  [U        ] Audio Clock                Typical/Real                 page=Hardware
-  [V        ] Sufami Cart swapping       No/Yes                       page=Hardware
-  [MP       ] Competition Cart time      3/4/5/6/7/8/9/10/11/12/13/14... page=Hardware
-  [LM       ] Initial WRAM               9966(SNES2)/00FF(SNES1)/55(S... page=Hardware
-  [CD       ] Initial ARAM               9966(SNES2)/00FF(SNES1)/55(S... page=Hardware
+  [[50]]      Save state to SD           On/Off                             
+  [[52:51]]   Savestate Slot             1/2/3/4                            
+  [EF]        Video Region               Auto/NTSC/PAL                      
+  [13]        ROM Header                 Auto/No Header/LoROM/HiROM/ExHiROM 
+  [O]         Cheats Enabled             Yes/No                             cond=H2
+  [N]         Autosave                   Off/On                             cond=D0
+  [01]        Aspect Ratio               Original/Full Screen/[ARC1]/[ARC2] page=Audio & Video 
+  [9B]        Scandoubler Fx             None/HQ2x/CRT 25%/CRT 50%/CRT 75%  page=Audio & Video 
+  [7]         Vertical Crop              Disabled/216p(5x)                  page=Audio & Video cond=d5
+  [36]        Crop Offset                0/2/4/8/10/12/-12/-10/-8/-6/-4/-2  page=Audio & Video cond=d5
+  [89]        Scale                      Normal/V-Integer/Narrower HV-Integ page=Audio & Video 
+  [A]         Force 256px                Off/On                             page=Audio & Video 
+  [G]         Pseudo Transparency        Blend/Off                          page=Audio & Video 
+  [JK]        Stereo Mix                 None/25%/50%/100%                  page=Audio & Video 
+  [7]         Swap Joysticks             No/Yes                             page=Input Options 
+  [8]         SNAC                       No/Yes                             page=Input Options 
+  [[53]]      State Ld/Sv                Start+Up/Down/Up/Down              page=Input Options 
+  [B]         Miracle Piano              No/Yes                             page=Input Options 
+  [H]         Multitap                   Disabled/Port2                     page=Input Options 
+  [56]        Mouse                      None/Port1/Port2                   page=Input Options 
+  [PQ]        Super Scope                Disabled/Joy1/Joy2/Mouse           page=Input Options 
+  [R]         Super Scope Btn            Joy/Mouse                          page=Input Options cond=D4
+  [ST]        Cross                      Small/Big/None                     page=Input Options cond=D4
+  [2]         Gun Type                   Super Scope/Justifier              page=Input Options cond=D4
+  [I]         SuperFX Speed              Normal/Turbo                       page=Hardware cond=D1
+  [E]         SuperFX FastROM            Yes/No                             page=Hardware cond=D1
+  [4]         CPU Speed                  Normal/Turbo                       page=Hardware cond=D3
+  [U]         Audio Clock                Typical/Real                       page=Hardware 
+  [V]         Sufami Cart swapping       No/Yes                             page=Hardware 
+  [MP]        Competition Cart time      3/4/5/6/7/8/9/10/11/12/13/14/15/16 page=Hardware 
+  [LM]        Initial WRAM               9966(SNES2)/00FF(SNES1)/55(SD2SNES page=Hardware 
+  [CD]        Initial ARAM               9966(SNES2)/00FF(SNES1)/55(SD2SNES page=Hardware 
 
 ==============================================================================
-Gameboy
+Gameboy  (32 settings)
 ==============================================================================
-  [EF       ] System                     Auto/Gameboy/Gameboy Color/M... 
-  [79       ] Mapper                     Auto/WisdomTree/Mani161/MBC1...  cond=D7
-  [[50:48]  ] Mapper                     Auto/MD0/MD1/MD2              cond=d7
-  [NO       ] Super Game Boy             Off/Palette/On               
-  [H        ] Cheats enabled             Yes/No                        cond=h0
-  [D        ] Autosave                   Off/On                       
-  [V        ] Savestates to SDCard       On/Off                       
-  [01       ] Savestate Slot             1/2/3/4                      
-  [[44]     ] Extra sprites              No/Yes                       page=Audio & Video
-  [C        ] Inverted color             No/Yes                       page=Audio & Video
-  [4        ] Screen Shadow              No/Yes                       page=Audio & Video
-  [12       ] Custom Palette             Off/Auto/On                  page=Audio & Video
-  [G        ] Frame blend                Off/On                       page=Audio & Video
-  [5        ] Stabilize video(buffer)    Off/On                       page=Audio & Video
-  [34       ] Aspect ratio               Original/Full Screen/[ARC1]/... page=Audio & Video
-  [LM       ] Scale                      Normal/V-Integer/Narrower HV... page=Audio & Video
-  [IK       ] Scandoubler Fx             None/HQ2x/CRT 25%/CRT 50%/CR... page=Audio & Video
-  [2        ] Analog width               Narrow/Wide                  page=Audio & Video
-  [78       ] Stereo mix                 none/25%/50%/100%            page=Audio & Video
-  [[43]     ] Audio mode                 Accurate/No Pops             page=Audio & Video
-  [6        ] Link Port                  Disabled/Enabled             page=Misc.
-  [[45]     ] WorkBoy Keyboard           Off/On                       page=Misc.
-  [[46]     ] iG Keyboard/Mouse          Off/On                       page=Misc.
-  [6        ] Rumble                     On/Off                       page=Misc.
-  [P        ] FastForward Sound          On/Off                       page=Misc.
-  [Q        ] Pause when OSD is open     Off/On                       page=Misc.
-  [R        ] Rewind Capture             Off/On                       page=Misc.
-  [3        ] Super Game Boy + GBC       Off/On                       page=Misc.
+  [EF]        System                     Auto/Gameboy/Gameboy Color/MegaDuc 
+  [79]        Mapper                     Auto/WisdomTree/Mani161/MBC1/MBC3  cond=D7
+  [[50:48]]   Mapper                     Auto/MD0/MD1/MD2                   cond=d7
+  [NO]        Super Game Boy             Off/Palette/On                     
+  [H]         Cheats enabled             Yes/No                             cond=h0
+  [D]         Autosave                   Off/On                             
+  [V]         Savestates to SDCard       On/Off                             
+  [01]        Savestate Slot             1/2/3/4                            
+  [[44]]      Extra sprites              No/Yes                             page=Audio & Video 
+  [C]         Inverted color             No/Yes                             page=Audio & Video 
+  [4]         Screen Shadow              No/Yes                             page=Audio & Video 
+  [12]        Custom Palette             Off/Auto/On                        page=Audio & Video 
+  [G]         Frame blend                Off/On                             page=Audio & Video 
+  [U]         GBC Colors                 Corrected/Raw                      page=Audio & Video cond=d4
+  [5]         Stabilize video(buffer)    Off/On                             page=Audio & Video 
+  [34]        Aspect ratio               Original/Full Screen/[ARC1]/[ARC2] page=Audio & Video 
+  [LM]        Scale                      Normal/V-Integer/Narrower HV-Integ page=Audio & Video 
+  [IK]        Scandoubler Fx             None/HQ2x/CRT 25%/CRT 50%/CRT 75%  page=Audio & Video 
+  [2]         Analog width               Narrow/Wide                        page=Audio & Video 
+  [78]        Stereo mix                 none/25%/50%/100%                  page=Audio & Video 
+  [[43]]      Audio mode                 Accurate/No Pops                   page=Audio & Video 
+  [[37]]      GBC/GBA mode               GBC/GBA                            page=Bootroms cond=d6
+  [[42]]      Fast boot                  Off/On                             page=Bootroms cond=d8
+  [6]         Link Port                  Disabled/Enabled                   page=Misc. 
+  [[45]]      WorkBoy Keyboard           Off/On                             page=Misc. 
+  [[46]]      iG Keyboard/Mouse          Off/On                             page=Misc. 
+  [[47]]      MegaDuck Laptop            Off/On                             page=Misc. cond=d7
+  [6]         Rumble                     On/Off                             page=Misc. 
+  [P]         FastForward Sound          On/Off                             page=Misc. 
+  [Q]         Pause when OSD is open     Off/On                             page=Misc. 
+  [R]         Rewind Capture             Off/On                             page=Misc. 
+  [3]         Super Game Boy + GBC       Off/On                             page=Misc. 
 
 ==============================================================================
-GBA
+GBA  (23 settings)
 ==============================================================================
-  [[6]      ] Cheats Enabled             Yes/No                        cond=H1
-  [[23]     ] Autosave                   Off/On                        cond=D0
-  [[36]     ] Savestates to SDCard       On/Off                       
-  [[43]     ] Autoincrement Slot         Off/On                       
-  [[38:37]  ] Savestate Slot             1/2/3/4                      
-  [[33:32]  ] Aspect ratio               Original/Full Screen/[ARC1]/... page=Video & Audio
-  [[4:2]    ] Scandoubler Fx             None/HQ2x/CRT 25%/CRT 50%/CR... page=Video & Audio
-  [[35:34]  ] Scale                      Normal/V-Integer/Narrower HV... page=Video & Audio
-  [[26:24]  ] Modify Colors              Off/GBA 2.2/GBA 1.6/NDS 1.6/... page=Video & Audio
-  [[39]     ] Sync core to video         On/Off                       page=Video & Audio
-  [[10:9]   ] Flickerblend               Off/Blend/30Hz               page=Video & Audio
-  [[22:21]  ] 2XResolution               Off/Background/Sprites/Both  page=Video & Audio
-  [[20]     ] Spritelimit                Off/On                       page=Video & Audio
-  [[8:7]    ] Stereo Mix                 None/25%/50%/100%            page=Video & Audio
-  [[19]     ] Fast Forward Sound         On/Off                       page=Video & Audio
-  [[28]     ] Homebrew BIOS(Reset!)      Off/On                       page=Hardware
-  [[15:14]  ] Storage                    Auto/SDRAM/DDR3              page=Miscellaneous
-  [[27]     ] Rewind Capture             Off/On                       page=Miscellaneous
-  [[40]     ] GPIO HACK(RTC+Rumble)      Off/On                       page=Miscellaneous
-  [[42:41]  ] Underclock CPU             0/1/2/3                      page=Miscellaneous
+  [[6]]       Cheats Enabled             Yes/No                             cond=H1
+  [[23]]      Autosave                   Off/On                             cond=D0
+  [[36]]      Savestates to SDCard       On/Off                             
+  [[43]]      Autoincrement Slot         Off/On                             
+  [[38:37]]   Savestate Slot             1/2/3/4                            
+  [[33:32]]   Aspect ratio               Original/Full Screen/[ARC1]/[ARC2] page=Video & Audio 
+  [[4:2]]     Scandoubler Fx             None/HQ2x/CRT 25%/CRT 50%/CRT 75%  page=Video & Audio 
+  [[35:34]]   Scale                      Normal/V-Integer/Narrower HV-Integ page=Video & Audio 
+  [[26:24]]   Modify Colors              Off/GBA 2.2/GBA 1.6/NDS 1.6/VBA 1. page=Video & Audio 
+  [[39]]      Sync core to video         On/Off                             page=Video & Audio 
+  [[10:9]]    Flickerblend               Off/Blend/30Hz                     page=Video & Audio 
+  [[22:21]]   2XResolution               Off/Background/Sprites/Both        page=Video & Audio 
+  [[20]]      Spritelimit                Off/On                             page=Video & Audio 
+  [[8:7]]     Stereo Mix                 None/25%/50%/100%                  page=Video & Audio 
+  [[19]]      Fast Forward Sound         On/Off                             page=Video & Audio 
+  [[31:29]]   Solar Sensor               0%/15%/30%/42%/55%/70%/85%/100%    page=Hardware cond=H6
+  [[16]]      Turbo                      Off/On                             page=Hardware cond=H2
+  [[28]]      Homebrew BIOS(Reset!)      Off/On                             page=Hardware 
+  [[15:14]]   Storage                    Auto/SDRAM/DDR3                    page=Miscellaneous 
+  [[5]]       Pause when OSD is open     Off/On                             page=Miscellaneous cond=D5
+  [[27]]      Rewind Capture             Off/On                             page=Miscellaneous 
+  [[40]]      GPIO HACK(RTC+Rumble)      Off/On                             page=Miscellaneous 
+  [[42:41]]   Underclock CPU             0/1/2/3                            page=Miscellaneous 
 
 ==============================================================================
-MegaDrive
+MegaDrive  (30 settings)
 ==============================================================================
-  [[7:6]    ] Region                     JP/US/EU                     
-  [[9:8]    ] Auto Region                Header/File Ext/Disabled     
-  [[28:27]  ] Priority                   US>EU>JP/EU>US>JP/US>JP>EU/J...  cond=D2
-  [[12]     ] TMSS                       Disabled/Enabled              cond=d7
-  [[24]     ] Cheats Enabled             Yes/No                        cond=H1
-  [[13]     ] Autosave                   Off/On                       
-  [[49:48]  ] Aspect Ratio               Original/Full Screen/[ARC1]/... page=Audio & Video
-  [[3:1]    ] Scandoubler Fx             None/HQ2x/CRT 25%/CRT 50%/CR... page=Audio & Video
-  [[55:54]  ] Scale                      Normal/V-Integer/Narrower HV... page=Audio & Video
-  [[30]     ] 320x224 Aspect             Original/Corrected           page=Audio & Video
-  [[29]     ] Border                     No/Yes                       page=Audio & Video
-  [[46]     ] Composite Blend            Off/On                       page=Audio & Video
-  [[10]     ] CRAM Dots                  Off/On                       page=Audio & Video
-  [[15:14]  ] Audio Filter               Model 1/Model 2/Minimal/No F... page=Audio & Video
-  [[11]     ] FM Chip                    YM2612/YM3438                page=Audio & Video
-  [[60]     ] SMS FM Chip                Enabled/Disabled             page=Audio & Video
-  [[58:57]  ] Stereo Mix                 None/25%/50%/100%            page=Audio & Video
-  [[4]      ] Swap Joysticks             No/Yes                       page=Input
-  [[5]      ] 6 Buttons Mode             No/Yes                       page=Input
-  [[39:37]  ] Multitap                   Disabled/4-Way/TeamPlayer: P... page=Input
-  [[19:18]  ] Mouse                      None/Port1/Port2             page=Input
-  [[20]     ] Mouse Flip Y               No/Yes                       page=Input
-  [[22:21]  ] Keyboard                   None/Port1/Port2             page=Input
-  [[41:40]  ] Gun Control                Disabled/Joy1/Joy2/Mouse     page=Input
-  [[63:62]  ] SNAC                       Off/Port 1/Port 2/Port 3     page=Input
-  [[61]     ] Pause When OSD is Open     No/Yes                       
+  [[7:6]]     Region                     JP/US/EU                           
+  [[9:8]]     Auto Region                Header/File Ext/Disabled           
+  [[28:27]]   Priority                   US>EU>JP/EU>US>JP/US>JP>EU/JP>US>E cond=D2
+  [[12]]      TMSS                       Disabled/Enabled                   cond=d7
+  [[24]]      Cheats Enabled             Yes/No                             cond=H1
+  [[13]]      Autosave                   Off/On                             
+  [[49:48]]   Aspect Ratio               Original/Full Screen/[ARC1]/[ARC2] page=Audio & Video 
+  [[3:1]]     Scandoubler Fx             None/HQ2x/CRT 25%/CRT 50%/CRT 75%  page=Audio & Video 
+  [[34]]      Vertical Crop              Disabled/216p(5x)                  page=Audio & Video cond=d5
+  [[53:50]]   Crop Offset                0/2/4/8/10/12/-12/-10/-8/-6/-4/-2  page=Audio & Video cond=d5
+  [[55:54]]   Scale                      Normal/V-Integer/Narrower HV-Integ page=Audio & Video 
+  [[30]]      320x224 Aspect             Original/Corrected                 page=Audio & Video 
+  [[29]]      Border                     No/Yes                             page=Audio & Video 
+  [[46]]      Composite Blend            Off/On                             page=Audio & Video 
+  [[10]]      CRAM Dots                  Off/On                             page=Audio & Video 
+  [[15:14]]   Audio Filter               Model 1/Model 2/Minimal/No Filter  page=Audio & Video 
+  [[11]]      FM Chip                    YM2612/YM3438                      page=Audio & Video 
+  [[60]]      SMS FM Chip                Enabled/Disabled                   page=Audio & Video 
+  [[58:57]]   Stereo Mix                 None/25%/50%/100%                  page=Audio & Video 
+  [[4]]       Swap Joysticks             No/Yes                             page=Input 
+  [[5]]       6 Buttons Mode             No/Yes                             page=Input 
+  [[39:37]]   Multitap                   Disabled/4-Way/TeamPlayer: Port1/T page=Input 
+  [[19:18]]   Mouse                      None/Port1/Port2                   page=Input 
+  [[20]]      Mouse Flip Y               No/Yes                             page=Input 
+  [[22:21]]   Keyboard                   None/Port1/Port2                   page=Input 
+  [[41:40]]   Gun Control                Disabled/Joy1/Joy2/Mouse           page=Input 
+  [[42]]      Gun Fire                   Joy/Mouse                          page=Input cond=D4
+  [[44:43]]   Cross                      Small/Medium/Big/None              page=Input cond=D4
+  [[63:62]]   SNAC                       Off/Port 1/Port 2/Port 3           page=Input 
+  [[61]]      Pause When OSD is Open     No/Yes                             
 
 ==============================================================================
-SMS
+SMS  (35 settings)
 ==============================================================================
-  [[16:15]  ] SaveState Slot             1/2/3/4                      
-  [O        ] Cheats Enabled             ON/OFF                        cond=H1
-  [P        ] Autosave                   OFF/ON                        cond=H8
-  [A        ] Region                     US/EU/Japan                   cond=H8
-  [BC       ] SMS BIOS                   Disable/Internal/Ext. File    cond=H8
-  [H        ] GG BIOS                    Disable/Ext. File             cond=H8
-  [[48:45]  ] Mapper                     Auto/Sega/Codemasters/Dahjee...  cond=H8
-  [8        ] Z80 Speed                  Normal/Turbo                  cond=H8
-  [12       ] VDPs                       Both/2/1/None                 cond=H7
-  [34       ] PSGs                       Both/2/1/None                 cond=H7
-  [2        ] TV System                  NTSC/PAL                     page=Audio & Video
-  [QR       ] Aspect ratio               Original/Full Screen/[ARC1]/... page=Audio & Video
-  [35       ] Scandoubler Fx             None/HQ2x/CRT 25%/CRT 50%/CR... page=Audio & Video
-  [UV       ] Scale                      Normal/V-Integer/Narrower HV... page=Audio & Video
-  [ST       ] Masked Left Column         BG/Black/Cut                 page=Audio & Video
-  [8        ] Sprites Per Line           Standard/All                 page=Audio & Video
-  [C        ] SMS FM Sound               Enable/Disable               page=Audio & Video
-  [1        ] Swap Joysticks             No/Yes                       page=Input
-  [E        ] Multitap                   Disabled/Port1               page=Input
-  [NO       ] USERIO                     Off/SNAC/Gear2Gear           page=Input
-  [56       ] Paddle Control             Disabled/Paddle/Joy          page=Input
-  [P        ] SK-1100                    Off/On                       page=Input
-  [Q        ] SC-3000                    Off/On                       page=Input
-  [RS       ] SG/SC Cart RAM             Off/2KB/16KB/32KB            page=Input
+  [[16:15]]   SaveState Slot             1/2/3/4                            
+  [O]         Cheats Enabled             ON/OFF                             cond=H1
+  [P]         Autosave                   OFF/ON                             cond=H8
+  [A]         Region                     US/EU/Japan                        cond=H8
+  [BC]        SMS BIOS                   Disable/Internal/Ext. File         cond=H8
+  [H]         GG BIOS                    Disable/Ext. File                  cond=H8
+  [[48:45]]   Mapper                     Auto/Sega/Codemasters/Dahjee A/Lin cond=H8
+  [8]         Z80 Speed                  Normal/Turbo                       cond=H8
+  [12]        VDPs                       Both/2/1/None                      cond=H7
+  [34]        PSGs                       Both/2/1/None                      cond=H7
+  [2]         TV System                  NTSC/PAL                           page=Audio & Video 
+  [9]         Orientation                Horz/Vert                          page=Audio & Video cond=h8
+  [A]         Flip Screen                Off/On                             page=Audio & Video cond=h8
+  [QR]        Aspect ratio               Original/Full Screen/[ARC1]/[ARC2] page=Audio & Video 
+  [35]        Scandoubler Fx             None/HQ2x/CRT 25%/CRT 50%/CRT 75%  page=Audio & Video 
+  [I]         Vertical Crop              Disabled/216p(5x)                  page=Audio & Video cond=d6
+  [JM]        Crop Offset                0/2/4/8/10/12/-12/-10/-8/-6/-4/-2  page=Audio & Video cond=d6
+  [UV]        Scale                      Normal/V-Integer/Narrower HV-Integ page=Audio & Video 
+  [D]         Border                     No/Yes                             page=Audio & Video cond=D2
+  [ST]        Masked Left Column         BG/Black/Cut                       page=Audio & Video 
+  [8]         Sprites Per Line           Standard/All                       page=Audio & Video 
+  [7]         Game Gear Res.             Standard/Extended                  page=Audio & Video cond=d2
+  [C]         SMS FM Sound               Enable/Disable                     page=Audio & Video 
+  [1]         Swap Joysticks             No/Yes                             page=Input 
+  [E]         Multitap                   Disabled/Port1                     page=Input 
+  [NO]        USERIO                     Off/SNAC/Gear2Gear                 page=Input 
+  [H]         Pause Btn Combo            No/Yes                             page=Input cond=D3
+  [IJ]        Gun Control                Disabled/Joy1/Joy2/Mouse           page=Input cond=D2
+  [K]         Gun Fire                   Joy/Mouse                          page=Input cond=D4
+  [L]         Gun Port                   Port1/Port2                        page=Input cond=D4
+  [MN]        Cross                      Small/Medium/Big/None              page=Input cond=D4
+  [56]        Paddle Control             Disabled/Paddle/Joy                page=Input 
+  [P]         SK-1100                    Off/On                             page=Input 
+  [Q]         SC-3000                    Off/On                             page=Input 
+  [RS]        SG/SC Cart RAM             Off/2KB/16KB/32KB                  page=Input 
 
 ==============================================================================
-N64
+N64  (58 settings)
 ==============================================================================
-  [[103]    ] Cheats Enabled             Yes/No                       
-  [[42]     ] Autosave                   On/Off                       
-  [[51:49]  ] Pad 1 Type                 N64Pad/None/ControllerPak/Ru... 
-  [[54:52]  ] Pad 2 Type                 N64Pad/None/ControllerPak/Ru... 
-  [[57:55]  ] Pad 3 Type                 N64Pad/None/ControllerPak/Ru... 
-  [[60:58]  ] Pad 4 Type                 N64Pad/None/ControllerPak/Ru... 
-  [[92]     ] Swap Analog<->DPAD         Off/On                       
-  [[86:84]  ] Mouse for P1               Off/Buttons ABZ/Buttons ZAB/... 
-  [[62:61]  ] Dual Controller            Off/P1->P2/P1->P3            
-  [[63]     ] Analog Stick Swap          Off/On                       
-  [[8:7]    ] Stereo Mix                 None/25%/50%/100%            page=Video & Audio
-  [[82]     ] Fixed Video Blanks         On/Off                       page=Video & Audio
-  [[48:47]  ] Aspect ratio               Original/Full Screen/[ARC1]/... page=Video & Audio
-  [[105]    ] Video Out                  Original(VI)/Clean HDMI      page=Video & Audio
-  [[30]     ] Texture Filter             Original/Off                 page=Video & Audio
-  [[31]     ] Dithering                  Original/Off                 page=Video & Audio
-  [[34]     ] LOD Textures               Original/Off                 page=Video & Audio
-  [[2]      ] Error Overlay              Off/On                       page=Video & Audio
-  [[28]     ] FPS Overlay                Off/On                       page=Video & Audio
-  [[64]     ] Auto Detect                On/Off                       page=System settings
-  [[90]     ] Patch games                Yes(Auto)/Off                page=System settings
-  [[70]     ] RAM size                   8MByte/4MByte                page=System settings
-  [[80:79]  ] System Type                NTSC/PAL                     page=System settings
-  [[68:65]  ] CIC                        6101/6102/7101/7102/6103/710... page=System settings
-  [[81]     ] Auto Setup Pak Type        On/Off                       page=System settings
-  [[71]     ] ControllerPak              Off/On                       page=System settings
-  [[72]     ] RumblePak                  Off/On                       page=System settings
-  [[73]     ] TransferPak                Off/On                       page=System settings
-  [[74]     ] RTC                        Off/On                       page=System settings
-  [[77:75]  ] Save Type                  None/EEPROM4/EEPROM16/SRAM32... page=System settings
-  [[83]     ] Fast RAM access            Off/On                       page=Debug settings
-  [[106]    ] Fast ROM access            Off/On                       page=Debug settings
-  [[93]     ] Instr Cache                On/Off                       page=Debug settings
-  [[43]     ] Data Cache                 On/Off                       page=Debug settings
-  [[100]    ] Data Cache from TLB        On/Off                       page=Debug settings
-  [[29]     ] Data FORCE WB              Off/On                       page=Debug settings
-  [[99]     ] DTLB Mini Cache            On/Off                       page=Debug settings
-  [[27:24]  ] Cache Delay                0/1/2/3/4/5/6/7/8/9/10/11/12... page=Debug settings
-  [[23:20]  ] DDR3 Delay                 0/16/24/32/40/48/56/64/72/80... page=Debug settings
-  [[98]     ] RDRAM Calib Waittime       On/Off                       page=Debug settings
-  [[11]     ] Write Bit 9                On/Off                       page=Debug settings
-  [[12]     ] Read Bit 9                 On/Off                       page=Debug settings
-  [[13]     ] Wait Bit 9                 On/Off                       page=Debug settings
-  [[14]     ] Write Z                    On/Off                       page=Debug settings
-  [[15]     ] Read Z                     On/Off                       page=Debug settings
-  [[1]      ] Swap Interlaced            Off/On                       page=Debug settings
-  [[101]    ] AI processing              On/Off                       page=Debug settings
-  [[102]    ] AI IRQ                     On/Off                       page=Debug settings
-  [[91]     ] SNAC Compare               Off/On                       page=Debug settings
+  [[103]]     Cheats Enabled             Yes/No                             
+  [[42]]      Autosave                   On/Off                             
+  [[51:49]]   Pad 1 Type                 N64Pad/None/ControllerPak/RumblePa 
+  [[54:52]]   Pad 2 Type                 N64Pad/None/ControllerPak/RumblePa 
+  [[57:55]]   Pad 3 Type                 N64Pad/None/ControllerPak/RumblePa 
+  [[60:58]]   Pad 4 Type                 N64Pad/None/ControllerPak/RumblePa 
+  [[92]]      Swap Analog<->DPAD         Off/On                             
+  [[86:84]]   Mouse for P1               Off/Buttons ABZ/Buttons ZAB/Button 
+  [[62:61]]   Dual Controller            Off/P1->P2/P1->P3                  
+  [[63]]      Analog Stick Swap          Off/On                             
+  [[8:7]]     Stereo Mix                 None/25%/50%/100%                  page=Video & Audio 
+  [[82]]      Fixed Video Blanks         On/Off                             page=Video & Audio 
+  [[45:44]]   Crop Vertical              None/8/12                          page=Video & Audio cond=D0
+  [[48:47]]   Aspect ratio               Original/Full Screen/[ARC1]/[ARC2] page=Video & Audio 
+  [[105]]     Video Out                  Original(VI)/Clean HDMI            page=Video & Audio 
+  [[104]]     VI Colorbits               Original(21)/24                    page=Video & Audio cond=D1
+  [[32]]      VI Bilinear                Original/Off                       page=Video & Audio cond=D1
+  [[89]]      VI Deblur                  Original/On                        page=Video & Audio cond=D1
+  [[33]]      VI Gamma                   Original/Off                       page=Video & Audio cond=D1
+  [[88:87]]   VI Dedither                Original/Off/Force                 page=Video & Audio cond=D1
+  [[35]]      VI Antialias               Original/Off                       page=Video & Audio cond=D1
+  [[36]]      VI Divot                   Original/Off                       page=Video & Audio cond=D1
+  [[37]]      VI Noisedither             Original/Off                       page=Video & Audio cond=D1
+  [[30]]      Texture Filter             Original/Off                       page=Video & Audio 
+  [[31]]      Dithering                  Original/Off                       page=Video & Audio 
+  [[34]]      LOD Textures               Original/Off                       page=Video & Audio 
+  [[2]]       Error Overlay              Off/On                             page=Video & Audio 
+  [[28]]      FPS Overlay                Off/On                             page=Video & Audio 
+  [[64]]      Auto Detect                On/Off                             page=System settings 
+  [[90]]      Patch games                Yes(Auto)/Off                      page=System settings 
+  [[70]]      RAM size                   8MByte/4MByte                      page=System settings 
+  [[80:79]]   System Type                NTSC/PAL                           page=System settings 
+  [[68:65]]   CIC                        6101/6102/7101/7102/6103/7103/6105 page=System settings 
+  [[81]]      Auto Setup Pak Type        On/Off                             page=System settings 
+  [[71]]      ControllerPak              Off/On                             page=System settings 
+  [[72]]      RumblePak                  Off/On                             page=System settings 
+  [[73]]      TransferPak                Off/On                             page=System settings 
+  [[74]]      RTC                        Off/On                             page=System settings 
+  [[77:75]]   Save Type                  None/EEPROM4/EEPROM16/SRAM32/SRAM9 page=System settings 
+  [[83]]      Fast RAM access            Off/On                             page=Debug settings 
+  [[106]]     Fast ROM access            Off/On                             page=Debug settings 
+  [[93]]      Instr Cache                On/Off                             page=Debug settings 
+  [[43]]      Data Cache                 On/Off                             page=Debug settings 
+  [[100]]     Data Cache from TLB        On/Off                             page=Debug settings 
+  [[29]]      Data FORCE WB              Off/On                             page=Debug settings 
+  [[99]]      DTLB Mini Cache            On/Off                             page=Debug settings 
+  [[27:24]]   Cache Delay                0/1/2/3/4/5/6/7/8/9/10/11/12/13/14 page=Debug settings 
+  [[23:20]]   DDR3 Delay                 0/16/24/32/40/48/56/64/72/80/88/96 page=Debug settings 
+  [[98]]      RDRAM Calib Waittime       On/Off                             page=Debug settings 
+  [[11]]      Write Bit 9                On/Off                             page=Debug settings 
+  [[12]]      Read Bit 9                 On/Off                             page=Debug settings 
+  [[13]]      Wait Bit 9                 On/Off                             page=Debug settings 
+  [[14]]      Write Z                    On/Off                             page=Debug settings 
+  [[15]]      Read Z                     On/Off                             page=Debug settings 
+  [[1]]       Swap Interlaced            Off/On                             page=Debug settings 
+  [[101]]     AI processing              On/Off                             page=Debug settings 
+  [[102]]     AI IRQ                     On/Off                             page=Debug settings 
+  [[91]]      SNAC Compare               Off/On                             page=Debug settings 
 
 ==============================================================================
-PSX
+PSX  (52 settings)
 ==============================================================================
-  [[6]      ] Cheats Enabled             Yes/No                        cond=h6
-  [[71]     ] Save to SDCard             On Open OSD/Manual           
-  [[63]     ] Automount Memory Card 1    Yes/No                       
-  [[36]     ] Savestates to SDCard       On/Off                       
-  [[68]     ] Autoincrement Slot         Off/On                       
-  [[38:37]  ] Savestate Slot             1/2/3/4                      
-  [[40:39]  ] System Type                Auto/NTSC-U/NTSC-J/PAL       
-  [[48:45]  ] Pad1                       Dualshock/Off/Digital/Analog...  cond=D8
-  [[52:49]  ] Pad2                       Dualshock/Off/Digital/Analog...  cond=D8
-  [[66]     ] SNAC MemCard               Virtual/Real                  cond=D8h0
-  [[9]      ] Show Crosshair             Off/On                        cond=D8h2
-  [[31]     ] DS Mode                    L3+R3+Up/Dn | Click/L1+L2+R1...  cond=D8h4
-  [[57:56]  ] Multitap                   Off/Port1: 4 x Digital/Port1... 
-  [[33:32]  ] Aspect ratio               Original/Full Screen/[ARC1]/... page=Video & Audio
-  [[35:34]  ] Scale                      Normal/V-Integer/Narrower HV... page=Video & Audio
-  [[67]     ] Horizontal Crop            Off/On                       page=Video & Audio
-  [[61]     ] Black Transitions          On/Off                       page=Video & Audio
-  [[41]     ] Deinterlacing              Weave/Bob                    page=Video & Audio
-  [[60]     ] Sync 480i for HDMI         Off/On                       page=Video & Audio
-  [[24]     ] Rotate                     Off/On                       page=Video & Audio
-  [[22]     ] Dithering                  On/Off                       page=Video & Audio
-  [[73]     ] Dither 24 Bit for VGA      Off/On                       page=Video & Audio
-  [[89]     ] 480i to 480p Hack          Off/On                       page=Video & Audio
-  [[54:53]  ] Widescreen Hack            Off/3:2/5:3/16:9             page=Video & Audio
-  [[82:81]  ] Texture Filter             Off/All Polygon/Dithered/Dit... page=Video & Audio
-  [[8:7]    ] Stereo Mix                 None/25%/50%/100%            page=Video & Audio
-  [[16]     ] Fastboot                   Off/On                       page=Miscellaneous
-  [[42]     ] CD Lid                     Closed/Open                  page=Miscellaneous
-  [[64]     ] Pause when OSD open        On/Off                       page=Miscellaneous
-  [[80:79]  ] Turbo(Cheats Off)          Off/Low(U)/Medium(U)/High(U) page=Miscellaneous
-  [[72]     ] Pause when CD slow         On/Off(U)                    page=Miscellaneous
-  [[15]     ] PAL 60Hz Hack              Off/On(U)                    page=Miscellaneous
-  [[21]     ] CD Fast Seek               Off/On(U)                    page=Miscellaneous
-  [[77:75]  ] CD Speed                   Original/Forced 1X(U)/Forced... page=Miscellaneous
-  [[78]     ] Limit Max CD Speed         Off/On(U)                    page=Miscellaneous
-  [[85]     ] RAM(Homebrew)              2 MByte/8 MByte(U)           page=Miscellaneous
-  [[90]     ] GPU Slowdown               Off/On(U)                    page=Miscellaneous
-  [[92]     ] Old GPU(CXD8514Q)          Off/On                       page=Miscellaneous
-  [[28]     ] FPS Overlay                Off/On                       page=Miscellaneous
-  [[74]     ] Error Overlay              Off/On                       page=Miscellaneous
-  [[59]     ] CD Slow Overlay            Off/On                       page=Miscellaneous
+  [[6]]       Cheats Enabled             Yes/No                             cond=h6
+  [[71]]      Save to SDCard             On Open OSD/Manual                 
+  [[63]]      Automount Memory Card 1    Yes/No                             
+  [[36]]      Savestates to SDCard       On/Off                             
+  [[68]]      Autoincrement Slot         Off/On                             
+  [[38:37]]   Savestate Slot             1/2/3/4                            
+  [[40:39]]   System Type                Auto/NTSC-U/NTSC-J/PAL             
+  [[48:45]]   Pad1                       Dualshock/Off/Digital/Analog/GunCo cond=D8
+  [[52:49]]   Pad2                       Dualshock/Off/Digital/Analog/GunCo cond=D8
+  [[66]]      SNAC MemCard               Virtual/Real                       cond=D8h0
+  [[9]]       Show Crosshair             Off/On                             cond=D8h2
+  [[31]]      DS Mode                    L3+R3+Up/Dn | Click/L1+L2+R1+R2+Up cond=D8h4
+  [[57:56]]   Multitap                   Off/Port1: 4 x Digital/Port1: 4 x  
+  [[33:32]]   Aspect ratio               Original/Full Screen/[ARC1]/[ARC2] page=Video & Audio 
+  [[35:34]]   Scale                      Normal/V-Integer/Narrower HV-Integ page=Video & Audio 
+  [[4:3]]     Vertical Crop              Off/On(224/270)/On(216/256)        page=Video & Audio cond=d5
+  [[67]]      Horizontal Crop            Off/On                             page=Video & Audio 
+  [[61]]      Black Transitions          On/Off                             page=Video & Audio 
+  [[41]]      Deinterlacing              Weave/Bob                          page=Video & Audio 
+  [[60]]      Sync 480i for HDMI         Off/On                             page=Video & Audio 
+  [[24]]      Rotate                     Off/On                             page=Video & Audio 
+  [[22]]      Dithering                  On/Off                             page=Video & Audio 
+  [[73]]      Dither 24 Bit for VGA      Off/On                             page=Video & Audio 
+  [[89]]      480i to 480p Hack          Off/On                             page=Video & Audio 
+  [[54:53]]   Widescreen Hack            Off/3:2/5:3/16:9                   page=Video & Audio 
+  [[82:81]]   Texture Filter             Off/All Polygon/Dithered/Dith+Shad page=Video & Audio 
+  [[44]]      SPU RAM select             DDR3/SDRAM2                        page=Video & Audio cond=d1
+  [[8:7]]     Stereo Mix                 None/25%/50%/100%                  page=Video & Audio 
+  [[16]]      Fastboot                   Off/On                             page=Miscellaneous 
+  [[42]]      CD Lid                     Closed/Open                        page=Miscellaneous 
+  [[64]]      Pause when OSD open        On/Off                             page=Miscellaneous 
+  [[80:79]]   Turbo(Cheats Off)          Off/Low(U)/Medium(U)/High(U)       page=Miscellaneous 
+  [[72]]      Pause when CD slow         On/Off(U)                          page=Miscellaneous 
+  [[15]]      PAL 60Hz Hack              Off/On(U)                          page=Miscellaneous 
+  [[21]]      CD Fast Seek               Off/On(U)                          page=Miscellaneous 
+  [[77:75]]   CD Speed                   Original/Forced 1X(U)/Forced 2X(U) page=Miscellaneous 
+  [[78]]      Limit Max CD Speed         Off/On(U)                          page=Miscellaneous 
+  [[85]]      RAM(Homebrew)              2 MByte/8 MByte(U)                 page=Miscellaneous 
+  [[90]]      GPU Slowdown               Off/On(U)                          page=Miscellaneous 
+  [[92]]      Old GPU(CXD8514Q)          Off/On                             page=Miscellaneous 
+  [[28]]      FPS Overlay                Off/On                             page=Miscellaneous 
+  [[74]]      Error Overlay              Off/On                             page=Miscellaneous 
+  [[59]]      CD Slow Overlay            Off/On                             page=Miscellaneous 
+  [[70]]      CD Overlay                 Read/Read+Seek                     page=Miscellaneous cond=h9
+  [[14]]      DDR3 Framebuffer           Off/On                             cond=h3
+  [[10]]      DDR3 FB Color              16/24                              cond=h3
+  [[11]]      VRAMViewer                 Off/On                             cond=h3
+  [[30]]      Sound                      On/Off                             cond=h3
+  [[43]]      RepTimingSPUDMA            Off/On                             cond=h3
+  [[27]]      Textures                   On/Off                             cond=h3
+  [[69]]      LBA Overlay                Off/On                             cond=h3
+  [[88]]      Fast CD DMA Timing         Off/On                             cond=h3
