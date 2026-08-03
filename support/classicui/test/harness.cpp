@@ -1547,6 +1547,77 @@ static int fav_count()
   nothing until the core was reloaded. What is checked is that the preset file the
   video layer was handed names the look that was chosen.
 */
+/*
+  The core's own options are reachable from inside a game.
+
+  A player reported this as the one thing the front-end had taken away: with a core
+  loaded there was no route to the classic OSD, and that is where a core's own settings
+  live - widescreen on PSX, or its video and audio. Options ended in Close Game and
+  nothing else.
+
+  Two things have to hold. The route exists and asks for the OSD, and once the OSD has
+  the screen the menu button belongs to *it* - otherwise the player is trapped in the
+  core's settings with no way back but a reset.
+*/
+static void assert_core_options_are_reachable()
+{
+	printf("\n== the core's own options are reachable from a game ==\n");
+
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "gb\nTetris (World).gb\n"); fclose(f); }
+	}
+
+	harness_set_menu_core(0);
+	harness_set_fb_supported(1);
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+	harness_set_confstr(1);
+	harness_set_osd_visible(0);
+	chome_handle(0);
+	if (chome_ingame_active()) press(KEY_MENU, 14);
+	frame(6);
+
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 40 && lib_scanning(); i++) frame(2);
+	frame(16);
+	check(chome_ingame_active(), "the menu is up over the running game");
+
+	press(KEY_UP, 14);                     // menu bar
+	press(KEY_RIGHT, 12);                  // Options
+	press(KEY_ENTER, 18);
+	frame(8);
+
+	// Core Settings is the row above Close Game.
+	for (int i = 0; i < 8; i++) press(KEY_DOWN, 8);
+	frame(8);
+	dump("core-options-row");
+
+	press(KEY_ENTER, 18);
+	frame(10);
+
+	check(!chome_ingame_active(), "choosing it gives the screen back to the core");
+	check(harness_last_menu_key() == KEY_F12, "and asks for the classic OSD");
+
+	/*
+	  And the button is now the OSD's. Pressing it must not reopen the front-end over
+	  the settings screen the player just asked for.
+	*/
+	press(KEY_MENU, 20);
+	frame(8);
+	check(!chome_ingame_active(), "while the OSD is up the menu button is not ours");
+
+	// Once it closes, it is ours again.
+	harness_set_osd_visible(0);
+	press(KEY_MENU, 20);
+	frame(10);
+	check(chome_ingame_active(), "and once the OSD closes the front-end comes back");
+
+	press(KEY_MENU, 16);
+	frame(8);
+}
+
 static void assert_look_applies_to_the_running_core()
 {
 	printf("\n== a display look reaches the running core at once ==\n");
@@ -2944,6 +3015,7 @@ int main()
 	assert_ingame();
 	assert_save_on_pausing_core();
 	assert_freeze_off();
+	assert_core_options_are_reachable();
 	assert_look_applies_to_the_running_core();
 	assert_forget_beats_the_stat_check();
 	assert_slot_count_follows_core();
