@@ -534,6 +534,52 @@ void OsdDisable()
 	spi_osd_cmd(OSD_CMD_DISABLE);
 }
 
+/*
+  Hold OSD_STATUS asserted into the core without putting the classic OSD on screen.
+
+  Why this is possible at all. sys_top instantiates the osd module twice - vga_osd and
+  hdmi_osd - and only vga_osd's osd_status is wired to the core; hdmi_osd has no such
+  connection. Within one instance osd_status and the visible overlay are the same bit, so
+  they cannot be separated - but the two instances can be addressed separately, because
+  EnableOsd_on() picks the chip select. So: raise the bit on the VGA instance, which is the
+  one the core hears, and lower it on the HDMI instance, which is the one composited into
+  the picture the player is looking at.
+
+  This is what makes a pause available to a core that only pauses "while the OSD is open".
+  MiSTer has no pause command; osd_status is the pause, and until now an alternative
+  front-end had to give it up in order to have the screen. vga_nag() already uses the same
+  per-output targeting, so the split is known to work on hardware.
+
+  What it costs: the VGA instance's overlay is left enabled, which draws a dimmed box into
+  vga_data_osd. That stream reaches a pin only when neither vga_fb nor vga_scaler is set -
+  so it is invisible under the front-end's analog takeover, invisible with vga_scaler=1 and
+  invisible with direct_video=1. It is visible on the raw analog output in one setup: an
+  HDMI sink attached with vga_scaler=0, where the takeover is refused. HDMI itself stays
+  clean in every case.
+
+  osd_target is sticky, so it is put back to OSD_ALL before returning - otherwise every
+  later OSD write in the process would go to one output.
+*/
+void OsdStatusHold(int on)
+{
+	user_io_osd_key_enable(on ? DISABLE_KEYBOARD : 0);
+
+	if (on)
+	{
+		EnableOsd_on(OSD_VGA);
+		spi_osd_cmd(OSD_CMD_ENABLE | DISABLE_KEYBOARD);
+		EnableOsd_on(OSD_HDMI);
+		spi_osd_cmd(OSD_CMD_DISABLE);
+	}
+	else
+	{
+		EnableOsd_on(OSD_ALL);
+		spi_osd_cmd(OSD_CMD_DISABLE);
+	}
+
+	EnableOsd_on(OSD_ALL);
+}
+
 void OsdMenuCtl(int en)
 {
 	if (en)
