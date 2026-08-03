@@ -12,6 +12,7 @@
 #include "chome_gfx.h"
 #include "chome_theme.h"
 #include "chome_lib.h"
+#include "chome_core.h"
 #include "chome_art.h"
 #include "chome_video.h"
 #include "chome_icons32.h"
@@ -209,6 +210,7 @@ static void ref_shot_path(const char *sysid, const char *rompath, char *out, int
 #define SCR_INI     13
 #define SCR_PADTEST 14
 #define SCR_SET     15
+#define SCR_CORE    16
 
 // Rows on the Options panel. Several places step over them.
 /*
@@ -255,14 +257,22 @@ static void ref_shot_path(const char *sysid, const char *rompath, char *out, int
 #define MB_OPTIONS  1
 #define MB_POWER    2
 #define MB_ABOUT    3
-#define MB_COUNT    4
+#define MB_CORE     4
+#define MB_COUNT    5
 
 /*
   Language and Manuals are gone. The first opened a panel with nothing behind it,
   and the second only handed the screen to the classic OSD - which is exactly what
   the front-end is not supposed to do on its own.
 */
-static const char *mb_label[MB_COUNT] = { "Display", "Options", "Power", "About" };
+static const char *mb_label[MB_COUNT] = { "Display", "Options", "Power", "About", "Core" };
+
+/*
+  The core entry is labelled with the running system rather than the word "Core": a player
+  looking for the PlayStation's widescreen hack is looking for "PSX". Defined further down,
+  where the running game's identity is in scope.
+*/
+static const char *mb_text(int i);
 
 /*
   Every Display option lives in the scaler - filters, shadow mask, gamma - so the
@@ -272,6 +282,19 @@ static const char *mb_label[MB_COUNT] = { "Display", "Options", "Power", "About"
 */
 static int mb_visible(int i)
 {
+	/*
+	  The core's own options, which only exist while a core is running - and only if it
+	  published something we would offer. A core with nothing but debug toggles gets no
+	  entry rather than an empty screen.
+	*/
+	if (i == MB_CORE)
+	{
+		if (!ig_active) return 0;
+		return core_opts_tier_count(CO_TIER_PICTURE)
+			|| core_opts_tier_count(CO_TIER_SYSTEM)
+			|| core_opts_tier_count(CO_TIER_RISKY);
+	}
+
 	if (i != MB_DISPLAY) return 1;
 
 	// Nothing in Display applies when the scaler is bypassed.
@@ -417,6 +440,8 @@ static int slot_idx = 0;
 static int sort_idx = 0;
 static int opt_row = 0;
 static int look_row = 0;
+static int co_row = 0;                       // the core-options list
+static int co_tier = CO_TIER_PICTURE;
 
 static double bar_y = 0, strip_y = 0, curtain = 0;
 
@@ -1676,6 +1701,19 @@ static int build_legend(legend_pair *out, int max)
 		if (n < max) { out[n++] = lp(LBL_A, "Select", "OK"); }
 		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
 		break;
+	case SCR_CORE:
+		/*
+		  Left and right on every row but the last, which turns the page. No Save: a
+		  change is written to the core as it is made.
+		*/
+		if (co_row < core_opts_tier_count(co_tier))
+		{
+			if (n < max) { out[n++] = { CH_LEFT CH_RIGHT, "dpad_lr", "Change", "Chg", 0, COL_WHITE }; }
+		}
+		else if (n < max) out[n++] = lp(LBL_A, "More", "More");
+		if (n < max) out[n++] = lp(LBL_B, "Back", "Back");
+		break;
+
 	case SCR_SET:
 		/*
 		  The Save row is the one row where A means something, so it is the only row that
@@ -1815,7 +1853,7 @@ static void draw_menubar(const chome_profile *p, int focused)
 		  "OPTIONS". The name is the clearer label of the two anyway.
 		*/
 		char up[32];
-		snprintf(up, sizeof(up), "%s", mb_label[i]);
+		snprintf(up, sizeof(up), "%s", mb_text(i));
 		for (char *q = up; *q; q++) *q = (char)toupper((unsigned char)*q);
 
 		if (on) gfx_fill(cx - cellw / 2 + 2, y + 2, cellw - 4, h - 6, COL_BLUE);
@@ -3604,6 +3642,102 @@ static void set_edited()
 	mark_dirty();
 }
 
+/* ------------------------------------------------------- core options ----- */
+
+static int co_rows()
+{
+	int n = core_opts_tier_count(co_tier);
+	// The last row switches page, so there is always one more than there are options.
+	return n + 1;
+}
+
+static const char *co_tier_name(int t)
+{
+	if (t == CO_TIER_PICTURE) return "Picture";
+	if (t == CO_TIER_SYSTEM) return "System & Sound";
+	return "Risky";
+}
+
+/*
+  The running core's own options.
+
+  Flat within a tier, the same choice draw_settings() made and for the same reason: one
+  list to scroll beats picking a category first. The tiers themselves are a page switch on
+  the last row rather than a separate screen, so the risky set takes a deliberate step to
+  reach without being hidden away.
+
+  Values come from the core every time this draws. They have to: some of these options
+  change what others mean - the N64's whole VI group applies only while Video Out is
+  Original(VI) - and the core recomputes that mask itself. Caching would show the player a
+  stale screen with no way to know.
+*/
+static void draw_core_opts(const chome_profile *p)
+{
+	int s = p->ts_ui;
+	int n = core_opts_tier_count(co_tier);
+
+	int pw = p->w - p->inset * 2;
+	if (pw > 46 * 8 * s) pw = 46 * 8 * s;
+	int ph = (10 * s + 6) + (n + 1) * 12 * s + 22 * s;
+	if (ph > p->h - 2 * p->safe_y) ph = p->h - 2 * p->safe_y;
+
+	char title[48];
+	const char *sysn = core_short_name(ig_have_item ? ig_item.sysidx : -1);
+	snprintf(title, sizeof(title), "%s - %s", (sysn && *sysn) ? sysn : "Core",
+		co_tier_name(co_tier));
+
+	panel_box b = draw_panel_ex(p, pw, ph, title);
+
+	static const char *rows[CO_MAX + 1];
+	static const char *vals[CO_MAX + 1];
+	static uint32_t vcol[CO_MAX + 1];
+	static char vbuf[CO_MAX + 1][CO_VAL_LEN + 8];
+
+	int i = 0;
+	for (; i < n && i < CO_MAX; i++)
+	{
+		const core_opt *o = core_opt_tier_at(co_tier, i);
+		if (!o) break;
+
+		rows[i] = o->name;
+		snprintf(vbuf[i], sizeof(vbuf[i]), "%s", o->vals[core_opt_value(o)]);
+		vals[i] = vbuf[i];
+
+		/*
+		  Amber for a value the core marked (U), because the core is telling the player it
+		  can crash - the same signal the risky page is built from. Dim for one the core
+		  says does not apply right now, which is how the VI group reads under Clean HDMI:
+		  still there, visibly not in effect.
+		*/
+		if (o->disabled) vcol[i] = COL_DIM;
+		else if (strstr(vbuf[i], "(U)")) vcol[i] = COL_YELLOW;
+		else vcol[i] = COL_PANELLO;
+	}
+
+	// The page switch, always last.
+	int nt = (co_tier == CO_TIER_PICTURE) ? CO_TIER_SYSTEM
+		: (co_tier == CO_TIER_SYSTEM) ? CO_TIER_RISKY : CO_TIER_PICTURE;
+	rows[i] = "More";
+	snprintf(vbuf[i], sizeof(vbuf[i]), "%s >", co_tier_name(nt));
+	vals[i] = vbuf[i];
+	vcol[i] = COL_PANELHI;
+	i++;
+
+	draw_rows_c(&b, rows, vals, vcol, i, co_row);
+
+	int fy = b.y + b.h - 12 * s;
+	/*
+	  Two wordings again: at 240p the panel is not wide enough for the long one, and a
+	  footer that loses its end is worse than a short one that does not.
+	*/
+	int room = (b.w - 12 * s) / (8 * p->ts_tiny);
+	const char *foot = (room >= 36) ? "Applied at once, kept with the core" : "Applied at once";
+	if (co_tier == CO_TIER_RISKY) foot = (room >= 34) ? "(U) marked by the core: can crash" : "(U): can crash";
+	else if (!n) foot = "Nothing here on this core";
+	gfx_text(gfx_clip(foot, p->ts_tiny, b.w - 12 * s), b.x + 6 * s, fy, p->ts_tiny,
+		(co_tier == CO_TIER_RISKY) ? COL_YELLOW : COL_PANELLO, 0);
+}
+
 static void draw_settings(const chome_profile *p)
 {
 	int s = p->ts_ui;
@@ -4030,7 +4164,7 @@ static void render()
 	int overlay = (screen == SCR_SORT || screen == SCR_DISPLAY || screen == SCR_OPTIONS ||
 		screen == SCR_ABOUT || screen == SCR_WIFI || screen == SCR_PADS ||
 		screen == SCR_POWER || screen == SCR_INI || screen == SCR_PADTEST ||
-		screen == SCR_SET);
+		screen == SCR_SET || screen == SCR_CORE);
 	if (overlay) gfx_scrim(0, 0, p->w, p->h, COL_BGDARK, 2);
 
 	draw_suspend(p);
@@ -4047,6 +4181,7 @@ static void render()
 	case SCR_POWER:   draw_power(p); break;
 	case SCR_INI:     draw_ini(p); break;
 	case SCR_SET:     draw_settings(p); break;
+	case SCR_CORE:    draw_core_opts(p); break;
 	case SCR_PADS:    draw_pads(p); break;
 	case SCR_PADTEST: draw_padtest(p); break;
 	case SCR_LAUNCH:  draw_launch(p); break;
@@ -4185,6 +4320,28 @@ static void move_h(int dir)
 	  Left and right are how a setting is changed, which is why the value column is on
 	  this axis at all. On the Save row there is nothing to move: A is what it is for.
 	*/
+	/*
+	  Left and right change the value, which is the whole interaction on this screen. It
+	  writes to the core immediately and keeps it in the core's own config: there is no
+	  Save row, because a picture setting you cannot see take effect is not worth having.
+	*/
+	case SCR_CORE:
+	{
+		int n = core_opts_tier_count(co_tier);
+		if (co_row >= n) { nudge(); return; }
+
+		const core_opt *o = core_opt_tier_at(co_tier, co_row);
+		if (!o) { nudge(); return; }
+
+		core_opt_set(o, core_opt_value(o) + dir);
+		core_opts_save();
+
+		// The core recomputes which options apply, so re-read rather than assume.
+		core_opts_scan();
+		if (co_row >= co_rows()) co_row = co_rows() - 1;
+		break;
+	}
+
 	case SCR_SET:
 		if (set_row >= set_nview) { nudge(); return; }
 		if (!opt_step_by(set_view[set_row], dir)) { nudge(); return; }
@@ -4232,6 +4389,16 @@ static void move_v(int dir)
 {
 	switch (screen)
 	{
+	// Up and down walk the list; the last row is the page switch.
+	case SCR_CORE:
+	{
+		int n = co_rows();
+		int next = co_row + dir;
+		if (next < 0 || next >= n) { nudge(); return; }
+		co_row = next;
+		break;
+	}
+
 	case SCR_HOME:
 		if (dir < 0) { mb_idx = 0; go_screen(SCR_MENUBAR); }
 		else
@@ -4396,8 +4563,31 @@ static void accept()
 		case MB_OPTIONS:  opt_row = 0; go_screen(SCR_OPTIONS); break;
 		case MB_POWER:    pwr_row = 0; pwr_arm = -1; go_screen(SCR_POWER); break;
 		case MB_ABOUT:    go_screen(SCR_ABOUT); break;
+		case MB_CORE:
+			core_opts_scan();
+			co_tier = CO_TIER_PICTURE;
+			// Land on a page that has something, so an empty Picture list is not the
+			// first thing a player meets on a core whose options are all elsewhere.
+			if (!core_opts_tier_count(co_tier)) co_tier = CO_TIER_SYSTEM;
+			if (!core_opts_tier_count(co_tier)) co_tier = CO_TIER_RISKY;
+			co_row = 0;
+			go_screen(SCR_CORE);
+			break;
 		}
 		break;
+
+	case SCR_CORE:
+	{
+		// Only the last row does anything with A: it turns the page.
+		int n = core_opts_tier_count(co_tier);
+		if (co_row < n) { nudge(); break; }
+
+		co_tier = (co_tier == CO_TIER_PICTURE) ? CO_TIER_SYSTEM
+			: (co_tier == CO_TIER_SYSTEM) ? CO_TIER_RISKY : CO_TIER_PICTURE;
+		co_row = 0;
+		mark_dirty();
+		break;
+	}
 
 	case SCR_SORT:
 		sort_mode = sort_idx;
@@ -5816,6 +6006,18 @@ static int ig_load_item()
 	return 1;
 }
 
+/*
+  The menu-bar label for the core entry: the library's badge for the running system, which
+  is already sized for tight places, and the word "Core" only if we have nothing better.
+*/
+static const char *mb_text(int i)
+{
+	if (i != MB_CORE) return mb_label[i];
+
+	const char *n = core_short_name(ig_have_item ? ig_item.sysidx : -1);
+	return (n && *n) ? n : mb_label[MB_CORE];
+}
+
 // The live frame, resampled to a requested size and cached, for look previews.
 static const uint32_t *ig_live_ref(int w, int h)
 {
@@ -6015,6 +6217,14 @@ static int ig_open()
 	ig_mute_engage();             // before the freeze state, which takes a moment to write
 
 	ss_hk_valid = 0;              // re-read CONF_STR: it may not have been ready before
+
+	/*
+	  And read the core's own options, because the menu bar has to know whether there are
+	  any before it can decide whether to show an entry for them. Doing it lazily when the
+	  entry is opened cannot work: the entry would never appear to be opened.
+	*/
+	core_opts_scan();
+
 	ig_load_item();
 	ig_build_background(p);
 
@@ -6437,12 +6647,18 @@ int chome_handle(uint32_t key)
 		if (!ig_active)
 		{
 			/*
-			  Unless the classic OSD is up, in which case the button belongs to it - that
-			  is how the player closes it. Core Settings hands the screen over precisely
-			  so the core's own options can be reached, and stealing the button back
-			  would trap them in there with no way out but a reset.
+			  Unless the classic menu is up, in which case the button belongs to it - that
+			  is how the player closes it. Core Settings hands the screen over precisely so
+			  the core's own options can be reached, and stealing the button back would
+			  trap them in there with no way out but a reset.
+
+			  menu_present() and not user_io_osd_is_visible(): the latter tracks whether OSD
+			  *key handling* is enabled, which this file turns on itself in ig_open(), so it
+			  reads as true whenever our own menu has been open once. Using it here stopped
+			  the front-end opening at all on the second try - caught on hardware, invisible
+			  to the harness, which had no classic menu to model.
 			*/
-			if (igpress && igmenu && !user_io_osd_is_visible())
+			if (igpress && igmenu && !menu_present())
 			{
 				eat_menu_release = 1;
 				if (ig_open()) return 1;

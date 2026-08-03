@@ -30,6 +30,8 @@
 #include "../../../hardware.h"
 #include "../../../menu.h"
 #include "../../../input.h"
+#include "../../../user_io.h"
+#include "../../../spi.h"
 #include "../../arcade/mra_loader.h"
 
 #include "harness.h"
@@ -419,6 +421,36 @@ static const char *fake_confstr_realpause[] =
   most cores offer four. The last slot is reserved to hold the game still, so such a core
   leaves the player exactly one.
 */
+/*
+  A core with a real options menu, shaped like the ones on the card rather than invented.
+
+  Every awkwardness in here was taken from a real CONF_STR: pages defined separately from
+  the options that reference them, a mask *before* the page prefix (which is how the N64
+  publishes its VI group, and what a parser that assumes an order silently drops), the two
+  bit-spec forms in one core, a value the core marks (U), and options the front-end owns
+  and must not offer twice.
+*/
+static const char *fake_confstr_opts[] =
+{
+	"OPTCORE",
+	"FS1,BIN,Load ROM",
+	"P1,Audio & Video;",
+	"P2,Debug settings;",
+	"-",
+	"O[38:37],Savestate Slot,1,2,3,4",          // ours: never offered
+	"P1O[33:32],Aspect ratio,Original,Full Screen",  // ours: overlaps Display looks
+	"P1OFH,Palette,Kitrinx,Smooth,Wavebeam",    // picture, legacy two-char spec
+	"P1O[54:53],Widescreen Hack,Off,3:2,16:9",  // picture
+	"D1P1O[35],VI Deblur,Original,On",          // picture, mask BEFORE page
+	"D1P1O[36],VI Antialias,Original,Off",      // picture, mask before page
+	"O[40:39],System Type,Auto,NTSC,PAL",       // system
+	"O[80:79],Turbo(Cheats Off),Off,Low(U),High(U)",  // risky: the core says so
+	"P2O[27:24],Cache Delay,0,1,2,3",           // debug page: never offered
+	"T[0],Reset",                                // a trigger, not a setting
+	"V,v1",
+	0
+};
+
 static const char *fake_confstr_twoslot[] =
 {
 	"TWOSLOT",
@@ -442,7 +474,8 @@ char *user_io_get_confstr(int index)
 	const char **tbl = (confstr_on == 2) ? fake_confstr_nopause
 		: (confstr_on == 3) ? fake_confstr_slotty
 		: (confstr_on == 4) ? fake_confstr_realpause
-		: (confstr_on == 5) ? fake_confstr_twoslot : fake_confstr;
+		: (confstr_on == 5) ? fake_confstr_twoslot
+		: (confstr_on == 6) ? fake_confstr_opts : fake_confstr;
 	int n = 0;
 	while (tbl[n]) n++;
 
@@ -828,10 +861,54 @@ static uint16_t pad_mmap[12] = { 0, 0, 0, 0, 0x131, 0x130, 0x133, 0x134, 0x136, 
 */
 static int osd_visible = 0;
 static unsigned int last_menu_key = 0;
-int user_io_osd_is_visible() { return osd_visible; }
+char user_io_osd_is_visible() { return (char)osd_visible; }
+
+/*
+  Whether the classic menu is on screen. Distinct from user_io_osd_is_visible(), which is
+  about key handling and which the front-end sets itself - the two were confused once, and
+  it stopped the in-game menu opening on real hardware.
+*/
+int menu_present() { return osd_visible; }
 void menu_key_set(unsigned int c) { last_menu_key = c; osd_visible = (c != 0); }
 void harness_set_osd_visible(int v) { osd_visible = v ? 1 : 0; }
 unsigned int harness_last_menu_key() { return last_menu_key; }
+
+/*
+  The core side of an options screen: a hide/disable mask, the config file it would be
+  written to, and the status words. The mask is what makes the conditional half testable -
+  a core recomputes it as options change, and the front-end has to re-read rather than
+  cache.
+*/
+static uint16_t osd_mask = 0;
+static int cfg_saves = 0;
+void harness_set_osd_mask(uint16_t m) { osd_mask = m; }
+int harness_cfg_saves() { return cfg_saves; }
+
+uint16_t spi_uio_cmd16(uint8_t cmd, uint16_t)
+{
+	if (cmd == UIO_GET_OSDMASK) return osd_mask;
+	return 0;
+}
+
+uint32_t user_io_hd_mask(const char *opt)
+{
+	int start = 0;
+	if (!user_io_status_bits(opt, &start, 0, 0, 1)) return 0;
+	return start;
+}
+
+char *user_io_create_config_name(int)
+{
+	static char n[32];
+	snprintf(n, sizeof(n), "%s.CFG", core_name);
+	return n;
+}
+
+int user_io_status_save(const char *)
+{
+	cfg_saves++;
+	return 1;
+}
 
 const char *input_menu_key_devname() { return pad_name; }
 
