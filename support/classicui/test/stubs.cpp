@@ -821,6 +821,18 @@ int audio_is_muted() { return muted; }
 static char pad_name[128] = "Generic USB Gamepad";
 static uint16_t pad_mmap[12] = { 0, 0, 0, 0, 0x131, 0x130, 0x133, 0x134, 0x136, 0x137, 0x13A, 0x13B };
 
+/*
+  The classic OSD, as far as the front-end can see it. Core Settings closes our menu and
+  asks for the OSD; the harness only needs to agree about who owns the menu button, so
+  a flag is the whole model - the OSD itself is not drawn here.
+*/
+static int osd_visible = 0;
+static unsigned int last_menu_key = 0;
+int user_io_osd_is_visible() { return osd_visible; }
+void menu_key_set(unsigned int c) { last_menu_key = c; osd_visible = (c != 0); }
+void harness_set_osd_visible(int v) { osd_visible = v ? 1 : 0; }
+unsigned int harness_last_menu_key() { return last_menu_key; }
+
 const char *input_menu_key_devname() { return pad_name; }
 
 /*
