@@ -22,6 +22,7 @@
 #include "../../../input.h"
 #include "../chome.h"
 #include "../chome_lib.h"
+#include "../chome_core.h"
 #include "../chome_art.h"
 #include "../chome_theme.h"
 #include "../chome_gfx.h"
@@ -1559,6 +1560,124 @@ static int fav_count()
   the screen the menu button belongs to *it* - otherwise the player is trapped in the
   core's settings with no way back but a reset.
 */
+/*
+  The core's own options, read out of its CONF_STR and driven from our screen.
+
+  The fake core is shaped like the real ones - see fake_confstr_opts - so the things this
+  has to get right are the things that were actually hard: a mask in front of a page
+  prefix, the two bit-spec forms, options we own and must not offer twice, and the core's
+  own (U) marking.
+*/
+static void assert_core_options(int hd_mask_bit1)
+{
+	harness_set_confstr(6);
+	harness_set_osd_mask(hd_mask_bit1 ? 0x0002 : 0x0000);
+	int n = core_opts_scan();
+
+	int pic = core_opts_tier_count(CO_TIER_PICTURE);
+	int sys = core_opts_tier_count(CO_TIER_SYSTEM);
+	int risk = core_opts_tier_count(CO_TIER_RISKY);
+	printf("  mask=%d -> %d offered (picture %d, system %d, risky %d)\n",
+		hd_mask_bit1, n, pic, sys, risk);
+
+	/*
+	  Four on the picture page either way. The mask on the VI pair is a D, which *disables*
+	  rather than hides - the option stays on screen and greys out, which is what the OSD
+	  does and the honest thing: the setting exists, it just does not apply right now.
+	  An earlier version of this check asserted they vanished, and was wrong about the
+	  grammar rather than about the code.
+	*/
+	check(pic == 4, "a mask in front of a page prefix is still parsed");
+	check(sys == 1, "region lands on the system page");
+	check(risk == 1, "and the core's own (U) marking puts an option on the risky page");
+
+	int vi_disabled = 0, owned = 0;
+	for (int i = 0; i < n; i++)
+	{
+		const core_opt *o = core_opt_at(i);
+		if (!strncasecmp(o->name, "VI ", 3) && o->disabled) vi_disabled++;
+		if (!strcasecmp(o->name, "Savestate Slot")
+			|| !strcasecmp(o->name, "Aspect ratio")
+			|| !strcasecmp(o->name, "Cache Delay")) owned++;
+	}
+
+	check(vi_disabled == (hd_mask_bit1 ? 2 : 0),
+		hd_mask_bit1 ? "and the core's mask greys out the pair it says do not apply"
+		             : "with nothing greyed out while the core says they apply");
+	check(!owned, "nothing the front-end owns is offered a second time");
+}
+
+static void assert_core_options_screen()
+{
+	printf("\n== the core's own options ==\n");
+
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "gb\nTetris (World).gb\n"); fclose(f); }
+	}
+	harness_set_menu_core(0);
+	harness_set_fb_supported(1);
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+	harness_set_osd_visible(0);
+
+	assert_core_options(0);
+	assert_core_options(1);
+	assert_core_options(0);
+
+	/*
+	  A trigger is not a setting. Reset sits in the same CONF_STR and a momentary action
+	  in a list of values is a trap: the player lands on it looking for something to
+	  change and loses their game.
+	*/
+	int found_reset = 0;
+	for (int i = 0; i < core_opts_count(); i++)
+		if (strcasestr(core_opt_at(i)->name, "Reset")) found_reset = 1;
+	check(!found_reset, "and a momentary trigger is not offered as a setting");
+
+	// Now through the UI: open it from the bar and change something.
+	chome_handle(0);
+	if (chome_ingame_active()) press(KEY_MENU, 14);
+	frame(6);
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 40 && lib_scanning(); i++) frame(2);
+	frame(16);
+	check(chome_ingame_active(), "the menu is up over the running game");
+
+	/*
+	  The bar entry has to be there before it can be opened, which is not circular by
+	  accident: the entry only exists when the core published something, so the scan has to
+	  have happened by the time the bar is drawn. Opening the menu is what does it. On
+	  hardware the entry never appeared until that was fixed.
+	*/
+	press(KEY_UP, 14);
+	unsigned long bar = harness_fb_hash(0, 60);
+	for (int i = 0; i < 6; i++) press(KEY_RIGHT, 8);   // walk to the last bar entry
+	frame(8);
+	check(harness_fb_hash(0, 60) != bar, "the bar has an entry for the running core");
+
+	press(KEY_ENTER, 18);
+	frame(10);
+	dump("core-options");
+
+	const core_opt *first = core_opt_tier_at(CO_TIER_PICTURE, 0);
+	check(first != 0, "the screen opens on something");
+
+	int before = first ? core_opt_value(first) : 0;
+	int saves = harness_cfg_saves();
+	press(KEY_RIGHT, 14);
+	frame(8);
+	check(first && core_opt_value(first) != before, "right changes the value in the core");
+	check(harness_cfg_saves() > saves, "and keeps it in the core's own config");
+
+	press(KEY_ESC, 12);
+	frame(6);
+	press(KEY_MENU, 16);
+	frame(8);
+	harness_set_confstr(1);
+}
+
 static void assert_core_options_are_reachable()
 {
 	printf("\n== the core's own options are reachable from a game ==\n");
@@ -3015,6 +3134,7 @@ int main()
 	assert_ingame();
 	assert_save_on_pausing_core();
 	assert_freeze_off();
+	assert_core_options_screen();
 	assert_core_options_are_reachable();
 	assert_look_applies_to_the_running_core();
 	assert_forget_beats_the_stat_check();

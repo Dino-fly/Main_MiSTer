@@ -36,6 +36,8 @@ unsigned long harness_fb_hash_box(int x0, int y0, int x1, int y1);
 void harness_set_pad_name(const char *n);
 void harness_set_pad_vidpid(uint32_t v);
 void harness_set_osd_visible(int v);
+void harness_set_osd_mask(uint16_t m);
+int harness_cfg_saves();
 unsigned int harness_last_menu_key();
 void harness_swap_pad_faces();
 
