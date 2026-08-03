@@ -73,14 +73,21 @@ joystick names:
 
 | Core | Settings | Own pages |
 |---|---|---|
-| NES | 27 | Audio & Video, Input Options, Miscellaneous, Advanced |
-| SNES | 24 | Audio & Video, Input Options, Hardware |
-| Game Boy | 27 | Audio & Video, Misc. |
-| GBA | 20 | Video & Audio, Hardware, Miscellaneous |
-| Mega Drive | 26 | Audio & Video, Input |
-| SMS | 22 | Audio & Video, Input |
-| N64 | 45 | Video & Audio, System settings, **Debug settings (23)** |
-| PSX | 42 | Video & Audio, Miscellaneous |
+| NES | 37 | Audio & Video, Input Options, Miscellaneous, Advanced |
+| SNES | 32 | Audio & Video, Input Options, Hardware |
+| Game Boy | 32 | Audio & Video, Misc. |
+| GBA | 23 | Video & Audio, Hardware, Miscellaneous |
+| Mega Drive | 30 | Audio & Video, Input |
+| SMS | 35 | Audio & Video, Input |
+| N64 | 58 | Video & Audio, System settings, **Debug settings (23)** |
+| PSX | 52 | Video & Audio, Miscellaneous |
+
+> **These counts are the corrected ones.** My first pass reported every core 3–13 options
+> short, because prefixes arrive in either order — `P1O[3:1]` *and* `D1P1O[104]` — and I
+> stripped the page before the mask, so every option with a mask in front of its page was
+> silently dropped. That is the same class of mistake the parser will make in the real
+> implementation if it assumes an order, and it hid the single most relevant group in this
+> whole document (see N64's VI filters below). Strip both, in a loop, in any order.
 
 N64 and PSX are the outliers, and almost entirely because of debug and unsafe options.
 N64's Debug page alone is 23 entries of cache timing, DDR3 delays and bit-9 toggles.
@@ -94,8 +101,77 @@ N64's Debug page alone is 23 entries of cache timing, DDR3 delays and bit-9 togg
 | **Widescreen hacks** | ✅ PSX `Widescreen Hack` — Off / 3:2 / 5:3 / 16:9. **PSX only** of these seven |
 | **Dithering** | ✅ PSX `Dithering`, `Dither 24 Bit for VGA`; N64 `Dithering` |
 | **Overclocking** | ⚠️ No general one. Per-core and mostly marked unsafe: GBA `Underclock CPU` (0–3), SMS `Z80 Speed` (Normal/Turbo), PSX `Turbo`/`GPU Slowdown`/`CD Speed` (all `(U)`), N64 `Fast RAM access`/`Fast ROM access` (Debug page) |
-| **Anti-aliasing** | ❌ Nothing is called that. Nearest are texture and blend controls: N64 `Texture Filter`, PSX `Texture Filter` (Off/All Polygon/Dithered/…), GBA `Flickerblend`, GB `Frame blend`, MD `Composite Blend` |
+| **Anti-aliasing / N64 blur** | ✅ **Better than I first said** — the N64 core exposes its whole VI filter chain. See below |
 | **Post-processing** | ✅ `Scandoubler Fx` (None/HQ2x/CRT 25%/50%/75%) on **every** core — but see the conflict below |
+
+---
+
+## 2b. The N64's blurring — the answer, and it is a good one
+
+The N64 core exposes **its entire VI filter chain**, one option per stage. This is the
+group my first parse dropped, and it is exactly what was being asked for:
+
+| Option | Values | What it is |
+|---|---|---|
+| `VI Deblur` | Original / **On** | Undoes the VI's horizontal blur — the "N64 looks soft" effect |
+| `VI Antialias` | Original / **Off** | The VI's edge anti-aliasing |
+| `VI Bilinear` | Original / **Off** | Bilinear resampling in the VI |
+| `VI Divot` | Original / **Off** | The divot filter, which smears across pixel gaps |
+| `VI Noisedither` | Original / **Off** | The VI's noise dither |
+| `VI Dedither` | Original / Off / Force | Removes the RDP's dither pattern |
+| `VI Gamma` | Original / Off | The VI's gamma boost |
+| `VI Colorbits` | Original(21) / 24 | Output colour depth |
+
+All eight are gated on mask bit 1, which tracks `Video Out` — they apply to
+`Original(VI)` and are irrelevant under `Clean HDMI`, which bypasses the VI entirely.
+So `Video Out` belongs directly above them, and the group should grey out when it is set
+to Clean HDMI. The core has already expressed that relationship; we just have to honour
+the mask.
+
+This is a strong Tier 1 group: every one is a single visible toggle, none is unsafe, and
+"why does N64 look blurry" is a question people actually have. `Texture Filter`,
+`Dithering` and `LOD Textures` are separate RDP-side controls and sit alongside them.
+
+---
+
+## 2c. GB and GBA: do the cores duplicate our Display looks?
+
+Partly — on exactly one axis, and that axis is the one where **the core is better**.
+
+Our looks for these systems do three things at once:
+
+| Our look | gamma | mask | filter |
+|---|---|---|---|
+| Game Boy DMG | `G_DMG` | matrix 2x | sharp |
+| Game Boy Pocket | `G_POCKET` | matrix 1x | sharp |
+| Game Boy Color | `G_GBC` | matrix 1x | sharp |
+| GBA (AGB-001) | `G_AGB001` | matrix 1x | sharp |
+| GBA SP (AGS-001) | `G_AGS001` | matrix 1x | sharp |
+| GBA SP (AGS-101) | `G_AGS101` | off | sharp |
+
+What the cores offer against that:
+
+| Axis | Core | Ours | Better |
+|---|---|---|---|
+| Colour correction | GBA `Modify Colors` (Off/GBA 2.2/GBA 1.6/NDS 1.6/VBA…), GB `GBC Colors` (Corrected/Raw) | gamma LUT in the scaler | **Core.** Applied in its own pixel pipeline before scaling, and authored per hardware model |
+| Palette replacement | GB `Custom Palette` (Off/Auto/On), `Super Game Boy` | — | **Core only.** A LUT cannot remap four grey levels to arbitrary colours; a palette file can |
+| LCD pixel grid | — | shadow mask, 1x/2x | **Ours only.** The cores have no mask; that is a scaler feature |
+| Frame blending | GB `Frame blend`, GBA `Flickerblend` (Off/Blend/30Hz) | — | **Core only.** Temporal blending needs consecutive frames, which the scaler does not have |
+| Inverted colour, screen shadow, sprite limits | yes | — | **Core only** |
+
+So they are **complementary, not redundant — except on colour, where they collide.** Turn
+on our `GBA (AGB-001)` look *and* the core's `Modify Colors: GBA 2.2` and the picture is
+corrected twice. Nothing warns about it; it just looks wrong, and a player would have no
+way to know which of two screens caused it.
+
+**Recommendation: let our Display look drive the core's option instead of our LUT, when the
+core has one.** Choosing "GBA (AGB-001)" would set `Modify Colors` in the core and leave
+our gamma off, while still applying our mask and filter — which the core cannot do. One
+control for the player, the better mechanism for each half, and no double correction.
+Where the core offers nothing (`AGS-101` has no core equivalent), our LUT stays as it is.
+
+That keeps the answer to "which is better" as "each, at what it does", rather than making
+the player arbitrate between two screens.
 
 ---
 
@@ -110,11 +186,14 @@ Visible effect, safe, and the reason someone opens this screen at all.
 
 - **NES** — Palette, Mask Edges, Overscan, Extra Sprites
 - **SNES** — Pseudo Transparency (Blend/Off), Force 256px
-- **Game Boy** — Super Game Boy, Custom Palette, Inverted color, Screen Shadow, Frame blend, Super Game Boy + GBC, Extra sprites
+- **Game Boy** — Super Game Boy, Custom Palette, GBC Colors, Inverted color, Screen Shadow,
+  Frame blend, Super Game Boy + GBC, Extra sprites
 - **GBA** — Modify Colors, Flickerblend, 2XResolution, Spritelimit
 - **Mega Drive** — 320x224 Aspect, Border, Composite Blend, CRAM Dots
-- **SMS** — Masked Left Column, Sprites Per Line
-- **N64** — Texture Filter, Dithering, LOD Textures, Video Out (Original VI / Clean HDMI)
+- **SMS** — Masked Left Column, Sprites Per Line, Border, Game Gear Res., Orientation,
+  Flip Screen
+- **N64** — Video Out, then the VI group (`VI Deblur`, `VI Antialias`, `VI Bilinear`,
+  `VI Divot`, `VI Noisedither`), plus Texture Filter, Dithering, LOD Textures
 - **PSX** — Widescreen Hack, Dithering, Texture Filter, Horizontal Crop, Deinterlacing, Rotate
 
 ### Tier 2 — a second page: *sound, region, hardware*
@@ -128,10 +207,14 @@ Worth reaching, not worth meeting first.
 - Hardware character: SNES `Initial WRAM`/`Initial ARAM`, NES `RAM Clear` /
   `PPU Reset Behavior`, MD `TMSS`, SMS `Mapper` / `SMS BIOS`
 
+Also newly found and worth having: **`Vertical Crop` (Disabled / 216p 5x) and
+`Crop Offset`** on NES, SNES, Mega Drive, SMS and PSX. That is the integer-scaling crop
+people set up by hand for a CRT, and it is one option away.
+
 ### Tier 3 — behind one deliberate step, labelled as risky
 
-The overclock family Dinofly wants, which is exactly the family that breaks games. I would
-put these behind a page the player has to choose, with the core's own warning shown:
+Confirmed wanted, so it goes in — but as its own page, with the core's own warning shown
+rather than a wording of ours:
 GBA `Underclock CPU`, SMS `Z80 Speed`, PSX `Turbo` / `CD Speed` / `CD Fast Seek` /
 `GPU Slowdown` / `PAL 60Hz Hack` / `RAM(Homebrew)`, N64 `Fast RAM/ROM access`.
 
