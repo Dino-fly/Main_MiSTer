@@ -45,6 +45,17 @@ struct sys_def
   upstream can gain save states without this file being touched, which is why a
   loaded core's own answer always outranks this one. Systems left at CH_SS_UNKNOWN
   were not measured; do not guess them from what the hardware "should" do.
+
+  Master System was CH_SS_UNKNOWN and is CH_SS_YES: it gained save states upstream over
+  May-July 2026 and the dump in docs/confstr/SMS.txt shows them - SS3E000000:18000, a
+  SaveState Slot option, and Save/Load State entries.
+
+  And why a loaded core is judged by its save and load *labels* rather than by the SS
+  entry, which looks like the obvious test: N64 declares SS3C000000:1000000 and ships a
+  whole savestates.vhd, but its save path is hardwired off in N64.sv - `.save_state(0)`,
+  commented out, that way since the core's first release - and its CONF_STR carries no
+  Save or Load entry at all. Trusting the SS entry would offer N64 save states that can
+  never be written. docs/confstr/N64.txt is the evidence.
 */
 static const sys_def defaults[] =
 {
@@ -54,7 +65,7 @@ static const sys_def defaults[] =
 	{ "gba",   "Game Boy Advance",              "GBA",  "_Console/GBA",          "GBA",     "gba",          "Nintendo - Game Boy Advance",                    'f', 0, 2, 0, 0, 0x4a3c8a, 0, CH_SS_YES     },
 	{ "n64",   "Nintendo 64",                   "N64",  "_Console/N64",          "N64",     "n64,z64,v64",  "Nintendo - Nintendo 64",                         'f', 0, 3, 0, 0, 0x2b5e8a, 0, CH_SS_NO      },
 	{ "md",    "Mega Drive",                    "MD",   "_Console/Genesis",      "Genesis", "md,bin,gen",   "Sega - Mega Drive - Genesis",                    'f', 0, 2, 0, 0, 0x2b4c7e, 0, CH_SS_NO      },
-	{ "sms",   "Master System",                 "SMS",  "_Console/SMS",          "SMS",     "sms,gg,sg",    "Sega - Master System - Mark III",                'f', 0, 2, 0, 0, 0x7e3a2b, 0, CH_SS_UNKNOWN },
+	{ "sms",   "Master System",                 "SMS",  "_Console/SMS",          "SMS",     "sms,gg,sg",    "Sega - Master System - Mark III",                'f', 0, 2, 0, 0, 0x7e3a2b, 0, CH_SS_YES     },
 	{ "tg16",  "TurboGrafx-16",                 "TG16", "_Console/TurboGrafx16", "TGFX16",  "pce,sgx",      "NEC - PC Engine - TurboGrafx 16",                'f', 0, 2, 0, 0, 0x8a6e2b, 0, CH_SS_NO      },
 	{ "a7800", "Atari 7800",                    "A78",  "_Console/Atari7800",    "A7800",   "a78,a26,bin",  "Atari - 7800",                                   'f', 0, 2, 0, 0, 0x6e2b2b, 0, CH_SS_NO      },
 	{ "psx",   "PlayStation",                   "PSX",  "_Console/PSX",          "PSX",     "cue,chd,exe",  "Sony - PlayStation",                             's', 1, 3, 0, 0, 0x4a4c58, 0, CH_SS_YES     },
