@@ -4697,11 +4697,20 @@ static void accept()
 			  The flag goes up before the close, so the menu key that follows is left for
 			  the classic menu instead of being taken as "open Classic Home".
 			*/
+			/*
+			  The release, not the press. menu.cpp opens the classic menu on
+			  KEY_F12 | UPSTROKE; its press branch only does anything when the OSD is
+			  already on screen, which here it is not. Queueing the press did nothing at
+			  all, and the handoff timed out four seconds later having achieved only a
+			  closed menu - which is what Derek saw as "Core Settings just goes back to
+			  the game". The comment above eat_menu_release has said the menu opens on the
+			  release since the day it was written; I simply had not applied it here.
+			*/
 			printf("ClassicUI: handing the screen to the core's own options\n");
 			osd_handoff = OSDH_WAITING;
 			osd_handoff_until = GetTimer(4000);
 			ig_close(1);
-			menu_key_set(KEY_F12);
+			menu_key_set(KEY_F12 | UPSTROKE);
 			break;
 
 		case 9:
