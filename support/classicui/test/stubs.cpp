@@ -885,7 +885,17 @@ int harness_osd_status_held() { return osd_hold; }
   it stopped the in-game menu opening on real hardware.
 */
 int menu_present() { return osd_visible; }
-void menu_key_set(unsigned int c) { last_menu_key = c; osd_visible = (c != 0); }
+/*
+  Queues a key for the classic menu - and deliberately does NOT make the menu appear.
+
+  It used to set osd_visible here, which flattered the front-end: the gap between asking for
+  the OSD and the OSD actually being on screen vanished, and that gap is exactly where the
+  Core Settings handoff went wrong on hardware. A test written against the old stub could
+  not tell a correct two-step handoff from a broken one-step one - I checked, by sabotaging
+  the fix and watching every check still pass. Tests raise osd_visible themselves now, when
+  they mean it.
+*/
+void menu_key_set(unsigned int c) { last_menu_key = c; }
 void harness_set_osd_visible(int v) { osd_visible = v ? 1 : 0; }
 unsigned int harness_last_menu_key() { return last_menu_key; }
 
