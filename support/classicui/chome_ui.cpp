@@ -211,6 +211,17 @@ static void ref_shot_path(const char *sysid, const char *rompath, char *out, int
 #define SCR_SET     15
 
 // Rows on the Options panel. Several places step over them.
+/*
+  Options has one more row inside a game than on the shelf. Both end with a way out -
+  Advanced Settings hands the shelf to the classic menu, Close Game puts the game away -
+  but in a game there is also Core Settings, which is the only route to the options that
+  belong to the core itself rather than to this front-end. A player reported that as the
+  one thing the front-end had taken away from them, and they were right: widescreen on
+  PSX, or a core's own video and audio settings, live in the classic OSD and nowhere
+  else, and the OSD is only reachable while that core is running.
+*/
+#define OPT_ROWS_MENU 9
+#define OPT_ROWS_GAME 10
 #define OPT_ROWS    9
 
 /*
@@ -2419,14 +2430,14 @@ static void draw_options_panel(const chome_profile *p)
 {
 	panel_box b = draw_panel(p, "Options");
 
-	static const char *rows_menu[] = { "Cover Art", "Rescan Library", "Reinstall Looks", "Menu Layout", "Controllers", "Wi-Fi", "Best Settings", "More Settings", "Advanced Settings" };
-	static const char *rows_game[] = { "Cover Art", "Rescan Library", "Reinstall Looks", "Menu Layout", "Controllers", "Wi-Fi", "Best Settings", "More Settings", "Close Game" };
+	static const char *rows_menu[] = { "Cover Art", "Rescan Library", "Reinstall Looks", "Menu Layout", "Controllers", "Wi-Fi", "Best Settings", "More Settings", "Advanced Settings", 0 };
+	static const char *rows_game[] = { "Cover Art", "Rescan Library", "Reinstall Looks", "Menu Layout", "Controllers", "Wi-Fi", "Best Settings", "More Settings", "Core Settings", "Close Game" };
 	const char *const *rows = ig_active ? rows_game : rows_menu;
 	char v1[32];
 	if (lib_scanning()) snprintf(v1, sizeof(v1), "%d...", lib_scan_progress());
 	else snprintf(v1, sizeof(v1), "%d games", lib_item_count());
 
-	int closing = (ig_active && opt_row == OPT_ROWS - 1 && !CheckTimer(ig_close_until));
+	int closing = (ig_active && opt_row == OPT_ROWS_GAME - 1 && !CheckTimer(ig_close_until));
 
 	// What the Wi-Fi row says without being opened: the network name is the one
 	// piece of it anybody wants to check in passing.
@@ -2470,10 +2481,11 @@ static void draw_options_panel(const chome_profile *p)
 		v2,
 		v4,
 		v5,
-		ig_active ? (closing ? "Again To Confirm" : "Back To Menu") : "Classic Menu >"
+		ig_active ? "Core Options >" : "Classic Menu >",
+		closing ? "Again To Confirm" : "Back To Menu"
 	};
 
-	draw_rows(&b, rows, vals, OPT_ROWS, opt_row);
+	draw_rows(&b, rows, vals, ig_active ? OPT_ROWS_GAME : OPT_ROWS_MENU, opt_row);
 
 	if (ig_active)
 	{
@@ -4269,7 +4281,7 @@ static void move_v(int dir)
 		break;
 
 	case SCR_OPTIONS:
-		opt_row = (opt_row + dir + OPT_ROWS) % OPT_ROWS;
+		{ int n = ig_active ? OPT_ROWS_GAME : OPT_ROWS_MENU; opt_row = (opt_row + dir + n) % n; }
 		mark_dirty();
 		break;
 
@@ -4453,6 +4465,26 @@ static void accept()
 
 		case 8:
 			if (!ig_active) { chome_leave(); break; }
+
+			/*
+			  The core's own options, which live in the classic OSD and nowhere else.
+
+			  Our menu goes away first - it owns the framebuffer and the OSD is composited
+			  over the same screen - and then the OSD is opened the way the menu button
+			  opens it. ig_close(1) also puts the video mode and the pause back, so the
+			  core is running normally underneath it, which is what its own settings
+			  screen expects.
+
+			  Getting back here needs nothing: while the OSD is visible the menu button
+			  belongs to it, and once it is closed the next press is ours again.
+			*/
+			printf("ClassicUI: handing the screen to the core's own options\n");
+			ig_close(1);
+			menu_key_set(KEY_F12);
+			break;
+
+		case 9:
+			if (!ig_active) break;
 
 			// Closing the game loses unsaved progress, so it takes two presses.
 			if (!CheckTimer(ig_close_until))
@@ -6404,7 +6436,13 @@ int chome_handle(uint32_t key)
 	{
 		if (!ig_active)
 		{
-			if (igpress && igmenu)
+			/*
+			  Unless the classic OSD is up, in which case the button belongs to it - that
+			  is how the player closes it. Core Settings hands the screen over precisely
+			  so the core's own options can be reached, and stealing the button back
+			  would trap them in there with no way out but a reset.
+			*/
+			if (igpress && igmenu && !user_io_osd_is_visible())
 			{
 				eat_menu_release = 1;
 				if (ig_open()) return 1;
