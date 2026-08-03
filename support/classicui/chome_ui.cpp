@@ -250,6 +250,13 @@ static void ref_shot_path(const char *sysid, const char *rompath, char *out, int
 */
 #define VP_ZOOM_PCT   45
 
+/*
+  The shape a captured frame is meant to be shown in - see shot_fit(). 4:3 because that is
+  what every console core here is, and what MiSTer's own "Original" aspect gives them.
+*/
+#define SHOT_AR_W 4
+#define SHOT_AR_H 3
+
 #define CH_SLOTS      4
 #define CH_SLOTS_USER 3
 
@@ -460,6 +467,22 @@ static int key_run = 0;
 // Set once the user hands off to the classic menu, so we do not immediately
 // grab the screen back. The OSD/menu button brings us back.
 static int handed_off = 0;
+/*
+  The in-game equivalent: Core Settings has given the screen to the classic OSD, so the
+  menu button belongs to that until it comes back.
+
+  A flag rather than asking menu_present(), which was the first attempt and was wrong twice
+  over. Too broad: the classic menu's state machine is briefly busy after a savestate load,
+  and standing down then sent the player to the classic OSD when they wanted us. And it
+  cannot help with the other half of the problem - menu_key_set(KEY_F12) is read by *this*
+  handler before menu.cpp ever sees it, so the key that was meant to open the OSD just
+  reopened our own menu instead.
+*/
+#define OSDH_NONE    0
+#define OSDH_WAITING 1      // asked for the OSD, it has not appeared yet
+#define OSDH_UP      2      // it is on screen; the button is its until it closes
+static int osd_handoff = OSDH_NONE;
+static unsigned long osd_handoff_until = 0;
 
 // Two-press confirmation for deleting a suspend point.
 static int del_arm_slot = -1;
@@ -487,6 +510,7 @@ static int ig_load_item();
 static void quit_to_home(int suspend);
 static int ss_can_load();
 static void draw_running_warning(const chome_profile *p);
+static void core_opts_save_unpaused();
 static int ss_do_save(int slot);
 static int ss_do_load(int slot);
 static void ss_pause_release(int engaged);
@@ -4334,7 +4358,8 @@ static void move_h(int dir)
 		if (!o) { nudge(); return; }
 
 		core_opt_set(o, core_opt_value(o) + dir);
-		core_opts_save();
+
+		core_opts_save_unpaused();
 
 		// The core recomputes which options apply, so re-read rather than assume.
 		core_opts_scan();
@@ -4668,7 +4693,13 @@ static void accept()
 			  Getting back here needs nothing: while the OSD is visible the menu button
 			  belongs to it, and once it is closed the next press is ours again.
 			*/
+			/*
+			  The flag goes up before the close, so the menu key that follows is left for
+			  the classic menu instead of being taken as "open Classic Home".
+			*/
 			printf("ClassicUI: handing the screen to the core's own options\n");
+			osd_handoff = OSDH_WAITING;
+			osd_handoff_until = GetTimer(4000);
 			ig_close(1);
 			menu_key_set(KEY_F12);
 			break;
@@ -5530,8 +5561,12 @@ static int ss_write_thumb(const chome_item *it, int slot)
 	char png[1024];
 	if (!slot_png_path(it, slot, png, sizeof(png))) return 0;
 
+	/*
+	  256 wide at the display aspect, not at the pixel aspect - see shot_fit(). By pixel
+	  ratio a PSX frame came out 256x173 and a 240p one 256x96, both squashed.
+	*/
 	int ow = 256;
-	int oh = (int)(((long long)ow * ig_shot_h) / ig_shot_w);
+	int oh = ow * SHOT_AR_H / SHOT_AR_W;
 	if (oh < 1) oh = 1;
 
 	if (!write_screenshot(png, (const uint8_t *)ig_shot, ig_shot_w, ig_shot_h, ow, oh)) return 0;
@@ -5705,8 +5740,16 @@ static void draw_running_warning(const chome_profile *p)
 	int s = p->ts_ui;
 	int h = 13 * s;
 
-	gfx_fill(0, 0, p->w, h, COL_RED);
-	gfx_fill(0, h, p->w, (s > 1) ? 2 : 1, COL_SHADOW);
+	/*
+	  Inside the safe area, not at y=0. On a CRT the top of the canvas is behind the
+	  bezel: at 240p with the default 6% overscan that is about 14 lines, and this band
+	  is 13 tall - so drawn at the top it was entirely hidden bar one line of red, which
+	  is how Dinofly found it. Every panel already respects safe_y; this did not.
+	*/
+	int y = p->safe_y;
+
+	gfx_fill(0, y, p->w, h, COL_RED);
+	gfx_fill(0, y + h, p->w, (s > 1) ? 2 : 1, COL_SHADOW);
 
 	/*
 	  Two wordings, because gfx_text_c() centres and a line too long for the canvas
@@ -5717,7 +5760,7 @@ static void draw_running_warning(const chome_profile *p)
 	int room = (p->w - 8 * s) / (8 * s);
 	if ((int)strlen(msg) > room) msg = "STILL PLAYING - NOT PAUSED";
 
-	gfx_text_c(gfx_clip(msg, s, p->w - 8 * s), p->w / 2, (h - 7 * s) / 2, s, COL_WHITE, 0);
+	gfx_text_c(gfx_clip(msg, s, p->w - 8 * s), p->w / 2, y + (h - 7 * s) / 2, s, COL_WHITE, 0);
 }
 
 // Runs every frame in every core, so a registered save finishes whether the menu is
@@ -5864,13 +5907,41 @@ static int ss_pause_engage()
 	return 1;
 }
 
+/*
+  Write the core's config without our own pause in it.
+
+  user_io_status_save() writes the whole status word, and while this menu is up that word
+  carries the pause we forced on. Saved as-is it would persist a setting the player never
+  chose - and being in the config, it would then apply on every later boot. So the pause is
+  lifted for the write and put straight back.
+*/
+static void core_opts_save_unpaused()
+{
+	const ss_hooks *h = ss_get();
+	int held = (ig_paused && h->found_pause
+		&& (h->pause_is_option || h->pause_needs_osd));
+
+	if (held) user_io_status_set(h->pause_opt, ss_pause_prev, h->pause_ex);
+	core_opts_save();
+	if (held) user_io_status_set(h->pause_opt, h->pause_on_val, h->pause_ex);
+}
+
 static void ss_pause_release(int engaged)
 {
 	const ss_hooks *h = ss_get();
 	if (!engaged || !h->found_pause) return;
 
-	if (h->pause_is_option) user_io_status_set(h->pause_opt, ss_pause_prev, h->pause_ex);
-	else ss_pulse(h->pause_opt, h->pause_ex);
+	/*
+	  Symmetrical with engage, which is what this was not. Engage sets the option for an
+	  OSD-gated pause as well as a plain one, but this only put a plain one back - so on
+	  NES, Game Boy, GBA and Mega Drive the pause option was left switched on for good.
+	  That is how MegaDrive.CFG came to have "Pause When OSD is Open" already set: we turned
+	  it on and never turned it off. A setting the player did not choose, made permanent.
+	*/
+	if (h->pause_is_option || h->pause_needs_osd)
+		user_io_status_set(h->pause_opt, ss_pause_prev, h->pause_ex);
+	else
+		ss_pulse(h->pause_opt, h->pause_ex);
 
 	printf("ClassicUI: resumed the core\n");
 }
@@ -6018,6 +6089,44 @@ static const char *mb_text(int i)
 	return (n && *n) ? n : mb_label[MB_CORE];
 }
 
+/*
+  The shape the captured frame is meant to be shown in, which is not the shape of its
+  pixels.
+
+  screenshot_grab() hands back the core's native frame, and those pixels are not square:
+  PSX gave 352x239 and the 240p cores 640x240 - ratios of 1.47 and 2.67 for two pictures
+  that are both 4:3 on the television. Fitting by the pixel ratio is what squashed the menu
+  background into a letterboxed band, and squashed the suspend thumbnails with it.
+
+  So the fit is done against the display aspect instead. 4:3 is assumed, which is right for
+  every console core here and is what MiSTer's own "Original" aspect gives them. Handhelds
+  are the known exception - a GBA panel is 3:2 and a Game Boy 10:9 - and if one of those
+  looks wrong on a real screen this is the line to revisit; it is a deliberate assumption,
+  not an oversight.
+*/
+// Fits SHOT_AR_W:SHOT_AR_H inside w x h, centred, and reports where it landed.
+static void shot_fit(int w, int h, int *fw, int *fh, int *ox, int *oy)
+{
+	int aw, ah;
+	if ((long long)SHOT_AR_W * h > (long long)SHOT_AR_H * w)
+	{
+		aw = w;
+		ah = (int)((long long)w * SHOT_AR_H / SHOT_AR_W);
+	}
+	else
+	{
+		ah = h;
+		aw = (int)((long long)h * SHOT_AR_W / SHOT_AR_H);
+	}
+	if (aw < 1) aw = 1;
+	if (ah < 1) ah = 1;
+
+	*fw = aw;
+	*fh = ah;
+	if (ox) *ox = (w - aw) / 2;
+	if (oy) *oy = (h - ah) / 2;
+}
+
 // The live frame, resampled to a requested size and cached, for look previews.
 static const uint32_t *ig_live_ref(int w, int h)
 {
@@ -6070,18 +6179,7 @@ static void ig_build_background(const chome_profile *p)
 	  surround left black. Then dim, so panel text stays readable over anything.
 	*/
 	int fw, fh;
-	if ((long long)ig_shot_w * p->h > (long long)ig_shot_h * p->w)
-	{
-		fw = p->w;
-		fh = (int)((long long)p->w * ig_shot_h / ig_shot_w);
-	}
-	else
-	{
-		fh = p->h;
-		fw = (int)((long long)p->h * ig_shot_w / ig_shot_h);
-	}
-	if (fw < 1) fw = 1;
-	if (fh < 1) fh = 1;
+	shot_fit(p->w, p->h, &fw, &fh, 0, 0);
 
 	int ox = (p->w - fw) / 2, oy = (p->h - fh) / 2;
 
@@ -6179,6 +6277,20 @@ static int ig_open()
 		free(ig_shot);
 		ig_shot = 0;
 		ig_shot_w = ig_shot_h = 0;
+	}
+
+	/*
+	  Opaque, once, here. The scaler hands back ARGB with nothing meaningful in the alpha
+	  byte, and the drawing paths each worked around that by or-ing 0xff000000 in as they
+	  read - so the menu background looked right while ss_write_thumb, which passes the
+	  buffer straight to imlib2, wrote a fully transparent image. That is the black tile
+	  Dinofly found on a PSX suspend point. Fixing it at the source means every consumer gets
+	  a valid frame instead of each having to remember.
+	*/
+	if (ig_shot)
+	{
+		size_t n = (size_t)ig_shot_w * ig_shot_h;
+		for (size_t i = 0; i < n; i++) ig_shot[i] |= 0xff000000u;
 	}
 
 	if (!gfx_begin()) { free(ig_shot); ig_shot = 0; return 0; }
@@ -6657,18 +6769,39 @@ int chome_handle(uint32_t key)
 		if (!ig_active)
 		{
 			/*
-			  Unless the classic menu is up, in which case the button belongs to it - that
-			  is how the player closes it. Core Settings hands the screen over precisely so
-			  the core's own options can be reached, and stealing the button back would
+			  While the screen has been handed to the core's own options the button belongs
+			  to the classic menu - that is how the player closes it. Taking it back would
 			  trap them in there with no way out but a reset.
 
-			  menu_present() and not user_io_osd_is_visible(): the latter tracks whether OSD
-			  *key handling* is enabled, which this file turns on itself in ig_open(), so it
-			  reads as true whenever our own menu has been open once. Using it here stopped
-			  the front-end opening at all on the second try - caught on hardware, invisible
-			  to the harness, which had no classic menu to model.
+			  The handoff ends when the classic menu is no longer showing anything, and only
+			  then: watching menu_present() alone is what made this wrong before, because it
+			  goes true for a moment after a savestate load as well.
 			*/
-			if (igpress && igmenu && !menu_present())
+			/*
+			  Two steps, because one is not enough: on the frame after the handoff the
+			  classic menu has not opened yet, so a single "clear when it is not present"
+			  clears immediately and we take the very key we were standing down for.
+
+			  The deadline matters as much as the states. If the OSD never appears - a core
+			  that will not show it, or a key that goes nowhere - then without a timeout the
+			  flag stays up and our menu becomes unreachable, which is exactly the trap this
+			  is meant to prevent rather than create.
+			*/
+			if (osd_handoff == OSDH_WAITING)
+			{
+				if (menu_present()) osd_handoff = OSDH_UP;
+				else if (CheckTimer(osd_handoff_until))
+				{
+					printf("ClassicUI: the core's options never opened, taking the screen back\n");
+					osd_handoff = OSDH_NONE;
+				}
+			}
+			else if (osd_handoff == OSDH_UP && !menu_present())
+			{
+				osd_handoff = OSDH_NONE;
+			}
+
+			if (igpress && igmenu && !osd_handoff)
 			{
 				eat_menu_release = 1;
 				if (ig_open()) return 1;
