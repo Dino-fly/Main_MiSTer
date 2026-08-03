@@ -1724,7 +1724,8 @@ static void assert_core_options_are_reachable()
 	frame(10);
 
 	check(!chome_ingame_active(), "choosing it gives the screen back to the core");
-	check(harness_last_menu_key() == KEY_F12, "and asks for the classic OSD");
+	check(harness_last_menu_key() == (KEY_F12 | UPSTROKE),
+		"and asks for the classic OSD the way menu.cpp opens it - on the release");
 
 	/*
 	  The key that asks for the OSD must not be taken by us on the way past.
