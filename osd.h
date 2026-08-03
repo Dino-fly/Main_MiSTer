@@ -21,6 +21,13 @@ void OsdWrite(unsigned char n, const char *s="", unsigned char inver=0, unsigned
 void OsdWriteOffset(unsigned char n, const char *s, unsigned char inver, unsigned char stipple, char offset, char leftchar, char usebg = 0, int maxinv = 32, int mininv = 0); // Used for scrolling "Exit" text downwards...
 void OsdClear();
 void OsdEnable(unsigned char mode);
+
+/*
+  Assert OSD_STATUS into the core with no overlay where it would be seen, so a core that
+  only pauses "while the OSD is open" can be paused by a front-end that has replaced the
+  OSD. See the note on the definition for what it costs.
+*/
+void OsdStatusHold(int on);
 void InfoEnable(int x, int y, int width, int height);
 void OsdRotation(uint8_t rotate);
 void OsdDisable();

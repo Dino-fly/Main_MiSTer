@@ -38,6 +38,7 @@ void harness_set_pad_vidpid(uint32_t v);
 void harness_set_osd_visible(int v);
 void harness_set_osd_mask(uint16_t m);
 int harness_cfg_saves();
+int harness_osd_status_held();
 unsigned int harness_last_menu_key();
 void harness_swap_pad_faces();
 
