@@ -512,6 +512,7 @@ static int ig_load_item();
 static void quit_to_home(int suspend);
 static int ss_can_load();
 static void draw_running_warning(const chome_profile *p);
+static int susp_arm(const chome_item *it, int slot);
 static void core_opts_save_unpaused();
 static int ss_do_save(int slot);
 static int ss_do_load(int slot);
@@ -5029,7 +5030,14 @@ static void accept()
 			return;
 		}
 
-		// Otherwise it means launching the game; the core picks its slot up.
+		/*
+		  Otherwise the game is not running and this means "start it here". The comment that
+		  used to be on this line said the core picks its slot up; nothing carried the slot,
+		  so it never did - the game simply started from the beginning and the chosen state
+		  was ignored without a word. Arming the resume record is what makes it true: it is
+		  the same mechanism Resume uses, and resume_poll() loads it once the core is up.
+		*/
+		susp_arm(it, slot_idx);
 		curtain = 0;
 		launch_at = GetTimer(0);
 		go_screen(SCR_LAUNCH);
@@ -5522,6 +5530,36 @@ int chome_hidden_slot()
 
 // Best effort: a core with no savestates just cannot be suspended, and quitting
 // still has to work.
+/*
+  Point the resume machinery at a game and a slot, without saving anything.
+
+  susp_write() below both saves a state and writes this record, which is right for putting a
+  game away. Launching a game *into* an existing state needs only the record: the state is
+  already on the card, and resume_poll() loads whatever this names once the core is up.
+*/
+static int susp_arm(const chome_item *it, int slot)
+{
+	if (!it) return 0;
+
+	const chome_sys *sy = lib_sys(it->sysidx);
+	if (!sy) return 0;
+
+	char dir[1024];
+	snprintf(dir, sizeof(dir), "%s/classicui", getRootDir());
+	mkdir(dir, 0777);
+
+	char full[1024];
+	snprintf(full, sizeof(full), "%s/%s", getRootDir(), SUSPEND_FILE);
+	FILE *f = fopen(full, "wt");
+	if (!f) return 0;
+
+	fprintf(f, "%s\n%s\n%d\n", sy->id, it->path, slot);
+	fclose(f);
+
+	printf("ClassicUI: %s will start from slot %d\n", it->title, slot + 1);
+	return 1;
+}
+
 static int susp_write()
 {
 	/*
@@ -6089,7 +6127,16 @@ static int ss_do_save(int slot)
 
 	// Armed here rather than at the four suspend and freeze call sites, so a slot the
 	// player chose by hand keeps its feedback and the reserved one never gets any.
-	if (slot == susp_slot()) ss_quiet_until = GetTimer(SS_QUIET_MS);
+	/*
+	  Quiet for any slot this front-end drives, not just the reserved one.
+
+	  The core announces its own states ("Save to state 4") and the firmware pops that up as
+	  a classic-OSD panel over our screen. That was suppressed for the suspend slot, on the
+	  grounds the player never asked for it - but the same is true of a slot they picked
+	  here: the strip already shows the moment and says whether it landed, so MiSTer's own
+	  notification is a second, uglier answer to a question already answered.
+	*/
+	ss_quiet_until = GetTimer(SS_QUIET_MS);
 
 	/*
 	  Two things have to be true for the core to actually write a file.
@@ -6132,7 +6179,16 @@ static int ss_do_load(int slot)
 	const ss_hooks *h = ss_get();
 	if (!h->found_load || !ss_select_slot(slot)) return 0;
 
-	if (slot == susp_slot()) ss_quiet_until = GetTimer(SS_QUIET_MS);
+	/*
+	  Quiet for any slot this front-end drives, not just the reserved one.
+
+	  The core announces its own states ("Save to state 4") and the firmware pops that up as
+	  a classic-OSD panel over our screen. That was suppressed for the suspend slot, on the
+	  grounds the player never asked for it - but the same is true of a slot they picked
+	  here: the strip already shows the moment and says whether it landed, so MiSTer's own
+	  notification is a second, uglier answer to a question already answered.
+	*/
+	ss_quiet_until = GetTimer(SS_QUIET_MS);
 
 	printf("ClassicUI: restore state <- slot %d\n", slot + 1);
 	ss_pulse(h->load_opt, h->load_ex);

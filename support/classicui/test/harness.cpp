@@ -3099,6 +3099,62 @@ static chome_item *entry_game(int i)
   the card is *absent* before the first one is asserted in assert_views, which runs
   before any launch.
 */
+/*
+  Starting a game *at* one of its suspend points, from the shelf, with no core loaded.
+
+  This had no coverage at all, which is why it silently did nothing for however long: the
+  shelf path threw the chosen slot away and launched the game from the beginning. The player
+  saw a game start, so it looked like it had worked.
+
+  What is checked is the record the resume machinery reads - the same one Resume writes -
+  because that is the whole of what this side can do. resume_poll() consuming it happens in
+  the next process, after a core load the harness cannot perform.
+*/
+static void assert_launch_into_state()
+{
+	printf("\n== starting a game at a suspend point ==\n");
+
+	const char *rec = ROOT "/classicui/suspend.txt";
+	unlink(rec);
+
+	harness_set_menu_core(1);
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+	chome_leave();
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 40 && lib_scanning(); i++) frame(2);
+	frame(12);
+
+	// A game with a state on the card, reached by name so the shelf order cannot matter.
+	int found = select_titled("Tetris");
+	check(found, "the shelf can be parked on a game that has a suspend point");
+
+	press(KEY_DOWN, 18);                  // into its suspend strip
+	frame(8);
+
+	{
+		FILE *f = fopen(rec, "rb");
+		check(f == 0, "nothing is armed before the player chooses a slot");
+		if (f) fclose(f);
+	}
+
+	press(KEY_ENTER, 20);                 // A on the slot: start the game there
+	frame(10);
+
+	char body[256] = {};
+	FILE *f = fopen(rec, "rb");
+	if (f) { if (fread(body, 1, sizeof(body) - 1, f)) {} fclose(f); }
+	printf("  suspend record: %s", body[0] ? body : "(none)\n");
+
+	check(body[0] != 0, "choosing a slot arms the resume record so the state is loaded");
+	check(strstr(body, "Tetris") != 0, "naming the game that was chosen");
+
+	unlink(rec);
+	press(KEY_ESC, 12);
+	frame(6);
+}
+
 static void assert_recent()
 {
 	printf("\n== recently played ==\n");
@@ -4331,6 +4387,7 @@ int main()
 	assert_ingame_view();
 	// After the launches above, so there is a recent list to be wrong about, and before
 	// the shelf sections that now see a fourth card on the root shelf.
+	assert_launch_into_state();
 	assert_recent();
 	// After it, because this one launches a game of its own and the section above is about
 	// the order of the list a launch writes to.
