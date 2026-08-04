@@ -37,6 +37,36 @@ Art is found locally under `games/<System>/boxart/`, or downloaded on demand wit
 `classicui_artfetch=1`. The library is indexed once and cached — 1430 items on the test
 machine — so later boots start instantly.
 
+### One card per game, however many dumps of it you have
+
+`Mega Man (U).nes` and `Mega Man (E).nes` both read as "Mega Man" once the decoration is
+stripped, so the shelf used to carry two identical cards with nothing to choose between
+them. Regional variants, revisions and the discs of one game all collide the same way.
+
+They are one card now. **X** cycles the files behind it and the title block names the one
+on show — `2/3  Final Fantasy VII (USA) (Disc 2).cue` — in the file's own case, since that
+line exists to be read against what is on the card. X is offered only where there is
+something to cycle.
+
+What counts as the same title is the cleaned title **plus** the system, the folder and the
+extension, and the last three are there to stop a merge that would be wrong rather than to
+make one that would be right: Aladdin on the SNES is not Aladdin on the Mega Drive, a hack
+in `SNES/Hacks` is not a regional variant of the game it was built from, and the `.sms`
+and `.gg` of one name are two games with different levels. Merging two genuinely different
+games would hide one behind a button nobody knows to press, which is worse than the
+duplicate cards this replaces. A card that still shares its title with another — those
+three cases, and Recently Played, which is deliberately not grouped because its content is
+a list of launches — is named by its file too, so the shelf never shows two identical
+titles and no way to tell them apart.
+
+**The card stands for the file it is showing**, not for the group: the favourite, the play
+count, Recently Played, the suspend points, the per-game core options and the launch itself
+all act on it. Which file a card comes up on is the one with the most plays, then a
+favourite, then the first by filename — so the version you actually play is the one the card
+offers, remembered in the play counts that were already per-file rather than in a new file
+of its own. The exact file you were last standing on comes back with the rest of the shelf
+position in `classicui_session.cfg`.
+
 ### Browsing by system
 
 ![Systems](docs/img/device/systems.png)
@@ -592,7 +622,7 @@ backwards - what the legend shows is what the key does.
 | D-pad | arrows | move / reveal menu bar (up) / suspend points (down) |
 | A | Enter | start, resume, open folder, confirm |
 | B | Esc | back, leave folder, resume |
-| X | Tab | delete a suspend point (two presses), or put a setting back to its usual value |
+| X | Tab | cycle the files behind a card, delete a suspend point (two presses), or put a setting back to its usual value |
 | Y | Backspace | favourite, or save into a slot in-game |
 | Select | ` (backtick) | sort |
 | L / R | - / = | jump one screenful |
@@ -688,9 +718,9 @@ approximation `vp_preview()` draws.
 `support/classicui/test/run.sh` builds a host binary in Docker from the real
 `chome_*.cpp` files plus fakes for the framebuffer, SD card, clock, `xml_load()`
 and `video_loadPreset()`. It creates a fake SD card, walks every screen at four
-canvas sizes, writes a PNG of each to `test/out/`, and runs 61 assertions over the
-index, sorting, views, savestate slots, art decode, the generated video files and
-the exact MGL emitted at launch.
+canvas sizes, writes a PNG of each to `test/out/`, and runs 635 assertions over the
+index, sorting, views, title groups, savestate slots, art decode, the generated
+video files and the exact MGL emitted at launch.
 
 It found real bugs that compile cleanly: a tap-run being mistaken for a held key,
 an enter-then-immediately-leave on the first menu press, and cards 30% too small at

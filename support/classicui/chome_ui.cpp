@@ -425,15 +425,17 @@ static int session_restore()
 	int n = lib_view_count();
 	sel = 0;
 
+	/*
+	  Through the view rather than over the entries, so a game that is one of several
+	  files behind one card is still found - and the card comes back showing *that* file.
+	  This is the only thing that remembers a cycled card across the re-exec a launch
+	  performs, which is the case that matters: choose the European dump, play it, and
+	  the shelf is still on the European dump when the menu comes back.
+	*/
 	if (r.sel_key)
 	{
-		for (int i = 0; i < n; i++)
-		{
-			const chome_entry *e = lib_view_entry(i);
-			if (!e || e->kind != ENT_GAME) continue;
-			chome_item *it = lib_item(e->game);
-			if (it && it->key == r.sel_key) { sel = i; break; }
-		}
+		int at = lib_view_select_key(r.sel_key);
+		if (at >= 0) sel = at;
 	}
 	if (!sel && r.sel_idx > 0 && r.sel_idx < n) sel = r.sel_idx;
 
@@ -630,16 +632,27 @@ static void nudge()
 	mark_dirty();
 }
 
-// Keeps the shelf pips honest: re-stat the selected game's savestate slots
-// whenever the selection moves. Four stat() calls, only on change.
+/*
+  Keeps the shelf pips honest: re-stat the selected game's savestate slots whenever the
+  selection moves. Four stat() calls, only on change.
+
+  The game index is part of what "moved" means, not just the shelf position: cycling a
+  grouped card to another file leaves sel and view alone while putting a different ROM -
+  with its own savestates - under the cursor.
+*/
 static void sync_sel_slots()
 {
 	static int last_sel = -1;
 	static int last_view = -1;
+	static int last_game = -1;
 
-	if (sel == last_sel && view == last_view) return;
+	const chome_entry *ce = lib_view_entry(sel);
+	int game = (ce && ce->kind == ENT_GAME) ? ce->game : -1;
+
+	if (sel == last_sel && view == last_view && game == last_game) return;
 	last_sel = sel;
 	last_view = view;
+	last_game = game;
 
 	del_arm_slot = -1;
 
@@ -1088,6 +1101,37 @@ static void draw_title_block(const chome_profile *p)
 
 	for (char *q = meta; *q; q++) *q = (char)toupper((unsigned char)*q);
 	gfx_text_c(gfx_clip(meta, p->ts_ui, avail), p->w / 2, p->y_meta, p->ts_ui, COL_DIM, 0);
+
+	/*
+	  A third line naming the file, for the cards where the title above does not.
+
+	  Two of those: a grouped card, which is several files and says which of them with a
+	  counter, and a card whose title appears on another card of the same shelf - a hack
+	  in its own folder, the .sms beside the .gg, Recently Played holding two dumps of one
+	  game. See "title groups" in chome_lib.cpp for why those are deliberately not merged.
+
+	  Left in the file's own case while everything above it is upper-cased: this is the
+	  name on the card, and "MEGA MAN (E).NES" is not it. MiSTer's OSD ROM font has
+	  lower case, so nothing is lost by saying so exactly.
+
+	  Drawn at the tiny scale, clipped to the same width as the lines above, and skipped
+	  outright if it would reach the cards - at 240p the whole block has about twenty
+	  pixels under the meta line and a long No-Intro name is far wider than the canvas.
+	*/
+	if (e->kind == ENT_GAME && (e->nvar > 1 || e->dup))
+	{
+		int y = p->y_meta + 10 * p->ts_ui;
+		if (y + 8 * p->ts_tiny <= p->y_shelf - p->sel_h)
+		{
+			char line[CH_PATH_LEN + 16];
+			const char *file = lib_view_variant_file(sel, e->vsel);
+
+			if (e->nvar > 1) snprintf(line, sizeof(line), "%d/%d  %s", e->vsel + 1, e->nvar, file);
+			else snprintf(line, sizeof(line), "%s", file);
+
+			gfx_text_c(gfx_clip(line, p->ts_tiny, avail), p->w / 2, y, p->ts_tiny, COL_PANELLO, 0);
+		}
+	}
 }
 
 static void draw_pips(const chome_profile *p)
@@ -1792,11 +1836,27 @@ static int build_legend(legend_pair *out, int max)
 			int running = ig_is_running(cur_game()) || susp_matches(cur_game());
 			if (n < max) { out[n++] = lp(LBL_A, running ? "Resume" : "Start", running ? "Play" : "Start"); }
 			/*
-			  Order is priority: the 240p legend keeps only the first three, and
-			  favouriting a game is worth more there than re-sorting the shelf. The
-			  action itself was always here - it just never appeared on a CRT.
+			  X was the one face button the shelf had nothing for, which is what makes it
+			  the button that cycles a card's files. Everything else was taken and none of
+			  it could be given up: A starts, B jumps back to the folders, Y favourites,
+			  Select sorts, the shoulders page the shelf, up is the menu bar and down is
+			  the suspend points. Taking one of those would have cost an action to gain
+			  one - and X already means "the other thing you can do to this row"
+			  elsewhere here (a shared value on core options, the usual value in
+			  Settings), so this is that meaning on the shelf rather than a new one.
+
+			  Offered only on a card that has something to cycle, like X on the core
+			  options rows: a prompt for a press that does nothing is worse than no prompt.
+
+			  Second, because order is priority - the 240p legend keeps only the first
+			  three - and on a grouped card starting the wrong region is a wrong outcome
+			  while not favouriting is merely a missing convenience. On every other card
+			  the order is unchanged.
 			*/
+			if (e && e->nvar > 1 && n < max) { out[n++] = lp(LBL_X, "Version", "Ver"); }
 			if (n < max) { out[n++] = { CH_DOWN, "dpad_down", "Suspend Points", "Saves", 0, COL_WHITE }; }
+			// And favouriting a game is worth more on a CRT than re-sorting the shelf.
+			// The action itself was always here - it just never appeared there.
 			if (n < max) { out[n++] = lp(LBL_Y, "Favourite", "Fav"); }
 			if (n < max) { out[n++] = lp(LBL_SELECT, "Sort", "Sort"); }
 		}
@@ -6313,22 +6373,19 @@ static void ig_select_running()
 {
 	if (!ig_have_item || ig_selected_running) return;
 
-	int n = lib_view_count();
-	for (int i = 0; i < n; i++)
-	{
-		const chome_entry *e = lib_view_entry(i);
-		if (!e || e->kind != ENT_GAME) continue;
+	/*
+	  Through the view, so the running game is found even when it is not the file its
+	  card is showing - and the card is turned to it. Comparing only against each card's
+	  selected file would leave the shelf parked somewhere else entirely whenever the
+	  player started the second dump of a title.
+	*/
+	int at = lib_view_select_path(ig_item.sysidx, ig_item.path);
+	if (at < 0) return;
 
-		chome_item *it = lib_item(e->game);
-		if (!it) continue;
-		if (it->sysidx != ig_item.sysidx || strcmp(it->path, ig_item.path)) continue;
-
-		sel = i;
-		selF = i;
-		ig_selected_running = 1;
-		mark_dirty();
-		return;
-	}
+	sel = at;
+	selF = at;
+	ig_selected_running = 1;
+	mark_dirty();
 }
 
 // Returns 1 when the menu took over, 0 when the core cannot host it.
@@ -7146,6 +7203,26 @@ int chome_handle(uint32_t key)
 			{
 				if (set_row >= set_nview || !opt_reset(set_view[set_row])) { nudge(); break; }
 				set_edited();
+				break;
+			}
+
+			/*
+			  On the shelf X turns a card to the next of the files behind it. One
+			  direction only, and it wraps: a title has two or three dumps, so wrapping
+			  reaches all of them, and there is no second free button on this screen to
+			  spend on going back (see build_legend).
+
+			  Nothing else needs telling. The entry's game index moves with it, and every
+			  per-game path in this file reads that index - so the launch, the play count,
+			  Recently Played, the favourite, the suspend points and the per-game core
+			  options all follow to the file now on show. The slots are re-stat()ed by
+			  sync_sel_slots(), which counts the game as part of the selection for exactly
+			  this reason.
+			*/
+			if (screen == SCR_HOME)
+			{
+				if (!lib_view_cycle(sel, 1)) { nudge(); break; }
+				mark_dirty();
 				break;
 			}
 

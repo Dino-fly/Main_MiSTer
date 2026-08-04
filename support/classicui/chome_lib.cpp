@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <ctype.h>
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -1295,11 +1296,131 @@ void lib_rescan()
 	lib_init_common(0);
 }
 
+/* -------------------------------------------------------- title groups ---- */
+
+/*
+  Several files, one title.
+
+  clean_title() strips the decoration, so "Mega Man (U).nes" and "Mega Man (E).nes" both
+  read as "Mega Man" and the shelf drew two identical cards with nothing to tell them
+  apart. They become one card instead, cycled with a button, and the title block names
+  the file on show. Regional variants, revisions and the discs of one game all collide
+  the same way and are all fixed by the same grouping.
+
+  What counts as the same title is four things. The display title is one of them and the
+  other three exist to stop a merge that would be *wrong*, because merging two genuinely
+  different games hides one of them behind a button nobody knows to press - a worse fault
+  than the duplicate cards this replaces:
+
+    the system     Aladdin on the SNES and Aladdin on the Mega Drive are different games
+                   that share a name.
+    the directory  a card that keeps hacks, translations or a region in a folder of its
+                   own is the player saying those are separate collections, so
+                   games/SNES/Hacks/Super Mario World.sfc is not a regional variant of
+                   the one in games/SNES. The cost is that a library filed as
+                   games/NES/USA + games/NES/Europe groups nothing; that is the safe way
+                   round, since the folders may just as easily hold different games.
+    the extension  a shared core hosts more than one machine and is told apart by
+                   extension exactly here - "Sonic The Hedgehog 2.sms" and
+                   "Sonic The Hedgehog 2.gg" are different games with different levels,
+                   and class_of() already treats them as different hardware. The cost is
+                   that a .cue and a .chd of one dump stay two cards, which is what they
+                   are today, so nothing regresses.
+    clean_title()  the grouping key and the thing the player reads as the title cannot
+                   then disagree. Anything looser - a prefix, a fuzzy match - could put
+                   "Mega Man" and "Mega Man 2" on one card.
+
+  Compared case-insensitively throughout, matching both the shelf sort (strcasecmp) and
+  the FAT filesystem the paths came off.
+*/
+#define GRP_KEY_LEN 320
+#define GRP_SLOTS   8192     // power of two, comfortably over CH_MAX_ITEMS
+
+/*
+  How much of a path is the directory a group would share.
+
+  A zipped ROM's path names the member inside the archive
+  ("Mega Man (U).zip/Mega Man (U).nes") and the archive is the file on the card, so the
+  archive counts as the file rather than as a directory. Without that, two zipped
+  regions of one game sit in two different "directories" and never group - and zipped
+  ROMs are how most cards store them.
+*/
+static int group_dir_len(const char *path)
+{
+	const char *zip = strcasestr(path, ".zip/");
+	const char *end = zip ? zip + 4 : path + strlen(path);
+
+	const char *slash = 0;
+	for (const char *p = path; p < end; p++) if (*p == '/') slash = p;
+	return slash ? (int)(slash - path) : 0;
+}
+
+/*
+  The extension is the innermost file's, not the archive's: what decides the machine is
+  the ROM, and "Sonic.zip/Sonic.gg" is a Game Gear game however the archive is named. A
+  romset archive has no inner file and answers "zip", which is right - the archive is
+  the game there.
+*/
+static void group_key(const chome_item *it, char *out, int len)
+{
+	const char *dot = strrchr(it->path, '.');
+	snprintf(out, len, "%d|%.*s|%s|%s", (int)it->sysidx,
+		group_dir_len(it->path), it->path, dot ? dot + 1 : "", it->title);
+
+	for (char *p = out; *p; p++) *p = (char)tolower((unsigned char)*p);
+}
+
+/*
+  One open-addressed table, shared by the three passes below that each need to answer
+  "have I seen this key already" in a single walk. The generation counter retires the
+  whole table in one assignment, so a pass costs nothing to start and no pass can see
+  another's entries - they run one after another over the same cells.
+
+  The payload is an index and the caller confirms the hit itself, because a 32-bit hash
+  over a few thousand keys collides often enough that trusting it would occasionally
+  merge two unrelated games. That is the one failure this feature must not have.
+*/
+struct grp_cell { uint32_t gen; int val; };
+static grp_cell grp_tab[GRP_SLOTS];
+static uint32_t grp_gen = 0;
+
+typedef int (*grp_same)(int val, const char *key);
+
+static void group_open() { grp_gen++; }
+
+// The cell this key belongs in: an occupied one `same()` accepts, or a free one with
+// val < 0 for the caller to fill. 0 only if the table filled up, which cannot happen at
+// CH_MAX_ITEMS keys in GRP_SLOTS cells but is checked rather than assumed.
+static grp_cell *group_cell(const char *key, grp_same same)
+{
+	uint32_t h = hash32(key);
+	for (uint32_t probe = 0; probe < GRP_SLOTS; probe++)
+	{
+		grp_cell *c = &grp_tab[(h + probe) & (GRP_SLOTS - 1)];
+		if (c->gen != grp_gen) { c->gen = grp_gen; c->val = -1; }
+		if (c->val < 0) return c;
+		if (same(c->val, key)) return c;
+	}
+	return 0;
+}
+
 /* --------------------------------------------------------------- views ---- */
 
 #define VIEW_MAX 6100
 static chome_entry view[VIEW_MAX];
 static int nview = 0;
+
+/*
+  The files behind each card, as a chain through the item array: one link per item,
+  since an item belongs to at most one card in any one view. A chain rather than a
+  packed list because the variants of a title are not adjacent in the index - a third
+  file in the same folder, or a zip whose members are added when the zip is reached,
+  lands between them - so a packed list would need a second flattening pass.
+
+  Kept in filename order, so the cycle runs Disc 1, Disc 2, Disc 3 rather than in
+  whatever order readdir() happened to return.
+*/
+static int var_next[CH_MAX_ITEMS];
 
 int lib_view_count() { return nview; }
 const chome_entry *lib_view_entry(int i) { return (i >= 0 && i < nview) ? &view[i] : 0; }
@@ -1353,23 +1474,53 @@ static int cmp_entry(const void *a, const void *b)
 	return strcasecmp(ia->title, ib->title);
 }
 
-// Counts what sits behind a folder, so the card and title can say so.
+// Confirms a count-pass hit: the payload is the item that opened the group.
+static int same_group_item(int val, const char *key)
+{
+	char other[GRP_KEY_LEN];
+	group_key(&items[val], other, sizeof(other));
+	return !strcmp(key, other);
+}
+
+/*
+  Counts what sits behind a folder, so the card and title can say so.
+
+  Counted in titles, not in files, because that is what the shelf behind the folder will
+  show and because "12 GAMES" over a shelf of ten cards is the folder lying about itself.
+  Three regional dumps of one game are one game by the same argument that put them on one
+  card.
+*/
 static int count_behind(int tview, int tsys)
 {
 	// Already resolved and already capped, and the loop below could express neither.
+	// Ungrouped as well - see lib_view_build - so a file count is the card count here.
 	if (tview == VIEW_RECENT) return recent_n;
+
+	group_open();
 
 	int c = 0;
 	for (int i = 0; i < nitems; i++)
 	{
 		const chome_sys *s = lib_sys(items[i].sysidx);
+		int mine = 0;
 		switch (tview)
 		{
-		case VIEW_FAV: if (items[i].fav) c++; break;
-		case VIEW_SYS: if (items[i].sysidx == tsys) c++; break;
-		case VIEW_ALL: if (s && !s->computer) c++; break;
+		case VIEW_FAV: mine = items[i].fav ? 1 : 0; break;
+		case VIEW_SYS: mine = (items[i].sysidx == tsys); break;
+		case VIEW_ALL: mine = (s && !s->computer) ? 1 : 0; break;
 		default: break;
 		}
+		if (!mine) continue;
+
+		char key[GRP_KEY_LEN];
+		group_key(&items[i], key, sizeof(key));
+
+		grp_cell *cell = group_cell(key, same_group_item);
+		if (!cell) { c++; continue; }        // no table: over-count rather than under
+		if (cell->val >= 0) continue;        // another file of a title already counted
+
+		cell->val = i;
+		c++;
 	}
 
 	if (tview == VIEW_SYSTEMS || tview == VIEW_COMPUTERS)
@@ -1405,6 +1556,144 @@ static void push_game(int idx)
 	memset(e, 0, sizeof(*e));
 	e->kind = ENT_GAME;
 	e->game = idx;
+	e->nvar = 1;
+	e->vhead = idx;
+	var_next[idx] = -1;
+}
+
+// Confirms a grouping hit: the payload is the entry, and every file behind it shares
+// the key, so the chain head answers for all of them.
+static int same_group_entry(int val, const char *key)
+{
+	char other[GRP_KEY_LEN];
+	group_key(&items[view[val].vhead], other, sizeof(other));
+	return !strcmp(key, other);
+}
+
+/*
+  Adds a game to the shelf, or behind the card that already carries its title.
+
+  The chain is kept in filename order by inserting into it, which costs nothing: a title
+  has two or three files, not hundreds.
+
+  The table's generation is opened here, on the first grouped push of a build, rather
+  than at the top of lib_view_build(): the folder cards are pushed first and
+  count_behind() runs a pass of its own over the same cells while they are, so opening
+  earlier would leave the games sharing a generation with the counting.
+*/
+static int grp_open_done = 0;
+
+static void push_game_grouped(int idx)
+{
+	if (!grp_open_done) { group_open(); grp_open_done = 1; }
+
+	char key[GRP_KEY_LEN];
+	group_key(&items[idx], key, sizeof(key));
+
+	grp_cell *cell = group_cell(key, same_group_entry);
+	if (!cell || cell->val < 0)
+	{
+		int before = nview;
+		push_game(idx);
+		if (cell && nview > before) cell->val = before;
+		return;
+	}
+
+	chome_entry *e = &view[cell->val];
+
+	int *link = &e->vhead;
+	while (*link >= 0 && strcasecmp(items[*link].path, items[idx].path) < 0) link = &var_next[*link];
+	var_next[idx] = *link;
+	*link = idx;
+
+	e->nvar++;
+}
+
+/*
+  Which file a card shows when the view is built.
+
+  The one with the highest play count, then a favourite, then the first in filename
+  order. That is deliberately not "the first file found": the version the player
+  actually plays is the version the card should offer, and play counts and favourites
+  are already per-file in classicui_state.cfg, so this needs no new state and survives
+  a re-exec, a rescan and a reboot on its own.
+
+  Widening state_rec to hold an explicit choice was the alternative and was rejected:
+  classicui_state.cfg is a bare array of records with no magic and no version, so
+  growing the record would make every existing file parse at the wrong stride and lose
+  the player's favourites. The exact file the player last stood on is pinned separately,
+  by lib_view_select_key() from the session record.
+*/
+static void group_pick_default()
+{
+	for (int i = 0; i < nview; i++)
+	{
+		chome_entry *e = &view[i];
+		if (e->kind != ENT_GAME || e->nvar < 2) continue;
+
+		int best = e->vhead, best_pos = 0, pos = 0;
+		for (int k = e->vhead; k >= 0; k = var_next[k], pos++)
+		{
+			const chome_item *a = &items[k];
+			const chome_item *b = &items[best];
+			if (a->plays > b->plays || (a->plays == b->plays && a->fav && !b->fav))
+			{
+				best = k;
+				best_pos = pos;
+			}
+		}
+
+		e->game = best;
+		e->vsel = best_pos;
+	}
+}
+
+/*
+  Confirms a duplicate-title hit. Folded to lower case on both sides because the hash
+  the table probes with is not case-insensitive: a confirm that was would put "MEGA MAN"
+  and "Mega Man" in different cells and then never compare them.
+*/
+static void lower_title(const char *in, char *out, int len)
+{
+	snprintf(out, len, "%s", in);
+	for (char *p = out; *p; p++) *p = (char)tolower((unsigned char)*p);
+}
+
+static int same_title_entry(int val, const char *key)
+{
+	char mine[CH_TITLE_LEN];
+	lower_title(items[view[val].game].title, mine, sizeof(mine));
+	return !strcmp(mine, key);
+}
+
+/*
+  Marks the cards whose title alone does not say which file they are.
+
+  A grouped card knows this about itself, but the cases grouping deliberately refuses -
+  a hack in its own folder, the .sms and .gg of one name, the same title on two systems,
+  and Recently Played, which is not grouped at all - still put two identical titles on
+  one shelf. Those are exactly the cards the title block has to name the file for, so
+  they are found here rather than left as the fault this feature exists to fix.
+*/
+static void group_mark_dups()
+{
+	group_open();
+
+	for (int i = 0; i < nview; i++)
+	{
+		if (view[i].kind != ENT_GAME) continue;
+
+		char key[CH_TITLE_LEN];
+		lower_title(items[view[i].game].title, key, sizeof(key));
+
+		grp_cell *cell = group_cell(key, same_title_entry);
+		if (!cell) continue;
+
+		if (cell->val < 0) { cell->val = i; continue; }
+
+		view[cell->val].dup = 1;
+		view[i].dup = 1;
+	}
 }
 
 int lib_view_build(int v, int sysidx, int sort)
@@ -1413,6 +1702,7 @@ int lib_view_build(int v, int sysidx, int sort)
 	cur_sort = sort;
 
 	int nfolders = 0;
+	grp_open_done = 0;
 
 	switch (v)
 	{
@@ -1431,7 +1721,7 @@ int lib_view_build(int v, int sysidx, int sort)
 		for (int i = 0; i < nitems; i++)
 		{
 			const chome_sys *s = lib_sys(items[i].sysidx);
-			if (s && !s->computer) push_game(i);
+			if (s && !s->computer) push_game_grouped(i);
 		}
 		break;
 
@@ -1439,15 +1729,22 @@ int lib_view_build(int v, int sysidx, int sort)
 		for (int i = 0; i < nitems; i++)
 		{
 			const chome_sys *s = lib_sys(items[i].sysidx);
-			if (s && !s->computer) push_game(i);
+			if (s && !s->computer) push_game_grouped(i);
 		}
 		break;
 
 	case VIEW_FAV:
-		for (int i = 0; i < nitems; i++) if (items[i].fav) push_game(i);
+		for (int i = 0; i < nitems; i++) if (items[i].fav) push_game_grouped(i);
 		break;
 
 	case VIEW_RECENT:
+		/*
+		  The one shelf that is *not* grouped. Its content is a list of launches, and two
+		  launches of two different files are two things that happened - collapsing them
+		  would either lose the ordering that is this view's whole point, or contradict
+		  the group's own choice of which file to show. The duplicate titles that leaves
+		  are named by their file instead: see group_mark_dups().
+		*/
 		for (int i = 0; i < recent_n; i++) push_game(recent_items[i]);
 		/*
 		  Here the order is the whole answer, so the sort at the end of this function
@@ -1481,9 +1778,20 @@ int lib_view_build(int v, int sysidx, int sort)
 		break;
 
 	case VIEW_SYS:
-		for (int i = 0; i < nitems; i++) if (items[i].sysidx == sysidx) push_game(i);
+		for (int i = 0; i < nitems; i++) if (items[i].sysidx == sysidx) push_game_grouped(i);
 		break;
 	}
+
+	/*
+	  Both before the sort, and the first of them has to be: cmp_entry() reads the item
+	  behind each entry, and the files behind one card do not share a play count - so
+	  sorting by Times Played before the card has settled on which file it stands for
+	  would order it by a file it is not showing. Neither pass cares about the order
+	  itself, and both are done with the hash table before qsort makes its entry indices
+	  meaningless.
+	*/
+	group_pick_default();
+	group_mark_dups();
 
 	if (nview > nfolders)
 	{
@@ -1491,6 +1799,108 @@ int lib_view_build(int v, int sysidx, int sort)
 	}
 
 	return nview;
+}
+
+/* --------------------------------------------------- variants of a card --- */
+
+int lib_view_variant(int entry, int which)
+{
+	const chome_entry *e = lib_view_entry(entry);
+	if (!e || e->kind != ENT_GAME || which < 0 || which >= e->nvar) return -1;
+
+	int k = e->vhead;
+	while (which-- > 0 && k >= 0) k = var_next[k];
+	return k;
+}
+
+/*
+  Names a variant by the part of its path the other variants do not share. For the
+  ordinary case that is the ROM filename, which is what the player needs to read; for a
+  ROM inside a multi-ROM archive it keeps the archive in front of it, because there the
+  archive name is shared and the member name is what differs.
+
+  The folder is dropped only when the card has files to share it with. A card of one file
+  is named here because some *other* card carries the same title (see group_mark_dups),
+  and the other card may well be the same filename in another folder - two collections
+  of one library, filed apart. Dropping the folder there would print the same line under
+  both cards and answer nothing.
+*/
+const char *lib_view_variant_file(int entry, int which)
+{
+	static char buf[CH_PATH_LEN];
+	buf[0] = 0;
+
+	const chome_entry *e = lib_view_entry(entry);
+	int k = lib_view_variant(entry, which);
+	if (!e || k < 0) return buf;
+
+	const char *path = items[k].path;
+	int skip = 0;
+
+	if (e->nvar > 1)
+	{
+		skip = group_dir_len(path);
+		if (skip && path[skip] == '/') skip++;
+	}
+
+	snprintf(buf, sizeof(buf), "%s", path + skip);
+	return buf;
+}
+
+int lib_view_cycle(int entry, int dir)
+{
+	if (entry < 0 || entry >= nview) return 0;
+
+	chome_entry *e = &view[entry];
+	if (e->kind != ENT_GAME || e->nvar < 2) return 0;
+
+	// Wraps, and only one direction is ever asked for: see the legend in chome_ui.cpp
+	// for why there is one button rather than two.
+	int next = e->vsel + ((dir < 0) ? -1 : 1);
+	while (next < 0) next += e->nvar;
+	next %= e->nvar;
+
+	int idx = lib_view_variant(entry, next);
+	if (idx < 0) return 0;
+
+	e->vsel = next;
+	e->game = idx;
+	return 1;
+}
+
+// Both lookups below want the same walk: every card, and every file behind it.
+static int view_select(uint32_t key, int sysidx, const char *relpath)
+{
+	for (int i = 0; i < nview; i++)
+	{
+		chome_entry *e = &view[i];
+		if (e->kind != ENT_GAME) continue;
+
+		int pos = 0;
+		for (int k = e->vhead; k >= 0; k = var_next[k], pos++)
+		{
+			int hit = relpath
+				? (items[k].sysidx == sysidx && !strcmp(items[k].path, relpath))
+				: (items[k].key == key);
+			if (!hit) continue;
+
+			e->game = k;
+			e->vsel = pos;
+			return i;
+		}
+	}
+	return -1;
+}
+
+int lib_view_select_key(uint32_t key)
+{
+	return key ? view_select(key, -1, 0) : -1;
+}
+
+int lib_view_select_path(int sysidx, const char *relpath)
+{
+	if (!relpath || !relpath[0]) return -1;
+	return view_select(0, sysidx, relpath);
 }
 
 const char *lib_view_title(int v, int sysidx)
