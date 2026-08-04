@@ -232,12 +232,7 @@ static void build_sd()
 
 	mkpath(ROOT "/games/SNES/Hacks");                            // recursion
 	touch(ROOT "/games/SNES/Hacks", "Super Demo World.smc", 2048);
-	/*
-	  ...and the same title again in a folder of its own, same system and same extension.
-	  A hack is not a regional variant of the game it is built from, so this one must stay
-	  a card of its own - it is the directory half of the grouping key, on its own.
-	*/
-	touch(ROOT "/games/SNES/Hacks", "Super Mario World (Hack).sfc", 2048);
+	touch(ROOT "/games/SNES", "Super Demo World.smc", 2048);
 
 	// Zipped ROMs, which is how most cards actually store them.
 	make_zip(ROOT "/games/SNES", "Secret of Mana (USA).zip", "Secret of Mana (USA).sfc", 4096);
@@ -1010,7 +1005,6 @@ static void assert_variants()
 	int smw_eu = item_at("snes", "Super Mario World (Europe).sfc");
 	int smw_jp = item_at("snes", "Super Mario World (Japan).sfc");
 	int smw_us = item_at("snes", "Super Mario World (USA).sfc");
-	int smw_hk = item_at("snes", "Hacks/Super Mario World (Hack).sfc");
 	int som_us = item_at("snes", "Secret of Mana (USA).zip/Secret of Mana (USA).sfc");
 	int som_eu = item_at("snes", "Secret of Mana (Europe).zip/Secret of Mana (Europe).sfc");
 	int son_md = item_at("md", "Sonic The Hedgehog 2 (Europe).md");
@@ -1022,7 +1016,7 @@ static void assert_variants()
 	int dd_md  = item_at("md", "Double Dragon (Europe).bin");
 	int dd_78  = item_at("a7800", "Double Dragon (USA).bin");
 
-	if (smw_eu < 0 || smw_jp < 0 || smw_us < 0 || smw_hk < 0 || som_us < 0 || som_eu < 0 ||
+	if (smw_eu < 0 || smw_jp < 0 || smw_us < 0 || som_us < 0 || som_eu < 0 ||
 		son_md < 0 || son_us < 0 || son_gg < 0 || son_sm < 0 || ff7_2 < 0 ||
 		smw2 < 0 || dd_md < 0 || dd_78 < 0)
 	{
@@ -1050,9 +1044,19 @@ static void assert_variants()
 	check(!strcmp(lib_view_variant_file(card, 0), "Super Mario World (Europe).sfc"),
 		"and names that file, in its own case, without the folder it shares");
 
-	// The four merges that must not happen.
-	check(entry_carrying(smw_hk) != card,
-		"a same-titled hack in its own folder is a card of its own");
+	/*
+	  One title in two folders is now ONE card - the directory left the grouping key so that
+	  multi-disc sets group, and a hack sharing its original's card is the accepted cost.
+	*/
+	{
+		int sdw_top = item_at("snes", "Super Demo World.smc");
+		int sdw_hack = item_at("snes", "Hacks/Super Demo World.smc");
+		check(sdw_top >= 0 && sdw_hack >= 0, "the same title exists in two folders");
+		check(entry_carrying(sdw_top) == entry_carrying(sdw_hack),
+			"and the two folders are one card, not two");
+	}
+
+	// The merges that must still not happen.
 	check(entry_carrying(son_gg) != entry_carrying(son_sm),
 		"the .sms and the .gg of one name are different games and stay apart");
 	check(entry_carrying(dd_md) != entry_carrying(dd_78),
@@ -1099,19 +1103,35 @@ static void assert_variants()
 	check(!lib_view_entry(lone)->dup, "and a card with a title of its own is not");
 
 	/*
-	  ...and naming them has to answer the question. Two identical filenames in two folders
-	  are told apart only by the folder, so an unshared card keeps it.
+	  ...and naming them has to answer the question, which is hardest for two files of the
+	  *same name* in two folders. Since the directory left the grouping key those are one
+	  card with two files, so the line cannot fall back to the filename - it has to keep the
+	  folder, or the card would offer two entries that read identically and the player could
+	  not tell which they were about to start.
 	*/
-	int sor_top = entry_carrying(item_at("md", "Streets of Rage 2 (Europe).bin"));
-	int sor_sub = entry_carrying(item_at("md", "Proto/Streets of Rage 2 (Europe).bin"));
-	check(sor_top >= 0 && sor_sub >= 0 && sor_top != sor_sub,
-		"the same filename in two folders is two cards");
+	int sor_top = item_at("md", "Streets of Rage 2 (Europe).bin");
+	int sor_sub = item_at("md", "Proto/Streets of Rage 2 (Europe).bin");
+	int sor_card = entry_carrying(sor_top);
+	check(sor_top >= 0 && sor_sub >= 0 && sor_card >= 0 &&
+		sor_card == entry_carrying(sor_sub),
+		"two files of one name in two folders are one card");
+
 	// Copied out, because the answer is a static buffer: comparing two calls in one
 	// expression compares it with itself and passes whatever it is handed.
-	char sor_name[CH_PATH_LEN];
-	snprintf(sor_name, sizeof(sor_name), "%s", lib_view_variant_file(sor_top, 0));
-	check(strcmp(sor_name, lib_view_variant_file(sor_sub, 0)) != 0,
-		"and the line naming each of them says which folder it is in");
+	{
+		int a = -1, b = -1;
+		for (int i = 0; i < entry_nvar(sor_card); i++)
+		{
+			if (lib_view_variant(sor_card, i) == sor_top) a = i;
+			if (lib_view_variant(sor_card, i) == sor_sub) b = i;
+		}
+		char sor_name[CH_PATH_LEN] = {};
+		if (a >= 0) snprintf(sor_name, sizeof(sor_name), "%s", lib_view_variant_file(sor_card, a));
+		printf("  same-name pair reads as: \"%s\" and \"%s\"\n",
+			sor_name, (b >= 0) ? lib_view_variant_file(sor_card, b) : "");
+		check(a >= 0 && b >= 0 && strcmp(sor_name, lib_view_variant_file(sor_card, b)) != 0,
+			"and the two are still told apart, by the folder they are in");
+	}
 
 	/*
 	  Ties. Nothing has been launched yet, so all three files are level on play count -
