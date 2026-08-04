@@ -39,6 +39,8 @@ void harness_set_osd_visible(int v);
 void harness_set_osd_mask(uint16_t m);
 int harness_cfg_saves();
 int harness_osd_status_held();
+const char *harness_last_recent();
+int harness_recent_calls();
 unsigned int harness_last_menu_key();
 void harness_swap_pad_faces();
 

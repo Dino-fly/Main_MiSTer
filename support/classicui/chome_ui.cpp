@@ -26,6 +26,7 @@
 
 #include "../../cfg.h"
 #include "../../user_io.h"
+#include "../../recent.h"
 #include "../../input.h"
 #include "../../osd.h"
 #include "../../video.h"
@@ -6705,6 +6706,72 @@ void chome_core_boot()
 
 	if (!cfg.classicui || is_menu()) return;
 	vp_apply_pending();
+
+	/*
+	  Tell MiSTer's own recents about this launch.
+
+	  A user's point, and a fair one: the firmware has had a recents list since long before
+	  this front-end - recent.cpp, config/<CORE>_recent_<idx>.cfg - and a game started from
+	  here never appeared in it. Anything else that reads it, including MiSTer's own file
+	  browser, was blind to everything the player actually played.
+
+	  Here rather than in do_launch(), which is the obvious place and the wrong one: the
+	  record is named after user_io_get_core_name(), and at launch time that is still MENU.
+	  By the time this runs the core is up and answers for itself.
+
+	  Our own Recently Played is a different shape and stays - MiSTer's is per core, capped
+	  at sixteen, and has no ordering across cores, so it cannot answer "what did I play
+	  last" for a shelf that spans systems. This is interoperability, not a replacement.
+
+	  cfg.recents gates it inside recent_update(), so a player who has the feature switched
+	  off gets nothing written, which is what they asked for.
+	*/
+	{
+		char sysid[64] = {}, rel[CH_PATH_LEN] = {};
+		if (cur_read(sysid, sizeof(sysid), rel, sizeof(rel)))
+		{
+			const chome_sys *sy = 0;
+			for (int i = 0; i < lib_sys_count() && !sy; i++)
+			{
+				const chome_sys *c = lib_sys(i);
+				if (c && !strcasecmp(c->id, sysid)) sy = c;
+			}
+
+			if (sy)
+			{
+				/*
+				  Split as MiSTer stores it: the directory it was found in and the file's own
+				  name. rel is relative to the system's games folder and may name a member
+				  inside an archive, so the last slash is the wrong split for a zip - the
+				  archive is the file, exactly as it is for the shelf.
+				*/
+				char full[CH_PATH_LEN + 64];
+				snprintf(full, sizeof(full), "%s/%s", sy->dir, rel);
+
+				const char *zip = strcasestr(full, ".zip/");
+				const char *end = zip ? zip + 4 : full + strlen(full);
+				char *slash = 0;
+				for (char *q = full; q < full + (end - full); q++) if (*q == '/') slash = q;
+
+				char dir[CH_PATH_LEN + 64] = {};
+				char name[CH_PATH_LEN] = {};
+				if (slash)
+				{
+					snprintf(dir, sizeof(dir), "%.*s", (int)(slash - full), full);
+					snprintf(name, sizeof(name), "%s", slash + 1);
+				}
+				else snprintf(name, sizeof(name), "%s", full);
+
+				char label[CH_PATH_LEN] = {};
+				snprintf(label, sizeof(label), "%s", name);
+				char *dot = strrchr(label, '.');
+				if (dot) *dot = 0;
+
+				recent_update(dir, name, label, 0);
+				printf("ClassicUI: told MiSTer's recents about %s\n", name);
+			}
+		}
+	}
 
 	/*
 	  And the core settings this game keeps to itself.
