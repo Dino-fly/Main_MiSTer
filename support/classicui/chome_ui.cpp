@@ -2103,6 +2103,38 @@ static unsigned long disc_spin_period()
 }
 
 /*
+  The iridescence, as a short ramp the wedges are taken from.
+
+  Cool hues on purpose rather than a full rainbow: a real disc throws cyan through
+  violet far more than it throws red, and this UI is dark and blue, so a saturated
+  spectrum would look like a parrot landed on the shelf. One near-white wedge acts as
+  the specular streak, which is what the eye actually tracks as it turns.
+*/
+static const uint32_t disc_bands[8] =
+{
+	0xffe8f4ff,      // the highlight
+	0xff8fd8f0,
+	0xff58a8d8,
+	0xff4878c0,
+	0xff6858c0,
+	0xff9058b8,
+	0xff5878c8,
+	0xff3f6098,
+};
+
+#define DISC_BANDS_N ((int)(sizeof(disc_bands) / sizeof(disc_bands[0])))
+
+/*
+  Radius in the units gfx_disc() wants: a multiple of 8, so the cells come out whole
+  pixels. 8 gives a 16px icon at 240p; 16 gives a 32px one with 2x2 cells where there
+  is room for it.
+*/
+static int disc_radius(const chome_profile *p)
+{
+	return (p->ts_ui >= 2) ? 16 : 8;
+}
+
+/*
   Two lines and the air round them, in units of s. Wider than a settings row (12)
   because the second line is the whole point: it is where "paired, not awake" and
   "needs a password" go, which is what the old screens said in a column of symbols and
@@ -3689,10 +3721,10 @@ static void draw_disc(const chome_profile *p)
 	  player should see the same object they navigated to, not a different rendering
 	  of the same idea.
 	*/
-	int r = 9 * s;
+	int r = disc_radius(p);
 	int cy = b.y + r + 2 * s;
 	gfx_disc(b.x + 12 * s + r, cy, r, anim_ms(), disc_spin_period(),
-		COL_PANELHI, COL_WHITE, COL_INK, COL_PANEL);
+		disc_bands, DISC_BANDS_N, COL_WHITE, COL_PANELHI, COL_BGDARK);
 
 	int tx = b.x + 12 * s + 2 * r + 8 * s;
 
@@ -3759,17 +3791,13 @@ static void draw_disc_badge(const chome_profile *p)
 	if (disc_state() == DISC_ABSENT) return;
 
 	int s = p->ts_ui;
-
-	// Floor the radius rather than scaling it alone: at 240p ts_ui is 1, and a 7-pixel
-	// disc is a smudge on a CRT. Checked against the device capture, not guessed.
-	int r = 7 * s;
-	if (r < 9) r = 9;
+	int r = disc_radius(p);
 
 	int cx = p->safe_x + p->inset + r;
 	int cy = p->safe_y + p->inset + r;
 
 	gfx_disc(cx, cy, r, anim_ms(), disc_spin_period(),
-		COL_PANELHI, COL_WHITE, COL_INK, COL_PANEL);
+		disc_bands, DISC_BANDS_N, COL_WHITE, COL_PANELHI, COL_BGDARK);
 
 	/*
 	  A short label beside it, but only where there is room: at 240p the shelf is
