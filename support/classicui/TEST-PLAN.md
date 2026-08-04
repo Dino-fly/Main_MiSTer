@@ -158,6 +158,27 @@ lurches forward after saving, that is what happened.
 
 ---
 
+## A8. gamelist.xml — art scraped somewhere else
+
+Also **not verified on hardware at all**. The harness proves the file is read, that a
+malformed or oversized one degrades to no art, and which layer wins; what it cannot show is
+a real scraped card, a real gamelist written by a real tool, or what the read costs on the
+DE10-Nano. A 3000-game gamelist parses in 81 ms on a development host; on the device,
+including the read off the card, expect something nearer half a second — once per system,
+the first time a card from it needs a cover.
+
+| Step | I do | You look at | Report |
+|---|---|---|---|
+| A8.1 | Copy a `gamelist.xml` plus its media folder onto one system's games folder, scraped with whatever you normally use | The shelf for that system | Do the covers appear, and are they the ones you scraped rather than the ones from the art pack? |
+| A8.2 | Scroll into that system for the first time after a reboot | The shelf as you arrive | Does it stutter or pause noticeably before the covers start filling in? For how long — a blink, or a second? |
+| A8.3 | Same shelf, scrolled a second time | The shelf | Smooth now? (The file is read once per system per boot, so a second visit should cost nothing) |
+| A8.4 | Rename one scraped picture on the card so the gamelist points at nothing | That one card | Does it fall back to the art pack or the plain plate, rather than going blank or hanging? |
+| A8.5 | `grep gamelist /tmp/debug.txt` | The log | How many covers did it report per system, and did any file get rejected? |
+
+A8.2 is the one number I most want and cannot get from here.
+
+---
+
 ## Part B — plug the HDMI screen in
 
 Everything here is hidden or untestable at 240p.

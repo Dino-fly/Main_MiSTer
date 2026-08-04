@@ -10,6 +10,7 @@
 
 #include "chome_art.h"
 #include "chome_lib.h"
+#include "chome_gamelist.h"
 #include "../../file_io.h"
 #include "../../cfg.h"
 #include "../../lib/imlib2/Imlib2.h"
@@ -151,6 +152,19 @@ static void rom_base(const chome_item *it, char *out, int len)
 	if (dot) *dot = 0;
 }
 
+/*
+  The game's path relative to its games dir, with an archive member cut off the way
+  rom_base() does it: gamelist.xml and every scraper name the archive, not what is
+  inside it, so "Game (USA).zip/Game.sfc" has to be looked up as "Game (USA).zip".
+*/
+static void rom_relpath(const chome_item *it, char *out, int len)
+{
+	snprintf(out, len, "%s", it->path);
+
+	char *zip = (char*)strcasestr(out, ".zip/");
+	if (zip) zip[4] = 0;
+}
+
 static int file_exists_abs(const char *p)
 {
 	struct stat st;
@@ -174,7 +188,46 @@ static int art_cache_path(const chome_item *it, char *out, int len)
 	return 1;
 }
 
-// Finds a local file for this game, trying the community layouts in order.
+/*
+  The media folders the PC scrapers write beside the ROMs, relative to the system's
+  games dir, best first. Named after the ROM file, as every one of them does:
+  <games dir>/media/box2d/Sonic The Hedgehog 2 (Europe).png
+
+  "media/box2d" and its siblings are Skraper's romset layout - which is what most
+  people who have scraped with ScreenScraper end up with - and "images"/"boxart"
+  are what Batocera's own scraper writes into the ROM folder. Box art first,
+  screenshots last: any of them beats a blank plate, but a box is what the card is
+  shaped for.
+*/
+static const char *const scraper_dirs[] =
+{
+	"media/box2d",
+	"boxart",
+	"images",
+	"media/images",
+	"media/mixed",
+	"media/screenshot",
+	"screenshots",
+};
+#define SCRAPER_DIR_COUNT ((int)(sizeof(scraper_dirs) / sizeof(scraper_dirs[0])))
+
+/*
+  Finds a local file for this game, trying the layouts in order:
+
+    0. whatever gamelist.xml names, when the player has scraped with anything else
+    1. the scraper media folders beside the ROMs
+    2. our own <artdir>, in the three shapes the community art packs come in
+    3. next to the ROM itself
+
+  gamelist.xml goes first on purpose. It is the one layer where the player has said
+  which file belongs to which game rather than us guessing from a name, and it is
+  the output of a deliberate scrape with a tool they chose; our <artdir> is a
+  convention we invented, and its third shape matches on a cleaned title, which is
+  the loosest match here. A gamelist entry that names a file which is not on the
+  card is not allowed to win, though - gl_art() only answers with a file that
+  exists - so a stale scrape leaves the later layers to do their job instead of
+  producing a blank card.
+*/
 static int find_local_art(const chome_item *it, char *out, int len)
 {
 	const chome_sys *s = lib_sys(it->sysidx);
@@ -190,11 +243,35 @@ static int find_local_art(const chome_item *it, char *out, int len)
 	const char *roots[2] = { getRootDir(), "/media/usb0" };
 	const char *exts[2] = { "png", "jpg" };
 
+	char gd[1024];
+	int have_gd = lib_sys_games_dir(it->sysidx, gd, sizeof(gd));
+
+	// 0. what the player's own scrape says, read from gamelist.xml.
+	{
+		char rel[CH_PATH_LEN];
+		rom_relpath(it, rel, sizeof(rel));
+		if (gl_art(it->sysidx, rel, out, len)) return 1;
+	}
+
+	// 1. the scraper media folders beside the ROMs, for a card scraped without a
+	//    gamelist.xml or whose gamelist names no pictures (ES-DE writes none).
+	if (have_gd)
+	{
+		for (int m = 0; m < SCRAPER_DIR_COUNT; m++)
+		{
+			for (int e = 0; e < 2; e++)
+			{
+				snprintf(out, len, "%s/%s/%s.%s", gd, scraper_dirs[m], base, exts[e]);
+				if (file_exists_abs(out)) return 1;
+			}
+		}
+	}
+
 	for (int r = 0; r < 2; r++)
 	{
 		if (!roots[r]) continue;
 
-		// 1. libretro layout: <artdir>/<System Name>/Named_Boxarts/<ROM name>.png
+		// 2a. libretro layout: <artdir>/<System Name>/Named_Boxarts/<ROM name>.png
 		if (s->lr[0])
 		{
 			for (int e = 0; e < 2; e++)
@@ -204,14 +281,14 @@ static int find_local_art(const chome_item *it, char *out, int len)
 			}
 		}
 
-		// 2. flat per-system folder: <artdir>/<games dir>/<ROM name>.png
+		// 2b. flat per-system folder: <artdir>/<games dir>/<ROM name>.png
 		for (int e = 0; e < 2; e++)
 		{
 			snprintf(out, len, "%s/%s/%s/%s.%s", roots[r], dir, s->dir, safe, exts[e]);
 			if (file_exists_abs(out)) return 1;
 		}
 
-		// 3. cleaned display title, for hand-made packs
+		// 2c. cleaned display title, for hand-made packs
 		for (int e = 0; e < 2; e++)
 		{
 			snprintf(out, len, "%s/%s/%s/%s.%s", roots[r], dir, s->dir, it->title, exts[e]);
@@ -219,9 +296,8 @@ static int find_local_art(const chome_item *it, char *out, int len)
 		}
 	}
 
-	// 4. next to the ROM itself
-	char gd[1024];
-	if (lib_sys_games_dir(it->sysidx, gd, sizeof(gd)))
+	// 3. next to the ROM itself
+	if (have_gd)
 	{
 		char rel[CH_PATH_LEN];
 		snprintf(rel, sizeof(rel), "%s", it->path);

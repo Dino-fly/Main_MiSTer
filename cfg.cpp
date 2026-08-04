@@ -157,6 +157,7 @@ static const ini_var_t ini_vars[] =
 	{ "CLASSICUI_OVERSCAN", (void*)(&(cfg.classicui_overscan)), UINT8, 0, 15 },
 	{ "CLASSICUI_ARTDIR", (void*)(&(cfg.classicui_artdir)), STRING, 0, sizeof(cfg.classicui_artdir) - 1 },
 	{ "CLASSICUI_ARTFETCH", (void*)(&(cfg.classicui_artfetch)), UINT8, 0, 1 },
+	{ "CLASSICUI_GAMELIST", (void*)(&(cfg.classicui_gamelist)), UINT8, 0, 1 },
 	{ "CLASSICUI_FREEZE", (void*)(&(cfg.classicui_freeze)), UINT8, 0, 1 },
 	{ "CLASSICUI_ARTURL", (void*)(&(cfg.classicui_arturl)), STRING, 0, sizeof(cfg.classicui_arturl) - 1 },
 };
@@ -620,6 +621,12 @@ void cfg_parse()
 	  that has to be reloaded.
 	*/
 	cfg.classicui_freeze = 1;
+	/*
+	  On by default: a gamelist.xml on the card is the player's own scrape, from
+	  whichever front-end or scraper they used, and reading it is the whole point.
+	  Off is for the case where it names worse pictures than the local art pack.
+	*/
+	cfg.classicui_gamelist = 1;
 	cfg.wheel_force = 50;
 	cfg.dvi_mode = 2;
 	cfg.lookahead = 1;

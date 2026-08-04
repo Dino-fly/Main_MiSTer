@@ -230,6 +230,7 @@ itself as "Wireless Controller" over Bluetooth still get PlayStation shapes.
 | `chome_theme.cpp` | Layout profiles (hd/sd/lo) derived proportionally from the canvas, palette |
 | `chome_lib.cpp` | Systems table, background scan, game index, shelf views, favourites/play counts, suspend-slot state |
 | `chome_art.cpp` | Cover art: local lookup, lazy decode, LRU cache, optional online fetch |
+| `chome_gamelist.cpp` | `gamelist.xml`: the art a player already scraped with any other front-end |
 | `chome_video.cpp` | Video looks: preset/filter/mask/gamma generation, per-system defaults, previews |
 | `chome_ini.cpp` | The `MiSTer.ini` settings this front-end assumes, and a rewrite that leaves the rest of the player's file alone |
 | `chome_opt.cpp` | The `MiSTer.ini` options the player may edit: labels, defaults, ranges, and what a value is worth changing to |
@@ -242,7 +243,7 @@ Integration points outside this directory, all additive:
   `video_menu_fb_present()` expose the menu background double-buffer.
 - `menu.cpp`: one call in `HandleUI()`, `chome_active()` in `menu_key_get()`'s
   repeat condition and in the idle-dim guard, one include.
-- `cfg.cpp` / `cfg.h` / `MiSTer.ini`: five `CLASSICUI*` options.
+- `cfg.cpp` / `cfg.h` / `MiSTer.ini`: the `CLASSICUI*` options.
 
 ## How it draws
 
@@ -632,13 +633,18 @@ which is the escape hatch for the one case validation can miss.
 
 ## Cover art
 
-Local lookup order, all under `classicui_artdir` (default `boxart`):
+Lookup order:
 
-1. `<artdir>/<System Name>/Named_Boxarts/<ROM name>.png` - the libretro
-   convention the community packs already use
-2. `<artdir>/<games dir>/<ROM name>.png`
-3. `<artdir>/<games dir>/<cleaned title>.png`
-4. next to the ROM
+0. whatever `gamelist.xml` names for that game, when the games folder has one -
+   see below
+1. the scraper media folders beside the ROMs, named after the ROM file:
+   `<games dir>/media/box2d/<ROM name>.png`, then `boxart`, `images`,
+   `media/images`, `media/mixed`, `media/screenshot`, `screenshots`
+2. our own `classicui_artdir` (default `boxart`), in three shapes:
+   `<artdir>/<System Name>/Named_Boxarts/<ROM name>.png` - the libretro convention
+   the community packs use - then `<artdir>/<games dir>/<ROM name>.png`, then
+   `<artdir>/<games dir>/<cleaned title>.png`
+3. next to the ROM
 
 `.jpg` is tried too, but the bundled Imlib2 links only libpng, so JPEG support
 depends on the shipped `libImlib2.so` loaders - PNG is the safe format.
@@ -651,9 +657,98 @@ fast as anyone scrolls. Decoded cards are cached at the selected-card size with 
 24 MB LRU, aspect-fitted onto the system's plate colour rather than stretched.
 
 Fetching (`classicui_artfetch=1`, **off by default**) forks `curl` for one image at
-a time and polls it without blocking. It writes into layout 1 above, so a fetch
-permanently populates the local pack and the next boot needs no network. It is
+a time and polls it without blocking. It writes into layer 2's first shape, so a
+fetch permanently populates the local pack and the next boot needs no network. It is
 opt-in because it necessarily sends ROM names to a third party.
+
+### gamelist.xml
+
+`gamelist.xml` is EmulationStation's metadata file and every front-end worth
+interoperating with reads or writes it - stock ES, RetroPie, Batocera, Recalbox,
+ES-DE - as do the scrapers people actually use, Skraper and Skyscraper. Anyone who
+has scraped a card once on a PC already has one, so reading it means their art works
+here with no second scrape and no renaming. `chome_gamelist.cpp`, on by default,
+`classicui_gamelist=0` to ignore it.
+
+The format facts this is built on, from
+[Aloshi's GAMELISTS.md](https://github.com/Aloshi/EmulationStation/blob/master/GAMELISTS.md)
+and [Batocera's copy of it](https://github.com/batocera-linux/batocera-emulationstation/blob/master/GAMELISTS.md),
+with the field lists read out of
+[`MetaData.cpp`](https://github.com/batocera-linux/batocera-emulationstation/blob/master/es-app/src/MetaData.cpp)
+and the resolution rule out of
+[`Gamelist.cpp`](https://github.com/batocera-linux/batocera-emulationstation/blob/master/es-app/src/Gamelist.cpp):
+
+- It lives in the system's ROM folder - `games/<System>/gamelist.xml`. ES also looks
+  in `~/.emulationstation/gamelists/<system>/` and `/etc/emulationstation/...`;
+  neither exists on a MiSTer card, so neither is looked for.
+- Root is `<gameList>`; children are `<game>` and `<folder>`. Only `<game>` is read:
+  a `<folder>` names a directory and the shelf has no card for one.
+- A media path is absolute, or relative to that ROM folder and conventionally
+  prefixed `./`, or prefixed `~/` for the scraping machine's home directory. The
+  first two resolve; `~/` does not, since MiSTer has no home worth resolving against
+  and a tree copied off a PC would not be at the same place anyway.
+- Text is entity-escaped (ES writes through pugixml, which escapes rather than using
+  CDATA), so `&amp;` and friends and numeric references are decoded. A `<path>` with
+  no `./`, or with Windows separators, is matched all the same.
+
+Which tag becomes the cover, best first: **`<boxart>`** (Batocera's own field for the
+2D box, so it says exactly what it holds), **`<thumbnail>`** (in ES's vocabulary the
+box front, where `<image>` is the "main" picture), **`<image>`** (which is what a
+gamelist naming only one picture uses), then `<mix>`, `<titleshot>`, `<fanart>`.
+`<marquee>`, `<wheel>`, `<video>`, `<manual>`, `<magazine>`, `<map>`, `<bezel>`,
+`<cartridge>` and `<boxback>` are deliberately never covers - a logo on transparency
+or the back of a box on a card would look like a bug.
+
+Only pictures are read. Names, genres and descriptions are not: titles come from
+filenames, and the title *grouping* that puts three dumps of one game behind one card
+is built on that, so taking names from a gamelist would quietly change which games
+share a card.
+
+**Why gamelist wins over `classicui_artdir`.** It is the one layer where the player
+has said *this file belongs to this game* rather than us guessing from a name, and it
+is the output of a deliberate scrape with a tool they chose; `artdir` is a convention
+we invented, whose third shape matches on a cleaned title and is the loosest match
+here. An entry naming a file that is not on the card does not win, though - a stale
+scrape falls through to the later layers instead of producing a blank card - and
+`classicui_gamelist=0` is the escape hatch if a scrape's pictures are worse than the
+local pack's.
+
+**ES-DE is the exception worth knowing.** It writes `gamelist.xml` but deliberately
+puts no media paths in it, matching media to ROM names under
+`downloaded_media/<system>/covers/` instead ("ES-DE does not use tags inside the
+gamelist.xml files to find game media",
+[USERGUIDE.md](https://gitlab.com/es-de/emulationstation-de/-/blob/master/USERGUIDE.md)).
+Its gamelists are read here and simply name nothing, which is why layer 1 exists: the
+same filename-matching idea, against the folders Skraper and Batocera write.
+
+**What it costs.** Parsing is lazy and per system - the first time a card from that
+system asks for art, not during the library scan, which is already the slow part of a
+cold boot - and a player who never scrolls to the Mega Drive shelf never pays for its
+gamelist. A generated 3000-game gamelist (2.5 MB, the shape Skraper writes: desc,
+image, thumbnail, marquee, video, and the metadata fields) parses in **81 ms** on the
+development host and costs 72 KB of entry table plus 135 KB of strings; later lookups
+are 2.3 µs each. On a DE10-Nano expect that to be closer to half a second including
+the read off the card, i.e. one stutter the first time you reach a big scraped
+system - **not measured on hardware**. A few hundred games, which is the normal case,
+is a tenth of that.
+
+**What it refuses.** This is a file we did not write, of unknown size, on a card:
+
+- Over 16 MB is not opened at all - a renamed ROM or disc image is the case that
+  matters, and no real gamelist is close. The cost is that a MAME-scale gamelist is
+  ignored rather than partly read.
+- The XML is parsed with `sxmlc`, the parser already in this tree (`user_io.cpp`
+  reads `.mra` files with it, the Neo Geo loader reads `romsets.xml`), streaming to
+  the next `>` rather than loading the file - so a 15 MB gamelist costs a tag's worth
+  of memory, not 15 MB. What *would* grow is one stretch with no `>` in it, which is
+  what the size limit above actually guards. Writing another XML parser for a format
+  we do not own would be the wrong kind of confidence.
+- 4096 entries and 256 KB of strings, across all systems together. Hitting either
+  stops the read and keeps what fit: a cap makes what was read short, not wrong.
+- A **parse error throws the whole file away**, including entries that had already
+  parsed cleanly - a half-read gamelist is not a smaller gamelist - and the shelf
+  behaves exactly as though the file were not there. Malformed means no art, never a
+  crash and never a stall that grows with the damage.
 
 ## Keys
 
@@ -784,6 +879,40 @@ whether a core accepts the MGL.
   `savestates/<core>/<rom>_<n>.png`, which the strip displays and falls back to
   the cover when absent. The poll can be up to a second behind the actual save,
   so the frame is close but not exact.
+- **Scraping from ScreenScraper ourselves.** Asked for, and read up properly before
+  being turned down. Their data is CC BY-NC-SA, which is not the blocker - nobody is
+  proposing we redistribute it, and a player scraping their own library with their own
+  account would be entirely within their rights. The blocker is the API contract:
+  `jeuInfos.php` requires **`devid`/`devpassword`/`softname`** as well as the user's
+  own `ssid`/`sspassword`, and a `devid` is granted per *application* by the
+  ScreenScraper team on request in their forum, tied to the `softname` it was issued
+  for ([webapi2.php](https://www.screenscraper.fr/webapi2.php)). We cannot ship one -
+  a key in a public repository is a key that gets revoked - and putting it in
+  `MiSTer.ini` would ship an option almost nobody can fill in, since ordinary users
+  are issued user accounts, not developer keys. Reusing another scraper's registered
+  key (Skyscraper's is in its source) is what gets an application blacklisted.
+
+  Three more reasons it would not be the good version of the feature even with a key:
+  matching is by hash for accuracy (`crc`/`md5`/`sha1`, ideally with `romtaille`), and
+  hashing a 700 MB disc image on a DE10-Nano off an SD card is not something to do
+  behind a shelf that is already slow, so we would be on `romnom` filename matching -
+  the fallback the scrapers themselves call the error-prone one. `systemeid` is a
+  numeric per-platform id we could not verify against a live `systemesListe.php`
+  without a key, and a wrong one scrapes the wrong console. And the quota surface is
+  real work: HTTP 429/430/431 for threads-per-minute, daily quota and too-many-unknown
+  ROMs, plus `maxthreads`/`requeststoday` in every response body to throttle against
+  ([batocera-emulationstation#1090](https://github.com/batocera-linux/batocera-emulationstation/issues/1090),
+  [Skyscraper's screenscraper.cpp](https://github.com/muldjord/skyscraper/blob/master/src/screenscraper.cpp)).
+
+  What the gamelist reader does instead is the same outcome by a better route: scrape
+  on a PC with Skraper or Skyscraper, which already hold registered keys and already
+  hash properly, and the result works here untouched. If a `devid` is ever registered
+  for this firmware, the client itself is perhaps 200 lines on the fork/poll shape
+  `fetch_start()`/`fetch_poll()` already has - the media `url` in a `jeuInfos.php`
+  reply is directly fetchable, so it is two curls and a small JSON scrape - and the
+  place it would write is layer 1 above, where the gamelist reader would see it
+  immediately.
+
 - **i18n.** The Language panel lists the EU unit's languages and marks the six
   non-English ones as untranslated. Strings are still inline English; a string
   table is the next step, not a rewrite.

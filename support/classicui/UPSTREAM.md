@@ -185,7 +185,7 @@ front-end, and both are conditional on it being active.
 
 ## 7. Configuration
 
-Six keys in `cfg.h`/`cfg.cpp`/`MiSTer.ini`. Adding one means all three in step.
+Eight keys in `cfg.h`/`cfg.cpp`/`MiSTer.ini`. Adding one means all three in step.
 
 | Key | Default | Note |
 |---|---|---|
@@ -194,10 +194,12 @@ Six keys in `cfg.h`/`cfg.cpp`/`MiSTer.ini`. Adding one means all three in step.
 | `classicui_overscan` | `6` | percent kept clear of the edge |
 | `classicui_artdir` | `boxart` | under the games folder |
 | `classicui_artfetch` | `0` | download missing art |
+| `classicui_arturl` | libretro thumbnails | where art is fetched from |
+| `classicui_gamelist` | `1` | read `gamelist.xml` for art scraped elsewhere |
 | `classicui_freeze` | `1` | hold the game still while the menu is open |
 
-`classicui_freeze` defaults to **1**, set explicitly in `cfg_parse()` — a zeroed
-struct would mean off.
+`classicui_freeze` and `classicui_gamelist` default to **1**, both set explicitly in
+`cfg_parse()` — a zeroed struct would mean off.
 
 ---
 
