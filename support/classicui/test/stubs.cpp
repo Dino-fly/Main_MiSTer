@@ -451,6 +451,36 @@ static const char *fake_confstr_opts[] =
 	0
 };
 
+/*
+  The same core after an update that inserted a value into one of its lists.
+
+  Cores do this - PSX's Widescreen Hack grew from two entries to four - and it moves
+  every value after the insertion point by one. A per-game override stored as an index
+  would come back as the wrong setting; stored as a name it still means what the
+  player chose. Everything else here is identical to fake_confstr_opts so a test can
+  swap one for the other and nothing else about the screen changes.
+*/
+static const char *fake_confstr_opts_v2[] =
+{
+	"OPTCORE",
+	"FS1,BIN,Load ROM",
+	"P1,Audio & Video;",
+	"P2,Debug settings;",
+	"-",
+	"O[38:37],Savestate Slot,1,2,3,4",
+	"P1O[33:32],Aspect ratio,Original,Full Screen",
+	"P1OFH,Palette,Kitrinx,Smooth,Wavebeam",
+	"P1O[54:53],Widescreen Hack,Off,3:2,5:3,16:9",   // 5:3 is the new one: 16:9 moved
+	"D1P1O[35],VI Deblur,Original,On",
+	"D1P1O[36],VI Antialias,Original,Off",
+	"O[40:39],System Type,Auto,NTSC,PAL",
+	"O[80:79],Turbo(Cheats Off),Off,Low(U),High(U)",
+	"P2O[27:24],Cache Delay,0,1,2,3",
+	"T[0],Reset",
+	"V,v2",
+	0
+};
+
 static const char *fake_confstr_twoslot[] =
 {
 	"TWOSLOT",
@@ -475,7 +505,8 @@ char *user_io_get_confstr(int index)
 		: (confstr_on == 3) ? fake_confstr_slotty
 		: (confstr_on == 4) ? fake_confstr_realpause
 		: (confstr_on == 5) ? fake_confstr_twoslot
-		: (confstr_on == 6) ? fake_confstr_opts : fake_confstr;
+		: (confstr_on == 6) ? fake_confstr_opts
+		: (confstr_on == 7) ? fake_confstr_opts_v2 : fake_confstr;
 	int n = 0;
 	while (tbl[n]) n++;
 

@@ -93,7 +93,21 @@ Three pages. **Picture** first, because that is why anyone opens it. **System & 
 second. **Risky** last — and an option lands there automatically when the core marks its own
 values unsafe, as PSX does with `(U) = unsafe -> can crash`.
 
-Changes apply at once and are kept in the same `<CORE>.CFG` the classic OSD writes.
+Changes apply at once. Where they are *kept* depends on whether a game is running.
+
+**With a game running, the change belongs to that game.** PSX's widescreen hack flatters a
+3D racer and ruins the 2D game next to it on the same card, so a setting changed from inside
+a game is remembered against that game and applied again the next time it starts — the core's
+own `<CORE>.CFG` is left alone, and no other game on that core is affected. Such a value is
+marked with a green `*`, the footer says what the star means, and X hands the setting back to
+every game, putting the shared value on screen as it goes. With no game identified — a core
+something else loaded — a change goes into the same `<CORE>.CFG` the classic OSD writes,
+exactly as before.
+
+Per-game settings live in `config/classicui_coreopts.cfg`, keyed by system and ROM path like
+the rest of the front-end's per-game state. They name the option and the value rather than
+numbering them, so a core update that grows one of its own value lists cannot turn a
+remembered choice into a different setting.
 
 ### Options, and the classic menu when you want it
 
@@ -699,8 +713,15 @@ whether a core accepts the MGL.
 - **i18n.** The Language panel lists the EU unit's languages and marks the six
   non-English ones as untranslated. Strings are still inline English; a string
   table is the next step, not a rewrite.
-- **Attract mode, first-run wizard, per-game core options.** Options hands off to
-  the classic menu for anything it does not own.
+- **Attract mode and a first-run wizard.** Neither exists. Options hands off to the
+  classic menu for anything it does not own.
+- ~~Per-game core options.~~ **Done**, in one direction only: a setting changed from
+  inside a game is kept for that game, and X hands it back to every game. There is no
+  way to make a value the *shared* one from in there, because writing `<CORE>.CFG`
+  writes the whole status word - including the running game's other overrides, which
+  would then leak to every game on the core. The classic OSD remains the route to a
+  global change, and note that using it while a game with overrides is running bakes
+  those overrides into `<CORE>.CFG` for the same reason.
 - **Aspect and scaling** (4:3 vs pixel-perfect) are not in the Video Look panel:
   `video_loadPreset` has no key for them and `vscale_mode` does not survive the
   core switch. They stay an ini setting.
