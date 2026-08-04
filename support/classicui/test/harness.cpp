@@ -26,6 +26,7 @@
 #include "../chome_art.h"
 #include "../chome_gamelist.h"
 #include "../chome_ss.h"
+#include "../chome_disc.h"
 #include "../chome_theme.h"
 #include "../chome_gfx.h"
 #include "../chome_video.h"
@@ -1668,6 +1669,345 @@ static void assert_gamelist()
 	art_redo();
 	check(cover_is(metroid, 0xff9a2f2f, "Super Metroid, gamelist on again"),
 		"and turning it back on restores the scraped art");
+}
+
+/* ---------------------------------------------------------- physical disc --- */
+
+/*
+  Identification, tested against discs nobody has to own.
+
+  Every one of these is a real signature at a real offset (sources in chome_disc.h),
+  laid out here the way a pressed disc lays it out: a raw sector is a 16-byte
+  sync/header followed by the 2048-byte user area, or 24 bytes of it for the mode 2
+  form CD-i uses. So a fixture describes the user area and the reader below builds the
+  raw sector around it - which means a mistake about that offset shows up as a failed
+  identification rather than as a test that agrees with the bug.
+
+  What this cannot test is the drive: disc_poll() is a status ioctl and is compiled
+  out of the harness. What it *can* test is the two-phase state machine, because that
+  was deliberately split out of the ioctl path - see disc_ingest_present().
+*/
+struct fake_sector
+{
+	int lba;
+	int mode2;                 // user area at offset 24 rather than 16
+	uint8_t user[DISC_USER_SIZE];
+};
+
+struct fake_disc
+{
+	fake_sector sec[16];
+	int n;
+};
+
+static int fake_read(int lba, int mode, uint8_t *dst, void *ctx)
+{
+	fake_disc *d = (fake_disc*)ctx;
+
+	for (int i = 0; i < d->n; i++)
+	{
+		if (d->sec[i].lba != lba) continue;
+
+		if (mode == DISC_READ_USER)
+		{
+			memcpy(dst, d->sec[i].user, DISC_USER_SIZE);
+			return 0;
+		}
+
+		// Build the raw sector the way a real one is laid out.
+		memset(dst, 0, DISC_RAW_SIZE);
+		int off = d->sec[i].mode2 ? 24 : 16;
+		int room = DISC_RAW_SIZE - off;
+		memcpy(dst + off, d->sec[i].user, room < DISC_USER_SIZE ? (size_t)room : DISC_USER_SIZE);
+		return 0;
+	}
+
+	return -1;                 // no such sector, which is normal while probing
+}
+
+static void fake_put(fake_disc *d, int lba, int mode2, const void *data, int len, int at)
+{
+	fake_sector *s = 0;
+	for (int i = 0; i < d->n; i++) if (d->sec[i].lba == lba) s = &d->sec[i];
+	if (!s)
+	{
+		if (d->n >= (int)(sizeof(d->sec) / sizeof(d->sec[0]))) return;
+		s = &d->sec[d->n++];
+		memset(s, 0, sizeof(*s));
+		s->lba = lba;
+		s->mode2 = mode2;
+	}
+	if (data && len > 0 && at + len <= DISC_USER_SIZE) memcpy(s->user + at, data, len);
+}
+
+// A minimal but structurally valid ISO: primary volume descriptor plus a root
+// directory holding the given names.
+static void fake_iso(fake_disc *d, int lba0, const char *label,
+	const char *sig, const char *const *names, int nnames)
+{
+	uint8_t pvd[DISC_USER_SIZE];
+	memset(pvd, 0, sizeof(pvd));
+
+	pvd[0] = 1;
+	memcpy(pvd + 1, "CD001", 5);
+	if (sig) memcpy(pvd + 8, sig, strlen(sig));
+
+	// Volume label: 32 bytes, space padded.
+	memset(pvd + 40, ' ', 32);
+	if (label) memcpy(pvd + 40, label, strlen(label) > 32 ? 32 : strlen(label));
+
+	// Root directory record: length, then extent and size as little-endian 32.
+	const uint32_t extent = 24;
+	const uint32_t size = DISC_USER_SIZE;
+	pvd[156] = 34;
+	pvd[156 + 2] = (uint8_t)(extent & 0xff);
+	pvd[156 + 3] = (uint8_t)((extent >> 8) & 0xff);
+	pvd[156 + 10] = (uint8_t)(size & 0xff);
+	pvd[156 + 11] = (uint8_t)((size >> 8) & 0xff);
+
+	fake_put(d, lba0 + 16, 0, pvd, sizeof(pvd), 0);
+
+	// The directory itself: a chain of length-prefixed records.
+	uint8_t dir[DISC_USER_SIZE];
+	memset(dir, 0, sizeof(dir));
+	int off = 0;
+	for (int i = 0; i < nnames; i++)
+	{
+		int nlen = (int)strlen(names[i]);
+		if (!nlen) continue;
+		int rlen = 33 + nlen;
+		if (rlen & 1) rlen++;                     // records are even-aligned
+		if (off + rlen > DISC_USER_SIZE) break;
+		dir[off] = (uint8_t)rlen;
+		dir[off + 32] = (uint8_t)nlen;
+		memcpy(dir + off + 33, names[i], nlen);
+		off += rlen;
+	}
+	fake_put(d, lba0 + (int)extent, 0, dir, sizeof(dir), 0);
+}
+
+static void assert_physical_disc()
+{
+	printf("\n== physical disc: detection and identification ==\n");
+
+	const int L = 0;                              // first data track at LBA 0
+
+	/* --------------------------------------------------- identification --- */
+
+	{
+		fake_disc d; memset(&d, 0, sizeof(d));
+		fake_put(&d, L, 0, "SEGADISCSYSTEM", 14, 0);
+		disc_set_reader(fake_read, &d);
+		check(disc_identify_at(L) == DISC_T_MEGACD, "SEGADISCSYSTEM is a Mega CD disc");
+	}
+
+	{
+		fake_disc d; memset(&d, 0, sizeof(d));
+		fake_put(&d, L, 0, "SEGA SEGASATURN", 15, 0);
+		disc_set_reader(fake_read, &d);
+		check(disc_identify_at(L) == DISC_T_SATURN, "SEGA SEGASATURN is a Saturn disc");
+	}
+
+	{
+		fake_disc d; memset(&d, 0, sizeof(d));
+		uint8_t sig[6] = { 0x01, 0x5A, 0x5A, 0x5A, 0x5A, 0x5A };
+		fake_put(&d, L, 0, sig, sizeof(sig), 0);
+		disc_set_reader(fake_read, &d);
+		check(disc_identify_at(L) == DISC_T_3DO, "the 0x5A run is a 3DO disc");
+	}
+
+	{
+		fake_disc d; memset(&d, 0, sizeof(d));
+		static const char *const none[] = { "" };
+		fake_iso(&d, L, "PLAYSTATION", "PLAYSTATION", none, 0);
+		fake_put(&d, L + 20, 0, "BOOT = cdrom:\\SLUS_006.26;1", 27, 100);
+		disc_set_reader(fake_read, &d);
+
+		check(disc_identify_at(L) == DISC_T_PSX, "PLAYSTATION in the volume descriptor is a PSX disc");
+
+		char ser[DISC_SERIAL_LEN] = {};
+		check(disc_serial_at(L, ser, sizeof(ser)) > 0 && !strcmp(ser, "SLUS-00626"),
+			"and SLUS_006.26 comes out as SLUS-00626, the form the outside world uses");
+
+		char lbl[DISC_LABEL_LEN] = {};
+		check(disc_label_at(L, lbl, sizeof(lbl)) == 0,
+			"the useless PLAYSTATION volume label is refused rather than displayed");
+	}
+
+	{
+		fake_disc d; memset(&d, 0, sizeof(d));
+		fake_put(&d, L, 0, "NOTHINGUSEFUL", 13, 0);
+		fake_put(&d, L + 1, 0, "xx PC Engine CD-ROM SYSTEM xx", 29, 40);
+		disc_set_reader(fake_read, &d);
+		check(disc_identify_at(L) == DISC_T_PCECD,
+			"the PC Engine string is found in the second sector, not just the first");
+	}
+
+	{
+		fake_disc d; memset(&d, 0, sizeof(d));
+		static const char *const none[] = { "" };
+		fake_iso(&d, L, "NEOGEO CD", "NGCD", none, 0);
+		disc_set_reader(fake_read, &d);
+		check(disc_identify_at(L) == DISC_T_NEOGEO, "NGCD is a Neo Geo CD disc");
+	}
+
+	{
+		// The other Neo Geo tell: an IPL.TXT, with no NGCD signature at all.
+		fake_disc d; memset(&d, 0, sizeof(d));
+		static const char *const none[] = { "" };
+		fake_iso(&d, L, "SNK", 0, none, 0);
+		fake_put(&d, L + 18, 0, "IPL.TXT", 7, 300);
+		disc_set_reader(fake_read, &d);
+		check(disc_identify_at(L) == DISC_T_NEOGEO, "an IPL.TXT alone identifies a Neo Geo CD");
+	}
+
+	{
+		fake_disc d; memset(&d, 0, sizeof(d));
+		uint8_t cdi[8] = { 0x01, 'C', 'D', '-', 'I', ' ', ' ', ' ' };
+		// mode 2: the descriptor sits 24 bytes into the raw sector, not 16.
+		fake_put(&d, L + 16, 1, cdi, sizeof(cdi), 0);
+		disc_set_reader(fake_read, &d);
+		check(disc_identify_at(L) == DISC_T_CDI,
+			"a CD-i descriptor is found at the mode 2 offset, which is not the mode 1 one");
+	}
+
+	{
+		// Mega Drive+: the *pair* is the format, so neither file alone counts.
+		fake_disc d; memset(&d, 0, sizeof(d));
+		static const char *const pair[] = { "SONIC.MD;1", "SONIC.CUE;1" };
+		fake_iso(&d, L, "MDPLUS", 0, pair, 2);
+		disc_set_reader(fake_read, &d);
+		check(disc_identify_at(L) == DISC_T_MDPLUS, "matching .md and .cue names are a Mega Drive+ disc");
+
+		fake_disc d2; memset(&d2, 0, sizeof(d2));
+		static const char *const lone[] = { "SONIC.MD;1" };
+		fake_iso(&d2, L, "MDPLUS", 0, lone, 1);
+		disc_set_reader(fake_read, &d2);
+		check(disc_identify_at(L) != DISC_T_MDPLUS, "a .md with no matching .cue is not one");
+	}
+
+	{
+		fake_disc d; memset(&d, 0, sizeof(d));
+		static const char *const sfc[] = { "GAME.SFC;1" };
+		fake_iso(&d, L, "MSU1", 0, sfc, 1);
+		disc_set_reader(fake_read, &d);
+		check(disc_identify_at(L) == DISC_T_SNES, "a .sfc on the disc is an MSU-1 SNES disc");
+	}
+
+	{
+		fake_disc d; memset(&d, 0, sizeof(d));
+		static const char *const none[] = { "" };
+		fake_iso(&d, L, "SONIC_CD", 0, none, 0);
+		disc_set_reader(fake_read, &d);
+
+		char lbl[DISC_LABEL_LEN] = {};
+		check(disc_label_at(L, lbl, sizeof(lbl)) > 0 && !strcmp(lbl, "SONIC CD"),
+			"an underscore in the volume label becomes a space");
+	}
+
+	{
+		// Nothing readable: the drive is there, the disc is not one we know.
+		fake_disc d; memset(&d, 0, sizeof(d));
+		disc_set_reader(fake_read, &d);
+		check(disc_identify_at(L) == DISC_T_UNKNOWN, "a disc matching nothing is UNKNOWN, not NONE");
+		char ser[DISC_SERIAL_LEN] = {};
+		check(disc_serial_at(L, ser, sizeof(ser)) == 0, "and has no serial");
+	}
+
+	// No data track at all. Decided from the table of contents, before any read.
+	check(disc_identify_at(-1) == DISC_T_AUDIO, "a disc with no data track is an audio CD");
+
+	/* ---------------------------------------------------- what it maps to --- */
+
+	check(!strcmp(disc_system_id(DISC_T_PSX), "psx"), "a PSX disc maps to the psx shelf");
+	check(!strcmp(disc_system_id(DISC_T_PCECD), "tg16"), "a PC Engine CD maps to tg16");
+	check(!strcmp(disc_system_id(DISC_T_MEGACD), "md"), "a Mega CD maps to the Mega Drive core");
+
+	/*
+	  The ones that matter for the UI: identified, but this firmware has no shelf
+	  system for them. "We know what it is" and "we can launch it" are different
+	  questions, and this is the case that forces the player to be asked.
+	*/
+	check(disc_system_id(DISC_T_SATURN) == 0, "a Saturn disc is identified but has no core here");
+	check(disc_system_id(DISC_T_CDI) == 0, "nor a CD-i disc");
+	check(disc_system_id(DISC_T_AUDIO) == 0, "and an audio CD is nobody's game");
+	check(disc_type_name(DISC_T_PSX) && disc_type_name(DISC_T_PSX)[0],
+		"every type we can report has a name to show");
+
+	/* ------------------------------------------------- the state machine --- */
+
+	{
+		fake_disc d; memset(&d, 0, sizeof(d));
+		static const char *const none[] = { "" };
+		fake_iso(&d, L, "PLAYSTATION", "PLAYSTATION", none, 0);
+		fake_put(&d, L + 20, 0, "BOOT = cdrom:\\SLUS_006.26;1", 27, 100);
+		disc_set_reader(fake_read, &d);
+
+		disc_ingest_present(0);
+		(void)disc_take_dirty();
+		check(disc_state() == DISC_ABSENT, "no disc is ABSENT");
+
+		disc_ingest_present(1);
+		check(disc_state() == DISC_SPINNING,
+			"a disc arriving is SPINNING immediately, before anything has been read");
+		check(disc_type() == DISC_T_NONE, "with no type yet - that is the point of the state");
+		check(disc_identify_due() == 1, "and identification is now due");
+		check(disc_take_dirty() == 1, "the arrival marks the UI dirty");
+		check(disc_take_dirty() == 0, "and the flag is consumed, not sticky");
+
+		// A second poll while still spinning must not restart anything.
+		disc_ingest_present(1);
+		check(disc_state() == DISC_SPINNING && disc_take_dirty() == 0,
+			"a repeated present does not re-trigger the arrival");
+
+		disc_ingest_identify(L);
+		check(disc_state() == DISC_READY, "identifying moves it to READY");
+		check(disc_type() == DISC_T_PSX, "with the type filled in");
+		check(!strcmp(disc_serial(), "SLUS-00626"), "and the serial");
+		check(disc_identify_due() == 0, "identification is no longer due");
+		check(disc_take_dirty() == 1, "and that is a second UI change");
+
+		check(!strcmp(disc_display_name(), "SLUS-00626"),
+			"the name under the icon falls back to the serial when the label is useless");
+
+		disc_ingest_present(0);
+		check(disc_state() == DISC_ABSENT, "ejecting forgets the disc");
+		check(disc_type() == DISC_T_NONE && !disc_serial()[0], "and everything about it");
+		check(disc_take_dirty() == 1, "which is also a UI change");
+	}
+
+	{
+		// A disc we cannot identify must stop looking, or the icon spins forever.
+		fake_disc d; memset(&d, 0, sizeof(d));
+		disc_set_reader(fake_read, &d);
+
+		disc_ingest_present(1);
+		disc_ingest_identify(0);
+		check(disc_state() == DISC_UNKNOWN,
+			"an unidentifiable disc ends at UNKNOWN, not stuck at SPINNING");
+		(void)disc_take_dirty();
+		disc_ingest_present(0);
+		(void)disc_take_dirty();
+	}
+
+	{
+		// An audio CD identifies with no data track and no reads at all.
+		disc_ingest_present(1);
+		disc_ingest_identify(-1);
+		check(disc_state() == DISC_READY && disc_type() == DISC_T_AUDIO,
+			"an audio CD reaches READY without reading a sector");
+		check(!strcmp(disc_display_name(), "Audio CD"),
+			"and shows its console name when it has neither label nor serial");
+		disc_ingest_present(0);
+		(void)disc_take_dirty();
+	}
+
+	// Out of order: with no arrival there is nothing due, so a stray identify is a
+	// no-op rather than inventing a disc.
+	disc_ingest_identify(L);
+	check(disc_state() == DISC_ABSENT, "an identify with no disc present changes nothing");
+
+	disc_reset_reader();
 }
 
 /* --------------------------------------------------------- screenscraper --- */
@@ -5080,6 +5420,7 @@ int main()
 	assert_art();
 	assert_gamelist();
 	assert_screenscraper();
+	assert_physical_disc();
 	assert_video();
 	assert_index_cache();
 
