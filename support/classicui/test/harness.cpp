@@ -2010,6 +2010,97 @@ static void assert_physical_disc()
 	disc_reset_reader();
 }
 
+/*
+  The disc UI, checked where it can be checked honestly.
+
+  The badge is drawing, so it is verified by reading pixels back out of the corner it
+  occupies rather than by asserting a function was called: the failure this catches is
+  "the state changed and nothing appeared", which is the only failure a player would
+  notice. The two dumps are for eyes - a hash proves something is there, not that it
+  looks like a disc.
+
+  Not checked here: that the menu bar's Disc entry can be reached by pressing right the
+  right number of times. That count depends on which other entries are visible at this
+  profile, so a test asserting it would be asserting the profile, and it would pass
+  while the entry led nowhere. What is checked is the thing underneath: the entry
+  appears and disappears with the disc, via the same predicate the bar uses.
+*/
+static void assert_disc_ui()
+{
+	printf("\n== physical disc: the badge and the prompt ==\n");
+
+	// The corner the badge occupies, at whatever profile is current.
+	int w = gfx_w(), h = gfx_h();
+	int bx = w / 5, by = h / 5;
+
+	disc_ingest_present(0);
+	(void)disc_take_dirty();
+	frame(6);
+	unsigned long empty = harness_fb_hash_box(0, 0, bx, by);
+
+	// A disc arrives: the badge should appear without anything having been read.
+	disc_ingest_present(1);
+	frame(6);
+	unsigned long spinning = harness_fb_hash_box(0, 0, bx, by);
+	check(disc_state() == DISC_SPINNING, "a disc arriving is SPINNING");
+	check(spinning != empty, "and puts a badge in the corner of the shelf");
+	dump("disc-1-spinning");
+
+	/*
+	  Identified. The badge stays - it is an indicator, not a notification - and the
+	  corner changes again because the label beside it now names the console.
+	*/
+	fake_disc d; memset(&d, 0, sizeof(d));
+	static const char *const none[] = { "" };
+	fake_iso(&d, 0, "PLAYSTATION", "PLAYSTATION", none, 0);
+	fake_put(&d, 20, 0, "BOOT = cdrom:\\SLUS_006.26;1", 27, 100);
+	disc_set_reader(fake_read, &d);
+	disc_ingest_identify(0);
+	frame(6);
+
+	check(disc_state() == DISC_READY && disc_type() == DISC_T_PSX,
+		"identifying it reaches READY as a PlayStation disc");
+	unsigned long ready = harness_fb_hash_box(0, 0, bx, by);
+	check(ready != empty, "the badge is still there once the disc is known");
+	dump("disc-2-ready");
+
+	/*
+	  Ejecting has to take the badge away. This is the check that matters most for a
+	  drawing that is not part of any screen's own draw path: something that appears on
+	  an event and is never removed is the classic version of this bug.
+	*/
+	disc_ingest_present(0);
+	frame(6);
+	check(harness_fb_hash_box(0, 0, bx, by) == empty,
+		"ejecting takes the badge away and leaves the corner as it was");
+
+	/*
+	  Which cores could take a disc. Derived from the type map rather than listed
+	  twice, so this also pins that the two Mega Drive disc types collapse to one core
+	  rather than offering it to the player twice.
+	*/
+	const char *ids[16];
+	int n = disc_capable_systems(ids, 16);
+	check(n >= 4, "there are several disc-capable cores");
+
+	int md = 0, psx = 0, tg = 0;
+	for (int i = 0; i < n; i++)
+	{
+		if (!strcmp(ids[i], "md")) md++;
+		if (!strcmp(ids[i], "psx")) psx++;
+		if (!strcmp(ids[i], "tg16")) tg++;
+	}
+	check(psx == 1 && tg == 1, "psx and tg16 are each offered once");
+	check(md == 1, "and the Mega Drive core once, though two disc types map to it");
+
+	int cap = disc_capable_systems(ids, 2);
+	check(cap == 2, "and the caller's limit is respected");
+
+	disc_reset_reader();
+	disc_ingest_present(0);
+	(void)disc_take_dirty();
+}
+
 /* --------------------------------------------------------- screenscraper --- */
 
 /*
@@ -5421,6 +5512,7 @@ int main()
 	assert_gamelist();
 	assert_screenscraper();
 	assert_physical_disc();
+	assert_disc_ui();
 	assert_video();
 	assert_index_cache();
 

@@ -214,6 +214,7 @@ static void ref_shot_path(const char *sysid, const char *rompath, char *out, int
 #define SCR_PADTEST 14
 #define SCR_SET     15
 #define SCR_CORE    16
+#define SCR_DISC    17
 
 // Rows on the Options panel. Several places step over them.
 /*
@@ -268,14 +269,15 @@ static void ref_shot_path(const char *sysid, const char *rompath, char *out, int
 #define MB_POWER    2
 #define MB_ABOUT    3
 #define MB_CORE     4
-#define MB_COUNT    5
+#define MB_DISC     5
+#define MB_COUNT    6
 
 /*
   Language and Manuals are gone. The first opened a panel with nothing behind it,
   and the second only handed the screen to the classic OSD - which is exactly what
   the front-end is not supposed to do on its own.
 */
-static const char *mb_label[MB_COUNT] = { "Display", "Options", "Power", "About", "Core" };
+static const char *mb_label[MB_COUNT] = { "Display", "Options", "Power", "About", "Core", "Disc" };
 
 /*
   The core entry is labelled with the running system rather than the word "Core": a player
@@ -292,6 +294,14 @@ static const char *mb_text(int i);
 */
 static int mb_visible(int i)
 {
+	/*
+	  The disc entry exists only while there is a disc in the drive, which is what
+	  makes it the answer to "I dismissed the prompt, how do I get it back": the
+	  entry is there for exactly as long as the disc is, and gone the moment it is
+	  ejected.
+	*/
+	if (i == MB_DISC) return disc_state() != DISC_ABSENT;
+
 	/*
 	  The core's own options, which only exist while a core is running - and only if it
 	  published something we would offer. A core with nothing but debug toggles gets no
@@ -2083,6 +2093,16 @@ static void draw_rows(const panel_box *b, const char *const *rows, const char *c
 static unsigned long anim_ms() { return GetTimer(0); }
 
 /*
+  How fast the disc turns, which is the entire state indicator: fast while the drive
+  is still working out what the disc is, slow once it is known. Nothing else about the
+  drawing changes between the two, so there is exactly one place to get this wrong.
+*/
+static unsigned long disc_spin_period()
+{
+	return (disc_state() == DISC_SPINNING) ? GFX_DISC_FAST_MS : GFX_DISC_SLOW_MS;
+}
+
+/*
   Two lines and the air round them, in units of s. Wider than a settings row (12)
   because the second line is the whole point: it is where "paired, not awake" and
   "needs a password" go, which is what the old screens said in a column of symbols and
@@ -3535,6 +3555,235 @@ static void draw_padtest(const chome_profile *p)
 */
 #define PWR_ROWS 2
 
+/* ------------------------------------------------------------------ disc --- */
+
+/*
+  The prompt for a disc in the drive.
+
+  Two shapes, because there are two situations and they need different answers:
+
+    - we recognised the disc and this firmware has a core for it: offer to play it,
+      and offer to override the choice anyway (a Mega Drive+ disc is a real case
+      where the player may want the other core).
+    - we did not, or the core does not exist here (Saturn, 3DO and CD-i are all
+      identified and all have no shelf system): ask which core to try.
+
+  What is deliberately *not* here yet is playing. Handing a disc to a core needs each
+  CD core's firmware-side daemon taught to read sectors from the drive rather than
+  from a .cue, which is the piece that has not been merged - so the action says so
+  rather than pretending, and records the choice for when it lands. A prompt that
+  silently did nothing would be worse than one that explains itself.
+*/
+
+// Defined further down, with the rest of the navigation.
+static void go_screen(int s);
+
+#define DISC_ROW_MAX 8
+
+#define DACT_PLAY   0
+#define DACT_CHOOSE 1
+
+static int disc_row = 0;
+static int disc_picking = 0;                  // 0: the offer, 1: choosing a core
+static char disc_rowtext[DISC_ROW_MAX][48];
+static int  disc_rowact[DISC_ROW_MAX];
+static int  disc_rowsys[DISC_ROW_MAX];        // system index, -1 when not a system
+static int  disc_nrows = 0;
+
+// Which chosen core the player last picked for this disc, so re-opening the prompt
+// shows what they decided rather than starting over.
+static int disc_chosen_sys = -1;
+
+static int disc_sys_by_id(const char *id)
+{
+	if (!id) return -1;
+	for (int i = 0; i < lib_sys_count(); i++)
+	{
+		const chome_sys *sc = lib_sys(i);
+		if (sc && !strcasecmp(sc->id, id)) return i;
+	}
+	return -1;
+}
+
+static void disc_build_rows()
+{
+	disc_nrows = 0;
+
+	if (disc_picking)
+	{
+		/*
+		  Only systems that are actually in this library. A card offering to load the
+		  Neo Geo core on a machine with no Neo Geo core would be a dead end.
+		*/
+		const char *ids[16];
+		int n = disc_capable_systems(ids, 16);
+
+		for (int i = 0; i < n && disc_nrows < DISC_ROW_MAX; i++)
+		{
+			int sx = disc_sys_by_id(ids[i]);
+			if (sx < 0) continue;
+
+			const chome_sys *sc = lib_sys(sx);
+			snprintf(disc_rowtext[disc_nrows], sizeof(disc_rowtext[0]), "%s", sc->name);
+			disc_rowact[disc_nrows] = DACT_PLAY;
+			disc_rowsys[disc_nrows] = sx;
+			disc_nrows++;
+		}
+		return;
+	}
+
+	int match = disc_chosen_sys;
+	if (match < 0) match = disc_sys_by_id(disc_system_id(disc_type()));
+
+	if (match >= 0)
+	{
+		const chome_sys *sc = lib_sys(match);
+		snprintf(disc_rowtext[disc_nrows], sizeof(disc_rowtext[0]), "Play on %s", sc->name);
+		disc_rowact[disc_nrows] = DACT_PLAY;
+		disc_rowsys[disc_nrows] = match;
+		disc_nrows++;
+	}
+
+	if (disc_nrows < DISC_ROW_MAX)
+	{
+		snprintf(disc_rowtext[disc_nrows], sizeof(disc_rowtext[0]),
+			match >= 0 ? "Use a different core" : "Choose a core");
+		disc_rowact[disc_nrows] = DACT_CHOOSE;
+		disc_rowsys[disc_nrows] = -1;
+		disc_nrows++;
+	}
+}
+
+static int disc_rows()
+{
+	disc_build_rows();
+	return disc_nrows;
+}
+
+static void disc_open_screen()
+{
+	disc_row = 0;
+	disc_picking = 0;
+	disc_build_rows();
+	go_screen(SCR_DISC);
+}
+
+static void draw_disc(const chome_profile *p)
+{
+	disc_build_rows();
+
+	int ps = p->ts_ui;
+	int pw = p->w - 2 * p->inset;
+	if (pw > 34 * 8 * ps) pw = 34 * 8 * ps;
+
+	int nrows = disc_nrows ? disc_nrows : 1;
+	// The footer wraps to three lines at the narrow profiles, and 34 was measured
+	// against two - it ran off the bottom edge on the device.
+	int ph = (10 * ps + 6) + 22 * ps + nrows * 14 * ps + 46 * ps;
+
+	panel_box b = draw_panel_ex(p, pw, ph, disc_picking ? "Which core?" : "Disc");
+	int s = b.s;
+
+	/*
+	  The disc itself, spinning, at the same rate the corner indicator uses: the
+	  player should see the same object they navigated to, not a different rendering
+	  of the same idea.
+	*/
+	int r = 9 * s;
+	int cy = b.y + r + 2 * s;
+	gfx_disc(b.x + 12 * s + r, cy, r, anim_ms(), disc_spin_period(),
+		COL_PANELHI, COL_WHITE, COL_INK, COL_PANEL);
+
+	int tx = b.x + 12 * s + 2 * r + 8 * s;
+
+	// What it is, then what it is called. The type is the certain part.
+	const char *what = (disc_state() == DISC_SPINNING) ? "Reading the disc"
+		: (disc_state() == DISC_UNKNOWN) ? "Unrecognised disc"
+		: disc_type_name(disc_type());
+
+	gfx_text(gfx_clip(what, s, b.w - (tx - b.x) - 10 * s), tx, cy - 8 * s, s, COL_WHITE, 0);
+
+	const char *name = disc_display_name();
+	if (name && name[0] && strcmp(name, what))
+	{
+		gfx_text(gfx_clip(name, s, b.w - (tx - b.x) - 10 * s), tx, cy + 1 * s, s, COL_PANELHI, 0);
+	}
+
+	int y = b.y + 22 * ps + 6 * s;
+	int rowh = 14 * s;
+
+	if (disc_state() == DISC_SPINNING)
+	{
+		gfx_text_c("Working out what it is...", b.x + b.w / 2, y + 4 * s, s, COL_PANELHI, 0);
+		return;
+	}
+
+	for (int i = 0; i < disc_nrows; i++)
+	{
+		int on = (i == disc_row);
+		int ry = y + i * rowh;
+
+		if (on) gfx_fill(b.x + 4 * s, ry - 3 * s, b.w - 8 * s, rowh - 2 * s, COL_BLUE);
+		gfx_text(disc_rowtext[i], b.x + 10 * s, ry, s, on ? COL_WHITE : COL_INK, 0);
+	}
+
+	int ny = y + disc_nrows * rowh + 6 * s;
+
+	/*
+	  Said plainly, on the screen, because the alternative is a player pressing Play
+	  and watching nothing happen. See the comment above this section.
+	*/
+	char lines[4][64];
+	int nl = wrap_text("Reading discs is not finished: this identifies the disc but cannot"
+		" hand it to a core yet.", (b.w - 16 * s) / (8 * s), lines, 3);
+	for (int i = 0; i < nl; i++)
+		gfx_text_c(lines[i], b.x + b.w / 2, ny + i * 10 * s, s, COL_PANELHI, 0);
+}
+
+/*
+  The disc indicator: a spinning disc in the top-left corner whenever there is one in
+  the drive, on the shelf and behind the in-game menu alike.
+
+  Top-left because every other edge is taken - the title is centred at the top, the
+  legend and the suspend strip are along the bottom, and the menu bar slides down over
+  the top-centre. Inside the overscan margin, like everything else anchored to an
+  edge; a badge a CRT crops is a badge nobody sees.
+
+  Drawn after the scrim so it stays legible while a panel is open, which matches how
+  the legend and the menu bar behave. It is only an indicator: the way to act on a
+  disc is the Disc entry in the menu bar, which exists exactly as long as this badge
+  does.
+*/
+static void draw_disc_badge(const chome_profile *p)
+{
+	if (disc_state() == DISC_ABSENT) return;
+
+	int s = p->ts_ui;
+
+	// Floor the radius rather than scaling it alone: at 240p ts_ui is 1, and a 7-pixel
+	// disc is a smudge on a CRT. Checked against the device capture, not guessed.
+	int r = 7 * s;
+	if (r < 9) r = 9;
+
+	int cx = p->safe_x + p->inset + r;
+	int cy = p->safe_y + p->inset + r;
+
+	gfx_disc(cx, cy, r, anim_ms(), disc_spin_period(),
+		COL_PANELHI, COL_WHITE, COL_INK, COL_PANEL);
+
+	/*
+	  A short label beside it, but only where there is room: at 240p the shelf is
+	  already tight and a word here would collide with the title. The disc alone still
+	  says "there is a disc", and the menu bar entry says what to do about it.
+	*/
+	if (p->id == PROF_LO) return;
+
+	const char *tag = (disc_state() == DISC_SPINNING) ? "Reading"
+		: (disc_state() == DISC_UNKNOWN) ? "Disc?" : disc_type_name(disc_type());
+
+	gfx_text(gfx_clip(tag, s, 14 * 8 * s), cx + r + 4 * s, cy - 4 * s, s, COL_PANELHI, COL_BGDARK);
+}
+
 static void draw_power(const chome_profile *p)
 {
 	/*
@@ -4298,11 +4547,12 @@ static void render()
 	int overlay = (screen == SCR_SORT || screen == SCR_DISPLAY || screen == SCR_OPTIONS ||
 		screen == SCR_ABOUT || screen == SCR_WIFI || screen == SCR_PADS ||
 		screen == SCR_POWER || screen == SCR_INI || screen == SCR_PADTEST ||
-		screen == SCR_SET || screen == SCR_CORE);
+		screen == SCR_SET || screen == SCR_CORE || screen == SCR_DISC);
 	if (overlay) gfx_scrim(0, 0, p->w, p->h, COL_BGDARK, 2);
 
 	draw_suspend(p);
 	draw_legend(p);
+	draw_disc_badge(p);
 	draw_menubar(p, screen == SCR_MENUBAR || overlay);
 
 	switch (screen)
@@ -4313,6 +4563,7 @@ static void render()
 	case SCR_ABOUT:   draw_about_panel(p); break;
 	case SCR_WIFI:    draw_wifi(p); break;
 	case SCR_POWER:   draw_power(p); break;
+	case SCR_DISC:    draw_disc(p); break;
 	case SCR_INI:     draw_ini(p); break;
 	case SCR_SET:     draw_settings(p); break;
 	case SCR_CORE:    draw_core_opts(p); break;
@@ -4595,6 +4846,24 @@ static void move_v(int dir)
 		mark_dirty();
 		break;
 
+	case SCR_DISC:
+	{
+		/*
+		  Clamped rather than wrapping, and mark_dirty() at the end: leaving that off
+		  is the bug a user reported on the core options screen, where the cursor
+		  moved and the screen did not.
+		*/
+		int n = disc_rows();
+		if (n <= 0) { nudge(); break; }
+
+		int next = disc_row + dir;
+		if (next < 0 || next >= n) { nudge(); break; }
+
+		disc_row = next;
+		mark_dirty();
+		break;
+	}
+
 	case SCR_DISPLAY:
 		nudge();               // one row of tiles: nothing above or below
 		break;
@@ -4715,6 +4984,7 @@ static void accept()
 		case MB_OPTIONS:  opt_row = 0; go_screen(SCR_OPTIONS); break;
 		case MB_POWER:    pwr_row = 0; pwr_arm = -1; go_screen(SCR_POWER); break;
 		case MB_ABOUT:    go_screen(SCR_ABOUT); break;
+		case MB_DISC:     disc_open_screen(); break;
 		case MB_CORE:
 			core_opts_scan();
 			co_tier = CO_TIER_PICTURE;
@@ -4858,6 +5128,42 @@ static void accept()
 			break;
 		}
 		break;
+
+	case SCR_DISC:
+	{
+		disc_build_rows();
+		if (disc_row < 0 || disc_row >= disc_nrows) { nudge(); break; }
+
+		if (disc_rowact[disc_row] == DACT_CHOOSE)
+		{
+			disc_picking = 1;
+			disc_row = 0;
+			disc_build_rows();
+			mark_dirty();
+			break;
+		}
+
+		/*
+		  A core was chosen. Remembered so re-opening the prompt shows the decision
+		  rather than starting from the guess, and so the eventual mount has it.
+
+		  It does not launch: handing the disc to the core needs each CD core's daemon
+		  taught to read from the drive, which is not merged. Saying so in the log and
+		  on the panel beats a button that appears to do nothing.
+		*/
+		disc_chosen_sys = disc_rowsys[disc_row];
+		disc_picking = 0;
+		disc_row = 0;
+
+		{
+			const chome_sys *sc = (disc_chosen_sys >= 0) ? lib_sys(disc_chosen_sys) : 0;
+			printf("ClassicUI: disc -> %s (%s), not launched: core-side disc reading is not merged\n",
+				sc ? sc->name : "?", disc_display_name());
+		}
+
+		mark_dirty();
+		break;
+	}
 
 	case SCR_POWER:
 		if (pwr_arm == pwr_row && !CheckTimer(pwr_until))
@@ -5077,6 +5383,22 @@ static void back()
 {
 	switch (screen)
 	{
+	/*
+	  Back out of the core chooser to the offer, rather than out of the disc prompt
+	  altogether: the player who opened the chooser to look at their options should
+	  not lose the prompt for doing so.
+	*/
+	case SCR_DISC:
+		if (disc_picking)
+		{
+			disc_picking = 0;
+			disc_row = 0;
+			disc_build_rows();
+			mark_dirty();
+			return;
+		}
+		break;
+
 	case SCR_HOME:
 		if (nav_pop()) break;
 
@@ -7460,8 +7782,32 @@ int chome_handle(uint32_t key)
 	disc_poll();
 	if (disc_take_dirty())
 	{
+		/*
+		  mark_dirty() is the point of the dirty flag, and leaving it off is how the
+		  badge came and went without the screen ever repainting - the same omission
+		  that made the core options cursor look stuck. Nothing about a disc arriving
+		  comes through a keypress, so if this does not ask for a repaint, nothing will.
+		*/
+		mark_dirty();
+
 		printf("ClassicUI: disc state=%d type=%s name=\"%s\"\n",
 			disc_state(), disc_type_name(disc_type()), disc_display_name());
+	}
+
+	/*
+	  And a repaint while it is spinning, for the same reason the Wi-Fi screen repaints
+	  while it scans: the badge animates, and this UI only draws when something says it
+	  must. Rate-limited to the animation step so a spinning disc does not mean a full
+	  repaint every pass of this loop.
+	*/
+	if (disc_state() == DISC_SPINNING || disc_state() == DISC_READY)
+	{
+		static unsigned long disc_next_spin = 0;
+		if (CheckTimer(disc_next_spin))
+		{
+			disc_next_spin = GetTimer(GFX_SPIN_MS);
+			mark_dirty();
+		}
 	}
 
 	/*

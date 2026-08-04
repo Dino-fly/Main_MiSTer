@@ -361,6 +361,28 @@ const char *disc_system_id(int type)
 	return 0;
 }
 
+int disc_capable_systems(const char **out, int max)
+{
+	if (!out || max <= 0) return 0;
+
+	int n = 0;
+	for (int t = DISC_T_NONE; t <= DISC_T_UNKNOWN; t++)
+	{
+		const char *id = disc_system_id(t);
+		if (!id) continue;
+
+		// Two disc types share the Mega Drive core, so de-duplicate.
+		int seen = 0;
+		for (int i = 0; i < n; i++) if (!strcmp(out[i], id)) seen = 1;
+		if (seen) continue;
+
+		out[n++] = id;
+		if (n >= max) break;
+	}
+
+	return n;
+}
+
 /* ------------------------------------------------------------- the drive ---- */
 
 static int dstate = DISC_ABSENT;

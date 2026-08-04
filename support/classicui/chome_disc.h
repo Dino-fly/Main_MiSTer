@@ -136,11 +136,9 @@ void disc_watch_stop();
 int  disc_watching();
 
 /*
-  Called from the front-end's idle loop. Does the minimum each time: a drive status
-  ioctl, and only when that says a disc arrived does it start reading sectors. The
-  identification is spread over several polls rather than done in one, because
-  reading the first sectors of a disc that has just been inserted can block for
-  seconds while the drive spins up, and this runs on the thread that draws.
+  Called from the front-end's idle loop, and cheap by construction: it stats one small
+  file in /tmp and reads it only when the mtime moved. It does **not** touch the drive -
+  see the top of this file for why that is the whole point.
 */
 void disc_poll();
 
@@ -178,6 +176,19 @@ const char *disc_label();
 const char *disc_display_name();
 
 /* -------------------------------------------------------------- the parts --- */
+
+/*
+  Every system in this firmware that could load a disc, as chome_lib system ids.
+
+  Derived from disc_system_id() rather than listed separately, so the two can never
+  disagree: it is exactly the set of systems some disc type maps to. Used for the
+  "pick a core yourself" prompt, which is what an unidentified disc - or an
+  identified one with no core here, like Saturn - has to fall back on.
+
+  Writes up to `max` pointers into `out` and returns how many. The pointers are
+  static strings.
+*/
+int disc_capable_systems(const char **out, int max);
 
 /*
   The sector reader. Production reads the real drive; the harness installs its own
