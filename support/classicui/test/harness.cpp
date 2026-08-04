@@ -1752,12 +1752,281 @@ static void assert_core_options_screen()
 	press(KEY_RIGHT, 14);
 	frame(8);
 	check(first && core_opt_value(first) != before, "right changes the value in the core");
-	check(harness_cfg_saves() > saves, "and keeps it in the core's own config");
+
+	/*
+	  Where it is *kept* changed with per-game overrides, and this is the check that used
+	  to say the opposite.
+
+	  A game is running here, so the change belongs to that game: writing it into
+	  <CORE>.CFG would apply it to every game the core ever loads, which is the thing
+	  per-game settings exist to stop. So the shared config must be left alone, and the
+	  choice must be findable against the game instead.
+	  assert_per_game_core_options() covers the rest of it.
+	*/
+	check(harness_cfg_saves() == saves, "and leaves the core's shared config alone");
+	check(first && core_opt_per_game(first), "because it belongs to the game that is running");
 
 	press(KEY_ESC, 12);
 	frame(6);
 	press(KEY_MENU, 16);
 	frame(8);
+	harness_set_confstr(1);
+}
+
+// How many pixels of exactly this colour are on screen. Used to prove a marker is
+// really drawn rather than only computed: a hash says "something changed", this says
+// "the per-game green is there".
+static int px_count(uint32_t col)
+{
+	const uint32_t *fb = harness_fb_shown();
+	if (!fb) return 0;
+
+	int n = 0, w = gfx_w(), h = gfx_h();
+	for (int i = 0; i < w * h; i++) if (fb[i] == col) n++;
+	return n;
+}
+
+static int sysidx_of(const char *id)
+{
+	for (int i = 0; i < lib_sys_count(); i++) if (!strcmp(lib_sys(i)->id, id)) return i;
+	return -1;
+}
+
+/*
+  Core settings kept for one game instead of for the whole core.
+
+  <CORE>.CFG is the core's global config: PSX's Widescreen Hack written there flatters
+  a 3D racer and ruins every 2D game on the card. So a change made while a game is
+  running is remembered against that game and re-applied when it next starts.
+
+  What has to hold, and what each of these would catch if it stopped holding:
+
+  - the change goes to the game, not to <CORE>.CFG;
+  - it is visible as such, and undoable from the same screen;
+  - it reaches the core at the next launch of *that* game and no other;
+  - it survives a core update that renumbers the core's own value lists;
+  - it can never be created for anything the front-end owns itself.
+*/
+static void assert_per_game_core_options()
+{
+	printf("\n== core settings kept for one game ==\n");
+
+	int gb = sysidx_of("gb");
+	check(gb >= 0, "the Game Boy system is in the table");
+
+	const char *game_a = "Tetris (World).gb";
+	const char *game_b = "Zelda - Oracle of Ages (Europe).gbc";
+
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "gb\n%s\n", game_a); fclose(f); }
+	}
+
+	harness_set_menu_core(0);
+	harness_set_fb_supported(1);
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+	harness_set_confstr(6);
+	harness_set_osd_mask(0x0000);
+	harness_set_osd_visible(0);
+
+	/*
+	  Start from no overrides for this game. Deleting the file is not enough - it is
+	  read once per session and earlier sections have already put a record in it - so
+	  the store is cleared through the same call the screen's X uses, which also proves
+	  it clears something.
+	*/
+	core_opts_scan();
+	core_opts_bind_game(core_opts_game_key(gb, game_a));
+	for (int i = 0; i < core_opts_count(); i++) core_opt_drop_for_game(core_opt_at(i));
+
+	// A known starting point for the option under test, as if the core had just read it
+	// out of its own config.
+	harness_set_opt("[54:53]", 0);                     // Widescreen Hack = Off
+
+	chome_handle(0);
+	if (chome_ingame_active()) press(KEY_MENU, 14);
+	frame(6);
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 40 && lib_scanning(); i++) frame(2);
+	frame(16);
+	check(chome_ingame_active(), "the menu is up over the running game");
+
+	press(KEY_UP, 14);
+	for (int i = 0; i < 6; i++) press(KEY_RIGHT, 8);
+	press(KEY_ENTER, 18);
+	frame(10);
+
+	/*
+	  Widescreen Hack is the second row of the picture page, and it is the option Dinofly
+	  named: the one that is right for one game and wrong for the next.
+	*/
+	press(KEY_DOWN, 14);
+	frame(8);
+	const core_opt *ws = core_opt_tier_at(CO_TIER_PICTURE, 1);
+	check(ws && !strcasecmp(ws->name, "Widescreen Hack"), "the cursor is on Widescreen Hack");
+
+	int green0 = px_count(COL_GREEN);
+	int saves = harness_cfg_saves();
+
+	press(KEY_RIGHT, 14);
+	press(KEY_RIGHT, 14);
+	frame(10);
+
+	ws = core_opt_tier_at(CO_TIER_PICTURE, 1);
+	check(ws && core_opt_value(ws) == 2, "two presses put it on 16:9");
+	check(harness_cfg_saves() == saves, "and nothing was written to the core's shared config");
+	check(ws && core_opt_per_game(ws), "the game keeps the choice instead");
+
+	/*
+	  And says so. Without a mark the screen shows a setting that applies to one game
+	  and one that applies to all of them in exactly the same ink, and the player has no
+	  way to tell which of their games they just changed.
+	*/
+	int green1 = px_count(COL_GREEN);
+	printf("  per-game green pixels: %d -> %d\n", green0, green1);
+	check(green1 > green0, "and the row is marked on screen as this game's own");
+
+	// It is a file, not a session's memory.
+	{
+		struct stat st;
+		check(!stat(ROOT "/config/classicui_coreopts.cfg", &st) && st.st_size > 0,
+			"the choice is on the card, not just in this session");
+	}
+
+	dump("core-options-per-game");
+
+	/*
+	  Undo, from the screen that made it. X puts the shared value back and clears the
+	  mark - an override that can only be removed by knowing which file it lives in is
+	  a trap, and one that clears without the row visibly moving is an undo nobody
+	  believes happened.
+	*/
+	press(KEY_TAB, 14);
+	frame(10);
+	ws = core_opt_tier_at(CO_TIER_PICTURE, 1);
+	check(ws && !core_opt_per_game(ws), "X gives the setting back to every game");
+	check(ws && core_opt_value(ws) == 0, "and puts the value the core booted with back");
+	check(px_count(COL_GREEN) == green0, "with the mark gone from the row");
+
+	// Set it up again, this time to keep: the launch checks below need an override.
+	press(KEY_RIGHT, 14);
+	press(KEY_RIGHT, 14);
+	frame(10);
+	ws = core_opt_tier_at(CO_TIER_PICTURE, 1);
+	check(ws && core_opt_per_game(ws) && core_opt_value(ws) == 2, "and it can be set again");
+
+	press(KEY_ESC, 12);
+	frame(6);
+	press(KEY_MENU, 16);
+	frame(8);
+
+	/*
+	  Now the launches. core_opts_apply_for_game() is what chome_core_boot() calls once
+	  the core is up and its own config has been read, so the core is put back to that
+	  state first - Widescreen Hack Off, as <CORE>.CFG has it.
+	*/
+	/*
+	  The wiring first, because it is the part that cannot be checked twice.
+	  chome_core_boot() is what HandleUI() calls once per core on the device, and it
+	  runs at most once per process - so this is the only place it can be exercised.
+	  Without it every other check here still passes and the feature is inert on
+	  hardware.
+
+	  It also applies a video look armed at launch, and an earlier section left one
+	  armed. That belongs to the section that tests it, so it is taken out of the way
+	  rather than fired from here.
+	*/
+	unlink("/tmp/classicui_preset");
+	harness_set_opt("[54:53]", 0);
+	chome_core_boot();
+	check(harness_opt_val("[54:53]") == 2, "a core coming up applies it from chome_core_boot()");
+
+	harness_set_opt("[54:53]", 0);
+	int moved = core_opts_apply_for_game(gb, game_a);
+	check(moved == 1, "starting that game again applies its own setting");
+	check(harness_opt_val("[54:53]") == 2, "the core comes up on 16:9 for it");
+
+	/*
+	  The whole point, in one check. Another game on the same core must come up on the
+	  core's own value: a per-game setting that leaked into the next game would be
+	  indistinguishable from writing <CORE>.CFG, which is what this replaces.
+	*/
+	harness_set_opt("[54:53]", 0);
+	check(core_opts_apply_for_game(gb, game_b) == 0, "another game on the same core has none");
+	check(harness_opt_val("[54:53]") == 0, "so it comes up on the core's own value");
+
+	/*
+	  A core update that inserts a value into one of its own lists. PSX's Widescreen Hack
+	  grew from two entries to four; anything that stored the choice as an index would
+	  now re-apply the wrong setting. fake_confstr_opts_v2 puts 5:3 in front of 16:9, so
+	  16:9 moves from index 2 to index 3 and the check is that the player still gets 16:9.
+	*/
+	harness_set_confstr(7);
+	harness_set_opt("[54:53]", 0);
+	check(core_opts_apply_for_game(gb, game_a) == 1, "the setting survives a core update");
+	check(harness_opt_val("[54:53]") == 3, "and still means 16:9 after its list was renumbered");
+	harness_set_confstr(6);
+
+	/*
+	  Nothing the front-end owns may become per-game, whatever asks. These never reach
+	  the option table so the screen cannot offer them - this is the second lock, on the
+	  store itself, because "Pause when OSD is open" is the mechanism the in-game menu's
+	  freeze depends on and a per-game copy of it would change what the menu button does
+	  on one game only.
+	*/
+	{
+		core_opt owned;
+		memset(&owned, 0, sizeof(owned));
+		snprintf(owned.name, sizeof(owned.name), "Pause when OSD is open");
+		snprintf(owned.spec, sizeof(owned.spec), "Q");
+		snprintf(owned.vals[0], sizeof(owned.vals[0]), "Off");
+		snprintf(owned.vals[1], sizeof(owned.vals[1]), "On");
+		owned.nvals = 2;
+
+		core_opts_bind_game(core_opts_game_key(gb, game_a));
+		core_opt_keep_for_game(&owned, 1, 0);
+		check(!core_opt_per_game(&owned), "a setting the front-end owns cannot be made per-game");
+	}
+
+	/*
+	  And the shelf case: a core loaded behind our back, so the launch record names no
+	  game we can trust. There is nothing to hang a choice on, so it goes into the
+	  core's own config exactly as it did before any of this.
+	*/
+	unlink("/tmp/classicui_current");
+	press(KEY_MENU, 20);
+	frame(12);
+	check(chome_ingame_active(), "the menu opens over an unidentified core");
+	check(core_opts_bound_game() == 0, "with no game to keep settings for");
+
+	press(KEY_UP, 14);
+	for (int i = 0; i < 6; i++) press(KEY_RIGHT, 8);
+	press(KEY_ENTER, 18);
+	frame(10);
+
+	saves = harness_cfg_saves();
+	press(KEY_RIGHT, 14);
+	frame(10);
+	check(harness_cfg_saves() > saves, "a change there still goes to the core's own config");
+
+	/*
+	  And not against the game that happened to be running last. If the binding were
+	  simply never cleared, the change above would have been filed under Tetris - which
+	  looks like nothing at all until the player starts Tetris and finds a setting they
+	  made in another core's menu.
+	*/
+	const core_opt *any = core_opt_tier_at(CO_TIER_PICTURE, 0);
+	core_opts_bind_game(core_opts_game_key(gb, game_a));
+	check(any && !core_opt_per_game(any), "and not against the game that was running before");
+	core_opts_bind_game(0);
+
+	press(KEY_ESC, 12);
+	frame(6);
+	press(KEY_MENU, 16);
+	frame(8);
+
 	harness_set_confstr(1);
 }
 
@@ -3521,6 +3790,7 @@ int main()
 	assert_save_on_pausing_core();
 	assert_freeze_off();
 	assert_core_options_screen();
+	assert_per_game_core_options();
 	assert_core_options_are_reachable();
 	assert_look_applies_to_the_running_core();
 	assert_forget_beats_the_stat_check();

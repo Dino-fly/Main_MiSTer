@@ -1733,6 +1733,17 @@ static int build_legend(legend_pair *out, int max)
 		if (co_row < core_opts_tier_count(co_tier))
 		{
 			if (n < max) { out[n++] = { CH_LEFT CH_RIGHT, "dpad_lr", "Change", "Chg", 0, COL_WHITE }; }
+
+			/*
+			  And on a row this game keeps its own value for, the way to give it back.
+			  Offered only there: on any other row X would have nothing to do, and a
+			  prompt for a press that does nothing is worse than no prompt.
+			*/
+			const core_opt *co = core_opt_tier_at(co_tier, co_row);
+			if (co && core_opt_per_game(co) && n < max)
+			{
+				out[n++] = lp(LBL_X, "Shared Value", "Shared");
+			}
 		}
 		else if (n < max) out[n++] = lp(LBL_A, "More", "More");
 		if (n < max) out[n++] = lp(LBL_B, "Back", "Back");
@@ -3718,23 +3729,35 @@ static void draw_core_opts(const chome_profile *p)
 	static char vbuf[CO_MAX + 1][CO_VAL_LEN + 8];
 
 	int i = 0;
+	int mine = 0;                     // rows on this page this game keeps its own value for
 	for (; i < n && i < CO_MAX; i++)
 	{
 		const core_opt *o = core_opt_tier_at(co_tier, i);
 		if (!o) break;
 
+		/*
+		  A star on a value this game keeps to itself, explained by the footer below.
+		  Without a mark the screen would show a per-game setting and a shared one
+		  identically, and the player would have no way to know which of their games
+		  they had just changed.
+		*/
+		int own = core_opt_per_game(o);
+		if (own) mine++;
+
 		rows[i] = o->name;
-		snprintf(vbuf[i], sizeof(vbuf[i]), "%s", o->vals[core_opt_value(o)]);
+		snprintf(vbuf[i], sizeof(vbuf[i]), "%s%s", o->vals[core_opt_value(o)], own ? " *" : "");
 		vals[i] = vbuf[i];
 
 		/*
 		  Amber for a value the core marked (U), because the core is telling the player it
 		  can crash - the same signal the risky page is built from. Dim for one the core
 		  says does not apply right now, which is how the VI group reads under Clean HDMI:
-		  still there, visibly not in effect.
+		  still there, visibly not in effect. Both outrank the per-game green: a warning
+		  from the core matters more than whose setting it is.
 		*/
 		if (o->disabled) vcol[i] = COL_DIM;
 		else if (strstr(vbuf[i], "(U)")) vcol[i] = COL_YELLOW;
+		else if (own) vcol[i] = COL_GREEN;
 		else vcol[i] = COL_PANELLO;
 	}
 
@@ -3756,7 +3779,30 @@ static void draw_core_opts(const chome_profile *p)
 	*/
 	int room = (b.w - 12 * s) / (8 * p->ts_tiny);
 	const char *foot = (room >= 36) ? "Applied at once, kept with the core" : "Applied at once";
-	if (co_tier == CO_TIER_RISKY) foot = (room >= 34) ? "(U) marked by the core: can crash" : "(U): can crash";
+
+	/*
+	  Three different truths, and the screen has to tell the player which one applies -
+	  a change here goes to the core's own config, or to this game alone, and nothing
+	  else on screen says which.
+
+	  The star is explained where the player is already looking rather than in a legend:
+	  it appears as soon as one value on the page carries it.
+	*/
+	if (core_opts_bound_game())
+	{
+		if (mine) foot = (room >= 36) ? "* kept for this game, not for the core" : "* this game only";
+		else foot = (room >= 36) ? "Changes are kept for this game only" : "Kept for this game";
+	}
+
+	/*
+	  The core's own warning wins on the risky page - it is the reason that page is a page -
+	  but the star still has to mean something there, so where the line fits it says both.
+	*/
+	if (co_tier == CO_TIER_RISKY)
+	{
+		if (mine && room >= 36) foot = "* this game only - (U) can crash";
+		else foot = (room >= 34) ? "(U) marked by the core: can crash" : "(U): can crash";
+	}
 	else if (!n) foot = "Nothing here on this core";
 	gfx_text(gfx_clip(foot, p->ts_tiny, b.w - 12 * s), b.x + 6 * s, fy, p->ts_tiny,
 		(co_tier == CO_TIER_RISKY) ? COL_YELLOW : COL_PANELLO, 0);
@@ -4346,8 +4392,12 @@ static void move_h(int dir)
 	*/
 	/*
 	  Left and right change the value, which is the whole interaction on this screen. It
-	  writes to the core immediately and keeps it in the core's own config: there is no
-	  Save row, because a picture setting you cannot see take effect is not worth having.
+	  writes to the core immediately: there is no Save row, because a picture setting you
+	  cannot see take effect is not worth having.
+
+	  Where the change is *kept* depends on whether a game is running. With one, it is
+	  remembered against that game; without one, it goes into the core's own config as it
+	  always did. See the per-game section of chome_core.h.
 	*/
 	case SCR_CORE:
 	{
@@ -4357,9 +4407,13 @@ static void move_h(int dir)
 		const core_opt *o = core_opt_tier_at(co_tier, co_row);
 		if (!o) { nudge(); return; }
 
-		core_opt_set(o, core_opt_value(o) + dir);
+		// Read before the change: the first time an option is overridden this is the
+		// value the core's own config holds, and the only chance to record it.
+		int shared = core_opt_value(o);
+		core_opt_set(o, shared + dir);
 
-		core_opts_save_unpaused();
+		if (core_opts_bound_game()) core_opt_keep_for_game(o, core_opt_value(o), shared);
+		else core_opts_save_unpaused();
 
 		// The core recomputes which options apply, so re-read rather than assume.
 		core_opts_scan();
@@ -6361,6 +6415,18 @@ static int ig_open()
 	core_opts_scan();
 
 	ig_load_item();
+
+	/*
+	  Whose per-game core settings the options screen edits, if anyone's.
+
+	  ig_have_item is the whole test, and it is the honest one: it is set only when the
+	  launch record names a game and still names the core that is loaded. A core somebody
+	  else started - the classic menu, a script, a bootcore - leaves it clear, and then
+	  there is no game to hang a setting on, so a change made on that screen goes into the
+	  core's own config as it always did.
+	*/
+	core_opts_bind_game(ig_have_item ? core_opts_game_key(ig_item.sysidx, ig_item.path) : 0);
+
 	ig_build_background(p);
 
 	/*
@@ -6526,6 +6592,23 @@ void chome_core_boot()
 
 	if (!cfg.classicui || is_menu()) return;
 	vp_apply_pending();
+
+	/*
+	  And the core settings this game keeps to itself.
+
+	  Here rather than later because here is where the values are still the core's own:
+	  the firmware has just loaded <CORE>.CFG into the status word and nothing has
+	  touched it since, so the value each override replaces is the shared one and can be
+	  recorded as such. It is also before the MGL's delay has expired, which means before
+	  the ROM is handed over - the right side of every option that only takes effect at
+	  load time.
+
+	  Nothing is written to <CORE>.CFG: the overrides live in our own file, so a game
+	  with none of them boots with exactly the core's own settings and the next game on
+	  the same core is unaffected by this one.
+	*/
+	if (!ig_load_item()) return;
+	core_opts_apply_for_game(ig_item.sysidx, ig_item.path);
 }
 
 int chome_active()
@@ -7026,6 +7109,30 @@ int chome_handle(uint32_t key)
 					pads_forget_arm = pads_row;
 					pads_forget_until = GetTimer(2500);
 				}
+				mark_dirty();
+				break;
+			}
+
+			/*
+			  X gives a per-game core setting back to every game: it drops the override,
+			  puts the core's own value on the core and clears the star, so the row
+			  visibly moves. An override that could not be undone from the screen that
+			  made it would be a trap - the player would have to know which file it
+			  lived in.
+
+			  On a row with no star there is nothing to undo, so it nudges rather than
+			  doing something invisible. The legend only offers X where it acts.
+			*/
+			if (screen == SCR_CORE)
+			{
+				if (co_row >= core_opts_tier_count(co_tier)) { nudge(); break; }
+
+				const core_opt *o = core_opt_tier_at(co_tier, co_row);
+				if (!o || !core_opt_drop_for_game(o)) { nudge(); break; }
+
+				// Same reason as changing a value: the core recomputes its own mask.
+				core_opts_scan();
+				if (co_row >= co_rows()) co_row = co_rows() - 1;
 				mark_dirty();
 				break;
 			}
