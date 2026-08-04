@@ -159,7 +159,11 @@ int  lib_slot_thumb(const chome_item *it, int slot, char *out, int len);
 */
 int  lib_slot_target(const chome_item *it, int slot, char *out, int len);
 
-// Favourites and play counts, persisted in classicui_state.cfg.
+/*
+  Favourites and play counts, persisted in classicui_state.cfg. Noting a play also
+  moves the game to the front of the Recently Played list, which is its own file
+  (classicui_recent.cfg) because the order is what is stored, not a per-game field.
+*/
 void lib_toggle_fav(chome_item *it);
 void lib_note_play(chome_item *it);
 void lib_state_save();
