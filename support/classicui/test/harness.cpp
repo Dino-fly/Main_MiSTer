@@ -216,17 +216,70 @@ static void build_sd()
 	touch(ROOT "/games/SNES", "The Legend of Zelda - A Link to the Past (Europe).sfc", 4096);
 	touch(ROOT "/games/SNES", "notes.txt", 10);                 // must be ignored
 
+	/*
+	  Three dumps of one game, which is the whole point of title groups: all three clean
+	  to "Super Mario World" and used to draw three identical cards. One card, cycled.
+	  Named so the filename order the cycle follows is Europe, Japan, USA.
+	*/
+	touch(ROOT "/games/SNES", "Super Mario World (USA).sfc", 4096);
+	touch(ROOT "/games/SNES", "Super Mario World (Japan).sfc", 4096);
+	/*
+	  A different game whose title starts with the one above. Nothing may merge these: a
+	  grouping key that matched on a prefix rather than on the whole cleaned title would,
+	  and it would then hide a game behind a button nobody would think to press.
+	*/
+	touch(ROOT "/games/SNES", "Super Mario World 2 - Yoshi's Island (Europe).sfc", 4096);
+
 	mkpath(ROOT "/games/SNES/Hacks");                            // recursion
 	touch(ROOT "/games/SNES/Hacks", "Super Demo World.smc", 2048);
+	/*
+	  ...and the same title again in a folder of its own, same system and same extension.
+	  A hack is not a regional variant of the game it is built from, so this one must stay
+	  a card of its own - it is the directory half of the grouping key, on its own.
+	*/
+	touch(ROOT "/games/SNES/Hacks", "Super Mario World (Hack).sfc", 2048);
 
 	// Zipped ROMs, which is how most cards actually store them.
 	make_zip(ROOT "/games/SNES", "Secret of Mana (USA).zip", "Secret of Mana (USA).sfc", 4096);
+	// Two archives, one game: they group only if the archive counts as the file rather
+	// than as a directory of its own.
+	make_zip(ROOT "/games/SNES", "Secret of Mana (Europe).zip", "Secret of Mana (Europe).sfc", 4096);
 	make_zip(ROOT "/games/SNES", "Capcom Collection.zip", "Final Fight.sfc,Mega Man X.sfc", 2048);
 	make_zip(ROOT "/games/SNES", "Manual Scans.zip", "readme.txt", 512);
 
 	mkpath(ROOT "/games/Genesis");
 	touch(ROOT "/games/Genesis", "Sonic The Hedgehog 2 (Europe).md", 4096);
+	touch(ROOT "/games/Genesis", "Sonic The Hedgehog 2 (USA).md", 4096);
 	touch(ROOT "/games/Genesis", "Streets of Rage 2 (Europe).bin", 4096);
+	/*
+	  The same *filename* again, one folder down. Two cards with one title, and the only
+	  thing that can tell them apart on screen is the folder - so this is the fixture that
+	  fails if the line naming the file drops the folder for a card that has no other file
+	  to share it with.
+	*/
+	mkpath(ROOT "/games/Genesis/Proto");
+	touch(ROOT "/games/Genesis/Proto", "Streets of Rage 2 (Europe).bin", 4096);
+
+	/*
+	  A multi-disc set. clean_title() strips "(Disc 1)" along with everything else in
+	  brackets, so the discs collide exactly the way regions do and group the same way -
+	  and the file name on the card is the only thing that says which disc is loaded.
+	*/
+	mkpath(ROOT "/games/PSX");
+	touch(ROOT "/games/PSX", "Final Fantasy VII (USA) (Disc 1).cue", 2048);
+	touch(ROOT "/games/PSX", "Final Fantasy VII (USA) (Disc 2).cue", 2048);
+	touch(ROOT "/games/PSX", "Final Fantasy VII (USA) (Disc 3).cue", 2048);
+
+	/*
+	  One title on two systems, and *only* the system telling them apart: both are ".bin"
+	  at the top of their own games folder, which the Mega Drive and the Atari 7800 both
+	  accept. The Sonic pair below differs by extension as well, so it cannot be the check
+	  that the system is in the grouping key - sabotaging the system out of the key left it
+	  passing, which is how this fixture came to exist.
+	*/
+	touch(ROOT "/games/Genesis", "Double Dragon (Europe).bin", 2048);
+	mkpath(ROOT "/games/A7800");
+	touch(ROOT "/games/A7800", "Double Dragon (USA).bin", 2048);
 
 	mkpath(ROOT "/games/TGFX16");
 	touch(ROOT "/games/TGFX16", "Bonk's Adventure (USA).pce", 2048);
@@ -238,6 +291,13 @@ static void build_sd()
 	// different screens.
 	mkpath(ROOT "/games/SMS");
 	touch(ROOT "/games/SMS", "Sonic The Hedgehog 2 (Europe) (GG).gg", 2048);
+	/*
+	  The same title beside it in the same folder and the same core, differing only by
+	  extension - and they are different games with different levels, which is why the
+	  extension is part of the grouping key. class_of() already treats the two as
+	  different hardware; this is the shelf agreeing with it.
+	*/
+	touch(ROOT "/games/SMS", "Sonic The Hedgehog 2 (Europe).sms", 2048);
 
 	mkpath(ROOT "/games/AtariLynx");
 	touch(ROOT "/games/AtariLynx", "Chip's Challenge (USA).lnx", 2048);
@@ -292,6 +352,13 @@ static void build_sd()
 	touch(ROOT "/savestates/SNES", "Super Metroid (Europe)_1.ss", 256);
 	touch(ROOT "/savestates/SNES", "Super Metroid (Europe)_2.ss", 256);
 	make_cover(ROOT "/savestates/SNES/Super Metroid (Europe)_1.png", 320, 240, 0xff1e6fa8);
+
+	/*
+	  One dump of Super Mario World has a suspend point and the other two have none. The
+	  three share a card, so this is what proves the strip follows the file on show rather
+	  than the card: get it wrong and the player is offered another ROM's save state.
+	*/
+	touch(ROOT "/savestates/SNES", "Super Mario World (USA)_1.ss", 256);
 
 	// The Game Boy game gets a state too, so the in-game load path has something
 	// to act on.
@@ -884,6 +951,223 @@ static void assert_views()
 	lib_view_build(VIEW_COMPUTERS, -1, SORT_TITLE);
 	check(lib_view_count() >= 1, "Computers view lists computer systems");
 	check(lib_view_entry(0)->kind == ENT_BROWSE, "computer entries open the browser");
+}
+
+/* ----------------------------------------------------------- title groups -- */
+
+// The index position of a game, by system id and path relative to its games dir.
+static int item_at(const char *sysid, const char *relpath)
+{
+	for (int i = 0; i < lib_item_count(); i++)
+	{
+		chome_item *it = lib_item(i);
+		const chome_sys *s = lib_sys(it->sysidx);
+		if (s && !strcmp(s->id, sysid) && !strcmp(it->path, relpath)) return i;
+	}
+	return -1;
+}
+
+/*
+  The entry carrying a game, whether or not it is the file that entry is showing. The
+  distinction is the point: a check written against `e->game` alone would pass while the
+  other files behind the card were unreachable.
+*/
+static int entry_carrying(int idx)
+{
+	if (idx < 0) return -1;
+
+	for (int i = 0; i < lib_view_count(); i++)
+	{
+		const chome_entry *e = lib_view_entry(i);
+		if (!e || e->kind != ENT_GAME) continue;
+		for (int v = 0; v < e->nvar; v++) if (lib_view_variant(i, v) == idx) return i;
+	}
+	return -1;
+}
+
+static int entry_nvar(int entry)
+{
+	const chome_entry *e = lib_view_entry(entry);
+	return e ? e->nvar : -1;
+}
+
+/*
+  Files that share a title, drawn as one card.
+
+  Every check here is written to fail one specific way. The grouping ones fail if the key
+  stops looking at what it looks at now; the four negative ones fail if it starts looking
+  at less, because a merge of two genuinely different games is the one fault this feature
+  must not have - it would hide a game behind a button nobody knows to press, and worse,
+  attach one ROM's save states and settings to another.
+
+  Runs before anything has been launched, so no file has a play count and the card must be
+  showing the first of its files in filename order.
+*/
+static void assert_variants()
+{
+	printf("\n== title groups ==\n");
+
+	int smw_eu = item_at("snes", "Super Mario World (Europe).sfc");
+	int smw_jp = item_at("snes", "Super Mario World (Japan).sfc");
+	int smw_us = item_at("snes", "Super Mario World (USA).sfc");
+	int smw_hk = item_at("snes", "Hacks/Super Mario World (Hack).sfc");
+	int som_us = item_at("snes", "Secret of Mana (USA).zip/Secret of Mana (USA).sfc");
+	int som_eu = item_at("snes", "Secret of Mana (Europe).zip/Secret of Mana (Europe).sfc");
+	int son_md = item_at("md", "Sonic The Hedgehog 2 (Europe).md");
+	int son_us = item_at("md", "Sonic The Hedgehog 2 (USA).md");
+	int son_gg = item_at("sms", "Sonic The Hedgehog 2 (Europe) (GG).gg");
+	int son_sm = item_at("sms", "Sonic The Hedgehog 2 (Europe).sms");
+	int ff7_2  = item_at("psx", "Final Fantasy VII (USA) (Disc 2).cue");
+	int smw2   = item_at("snes", "Super Mario World 2 - Yoshi's Island (Europe).sfc");
+	int dd_md  = item_at("md", "Double Dragon (Europe).bin");
+	int dd_78  = item_at("a7800", "Double Dragon (USA).bin");
+
+	if (smw_eu < 0 || smw_jp < 0 || smw_us < 0 || smw_hk < 0 || som_us < 0 || som_eu < 0 ||
+		son_md < 0 || son_us < 0 || son_gg < 0 || son_sm < 0 || ff7_2 < 0 ||
+		smw2 < 0 || dd_md < 0 || dd_78 < 0)
+	{
+		check(0, "this section's fixtures are indexed");
+		return;
+	}
+
+	lib_view_build(VIEW_ALL, -1, SORT_TITLE);
+
+	int card = entry_carrying(smw_eu);
+	check(card >= 0 && card == entry_carrying(smw_jp) && card == entry_carrying(smw_us),
+		"three dumps of one game are one card");
+	check(entry_nvar(card) == 3, "and the card says it has three files behind it");
+
+	// Filename order, not readdir order: the cycle has to be the same every boot.
+	check(lib_view_variant(card, 0) == smw_eu &&
+		lib_view_variant(card, 1) == smw_jp &&
+		lib_view_variant(card, 2) == smw_us,
+		"the files behind a card are in filename order");
+	check(lib_view_variant(card, 3) == -1, "and asking past the last one answers nothing");
+
+	const chome_entry *e = lib_view_entry(card);
+	check(e && e->game == smw_eu && e->vsel == 0,
+		"with nothing played yet the card shows the first file");
+	check(!strcmp(lib_view_variant_file(card, 0), "Super Mario World (Europe).sfc"),
+		"and names that file, in its own case, without the folder it shares");
+
+	// The four merges that must not happen.
+	check(entry_carrying(smw_hk) != card,
+		"a same-titled hack in its own folder is a card of its own");
+	check(entry_carrying(son_gg) != entry_carrying(son_sm),
+		"the .sms and the .gg of one name are different games and stay apart");
+	check(entry_carrying(dd_md) != entry_carrying(dd_78),
+		"the same title on two systems stays two cards, alike in every other way");
+	check(entry_carrying(son_md) == entry_carrying(son_us) && entry_nvar(entry_carrying(son_md)) == 2,
+		"...while two dumps on the one system are one card");
+	check(entry_carrying(smw_eu) != entry_carrying(smw2),
+		"a title that merely starts with another title is a game of its own");
+
+	// Zipped ROMs: the archive is the file, not a directory.
+	int somcard = entry_carrying(som_us);
+	check(somcard >= 0 && somcard == entry_carrying(som_eu) && entry_nvar(somcard) == 2,
+		"two archives of one game are one card");
+	check(strstr(lib_view_variant_file(somcard, 0), ".zip/") != 0,
+		"and a zipped file is still named through its archive");
+
+	// Multi-disc.
+	int ff7 = entry_carrying(ff7_2);
+	check(ff7 >= 0 && entry_nvar(ff7) == 3, "the three discs of one game are one card");
+	check(strstr(lib_view_variant_file(ff7, 1), "(Disc 2)") != 0,
+		"and the second of them is the second disc");
+
+	// Cycling, and that it wraps rather than stopping.
+	check(lib_view_cycle(card, 1) && lib_view_entry(card)->game == smw_jp,
+		"the cycle moves the card to its next file");
+	check(lib_view_cycle(card, 1) && lib_view_entry(card)->game == smw_us,
+		"and to the one after that");
+	check(lib_view_cycle(card, 1) && lib_view_entry(card)->game == smw_eu,
+		"and wraps back to the first");
+
+	int lone = entry_carrying(item_at("snes", "Super Metroid (Europe).sfc"));
+	check(lone >= 0 && entry_nvar(lone) == 1, "a title with one file is one card");
+	check(!lib_view_cycle(lone, 1), "and there is nothing to cycle on it");
+
+	/*
+	  The flag that decides whether the title block names the file. A grouped card knows
+	  it needs to; these are the cards that need to and are not grouped, because grouping
+	  them would have been wrong.
+	*/
+	check(lib_view_entry(entry_carrying(son_gg))->dup &&
+		lib_view_entry(entry_carrying(son_sm))->dup &&
+		lib_view_entry(entry_carrying(son_md))->dup,
+		"cards left sharing a title are marked as needing their file named");
+	check(!lib_view_entry(lone)->dup, "and a card with a title of its own is not");
+
+	/*
+	  ...and naming them has to answer the question. Two identical filenames in two folders
+	  are told apart only by the folder, so an unshared card keeps it.
+	*/
+	int sor_top = entry_carrying(item_at("md", "Streets of Rage 2 (Europe).bin"));
+	int sor_sub = entry_carrying(item_at("md", "Proto/Streets of Rage 2 (Europe).bin"));
+	check(sor_top >= 0 && sor_sub >= 0 && sor_top != sor_sub,
+		"the same filename in two folders is two cards");
+	// Copied out, because the answer is a static buffer: comparing two calls in one
+	// expression compares it with itself and passes whatever it is handed.
+	char sor_name[CH_PATH_LEN];
+	snprintf(sor_name, sizeof(sor_name), "%s", lib_view_variant_file(sor_top, 0));
+	check(strcmp(sor_name, lib_view_variant_file(sor_sub, 0)) != 0,
+		"and the line naming each of them says which folder it is in");
+
+	/*
+	  Ties. Nothing has been launched yet, so all three files are level on play count -
+	  and then a favourite is the player's own word about one of them and decides it.
+	  Checked here because it needs the three level, which they only are before anything
+	  has been played.
+	*/
+	lib_toggle_fav(lib_item(smw_us));
+	lib_view_build(VIEW_ALL, -1, SORT_TITLE);
+	check(lib_view_entry(entry_carrying(smw_us))->game == smw_us,
+		"a favourite decides which file a card shows when nothing else separates them");
+
+	lib_toggle_fav(lib_item(smw_us));
+	lib_view_build(VIEW_ALL, -1, SORT_TITLE);
+	check(lib_view_entry(entry_carrying(smw_us))->game == smw_eu,
+		"and the card goes back to the first file when that is undone");
+
+	/*
+	  Finding a game behind a card. Coming back to where the player was, and parking the
+	  shelf on the running game, both go through these - and both used to compare against
+	  one item per entry, which would now miss two files out of every three.
+	*/
+	lib_view_build(VIEW_ALL, -1, SORT_TITLE);
+	card = entry_carrying(smw_eu);
+	int at = lib_view_select_key(lib_item(smw_us)->key);
+	check(at == card && lib_view_entry(at)->game == smw_us && lib_view_entry(at)->vsel == 2,
+		"a game is found by key behind its card, and the card turns to it");
+
+	lib_view_build(VIEW_ALL, -1, SORT_TITLE);
+	at = lib_view_select_path(lib_item(smw_jp)->sysidx, lib_item(smw_jp)->path);
+	check(at == card && lib_view_entry(at)->game == smw_jp,
+		"and by system and path, which is what the running game is known by");
+	check(lib_view_select_path(lib_item(smw_jp)->sysidx, "Nothing Like This.sfc") == -1,
+		"a game that is not on the shelf is not found");
+
+	/*
+	  A folder's count is what the shelf behind it will show. Counted in files it would
+	  promise eight games and open on six cards.
+	*/
+	int snes = -1;
+	for (int i = 0; i < lib_sys_count(); i++) if (!strcmp(lib_sys(i)->id, "snes")) snes = i;
+
+	int cards = lib_view_build(VIEW_SYS, snes, SORT_TITLE);
+	int files = 0;
+	for (int i = 0; i < lib_item_count(); i++) if (lib_item(i)->sysidx == snes) files++;
+
+	lib_view_build(VIEW_SYSTEMS, -1, SORT_TITLE);
+	int promised = -1;
+	for (int i = 0; i < lib_view_count(); i++)
+	{
+		const chome_entry *f = lib_view_entry(i);
+		if (f && f->sysidx == snes) promised = f->count;
+	}
+	printf("  SNES: %d files, %d cards, folder promises %d\n", files, cards, promised);
+	check(files > cards, "the fake card has more SNES files than SNES titles");
+	check(promised == cards, "a folder promises as many games as its shelf will show");
 }
 
 static void assert_slots()
@@ -2961,6 +3245,265 @@ static void assert_recent()
 	check(entry_game(0) == chip, "and it is offered again once the ROM is back");
 }
 
+/* ------------------------------------------- title groups, through the UI -- */
+
+/*
+  Rewinds the shelf and steps right until the card carrying this file is selected, then
+  returns that card's index - which is also where the cursor now is, since it got there
+  one press at a time from zero. The front-end keeps its selection to itself, so this is
+  how a check knows which card the presses below are landing on.
+*/
+static int shelf_go(const char *sysid, const char *relpath)
+{
+	for (int i = 0; i < 60; i++) press(KEY_LEFT, 2);
+
+	int target = entry_carrying(item_at(sysid, relpath));
+	if (target < 0) return -1;
+
+	for (int i = 0; i < target; i++) press(KEY_RIGHT, 3);
+	frame(10);
+	return target;
+}
+
+// Presses the cycle button until the selected card is showing this file. One full turn
+// and no more, so a card that never gets there fails rather than hanging.
+static int shelf_cycle_to(int card, int idx)
+{
+	const chome_entry *e = lib_view_entry(card);
+	if (!e) return 0;
+
+	for (int i = 0; i <= e->nvar; i++)
+	{
+		if (lib_view_entry(card)->game == idx) return 1;
+		press(KEY_TAB, 10);
+	}
+	return 0;
+}
+
+// The rows the legend occupies, which is where its button prompts and nothing else are.
+static int legend_colour(uint32_t want)
+{
+	const chome_profile *p = theme_get();
+	return box_pixels(0, p->y_legend - 6 * p->ts_ui, p->w, p->h, want);
+}
+
+// The one line of the title block that names the file: between the system line and the
+// top of the cards, which is background everywhere else.
+static int filename_line_pixels()
+{
+	const chome_profile *p = theme_get();
+	int y = p->y_meta + 10 * p->ts_ui;
+	return box_pixels(0, y, p->w, y + 8 * p->ts_tiny, COL_PANELLO);
+}
+
+/*
+  The same feature through the real key handler, on the real shelf.
+
+  The five things that key state by game are what this is for. Favourites, play counts,
+  Recently Played, suspend points and per-game core options all have to act on the file
+  the player is looking at - and the whole risk of one card standing for several files is
+  that one of them silently attaches one ROM's state to another. Each is checked here
+  against the file that is *not* the one the card came up on, because that is the case a
+  wrong implementation gets wrong.
+
+  Runs after the recent-list section so that its own launch cannot disturb what that one
+  asserts about the order.
+*/
+static void assert_variant_ui()
+{
+	printf("\n== title groups on the shelf ==\n");
+
+	const char *eu = "Super Mario World (Europe).sfc";
+	const char *jp = "Super Mario World (Japan).sfc";
+	const char *us = "Super Mario World (USA).sfc";
+
+	harness_set_menu_core(1);
+	harness_set_fb_supported(1);
+	harness_set_input_pad(1);
+	harness_set_pad_name("Nintendo Switch Pro Controller");
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+
+	chome_leave();
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 4; i++) press(KEY_ESC, 6);        // out to the root shelf
+	frame(10);
+
+	int i_eu = item_at("snes", eu), i_jp = item_at("snes", jp), i_us = item_at("snes", us);
+	if (i_eu < 0 || i_jp < 0 || i_us < 0) { check(0, "this section's fixtures are indexed"); return; }
+
+	int card = shelf_go("snes", eu);
+	if (card < 0) { check(0, "the grouped card is on the root shelf"); return; }
+
+	/*
+	  The prompt exists only where it acts. On a Nintendo pad the north button is a blue X,
+	  and the shelf's other lettered prompts are the east button (red) and the west one
+	  (green) - so a count of that blue in the legend rows is a count of this prompt.
+	*/
+	check(legend_colour(COL_SNES_X) > 0, "a card with several files offers a button to cycle them");
+	dump("variants-legend-grouped");
+
+	int lone = shelf_go("snes", "Super Metroid (Europe).sfc");
+	if (lone < 0) { check(0, "a card with one file is on the root shelf"); return; }
+	check(legend_colour(COL_SNES_X) == 0, "and a card with one file does not");
+
+	// X there must do nothing rather than something invisible.
+	int was = lib_view_entry(lone)->game;
+	press(KEY_TAB, 10);
+	check(lib_view_entry(lone)->game == was, "pressing it on such a card changes nothing");
+
+	// Back to the grouped card, and cycle it with the real key.
+	card = shelf_go("snes", eu);
+	if (card < 0) { check(0, "back on the grouped card"); return; }
+	check(lib_view_entry(card)->game == i_eu, "the card comes up on the first of its files");
+
+	press(KEY_TAB, 10);
+	check(lib_view_entry(card)->game == i_jp, "X moves it to the next file");
+	press(KEY_TAB, 10);
+	check(lib_view_entry(card)->game == i_us, "and to the one after");
+
+	/*
+	  Suspend points. Only the USA dump has a state on the fake card, so this fails if the
+	  strip is read off the card rather than off the file on show - which would offer the
+	  player a save state belonging to a different ROM.
+	*/
+	check((lib_item(i_us)->slots & 3) == 1, "the selected file's own suspend point is found");
+	check(lib_item(i_eu)->slots == 0 && lib_item(i_jp)->slots == 0,
+		"and the other files behind the card have none");
+
+	// Favourites.
+	press(KEY_BACKSPACE, 10);
+	check(lib_item(i_us)->fav == 1, "Y favourites the file on show");
+	check(lib_item(i_eu)->fav == 0 && lib_item(i_jp)->fav == 0,
+		"and not the card, nor the file it came up on");
+
+	/*
+	  Per-game core options are keyed by system and path, so the key is per file by
+	  construction - and the path it is given comes from what the launch wrote, checked
+	  below. This is the construction half.
+	*/
+	check(core_opts_game_key(lib_item(i_us)->sysidx, us) !=
+		core_opts_game_key(lib_item(i_eu)->sysidx, eu),
+		"two files of one title have different per-game option keys");
+
+	// The 240p title block: the line that names the file, and that it is only there when
+	// the title above does not say which file this is.
+	cfg.classicui_profile = 3;
+	harness_set_fb(320, 240);
+	gfx_shutdown();
+	theme_update(320, 240, 3);
+	frame(10);
+	if (shelf_go("snes", us) < 0) { check(0, "the grouped card is on the 240p shelf"); return; }
+	int named = filename_line_pixels();
+	dump("variants-240p-named");
+	check(named > 0, "at 240p the title block names the file on show");
+
+	if (shelf_go("snes", "Super Metroid (Europe).sfc") < 0)
+	{
+		check(0, "a card with one file is on the 240p shelf");
+		return;
+	}
+	check(filename_line_pixels() == 0, "and says nothing extra about a card with one file");
+
+	/*
+	  A card left sharing a title because grouping it would have been wrong is named too:
+	  the Master System and Game Gear Sonic 2 are two cards with one title, and without
+	  this the shelf is back to the fault this feature exists to fix.
+	*/
+	if (shelf_go("sms", "Sonic The Hedgehog 2 (Europe).sms") >= 0)
+	{
+		check(filename_line_pixels() > 0, "so is a card that only looks like a duplicate");
+	}
+	else check(0, "the Master System Sonic is on the shelf");
+
+	cfg.classicui_profile = 1;
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+	frame(10);
+
+	// Undone before the launch below, so which file the rebuilt shelf lands on is decided
+	// by the play count and by nothing else. The tie-break is checked in assert_variants().
+	lib_toggle_fav(lib_item(i_us));
+
+	/*
+	  The launch. Everything above is state on the card; this is the one that hands a path
+	  to the FPGA, and handing over the wrong dump of a game is the most visible way this
+	  could be wrong.
+
+	  Cycled to the first file rather than assumed to be there: the shelf has not been
+	  rebuilt since the presses above, so it is still showing whatever they left it on -
+	  and a check that reads better than it tests is worse than none.
+	*/
+	card = shelf_go("snes", eu);
+	if (card < 0) { check(0, "the grouped card is back"); return; }
+	if (!shelf_cycle_to(card, i_eu)) { check(0, "the card can be turned to its first file"); return; }
+
+	press(KEY_TAB, 10);
+	press(KEY_TAB, 10);
+	check(lib_view_entry(card)->game == i_us, "two presses from the first file reach the third");
+
+	int was_eu = lib_item(i_eu)->plays;
+	int was_jp = lib_item(i_jp)->plays;
+	int was_us = lib_item(i_us)->plays;
+
+	harness_clear_launch();
+	press(KEY_ENTER, 4);
+	frame(80);                                  // let the curtain elapse
+
+	char buf[2048] = {};
+	if (slurp_file("/tmp/classicui_launch.mgl", buf, sizeof(buf)) > 0)
+	{
+		check(strstr(buf, us) != 0, "the MGL names the file the card was showing");
+		check(strstr(buf, eu) == 0, "and not the one it came up on");
+	}
+	else check(0, "an MGL was written");
+
+	// What the next core is told it is running, which is where the per-game option key
+	// and the reference shot both come from.
+	char cur[1024] = {};
+	if (slurp_file("/tmp/classicui_current", cur, sizeof(cur)) > 0)
+		check(strstr(cur, us) != 0, "and the running-game record names it too");
+	else check(0, "the running-game record was written");
+
+	// As a delta, because the section above this one plays every game on the card: an
+	// absolute count would pass on a leftover.
+	check(lib_item(i_us)->plays == was_us + 1, "the play count went to that file");
+	check(lib_item(i_eu)->plays == was_eu && lib_item(i_jp)->plays == was_jp, "and to no other");
+
+	lib_view_build(VIEW_RECENT, -1, SORT_TITLE);
+	check(entry_game(0) == lib_item(i_us), "and Recently Played holds that file, not the card");
+
+	/*
+	  And the card remembers it. Not in a file of its own: the play count is already
+	  per-file and already survives a rescan and a reboot, so the file the player actually
+	  plays is the one the card offers from then on.
+	*/
+	check(lib_item(i_us)->plays > lib_item(i_eu)->plays && lib_item(i_us)->plays > lib_item(i_jp)->plays,
+		"that file now has more plays than the others behind its card");
+
+	lib_view_build(VIEW_ALL, -1, SORT_TITLE);
+	int back = entry_carrying(i_us);
+	check(back >= 0 && lib_view_entry(back)->game == i_us && lib_view_entry(back)->vsel == 2,
+		"a rebuilt shelf comes up on the file that was played");
+
+	/*
+	  And Times Played has to order the shelf by the file each card is showing. The files
+	  behind one card do not share a play count, so a sort that ran before the card chose
+	  which of them it stands for would place this one among the games with one play while
+	  showing a file with two - which is exactly what this ordering would then not be.
+	*/
+	int n = lib_view_build(VIEW_ALL, -1, SORT_PLAYS);
+	int ordered = 1;
+	for (int i = 1; i < n; i++)
+	{
+		chome_item *a = entry_game(i - 1), *b = entry_game(i);
+		if (a && b && a->plays < b->plays) ordered = 0;
+	}
+	check(ordered, "a card sorts on the play count of the file it is showing");
+}
+
 static void assert_ingame()
 {
 	printf("\n== in-game: the whole UI, over a running game ==\n");
@@ -3766,6 +4309,9 @@ int main()
 
 	assert_index();
 	assert_views();
+	// Before anything has been launched, so the choice of which file a card shows is not
+	// yet under the influence of a play count. See the section's own comment.
+	assert_variants();
 	assert_slots();
 	assert_art();
 	assert_video();
@@ -3786,6 +4332,9 @@ int main()
 	// After the launches above, so there is a recent list to be wrong about, and before
 	// the shelf sections that now see a fourth card on the root shelf.
 	assert_recent();
+	// After it, because this one launches a game of its own and the section above is about
+	// the order of the list a launch writes to.
+	assert_variant_ui();
 	assert_ingame();
 	assert_save_on_pausing_core();
 	assert_freeze_off();
