@@ -173,6 +173,25 @@ If joining fails it puts your old settings back.
 
 ---
 
+## Art you already scraped
+
+If you have ever scraped this card with another front-end — EmulationStation,
+Batocera, Recalbox, ES-DE — or with Skraper or Skyscraper on a PC, your pictures
+already work here. Those tools write a `gamelist.xml` into each system's games folder
+saying which picture belongs to which game, and that file is read as it is: no second
+scrape, no renaming, nothing to copy. ScreenScraper art scraped with Skraper is the
+common case and needs nothing done to it.
+
+Scrapes with no `gamelist.xml` work too, as long as the pictures are named after the
+ROM file: `games/<System>/media/box2d/`, `boxart/`, `images/`, `media/mixed/`,
+`media/screenshot/` and `screenshots/` are all looked in.
+
+What a gamelist says wins over the art in `classicui_artdir`, because it is your own
+scrape naming exact files rather than us guessing from a name. If its pictures are
+worse than the ones in your art pack, `classicui_gamelist=0` turns it off. Only
+pictures are read — names and descriptions are not, since titles here come from
+filenames.
+
 ## Installing
 
 **You need:** a MiSTer with a working SD card, and the ability to copy one file to it.
@@ -228,6 +247,7 @@ All optional; the defaults are what most people want.
 | `classicui_overscan` | `6` | Percent kept clear of the screen edge, for a CRT |
 | `classicui_artdir` | `boxart` | Where cover art lives, under the games folder |
 | `classicui_artfetch` | `0` | Download missing cover art over the network |
+| `classicui_gamelist` | `1` | Read `gamelist.xml`, so art scraped elsewhere works here |
 | `classicui_freeze` | `1` | Hold the game still while the menu is open |
 
 **`classicui_freeze` is worth knowing about.** Holding a game still means asking the
@@ -252,8 +272,9 @@ grep ClassicUI /tmp/debug.txt
   not replace. `grep CLASSICUI=1 /tmp/debug.txt` says which.
 - **"No games found"** — your games are not under `games/<System>/`. The log lists
   every folder it looked at and what it found.
-- **No cover art** — art goes in `games/<System>/boxart/`, named after the ROM.
-  `classicui_artfetch=1` downloads what is missing.
+- **No cover art** — art goes in `boxart/<System Name>/Named_Boxarts/`, named after
+  the ROM, and `games/<System>/media/box2d/` works too. If you scraped on a PC, see
+  "Art you already scraped" above. `classicui_artfetch=1` downloads what is missing.
 
 ---
 

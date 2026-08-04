@@ -10,15 +10,23 @@ docker run --rm -v "$REPO":/mister -w /mister ubuntu:20.04 bash -c '
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq >/dev/null
-apt-get install -qq -y g++ libimlib2-dev >/dev/null
+apt-get install -qq -y gcc g++ libimlib2-dev >/dev/null
 
 mkdir -p /tmp/harness
+
+# sxmlc is C and does not compile as C++ - it assigns void* and drops const, which
+# the firmware build gets away with by compiling it with the C compiler. The
+# gamelist reader parses with it rather than with a hand-rolled parser, so the
+# harness compiles it the same way and links the object.
+gcc -std=gnu99 -O1 -g -I. -c sxmlc.c -o /tmp/harness/sxmlc.o
+
 g++ -std=gnu++14 -O1 -g -Wall -Wextra -Wno-unused-parameter -Wno-format-truncation \
     -I. -o /tmp/harness/chome_test \
     support/classicui/chome_gfx.cpp \
     support/classicui/chome_theme.cpp \
     support/classicui/chome_lib.cpp \
     support/classicui/chome_art.cpp \
+    support/classicui/chome_gamelist.cpp \
     support/classicui/chome_ui.cpp \
     support/classicui/chome_osk.cpp \
     support/classicui/chome_net.cpp \
@@ -31,6 +39,7 @@ g++ -std=gnu++14 -O1 -g -Wall -Wextra -Wno-unused-parameter -Wno-format-truncati
     support/classicui/test/harness.cpp \
     charrom.cpp \
     lib/miniz/miniz.c \
+    /tmp/harness/sxmlc.o \
     -lImlib2
 
 echo "--- running ---"

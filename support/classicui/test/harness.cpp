@@ -24,6 +24,7 @@
 #include "../chome_lib.h"
 #include "../chome_core.h"
 #include "../chome_art.h"
+#include "../chome_gamelist.h"
 #include "../chome_theme.h"
 #include "../chome_gfx.h"
 #include "../chome_video.h"
@@ -197,6 +198,168 @@ static void make_zip(const char *dir, const char *name, const char *inner, int b
 	mz_zip_writer_finalize_archive(&z);
 	mz_zip_writer_end(&z);
 	free(buf);
+}
+
+/*
+  gamelist.xml fixtures - the file every other front-end already has.
+
+  Written the way the real thing is written (sources in chome_gamelist.h): root
+  <gameList>, <game> and <folder> children, entity-escaped text, and media paths
+  relative to the games folder with or without the conventional "./".
+
+  Every picture a gamelist names here lives in media/covers, which is *not* one of
+  the folders chome_art.cpp probes by name. That is deliberate: if these fixtures
+  used media/box2d then the scraper-folder layer would find them on its own and the
+  checks would pass whether the XML was read or not. media/box2d is used once, for
+  the Game Boy, which has no gamelist - that is that layer's own check.
+*/
+static void build_gamelists()
+{
+	// SNES: art the player scraped, over a game that already has a local cover.
+	mkpath(ROOT "/games/SNES/media/covers");
+	make_cover(ROOT "/games/SNES/media/covers/Super Metroid (Europe).png", 400, 600, 0xff9a2f2f);
+	make_cover(ROOT "/games/SNES/media/covers/Secret of Mana (USA) box.png", 400, 600, 0xff2f9a4f);
+	make_cover(ROOT "/games/SNES/media/covers/Secret of Mana (USA) mix.png", 400, 600, 0xffd0d020);
+
+	put_file(ROOT "/games/SNES/gamelist.xml",
+		// A UTF-8 BOM, which is what a Windows tool leaves in front of the prolog.
+		"\xEF\xBB\xBF"
+		"<?xml version=\"1.0\"?>\n"
+		"<gameList>\n"
+		/*
+		  id/source are what Skraper and the gamelist editors write; harmless, and
+		  here to prove attributes on <game> are not tripped over.
+		*/
+		"\t<game id=\"4321\" source=\"ScreenScraper.fr\">\n"
+		"\t\t<path>./Super Metroid (Europe).sfc</path>\n"
+		"\t\t<name>Super Metroid</name>\n"
+		/*
+		  A description with an escaped '&' and a bare '>' in it. The '>' is what
+		  makes the parser hand this text over in two pieces, since it reads up to
+		  every '>' - which is why the reader appends text rather than assigning it.
+		*/
+		"\t\t<desc>Ridley &amp; friends: 5 > 3, honestly.</desc>\n"
+		"\t\t<image>./media/covers/Super Metroid (Europe).png</image>\n"
+		"\t\t<rating>0.9</rating>\n"
+		"\t</game>\n"
+		// Two pictures for one game: <boxart> is the box and must beat <image>.
+		"\t<game>\n"
+		"\t\t<path>./Secret of Mana (USA).zip</path>\n"
+		"\t\t<image>./media/covers/Secret of Mana (USA) mix.png</image>\n"
+		"\t\t<boxart>./media/covers/Secret of Mana (USA) box.png</boxart>\n"
+		"\t</game>\n"
+		// A folder, which the shelf has no card for: nothing here may be read.
+		"\t<folder>\n"
+		"\t\t<path>./Hacks</path>\n"
+		"\t\t<image>./media/covers/Super Metroid (Europe).png</image>\n"
+		"\t</folder>\n"
+		// A game whose only media are a video and a logo: neither is a cover.
+		"\t<game>\n"
+		"\t\t<path>./Super Mario World (Japan).sfc</path>\n"
+		"\t\t<video>./media/videos/smw.mp4</video>\n"
+		"\t\t<marquee>./media/wheel/smw.png</marquee>\n"
+		"\t</game>\n"
+		"</gameList>\n");
+
+	/*
+	  Mega Drive, deliberately CRLF and without the "./" prefix, which is how a file
+	  that has been through a Windows tool arrives. Plus the two entries that must
+	  *not* produce a picture: one naming a file that is no longer on the card, and
+	  one naming a path in the scraping machine's home directory.
+	*/
+	mkpath(ROOT "/games/Genesis/media/covers");
+	make_cover(ROOT "/games/Genesis/media/covers/Streets of Rage 2 (Europe).png", 400, 600, 0xff7040b0);
+	make_cover(ROOT "/games/Genesis/media/covers/Sonic & Knuckles.png", 400, 600, 0xffb08040);
+
+	put_file(ROOT "/games/Genesis/gamelist.xml",
+		"<?xml version=\"1.0\"?>\r\n"
+		"<gameList>\r\n"
+		"\t<game>\r\n"
+		"\t\t<path>Streets of Rage 2 (Europe).bin</path>\r\n"
+		"\t\t<thumbnail>media/covers/Streets of Rage 2 (Europe).png</thumbnail>\r\n"
+		"\t</game>\r\n"
+		// The file really is called "Sonic & Knuckles.png": the entity must decode.
+		"\t<game>\r\n"
+		"\t\t<path>./Sonic The Hedgehog 2 (USA).md</path>\r\n"
+		"\t\t<image>./media/covers/Sonic &amp; Knuckles.png</image>\r\n"
+		"\t</game>\r\n"
+		// Stale scrape: the file is gone, so the local art pack must still be used.
+		"\t<game>\r\n"
+		"\t\t<path>./Sonic The Hedgehog 2 (Europe).md</path>\r\n"
+		"\t\t<image>./media/covers/deleted by the player.png</image>\r\n"
+		"\t</game>\r\n"
+		// A path on the PC that did the scraping: not ours to resolve.
+		"\t<game>\r\n"
+		"\t\t<path>./Double Dragon (Europe).bin</path>\r\n"
+		"\t\t<image>~/ES-DE/downloaded_media/megadrive/covers/Double Dragon.png</image>\r\n"
+		"\t</game>\r\n"
+		"</gameList>\r\n");
+
+	/*
+	  A malformed file, on a system whose game would otherwise get a cover out of it:
+	  an unterminated tag, an unclosed attribute quote and a comment that never ends.
+	  The picture it names really is there, so the only reason for that card to stay
+	  blank is the reader refusing the whole file - which is the point.
+	*/
+	mkpath(ROOT "/games/TGFX16/media/covers");
+	make_cover(ROOT "/games/TGFX16/media/covers/Bonk's Adventure (USA).png", 400, 600, 0xffe01010);
+
+	put_file(ROOT "/games/TGFX16/gamelist.xml",
+		"<?xml version=\"1.0\"?>\n"
+		"<gameList>\n"
+		"\t<game>\n"
+		"\t\t<path>./Bonk's Adventure (USA).pce</path>\n"
+		"\t\t<image>./media/covers/Bonk's Adventure (USA).png</image>\n"
+		"\t</game>\n"
+		"\t<game>\n"
+		"\t\t<path>./oops.pce</path\n"
+		"\t\t<image attr=\"unclosed>./nowhere.png</image>\n"
+		"\t<!-- and a comment that never ends\n");
+
+	/*
+	  And one that is well-formed but absurdly large - a renamed disc image is the
+	  case that matters - which has to be refused on its size before the parser is
+	  handed it. The game comes first in the file, so removing the size check makes
+	  this file work: that is what makes the check below a check.
+	*/
+	mkpath(ROOT "/games/GBA/media/covers");
+	make_cover(ROOT "/games/GBA/media/covers/Metroid Fusion (Europe).png", 400, 600, 0xff1010e0);
+
+	{
+		FILE *f = fopen(ROOT "/games/GBA/gamelist.xml", "wb");
+		if (f)
+		{
+			const char *head =
+				"<?xml version=\"1.0\"?>\n"
+				"<gameList>\n"
+				"\t<game>\n"
+				"\t\t<path>./Metroid Fusion (Europe).gba</path>\n"
+				"\t\t<image>./media/covers/Metroid Fusion (Europe).png</image>\n"
+				"\t</game>\n"
+				"\t<!-- ";
+			fwrite(head, 1, strlen(head), f);
+
+			char *blk = (char*)malloc(64 * 1024);
+			if (blk)
+			{
+				memset(blk, 'x', 64 * 1024);
+				for (int i = 0; i < (GL_MAX_BYTES / (64 * 1024)) + 16; i++) fwrite(blk, 1, 64 * 1024, f);
+				free(blk);
+			}
+
+			const char *tail = " -->\n</gameList>\n";
+			fwrite(tail, 1, strlen(tail), f);
+			fclose(f);
+		}
+		else printf("  cannot write the oversize gamelist fixture\n");
+	}
+
+	/*
+	  The scraper media folders, on a system with no gamelist at all: this is the
+	  layout Skraper writes, and the other half of the feedback that asked for this.
+	*/
+	mkpath(ROOT "/games/GAMEBOY/media/box2d");
+	make_cover(ROOT "/games/GAMEBOY/media/box2d/Tetris (World).png", 400, 600, 0xff30a070);
 }
 
 static void build_sd()
@@ -381,6 +544,8 @@ static void build_sd()
 
 	mkpath(ROOT "/boxart/Sega - Mega Drive - Genesis/Named_Boxarts");
 	make_cover(ROOT "/boxart/Sega - Mega Drive - Genesis/Named_Boxarts/Sonic The Hedgehog 2 (Europe).png", 600, 600, 0xff2b4c7e);
+
+	build_gamelists();
 }
 
 /* --------------------------------------------------------------- driving -- */
@@ -1303,7 +1468,16 @@ static void assert_art()
 	}
 
 	printf("  ready %d, missing %d, cache %d KB\n", ready, missing, art_cache_bytes() / 1024);
-	check(ready == 3, "exactly the three covers on the fake SD decoded");
+	/*
+	  Eight, and every one of them is named: three in our own art folder (Super
+	  Metroid, Super Mario World, Sonic 2 Europe - the last of those through a stale
+	  gamelist entry that has to fall through to it), four from the two gamelists
+	  (Super Metroid again but a different picture, Secret of Mana, and Streets of
+	  Rage 2 twice - the second by filename, from the Proto folder), and Tetris from
+	  the Skraper media folder. assert_gamelist() below is where each of those is
+	  told apart from the others.
+	*/
+	check(ready == 8, "exactly the eight covers on the fake SD decoded");
 	check(missing >= 8, "everything else reports missing for the fallback card");
 
 	int w = 0, h = 0;
@@ -1311,6 +1485,188 @@ static void assert_art()
 	for (int i = 0; i < lib_item_count() && !a; i++) a = art_get(i, &w, &h);
 	check(a != 0, "a decoded cover is retrievable");
 	check(w == theme_get()->sel_w && h == theme_get()->sel_h, "cover decoded at card size");
+}
+
+/* ------------------------------------------------------------- gamelist --- */
+
+static int sysidx_by_dir(const char *dir)
+{
+	for (int i = 0; i < lib_sys_count(); i++)
+	{
+		const chome_sys *s = lib_sys(i);
+		if (s && !strcmp(s->dir, dir)) return i;
+	}
+	return -1;
+}
+
+static int item_by_path(const char *sysdir, const char *relpath)
+{
+	int sys = sysidx_by_dir(sysdir);
+	for (int i = 0; i < lib_item_count(); i++)
+	{
+		chome_item *it = lib_item(i);
+		if (it && it->sysidx == sys && !strcmp(it->path, relpath)) return i;
+	}
+	return -1;
+}
+
+/*
+  Which picture a card ended up with, read off the card itself - the middle pixel of
+  the decoded cover. make_cover() paints a flat plate with a band along the bottom
+  and two diagonals, and neither of those goes near the middle of a 400x600 image,
+  so the middle pixel is the plate colour and says which file was decoded. That is
+  the only way from here to tell "found the right art" from "found some art".
+*/
+static int cover_colour(int item, uint32_t *out)
+{
+	int w = 0, h = 0;
+	const uint32_t *a = art_get(item, &w, &h);
+	if (!a || w < 8 || h < 8) return 0;
+	*out = a[(h / 2) * w + (w / 2)] | 0xff000000u;
+	return 1;
+}
+
+static int colour_near(uint32_t a, uint32_t b, int tol)
+{
+	for (int s = 0; s <= 16; s += 8)
+	{
+		int d = (int)((a >> s) & 0xff) - (int)((b >> s) & 0xff);
+		if (d < 0) d = -d;
+		if (d > tol) return 0;
+	}
+	return 1;
+}
+
+static int cover_is(int item, uint32_t want, const char *what)
+{
+	uint32_t got = 0;
+	if (!cover_colour(item, &got))
+	{
+		printf("  %s: no decoded cover at all\n", what);
+		return 0;
+	}
+	if (!colour_near(got, want, 24))
+	{
+		printf("  %s: cover is %06x, wanted %06x\n", what, got & 0xffffff, want & 0xffffff);
+		return 0;
+	}
+	return 1;
+}
+
+// Re-decodes everything from scratch, the way Options > Rescan Library does.
+static void art_redo()
+{
+	art_shutdown();
+	art_init(theme_get()->sel_w, theme_get()->sel_h);
+	for (int i = 0; i < lib_item_count(); i++) art_request(i, 0);
+	for (int i = 0; i < lib_item_count() * 2 + 10; i++) art_step();
+}
+
+static void assert_gamelist()
+{
+	printf("\n== gamelist.xml ==\n");
+
+	int snes = sysidx_by_dir("SNES");
+	int md   = sysidx_by_dir("Genesis");
+	int tg   = sysidx_by_dir("TGFX16");
+	int gba  = sysidx_by_dir("GBA");
+	int psx  = sysidx_by_dir("PSX");
+
+	int metroid = item_by_path("SNES", "Super Metroid (Europe).sfc");
+	int mana    = item_by_path("SNES", "Secret of Mana (USA).zip/Secret of Mana (USA).sfc");
+	int smwjp   = item_by_path("SNES", "Super Mario World (Japan).sfc");
+	int sor2    = item_by_path("Genesis", "Streets of Rage 2 (Europe).bin");
+	int sor2p   = item_by_path("Genesis", "Proto/Streets of Rage 2 (Europe).bin");
+	int sonusa  = item_by_path("Genesis", "Sonic The Hedgehog 2 (USA).md");
+	int soneur  = item_by_path("Genesis", "Sonic The Hedgehog 2 (Europe).md");
+	int ddragon = item_by_path("Genesis", "Double Dragon (Europe).bin");
+	int bonk    = item_by_path("TGFX16", "Bonk's Adventure (USA).pce");
+	int fusion  = item_by_path("GBA", "Metroid Fusion (Europe).gba");
+	int tetris  = item_by_path("GAMEBOY", "Tetris (World).gb");
+
+	check(metroid >= 0 && mana >= 0 && sor2 >= 0 && sor2p >= 0 && sonusa >= 0 &&
+		soneur >= 0 && ddragon >= 0 && bonk >= 0 && fusion >= 0 && tetris >= 0 && smwjp >= 0,
+		"every game the gamelist fixtures talk about is in the index");
+
+	printf("  entries: SNES %d, Genesis %d, TGFX16 %d, GBA %d\n",
+		gl_count(snes), gl_count(md), gl_count(tg), gl_count(gba));
+
+	/*
+	  Two, from four <game> elements and a <folder>: the folder is not a card, and the
+	  game whose only media are a video and a logo has no cover to offer. Reading
+	  either of those would show up here as three or four.
+	*/
+	check(gl_count(snes) == 2, "only <game> elements that name a picture are taken");
+	check(gl_rejected(snes) == 0, "a well-formed gamelist is not rejected");
+
+	// The whole point: the player's own scrape beats the local art pack.
+	check(cover_is(metroid, 0xff9a2f2f, "Super Metroid"),
+		"gamelist art wins over the same game's cover in the art folder");
+
+	// <boxart> is the box; <image> in the same entry is a composite and must lose.
+	check(cover_is(mana, 0xff2f9a4f, "Secret of Mana"),
+		"<boxart> beats <image>, and an archive is matched by the archive's name");
+
+	check(art_state(smwjp) == ART_MISSING,
+		"a <video> and a <marquee> are not covers");
+
+	/*
+	  Three entries out of four: the one naming a path under "~" is dropped when the
+	  file is read, not when it is looked up, so it never reaches the table.
+	*/
+	check(gl_count(md) == 3, "an entry whose picture is under ~/ is not stored at all");
+	check(art_state(ddragon) == ART_MISSING, "and that game gets no cover");
+
+	check(cover_is(sor2, 0xff7040b0, "Streets of Rage 2"),
+		"a CRLF gamelist with no ./ prefix on its paths still resolves");
+	check(cover_is(sonusa, 0xffb08040, "Sonic 2 USA"),
+		"&amp; in a picture path decodes to the file that is really there");
+
+	// The gamelist names a file that is not on the card, so the art pack still wins.
+	check(cover_is(soneur, 0xff2b4c7e, "Sonic 2 Europe"),
+		"a gamelist entry naming a missing file falls through to the art folder");
+
+	/*
+	  Only the root copy of this game is in the gamelist; the one in Proto/ is found
+	  by its filename alone. That fallback is what saves a gamelist whose <path> is
+	  absolute, and this is the check that it is there.
+	*/
+	check(cover_is(sor2p, 0xff7040b0, "Streets of Rage 2 (Proto)"),
+		"a game the gamelist does not name by path is still matched by filename");
+
+	// Malformed: refused whole, including the entry that parsed cleanly before it.
+	check(gl_rejected(tg) == 1, "a malformed gamelist is reported as rejected");
+	check(gl_count(tg) == 0, "and nothing it said is kept, not even the good entry");
+	check(art_state(bonk) == ART_MISSING,
+		"a malformed gamelist degrades to no art, though the file it named exists");
+
+	// Too large to be a gamelist: refused on its size, before the parser sees it.
+	check(gl_rejected(gba) == 1, "an oversized gamelist is refused");
+	check(gl_count(gba) == 0, "and contributes nothing");
+	check(art_state(fusion) == ART_MISSING, "so that game gets no cover either");
+
+	// The Skraper media folders, on a system with no gamelist.
+	check(gl_loaded(psx) && gl_count(psx) == 0 && gl_rejected(psx) == 0,
+		"a system with no gamelist.xml is looked at, empty, and not rejected");
+	check(cover_is(tetris, 0xff30a070, "Tetris"),
+		"media/box2d beside the ROMs is found without any gamelist at all");
+
+	/*
+	  And the off switch, which is the escape hatch for a scrape whose pictures are
+	  worse than the local pack: with it off, Super Metroid goes back to the cover in
+	  the art folder.
+	*/
+	cfg.classicui_gamelist = 0;
+	art_redo();
+	check(cover_is(metroid, 0xff5b4b8a, "Super Metroid, gamelist off"),
+		"classicui_gamelist=0 puts the art folder back in charge");
+	check(art_state(sonusa) == ART_MISSING,
+		"and a game whose only art was in the gamelist has none");
+
+	cfg.classicui_gamelist = 1;
+	art_redo();
+	check(cover_is(metroid, 0xff9a2f2f, "Super Metroid, gamelist on again"),
+		"and turning it back on restores the scraped art");
 }
 
 static int count_lines(const char *rel, int *bad_sum, int *maxlen)
@@ -4374,6 +4730,7 @@ int main()
 	cfg.classicui_freeze = 1;                         // as cfg.cpp defaults it
 	cfg.classicui_overscan = 6;                       // as cfg_parse() defaults it
 	snprintf(cfg.classicui_artdir, sizeof(cfg.classicui_artdir), "boxart");
+	cfg.classicui_gamelist = 1;                       // as cfg.cpp defaults it
 	cfg.osd_timeout = 0;
 
 	harness_set_fb(1280, 720);
@@ -4390,6 +4747,7 @@ int main()
 	assert_variants();
 	assert_slots();
 	assert_art();
+	assert_gamelist();
 	assert_video();
 	assert_index_cache();
 
