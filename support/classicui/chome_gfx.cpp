@@ -281,68 +281,84 @@ static int disc_isin(int step)
 	return -disc_sin[64 - step];
 }
 
-static int disc_icos(int step)
-{
-	return disc_isin(step + 16);
-}
+/*
+  Which of 64 positions round the circle a point sits at, without atan2 or floats.
 
-// Integer square root, for circle spans. Small radii, so the plain loop is fine.
-static int disc_isqrt(int v)
+  Octant first from the signs and from whether |y| exceeds |x|, then eight steps
+  within the octant by ratio. Good to about a position, which is all a sector lookup
+  on a 16-cell grid can use.
+*/
+static int disc_iatan(int y, int x)
 {
-	if (v <= 0) return 0;
-	int r = 0;
-	while ((r + 1) * (r + 1) <= v) r++;
-	return r;
+	if (!x && !y) return 0;
+
+	int ax = (x < 0) ? -x : x;
+	int ay = (y < 0) ? -y : y;
+
+	int r = (ax >= ay) ? (8 * ay) / ax : 16 - (8 * ax) / ay;
+
+	if (x >= 0 && y >= 0) return r;
+	if (x < 0 && y >= 0) return 32 - r;
+	if (x < 0 && y < 0)  return 32 + r;
+	return (64 - r) & 63;
 }
 
 void gfx_disc(int cx, int cy, int r, unsigned long ms, unsigned long period_ms,
-	uint32_t body, uint32_t rim, uint32_t spoke, uint32_t hub)
+	const uint32_t *bands, int nbands, uint32_t rim, uint32_t ring, uint32_t hole)
 {
-	if (r < 4) return;
+	if (r < 4 || !bands || nbands < 1) return;
 	if (!period_ms) period_ms = 1;
 
-	// Which of the 64 positions this instant is at. Driven by the clock, not a frame
-	// count, for the reason given at GFX_SPIN_MS.
+	/*
+	  Drawn as a 16x16 sprite of square cells rather than as a smooth circle, which is
+	  the whole point of the look: chunky pixels, hard edges, no antialiasing. The cell
+	  size comes from the radius asked for, so a caller that wants it chunky asks for a
+	  bigger disc - at 8 the cells are single pixels, which is a 16px icon, and at 16
+	  they are 2x2.
+	*/
+	int cell = r / 8;
+	if (cell < 1) cell = 1;
+
 	int step = (int)(((ms % period_ms) * 64UL) / period_ms);
 
 	/*
-	  The body as horizontal spans - one gfx_fill per row rather than per pixel, which
-	  matters because this repaints ten times a second and every fill also records
-	  damage.
+	  Radii in half-cells, squared, so cell centres land on odd numbers and nothing
+	  needs fractions. The disc is 8 cells (16 half-cells) to the edge.
 	*/
-	for (int dy = -r; dy <= r; dy++)
-	{
-		int w = disc_isqrt(r * r - dy * dy);
-		if (w <= 0) continue;
-		gfx_fill(cx - w, cy + dy, 2 * w + 1, 1, body);
-		// Rim: the outermost pixel of each row, which traces the circle.
-		gfx_fill(cx - w, cy + dy, 1, 1, rim);
-		gfx_fill(cx + w, cy + dy, 1, 1, rim);
-	}
+	const int r2_edge = 16 * 16;
+	const int r2_rim  = 14 * 14;
+	const int r2_ring =  6 * 6;
+	const int r2_hole =  4 * 4;
 
-	/*
-	  Two opposed spokes. Opposed rather than one so the disc reads as balanced and
-	  the eye can follow it round at slow speed without losing the mark.
-	*/
-	int inner = r / 3 + 1;
-	for (int k = 0; k < 2; k++)
+	for (int gy = -8; gy < 8; gy++)
 	{
-		int a = (step + k * 32) & 63;
-		int sx = disc_icos(a), sy = disc_isin(a);
+		int Y = 2 * gy + 1;
 
-		for (int t = inner; t <= r - 2; t++)
+		for (int gx = -8; gx < 8; gx++)
 		{
-			gfx_fill(cx + (sx * t) / 256, cy + (sy * t) / 256, 2, 2, spoke);
-		}
-	}
+			int X = 2 * gx + 1;
+			int d2 = X * X + Y * Y;
 
-	// The hub, last, so a spoke cannot run into the middle of it.
-	int hr = r / 3;
-	for (int dy = -hr; dy <= hr; dy++)
-	{
-		int w = disc_isqrt(hr * hr - dy * dy);
-		if (w <= 0) continue;
-		gfx_fill(cx - w, cy + dy, 2 * w + 1, 1, hub);
+			if (d2 > r2_edge) continue;                 // outside the disc
+
+			uint32_t col;
+
+			if (d2 <= r2_hole)      col = hole;         // the spindle hole
+			else if (d2 <= r2_ring) col = ring;         // the clear inner ring
+			else if (d2 >= r2_rim)  col = rim;          // hard bright edge
+			else
+			{
+				/*
+					The iridescence: the data area split into wedges that sweep round as
+					`step` advances. Sweeping colour rather than a couple of dark spokes is
+					what makes it read as a CD catching the light instead of a wheel.
+				*/
+				int sector = (disc_iatan(Y, X) + step) & 63;
+				col = bands[(sector * nbands / 64) % nbands];
+			}
+
+			gfx_fill(cx + gx * cell, cy + gy * cell, cell, cell, col);
+		}
 	}
 }
 

@@ -63,23 +63,29 @@ void gfx_spinner(int cx, int cy, int r, int dot, unsigned long ms, uint32_t hot,
   A spinning disc, for the optical drive.
 
   Drawn rather than blitted, so there is no icon asset and nothing to license: a
-  filled circle, a rim, a hub, and two opposed spokes that rotate. The spokes are
-  what reads as rotation - a plain circle spinning is indistinguishable from a
-  circle sitting still.
+  16x16 sprite of square cells, hard edged, no antialiasing - the pixel-art CD look
+  rather than a smooth circle. Rim, a clear inner ring, a spindle hole, and the data
+  area split into `nbands` wedges that sweep round as time passes. Sweeping colour is
+  what makes it read as a disc catching the light; a plain circle spinning is
+  indistinguishable from one sitting still.
+
+  `r` sets the cell size: cells are r/8 pixels square, so r=8 gives single-pixel cells
+  (a 16px icon) and r=16 gives 2x2 (a 32px one). Ask for a bigger disc to get chunkier
+  pixels - which is why the callers pass a multiple of 8 rather than whatever the
+  layout happens to allow.
 
   `period_ms` is one full turn, and it is the whole state indicator: fast while the
-  drive is still working out what the disc is, slow once it is known. A caller that
-  wants the disc to look busy makes it spin fast; nothing else about the drawing
-  changes.
+  drive is still working out what the disc is, slow once it is known. Nothing else
+  about the drawing changes between the two.
 
-  Repaint at GFX_SPIN_MS like the other animations. 64 positions per turn, so a
-  period under ~6 seconds moves at least one position per repaint.
+  Repaint at GFX_SPIN_MS like the other animations. 64 positions per turn, so a period
+  under ~6 seconds moves at least one position per repaint.
 */
 #define GFX_DISC_FAST_MS  700UL
 #define GFX_DISC_SLOW_MS  4000UL
 
 void gfx_disc(int cx, int cy, int r, unsigned long ms, unsigned long period_ms,
-	uint32_t body, uint32_t rim, uint32_t spoke, uint32_t hub);
+	const uint32_t *bands, int nbands, uint32_t rim, uint32_t ring, uint32_t hole);
 
 // Named steps as a row of boxes: `done` behind us, the one being worked on sweeping,
 // the rest empty. See the comment in chome_gfx.cpp for why the active one sweeps
