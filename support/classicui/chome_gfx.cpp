@@ -262,6 +262,91 @@ void gfx_spinner(int cx, int cy, int r, int dot, unsigned long ms, uint32_t hot,
 }
 
 /*
+  A quarter turn of sine, scaled to 256, in 16 steps - so 64 positions round the
+  circle. Written out rather than computed because this file has no math.h and does
+  not want one for a table that never changes.
+*/
+static const int disc_sin[17] =
+{
+	  0,  25,  50,  74,  98, 121, 142, 162,
+	181, 198, 213, 226, 237, 245, 251, 255, 256
+};
+
+static int disc_isin(int step)
+{
+	step &= 63;
+	if (step <= 16) return disc_sin[step];
+	if (step <= 32) return disc_sin[32 - step];
+	if (step <= 48) return -disc_sin[step - 32];
+	return -disc_sin[64 - step];
+}
+
+static int disc_icos(int step)
+{
+	return disc_isin(step + 16);
+}
+
+// Integer square root, for circle spans. Small radii, so the plain loop is fine.
+static int disc_isqrt(int v)
+{
+	if (v <= 0) return 0;
+	int r = 0;
+	while ((r + 1) * (r + 1) <= v) r++;
+	return r;
+}
+
+void gfx_disc(int cx, int cy, int r, unsigned long ms, unsigned long period_ms,
+	uint32_t body, uint32_t rim, uint32_t spoke, uint32_t hub)
+{
+	if (r < 4) return;
+	if (!period_ms) period_ms = 1;
+
+	// Which of the 64 positions this instant is at. Driven by the clock, not a frame
+	// count, for the reason given at GFX_SPIN_MS.
+	int step = (int)(((ms % period_ms) * 64UL) / period_ms);
+
+	/*
+	  The body as horizontal spans - one gfx_fill per row rather than per pixel, which
+	  matters because this repaints ten times a second and every fill also records
+	  damage.
+	*/
+	for (int dy = -r; dy <= r; dy++)
+	{
+		int w = disc_isqrt(r * r - dy * dy);
+		if (w <= 0) continue;
+		gfx_fill(cx - w, cy + dy, 2 * w + 1, 1, body);
+		// Rim: the outermost pixel of each row, which traces the circle.
+		gfx_fill(cx - w, cy + dy, 1, 1, rim);
+		gfx_fill(cx + w, cy + dy, 1, 1, rim);
+	}
+
+	/*
+	  Two opposed spokes. Opposed rather than one so the disc reads as balanced and
+	  the eye can follow it round at slow speed without losing the mark.
+	*/
+	int inner = r / 3 + 1;
+	for (int k = 0; k < 2; k++)
+	{
+		int a = (step + k * 32) & 63;
+		int sx = disc_icos(a), sy = disc_isin(a);
+
+		for (int t = inner; t <= r - 2; t++)
+		{
+			gfx_fill(cx + (sx * t) / 256, cy + (sy * t) / 256, 2, 2, spoke);
+		}
+	}
+
+	// The hub, last, so a spoke cannot run into the middle of it.
+	int hr = r / 3;
+	for (int dy = -hr; dy <= hr; dy++)
+	{
+		int w = disc_isqrt(hr * hr - dy * dy);
+		if (w <= 0) continue;
+		gfx_fill(cx - w, cy + dy, 2 * w + 1, 1, hub);
+	}
+}
+
+/*
   A progress track of `nseg` boxes, `done` of them finished.
 
   The segment that is currently being worked on is not filled - it has a block
