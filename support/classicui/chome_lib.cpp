@@ -427,6 +427,145 @@ static void add_item(int sysidx, const char *relpath, const char *filename)
 	nitems++;
 }
 
+/* ------------------------------------------------------ recently played --- */
+
+/*
+  The order *is* the data: an MRU list of game keys, most recently launched first.
+
+  A last-played time on each item is the obvious alternative and is wrong here twice
+  over. The DE10-Nano has no battery-backed clock, so anything played before the
+  network came up would be filed under 1970 and outrank every game played since. And
+  the only per-game record that survives a launch is this config directory: index.bin
+  is written once at the end of a scan, while a launch re-execs MiSTer long before the
+  next one, so a time stamped into chome_item would never reach the card at all.
+
+  Capped on the card as well as on the shelf - a "recent" list as long as the library
+  is just the library again.
+*/
+#define RECENT_MAX     20
+#define RECENT_FILE    "classicui_recent.cfg"
+#define RECENT_MAGIC   0x50524843u       // "CHRP"
+/*
+  Bump when the record below changes. A file that does not answer to the current magic
+  and version reads as "nothing played yet" and is rewritten by the next launch, which
+  is the same trade IDX_VERSION makes for the index cache: a stale file is rebuilt
+  rather than read at the wrong stride.
+*/
+#define RECENT_VERSION 1
+
+struct recent_file
+{
+	uint32_t magic;
+	uint32_t version;
+	uint32_t count;
+	uint32_t key[RECENT_MAX];
+};
+
+static uint32_t recent_keys[RECENT_MAX];
+static int recent_nkeys = 0;
+
+// Those keys resolved to index positions, same order, minus anything not on the card.
+// What the view is built from, so no view build has to touch the disk.
+static int recent_items[RECENT_MAX];
+static int recent_n = 0;
+
+/*
+  Is the game still there? Asked only of the twenty, and only when the list changes,
+  so it costs twenty stats per launch rather than anything per frame.
+
+  A zipped ROM's path names the member inside the archive ("Game (USA).zip/Game.sfc"),
+  which stat() cannot see, so the archive is what gets asked about - and a Darksoft
+  romset is a folder, so a directory counts as present.
+*/
+static int item_on_card(const chome_item *it)
+{
+	char dir[1024];
+	if (!lib_sys_games_dir(it->sysidx, dir, sizeof(dir))) return 0;
+
+	char rel[CH_PATH_LEN];
+	snprintf(rel, sizeof(rel), "%s", it->path);
+	char *member = (char*)strcasestr(rel, ".zip/");
+	if (member) member[4] = 0;
+
+	char full[1024 + CH_PATH_LEN];
+	snprintf(full, sizeof(full), "%s/%s", dir, rel);
+
+	struct stat st;
+	return stat(full, &st) ? 0 : 1;
+}
+
+/*
+  A key the index knows nothing about is a game that has left the card, or one on a
+  USB stick that is not plugged in this time. It drops out here instead of being
+  carried as a hole in the list, so the twenty places hold twenty games the player
+  can actually start.
+*/
+static void recent_resolve()
+{
+	recent_n = 0;
+
+	for (int i = 0; i < recent_nkeys && recent_n < RECENT_MAX; i++)
+	{
+		for (int k = 0; k < nitems; k++)
+		{
+			if (items[k].key != recent_keys[i]) continue;
+			if (item_on_card(&items[k])) recent_items[recent_n++] = k;
+			break;
+		}
+	}
+}
+
+static void recent_load()
+{
+	recent_nkeys = 0;
+
+	recent_file r;
+	memset(&r, 0, sizeof(r));
+
+	if (FileLoadConfig(RECENT_FILE, &r, sizeof(r)) == (int)sizeof(r) &&
+		r.magic == RECENT_MAGIC && r.version == RECENT_VERSION && r.count <= RECENT_MAX)
+	{
+		recent_nkeys = (int)r.count;
+		for (int i = 0; i < recent_nkeys; i++) recent_keys[i] = r.key[i];
+	}
+
+	// The systems are also reloaded by the in-game menu, which does it with the index
+	// already up, so the resolved list has to be rebuilt from here as well.
+	recent_resolve();
+}
+
+static void recent_save()
+{
+	recent_file r;
+	memset(&r, 0, sizeof(r));
+	r.magic = RECENT_MAGIC;
+	r.version = RECENT_VERSION;
+	r.count = (uint32_t)recent_nkeys;
+	for (int i = 0; i < recent_nkeys; i++) r.key[i] = recent_keys[i];
+
+	FileSaveConfig(RECENT_FILE, &r, sizeof(r));
+}
+
+// To the front, dropping any earlier appearance of the same game: one played twice
+// takes one place on the shelf, not two.
+static void recent_touch(const chome_item *it)
+{
+	uint32_t keys[RECENT_MAX];
+	int n = 0;
+
+	keys[n++] = it->key;
+	for (int i = 0; i < recent_nkeys && n < RECENT_MAX; i++)
+	{
+		if (recent_keys[i] != it->key) keys[n++] = recent_keys[i];
+	}
+
+	recent_nkeys = n;
+	memcpy(recent_keys, keys, sizeof(keys[0]) * (size_t)n);
+
+	recent_save();
+	recent_resolve();
+}
+
 /* ---------------------------------------------------------- play state ---- */
 
 #define STATE_MAX 1024
@@ -518,6 +657,8 @@ void lib_note_play(chome_item *it)
 	it->plays = r->plays;
 	state_dirty = 1;
 	lib_state_save();
+
+	recent_touch(it);
 }
 
 /* -------------------------------------------------------------- slots ----- */
@@ -833,6 +974,7 @@ static int idx_load()
 		items[i].slots = 0;
 		state_apply(&items[i]);
 	}
+	recent_resolve();
 
 	printf("ClassicUI: index cache hit, %d items%s\n",
 		nitems, idx_truncated ? " (validation incomplete: use Rescan if a game is missing)" : "");
@@ -949,6 +1091,7 @@ int lib_scan_step()
 	{
 		scanning = 0;
 		for (int i = 0; i < nitems; i++) state_apply(&items[i]);
+		recent_resolve();
 		printf("ClassicUI: scan complete, %d items\n", nitems);
 		idx_save();
 		return 0;
@@ -1113,6 +1256,7 @@ void lib_load_systems()
 
 	resolve_names();
 	state_load();
+	recent_load();
 }
 
 static void lib_init_common(int use_cache)
@@ -1212,6 +1356,9 @@ static int cmp_entry(const void *a, const void *b)
 // Counts what sits behind a folder, so the card and title can say so.
 static int count_behind(int tview, int tsys)
 {
+	// Already resolved and already capped, and the loop below could express neither.
+	if (tview == VIEW_RECENT) return recent_n;
+
 	int c = 0;
 	for (int i = 0; i < nitems; i++)
 	{
@@ -1271,6 +1418,13 @@ int lib_view_build(int v, int sysidx, int sort)
 	{
 	case VIEW_ROOT:
 		push_folder("Favourites", VIEW_FAV, -1, "star", ENT_FOLDER);
+		/*
+		  Beside Favourites, because both are lists of the player's own games while
+		  Systems and Computers are ways of browsing the card - but only once there is
+		  something in it. An entry that opens on "NOTHING HERE" is worse than no entry,
+		  and this one sits where the thumb lands.
+		*/
+		if (recent_n) push_folder("Recently Played", VIEW_RECENT, -1, "clock", ENT_FOLDER);
 		push_folder("Systems", VIEW_SYSTEMS, -1, "stack", ENT_FOLDER);
 		push_folder("Computers", VIEW_COMPUTERS, -1, "disk", ENT_FOLDER);
 		nfolders = nview;
@@ -1291,6 +1445,18 @@ int lib_view_build(int v, int sysidx, int sort)
 
 	case VIEW_FAV:
 		for (int i = 0; i < nitems; i++) if (items[i].fav) push_game(i);
+		break;
+
+	case VIEW_RECENT:
+		for (int i = 0; i < recent_n; i++) push_game(recent_items[i]);
+		/*
+		  Here the order is the whole answer, so the sort at the end of this function
+		  must not reach it - whichever sort the player last chose would otherwise
+		  scatter the one thing this view is for. Counting these as leading entries is
+		  how the other views keep their folders out of the sort, and it does the same
+		  job here.
+		*/
+		nfolders = nview;
 		break;
 
 	case VIEW_SYSTEMS:
@@ -1335,6 +1501,7 @@ const char *lib_view_title(int v, int sysidx)
 	case VIEW_ROOT:      return "Home";
 	case VIEW_ALL:       return "All Games";
 	case VIEW_FAV:       return "Favourites";
+	case VIEW_RECENT:    return "Recently Played";
 	case VIEW_SYSTEMS:   return "Systems";
 	case VIEW_COMPUTERS: return "Computers";
 	case VIEW_SYS:

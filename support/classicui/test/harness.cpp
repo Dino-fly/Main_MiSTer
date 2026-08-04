@@ -527,9 +527,9 @@ static void dump(const char *name)
 	free(copy);
 }
 
-// Three folders lead the root shelf, so three presses land on the first game.
-// With SORT_TITLE that is deterministically Bonk's Adventure, which the fake SD
-// gives savestates and a thumbnail.
+// The folders lead the root shelf, so that many presses land on the first game. With
+// SORT_TITLE that is deterministically Bonk's Adventure, which the fake SD gives
+// savestates and a thumbnail.
 static int leading_folders()
 {
 	int n = 0;
@@ -549,6 +549,30 @@ static void select_first_game()
 
 	int n = leading_folders();
 	for (int i = 0; i < n; i++) press(KEY_RIGHT, 6);
+}
+
+/*
+  Rewinds and steps right until the named leading folder is selected.
+
+  By label rather than by a count of presses: the row of folders is no longer a fixed
+  length - Recently Played joins it as soon as a game has been played - and a hardcoded
+  "Systems is the second card" would then quietly open a different card rather than
+  failing.
+*/
+static int select_folder(const char *label)
+{
+	for (int i = 0; i < 40; i++) press(KEY_LEFT, 2);
+
+	int target = -1;
+	for (int i = 0; i < leading_folders(); i++)
+	{
+		if (!strcmp(lib_view_entry(i)->label, label)) { target = i; break; }
+	}
+	if (target < 0) return 0;
+
+	for (int i = 0; i < target; i++) press(KEY_RIGHT, 6);
+	frame(10);
+	return 1;
 }
 
 // Rewinds and steps right until the named game is selected on the root shelf.
@@ -708,8 +732,7 @@ static void walk_profile(const char *tag, int profile, int w, int h)
 	  game, and a stray Enter there launches it instead.
 	*/
 	for (int i = 0; i < 4; i++) press(KEY_ESC, 8);
-	for (int i = 0; i < 6; i++) press(KEY_LEFT, 6);     // to Favourites, the first card
-	press(KEY_RIGHT, 10);                               // Systems
+	select_folder("Systems");
 	press(KEY_ENTER, 24);
 	snprintf(name, sizeof(name), "%s-10-systems", tag);
 	dump(name);
@@ -820,17 +843,28 @@ static void assert_views()
 	int n = lib_view_count();
 	check(n > 3, "root view has folders plus games");
 
-	int folders = 0, amiga_on_shelf = 0;
+	int folders = 0, amiga_on_shelf = 0, recent_card = 0;
 	for (int i = 0; i < n; i++)
 	{
 		const chome_entry *e = lib_view_entry(i);
-		if (e->kind != ENT_GAME) { folders++; continue; }
+		if (e->kind != ENT_GAME)
+		{
+			folders++;
+			if (!strcmp(e->label, "Recently Played")) recent_card = 1;
+			continue;
+		}
 		chome_item *it = lib_item(e->game);
 		const chome_sys *s = it ? lib_sys(it->sysidx) : 0;
 		if (s && s->computer) amiga_on_shelf = 1;
 	}
 	check(folders == 3, "three folders lead the root shelf");
 	check(!amiga_on_shelf, "computer games kept off the root shelf");
+
+	// Nothing has been played yet - this section runs before any launch - so Recently
+	// Played must not be there at all. An entry that opens on "NOTHING HERE" is worse
+	// than no entry, and it would sit second on the shelf where the thumb lands.
+	check(!recent_card, "Recently Played is absent until something has been played");
+	check(lib_view_build(VIEW_RECENT, -1, SORT_TITLE) == 0, "and the view behind it is empty");
 
 	// Folders must stay first whatever the sort.
 	lib_view_build(VIEW_ROOT, -1, SORT_TITLE);
@@ -2011,7 +2045,7 @@ static void assert_back_leftmost()
 	press(KEY_ESC, 10);
 	check(lib_view_count() == root_n, "B comes back out of Favourites");
 
-	press(KEY_RIGHT, 8);                      // Systems, the second card
+	check(select_folder("Systems"), "the Systems card is on the root shelf");
 	press(KEY_ENTER, 10);
 	int sysn = lib_view_count();
 	check(sysn > 0 && lib_view_entry(0)->kind == ENT_FOLDER, "the Systems folder is open");
@@ -2370,10 +2404,9 @@ static void assert_ingame_view()
 	for (int i = 0; i < lib_sys_count(); i++) if (!strcmp(lib_sys(i)->id, "gb")) gbsys = i;
 	if (gbsys < 0) { check(0, "the systems table has Game Boy"); return; }
 
-	// Systems is the second entry of the root shelf, and Game Boy has two games -
-	// so a shelf of two is unmistakably that view and not the unfiltered root.
-	for (int i = 0; i < 30; i++) press(KEY_LEFT, 2);
-	press(KEY_RIGHT, 6);
+	// Into Systems, where Game Boy has two games - so a shelf of two is unmistakably
+	// that view and not the unfiltered root.
+	check(select_folder("Systems"), "the Systems card is on the root shelf");
 	press(KEY_ENTER, 10);
 
 	int folder = -1;
@@ -2475,6 +2508,188 @@ static void assert_ingame_view()
 	press(KEY_ESC, 10);
 	press(KEY_ESC, 10);
 	check(lib_view_entry(0)->kind == ENT_FOLDER, "the root shelf is back for what follows");
+}
+
+/* --------------------------------------------------------- recently played */
+
+static chome_item *find_titled(const char *title)
+{
+	for (int i = 0; i < lib_item_count(); i++)
+	{
+		chome_item *it = lib_item(i);
+		if (!strcmp(it->title, title)) return it;
+	}
+	return 0;
+}
+
+// The game at a position of the view last built, or 0. Compared by pointer rather than
+// by title everywhere below: two systems on the fake card hold a "Sonic The Hedgehog 2".
+static chome_item *entry_game(int i)
+{
+	const chome_entry *e = lib_view_entry(i);
+	if (!e || e->kind != ENT_GAME) return 0;
+	return lib_item(e->game);
+}
+
+/*
+  Recently Played.
+
+  Everything here is about the one property this view has that no other view has: its
+  order is its content. So each check is written to fail if the order were left to the
+  shelf sort, if a game were listed twice, if the list grew without bound, if it did not
+  survive the re-exec a launch performs, or if it offered a ROM that has left the card.
+
+  Driven through lib_note_play() rather than by launching twenty games through the UI: a
+  launch is a curtain, an MGL and a re-exec, none of which is what this is about, and
+  do_launch() calling lib_note_play() is covered by assert_launch. Two launches have
+  happened by the time this runs, which is why nothing here assumes an empty list; that
+  the card is *absent* before the first one is asserted in assert_views, which runs
+  before any launch.
+*/
+static void assert_recent()
+{
+	printf("\n== recently played ==\n");
+
+	chome_item *metroid = find_titled("Super Metroid");
+	chome_item *fusion  = find_titled("Metroid Fusion");
+	chome_item *chip    = find_titled("Chip's Challenge");
+	if (!metroid || !fusion || !chip) { check(0, "this section's fixtures are indexed"); return; }
+
+	/*
+	  Launch order, and deliberately the reverse of both other orders this view could
+	  come out in: "Metroid Fusion" sorts before "Super Metroid", and after one play each
+	  their play counts are equal, so a count sort falls back to the title as well.
+	*/
+	lib_note_play(fusion);
+	lib_note_play(metroid);
+
+	int n = lib_view_build(VIEW_RECENT, -1, SORT_TITLE);
+	printf("  the recent view holds %d games\n", n);
+	check(n >= 2, "the recent view lists what has been played");
+	check(entry_game(0) == metroid && entry_game(1) == fusion,
+		"most recently launched first, not sorted by title or by play count");
+
+	// Playing an older one again brings it back to the front and must not list it twice.
+	lib_note_play(fusion);
+	int again = lib_view_build(VIEW_RECENT, -1, SORT_TITLE);
+	check(entry_game(0) == fusion, "playing a game again moves it back to the front");
+	check(again == n, "and does not give it a second place on the shelf");
+
+	/*
+	  No sort may touch it. The player's chosen sort applies to every other shelf and is
+	  handed to this one too, so this is the check that the order is held back from it.
+	*/
+	{
+		chome_item *want[32];
+		int wn = lib_view_build(VIEW_RECENT, -1, SORT_TITLE);
+		if (wn > 32) wn = 32;
+		for (int i = 0; i < wn; i++) want[i] = entry_game(i);
+
+		int same = 1;
+		for (int s = 0; s < SORT_COUNT; s++)
+		{
+			if (lib_view_build(VIEW_RECENT, -1, s) != wn) { same = 0; continue; }
+			for (int i = 0; i < wn; i++) if (entry_game(i) != want[i]) same = 0;
+		}
+		check(same, "every shelf sort leaves the recent order alone");
+	}
+
+	/*
+	  Across the re-exec a launch performs. In memory the list is index positions; on the
+	  card it is keys, so reloading the whole library has to bring the same games back in
+	  the same order even though a rescan can hand any of them a different index.
+	*/
+	int before_reload = lib_view_build(VIEW_RECENT, -1, SORT_TITLE);
+	lib_init();
+	while (lib_scanning()) lib_scan_step();
+
+	metroid = find_titled("Super Metroid");
+	fusion  = find_titled("Metroid Fusion");
+	chip    = find_titled("Chip's Challenge");
+	if (!metroid || !fusion || !chip) { check(0, "the reload found this section's fixtures"); return; }
+
+	int reloaded = lib_view_build(VIEW_RECENT, -1, SORT_TITLE);
+	check(reloaded == before_reload, "the list survives a reload of the library");
+	check(entry_game(0) == fusion && entry_game(1) == metroid,
+		"in the same order, resolved from the stored keys rather than from index positions");
+
+	/*
+	  The cap. Play everything on the card: the list has to stop at twenty, keep the
+	  newest and drop the oldest, or "recent" is the library again with extra steps.
+	*/
+	chome_item *oldest = 0, *newest = 0;
+	int played = 0;
+	for (int i = 0; i < lib_item_count(); i++)
+	{
+		chome_item *it = lib_item(i);
+		const chome_sys *s = lib_sys(it->sysidx);
+		if (!s || s->computer) continue;
+
+		lib_note_play(it);
+		if (!played) oldest = it;
+		newest = it;
+		played++;
+	}
+	printf("  played %d games in index order\n", played);
+	check(played > 20, "the fake card holds more games than the cap, so the cap is reachable");
+
+	int capped = lib_view_build(VIEW_RECENT, -1, SORT_TITLE);
+	printf("  and the recent view holds %d of them\n", capped);
+	check(capped == 20, "the list is capped at twenty");
+	check(entry_game(0) == newest, "with the game played last at the front");
+
+	int still_there = 0;
+	for (int i = 0; i < capped; i++) if (entry_game(i) == oldest) still_there = 1;
+	check(!still_there, "and the oldest pushed off the end");
+
+	// The card on the shelf: where it sits, and what it says is behind it.
+	{
+		int rootn = lib_view_build(VIEW_ROOT, -1, SORT_TITLE);
+		int at = -1, cnt = -1, opens = -1;
+		for (int i = 0; i < rootn; i++)
+		{
+			const chome_entry *e = lib_view_entry(i);
+			if (e->kind == ENT_GAME || strcmp(e->label, "Recently Played")) continue;
+			at = i;
+			cnt = e->count;
+			opens = e->view;
+			break;
+		}
+		printf("  the shelf card is entry %d, counting %d, opening view %d\n", at, cnt, opens);
+		check(at == 1, "the card sits immediately after Favourites, ahead of Systems");
+		check(opens == VIEW_RECENT, "and opens the recent view");
+		check(cnt == capped, "its count is the capped number, not the whole library");
+		check(!strcmp(lib_view_title(VIEW_RECENT, -1), "Recently Played"), "the view is titled");
+	}
+
+	/*
+	  A ROM that has left the card. The index is deliberately not rescanned, so the item
+	  is still in it and what this proves is the presence check in the list itself rather
+	  than the scanner noticing - which is the case that matters, since this list is read
+	  on every boot while a scan happens only when a directory's mtime says to.
+	*/
+	lib_note_play(chip);
+	lib_view_build(VIEW_RECENT, -1, SORT_TITLE);
+	check(entry_game(0) == chip, "the Lynx game is at the front of the list");
+
+	char lynx[1024];
+	snprintf(lynx, sizeof(lynx), "%s/games/AtariLynx/Chip's Challenge (USA).lnx", ROOT);
+	check(unlink(lynx) == 0, "its ROM can be taken off the fake card");
+
+	lib_note_play(metroid);                   // any play re-resolves the list
+	int after = lib_view_build(VIEW_RECENT, -1, SORT_TITLE);
+
+	int listed = 0;
+	for (int i = 0; i < after; i++) if (entry_game(i) == chip) listed = 1;
+	check(!listed, "a game whose ROM has gone is not on the recent shelf");
+	check(find_titled("Chip's Challenge") == chip,
+		"while the index still holds it, so it is the presence check that dropped it");
+
+	// Put the card back as it was found, and the same check the other way round.
+	touch(ROOT "/games/AtariLynx", "Chip's Challenge (USA).lnx", 2048);
+	lib_note_play(chip);
+	lib_view_build(VIEW_RECENT, -1, SORT_TITLE);
+	check(entry_game(0) == chip, "and it is offered again once the ROM is back");
 }
 
 static void assert_ingame()
@@ -3299,6 +3514,9 @@ int main()
 	// Before every other in-game section: the session record is read once per process,
 	// and this is the one that cares which process read it. See its own comment.
 	assert_ingame_view();
+	// After the launches above, so there is a recent list to be wrong about, and before
+	// the shelf sections that now see a fourth card on the root shelf.
+	assert_recent();
 	assert_ingame();
 	assert_save_on_pausing_core();
 	assert_freeze_off();
