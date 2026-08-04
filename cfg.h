@@ -125,8 +125,12 @@ typedef struct {
 	uint8_t classicui_freeze;
 	uint8_t classicui_profile;
 	uint8_t classicui_overscan;
+	// Inert until this build carries a ScreenScraper devid; see chome_ss.h.
+	uint8_t classicui_screenscraper;
 	char classicui_artdir[256];
 	char classicui_arturl[512];
+	char classicui_ss_user[64];
+	char classicui_ss_pass[64];
 } cfg_t;
 
 extern cfg_t cfg;

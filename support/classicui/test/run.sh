@@ -20,13 +20,24 @@ mkdir -p /tmp/harness
 # harness compiles it the same way and links the object.
 gcc -std=gnu99 -O1 -g -I. -c sxmlc.c -o /tmp/harness/sxmlc.o
 
+# The ScreenScraper module is compiled with a dummy devid defined.
+#
+# In every shipped build CLASSICUI_SS_DEVID is undefined, which makes ss_available()
+# compile-time false and ss_build_url() refuse - so the URL builder would be dead
+# code that no test could reach. Defining a fake pair here is what makes it
+# testable, and the value being obviously fake is the point: a test that needed a
+# real credential would be a test nobody but Dinofly could run.
 g++ -std=gnu++14 -O1 -g -Wall -Wextra -Wno-unused-parameter -Wno-format-truncation \
+    -DCLASSICUI_SS_DEVID=\"testdev\" \
+    -DCLASSICUI_SS_DEVPASS=\"testpass\" \
+    -DCLASSICUI_SS_SOFTNAME=\"classichome-test\" \
     -I. -o /tmp/harness/chome_test \
     support/classicui/chome_gfx.cpp \
     support/classicui/chome_theme.cpp \
     support/classicui/chome_lib.cpp \
     support/classicui/chome_art.cpp \
     support/classicui/chome_gamelist.cpp \
+    support/classicui/chome_ss.cpp \
     support/classicui/chome_ui.cpp \
     support/classicui/chome_osk.cpp \
     support/classicui/chome_net.cpp \
@@ -41,6 +52,16 @@ g++ -std=gnu++14 -O1 -g -Wall -Wextra -Wno-unused-parameter -Wno-format-truncati
     lib/miniz/miniz.c \
     /tmp/harness/sxmlc.o \
     -lImlib2
+
+# The same chome_ss.cpp compiled the way it actually ships - no devid - to prove that
+# configuration cannot reach the network. See support/classicui/test/gate.cpp.
+g++ -std=gnu++14 -O1 -g -Wall -Wextra -I. -o /tmp/harness/chome_gate \
+    support/classicui/chome_ss.cpp \
+    support/classicui/test/gate.cpp \
+    /tmp/harness/sxmlc.o
+
+echo "--- screenscraper gate ---"
+/tmp/harness/chome_gate
 
 echo "--- running ---"
 /tmp/harness/chome_test

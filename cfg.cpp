@@ -160,6 +160,9 @@ static const ini_var_t ini_vars[] =
 	{ "CLASSICUI_GAMELIST", (void*)(&(cfg.classicui_gamelist)), UINT8, 0, 1 },
 	{ "CLASSICUI_FREEZE", (void*)(&(cfg.classicui_freeze)), UINT8, 0, 1 },
 	{ "CLASSICUI_ARTURL", (void*)(&(cfg.classicui_arturl)), STRING, 0, sizeof(cfg.classicui_arturl) - 1 },
+	{ "CLASSICUI_SCREENSCRAPER", (void*)(&(cfg.classicui_screenscraper)), UINT8, 0, 1 },
+	{ "CLASSICUI_SS_USER", (void*)(&(cfg.classicui_ss_user)), STRING, 0, sizeof(cfg.classicui_ss_user) - 1 },
+	{ "CLASSICUI_SS_PASS", (void*)(&(cfg.classicui_ss_pass)), STRING, 0, sizeof(cfg.classicui_ss_pass) - 1 },
 };
 
 static const int nvars = (int)(sizeof(ini_vars) / sizeof(ini_var_t));
@@ -627,6 +630,13 @@ void cfg_parse()
 	  Off is for the case where it names worse pictures than the local art pack.
 	*/
 	cfg.classicui_gamelist = 1;
+
+	/*
+	  Off, and not merely off by default: no build we ship carries the devid that
+	  ScreenScraper requires, so turning this on does nothing at all today. See
+	  support/classicui/chome_ss.h.
+	*/
+	cfg.classicui_screenscraper = 0;
 	cfg.wheel_force = 50;
 	cfg.dvi_mode = 2;
 	cfg.lookahead = 1;

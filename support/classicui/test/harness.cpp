@@ -25,6 +25,7 @@
 #include "../chome_core.h"
 #include "../chome_art.h"
 #include "../chome_gamelist.h"
+#include "../chome_ss.h"
 #include "../chome_theme.h"
 #include "../chome_gfx.h"
 #include "../chome_video.h"
@@ -1667,6 +1668,336 @@ static void assert_gamelist()
 	art_redo();
 	check(cover_is(metroid, 0xff9a2f2f, "Super Metroid, gamelist on again"),
 		"and turning it back on restores the scraped art");
+}
+
+/* --------------------------------------------------------- screenscraper --- */
+
+/*
+  What can honestly be tested here, and what cannot.
+
+  Can: the system-id table and its two extension special cases, the override file,
+  the URL builder including that it never leaks a password into a loggable string,
+  the error classifier over both HTTP codes and the French sentences, the reply
+  parser, and the media picker's ordering rules.
+
+  Cannot: that any of it matches what the server really sends. No request is made
+  by this suite and none can be - the tree carries no devid. The XML *placement* of
+  type/region/url is the acknowledged soft spot (see the comment at the top of
+  chome_ss.cpp), so the parser is tested against all three placements rather than
+  against one assumed to be right. When a real reply finally arrives, the thing to
+  do is add it here as a fixture, not to trust these.
+
+  The fixtures below are hand-written from the documented shape. That is stated
+  plainly because a fixture that looks captured but was invented is the worst kind
+  of test evidence.
+*/
+static void assert_screenscraper()
+{
+	printf("\n== screenscraper (inert: no devid in this tree) ==\n");
+
+	// The gate. The harness build defines a dummy devid, which is the only reason
+	// anything below is reachable at all.
+	check(ss_available() == 1, "the harness build carries a dummy devid, so the module is live here");
+
+	/* -------------------------------------------------------- system ids --- */
+
+	const char *id = ss_system_id("psx", "Destruction Derby (USA).cue");
+	check(id && !strcmp(id, "57"), "psx maps to systemeid 57");
+
+	id = ss_system_id("nes", "Zelda.nes");
+	check(id && !strcmp(id, "3"), "nes maps to 3");
+
+	id = ss_system_id("SNES", "Metroid.sfc");
+	check(id && !strcmp(id, "4"), "the system id is matched case-insensitively");
+
+	// The two that ride in another core's shelf and are a different platform to the API.
+	id = ss_system_id("gb", "Tetris.gb");
+	check(id && !strcmp(id, "9"), "a .gb in the Game Boy shelf is 9");
+
+	id = ss_system_id("gb", "Zelda DX.gbc");
+	check(id && !strcmp(id, "10"), "and a .gbc in the same shelf is 10, not 9");
+
+	/*
+	  Game Gear rides in the Master System shelf and its systemeid is not one of the
+	  values we were able to verify. Returning nothing is the whole point: the
+	  tempting alternative - fall back to the Master System id - would scrape .gg
+	  games as Master System and put the wrong covers on the shelf silently.
+	*/
+	check(ss_system_id("sms", "Sonic.gg") == 0,
+		"a .gg is refused rather than scraped as Master System");
+	id = ss_system_id("sms", "Sonic.sms");
+	check(id && !strcmp(id, "2"), "while a real .sms is still 2");
+
+	check(ss_system_id("c64", "game.d64") == 0,
+		"a system whose id we never verified returns nothing rather than a guess");
+	check(ss_system_id("", "x.nes") == 0, "an empty system id is refused");
+
+	/* ---------------------------------------------------- override file --- */
+
+	put_file("/tmp/chome_ss_sys.cfg",
+		"# a comment\n"
+		"\n"
+		"c64 = 66\n"
+		"psx=999\n"                 // deliberately overrides a built-in
+		"bogus=notanumber\n"        // must be ignored: this goes into a URL
+		"noequals\n");
+
+	check(ss_systems_load("/tmp/chome_ss_sys.cfg") == 2,
+		"the override file takes two good lines and drops the junk");
+
+	id = ss_system_id("c64", "game.d64");
+	check(id && !strcmp(id, "66"), "an override fills a gap in the built-in table");
+
+	id = ss_system_id("psx", "x.cue");
+	check(id && !strcmp(id, "999"), "and can correct a built-in that has gone stale");
+
+	check(ss_system_id("bogus", "x.rom") == 0,
+		"a non-numeric override is dropped, not passed into a URL");
+
+	ss_systems_forget();
+	id = ss_system_id("psx", "x.cue");
+	check(id && !strcmp(id, "57"), "forgetting the overrides restores the built-in");
+
+	check(ss_systems_load("/tmp/chome_ss_nothing_here.cfg") == 0,
+		"a missing override file is simply no overrides");
+
+	/* --------------------------------------------------------- the URL ---- */
+
+	strcpy(cfg.classicui_ss_user, "dinofly");
+	strcpy(cfg.classicui_ss_pass, "s3cret&pass");
+
+	ss_query q;
+	memset(&q, 0, sizeof(q));
+	q.systemeid = "57";
+	q.romnom = "Destruction Derby (USA).cue";
+	q.romtaille = 1234567;
+	q.md5 = "d41d8cd98f00b204e9800998ecf8427e";
+
+	char url[1024];
+	int n = ss_build_url(&q, 0, url, sizeof(url));
+	check(n > 0, "a query with a system and a rom name builds a URL");
+	check(strstr(url, "jeuInfos.php") != 0, "it goes to jeuInfos.php");
+	check(strstr(url, "output=xml") != 0, "and asks for xml, which is what sxmlc can read");
+	check(strstr(url, "romnom=Destruction%20Derby%20%28USA%29.cue") != 0,
+		"the rom name is percent-encoded, spaces and brackets included");
+	check(strstr(url, "romtaille=1234567") != 0, "the size is sent");
+	check(strstr(url, "md5=d41d8cd98f00b204e9800998ecf8427e") != 0, "so is the hash");
+	check(strstr(url, "sha1=") == 0, "a hash we do not have is left out entirely");
+	check(strstr(url, "ssid=dinofly") != 0, "the user's own account is sent");
+
+	/*
+	  The one that matters more than the rest of this section. Everything that logs
+	  or reports a URL has to use the redacted form, because /tmp/debug.txt is
+	  world-readable and a password in it is a password published.
+	*/
+	char red[1024];
+	check(ss_build_url(&q, 1, red, sizeof(red)) > 0, "the redacted form builds too");
+	check(strstr(url, "s3cret") != 0, "the live URL does carry the password");
+	check(strstr(red, "s3cret") == 0, "the redacted one does not");
+	check(strstr(red, "testpass") == 0, "nor the dev password");
+	check(strstr(red, "sspassword=***") != 0, "it is replaced rather than dropped");
+	check(strstr(red, "romnom=Destruction%20Derby%20%28USA%29.cue") != 0,
+		"and everything not secret survives redaction, or the log would be useless");
+
+	// Refusals.
+	q.systemeid = 0;
+	check(ss_build_url(&q, 0, url, sizeof(url)) == 0, "no systemeid, no URL");
+	q.systemeid = "57";
+	q.romnom = "";
+	check(ss_build_url(&q, 0, url, sizeof(url)) == 0, "no rom name, no URL");
+	q.romnom = "x.cue";
+
+	char tiny[32];
+	check(ss_build_url(&q, 0, tiny, sizeof(tiny)) == 0,
+		"a buffer too small refuses rather than sending a truncated request");
+	check(tiny[0] == 0, "and leaves nothing behind in it");
+
+	/*
+	  The optional parameters are appended only if they fit, so a URL that is long
+	  enough to lose its hash still has to be a valid request rather than a
+	  half-written one.
+	*/
+	q.md5 = "d41d8cd98f00b204e9800998ecf8427e";
+	q.romtaille = 999;
+	char snug[260];
+	int m = ss_build_url(&q, 1, snug, sizeof(snug));
+	if (m > 0)
+	{
+		check(strstr(snug, "romnom=x.cue") != 0,
+			"when the optional parameters do not fit, the required ones are still intact");
+		check((int)strlen(snug) == m, "and the returned length matches the string");
+	}
+	else
+	{
+		check(snug[0] == 0, "or it refuses outright and empties the buffer");
+		check(1, "(the required parameters alone did not fit this buffer)");
+	}
+
+	// A user with no account is off, not degraded: the API has no anonymous tier.
+	cfg.classicui_screenscraper = 1;
+	cfg.classicui_ss_user[0] = 0;
+	check(ss_enabled() == 0, "turned on with no account is still off");
+	strcpy(cfg.classicui_ss_user, "dinofly");
+	check(ss_enabled() == 1, "on, with an account, is on");
+	cfg.classicui_screenscraper = 0;
+	check(ss_enabled() == 0, "and the option itself turns it off again");
+
+	/* ------------------------------------------------------ classifying --- */
+
+	check(ss_http_class(200) == SS_OK, "200 is fine");
+	check(ss_http_class(404) == SS_ERR_NOTFOUND, "404 is a game we do not have");
+	check(ss_http_class(403) == SS_ERR_CREDENTIALS, "403 is our credentials");
+	check(ss_http_class(429) == SS_ERR_THREADS, "429 is too many at once");
+	check(ss_http_class(430) == SS_ERR_QUOTA, "430 is the daily quota");
+	check(ss_http_class(431) == SS_ERR_BLACKLISTED, "431 is too many unmatched roms");
+	check(ss_http_class(401) == SS_ERR_CLOSED, "401 is the API shut off under load");
+	check(ss_http_class(503) == SS_ERR_TRANSPORT, "a 5xx is transport, not a verdict");
+	check(ss_http_class(0) == SS_ERR_TRANSPORT, "and so is no response at all");
+
+	/*
+	  Matched on accent-free fragments on purpose: the body is UTF-8 French, and
+	  depending on the exact bytes of "trouvée" would be depending on an encoding
+	  nobody promised us.
+	*/
+	check(ss_body_class("Erreur : Rom/Iso/Dossier non trouvée !") == SS_ERR_NOTFOUND,
+		"the French not-found sentence is recognised through its accent");
+	check(ss_body_class("Votre quota de scrape est ecoule pour aujourd'hui") == SS_ERR_QUOTA,
+		"so is the quota sentence");
+	check(ss_body_class("API totalement fermé!") == SS_ERR_CLOSED, "and the API-closed one");
+	check(ss_body_class("Le logiciel est blacklisté") == SS_ERR_BLACKLISTED, "and a blacklisting");
+	check(ss_body_class("Erreur de login : Verifiez vos identifiants") == SS_ERR_CREDENTIALS,
+		"and a login failure");
+	check(ss_body_class("<Data><jeu id=\"1\"/></Data>") == SS_OK,
+		"an ordinary reply is not mistaken for an error");
+	check(ss_body_class(0) == SS_OK, "and a null body does not crash the classifier");
+
+	/* ---------------------------------------------------------- parsing --- */
+
+	/*
+	  Placement 1: everything in attributes, which is what the JSON shape implies
+	  and the most likely form.
+	*/
+	put_file("/tmp/chome_ss_attr.xml",
+		"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+		"<Data>\n"
+		"  <ssuser>\n"
+		"    <id>dinofly</id>\n"
+		"    <maxthreads>1</maxthreads>\n"
+		"    <requeststoday>417</requeststoday>\n"
+		"    <maxrequestsperday>20000</maxrequestsperday>\n"
+		"  </ssuser>\n"
+		"  <jeu id=\"4321\">\n"
+		"    <noms><nom region=\"wor\">Destruction Derby</nom></noms>\n"
+		"    <medias>\n"
+		"      <media type=\"ss\" region=\"wor\" format=\"png\" url=\"https://ss/shot.png\"/>\n"
+		"      <media type=\"box-3D\" region=\"us\" format=\"png\" url=\"https://ss/3d-us.png\"/>\n"
+		"      <media type=\"box-2D\" region=\"jp\" format=\"png\" url=\"https://ss/2d-jp.png\"/>\n"
+		"      <media type=\"box-2D\" region=\"eu\" format=\"png\" url=\"https://ss/2d-eu.png\"/>\n"
+		"      <media type=\"wheel\" format=\"png\" url=\"https://ss/wheel.png\"/>\n"
+		"    </medias>\n"
+		"  </jeu>\n"
+		"</Data>\n");
+
+	ss_result r;
+	check(ss_parse_file("/tmp/chome_ss_attr.xml", &r) == SS_OK, "an attribute-form reply parses");
+	check(r.nmedia == 5, "all five media are taken");
+	check(!strcmp(r.gameid, "4321"), "the game id comes off the jeu element");
+	check(r.requests_today == 417 && r.max_requests_day == 20000,
+		"the quota counters are read from the game reply, costing no extra request");
+	check(r.max_threads == 1, "and the thread limit with them");
+
+	static const char *const eu_first[] = { "eu", "wor", "us", "jp", 0 };
+	static const char *const jp_first[] = { "jp", "wor", "us", "eu", 0 };
+
+	const ss_media *m2 = ss_pick(&r, SS_KIND_COVER, eu_first);
+	check(m2 && !strcmp(m2->url, "https://ss/2d-eu.png"),
+		"the cover picker honours the region preference");
+
+	m2 = ss_pick(&r, SS_KIND_COVER, jp_first);
+	check(m2 && !strcmp(m2->url, "https://ss/2d-jp.png"), "and a different one changes the answer");
+
+	/*
+	  Type before region, which is the deliberate difference from Skyscraper: a
+	  box-3D is a photograph of a box at an angle and looks wrong in a flat shelf
+	  card, so a 2D cover in the wrong region beats a 3D one in the right region.
+	*/
+	static const char *const us_first[] = { "us", 0 };
+	m2 = ss_pick(&r, SS_KIND_COVER, us_first);
+	check(m2 && !strcmp(m2->type, "box-2D"),
+		"a 2D cover in the wrong region still beats a 3D one in the right region");
+
+	m2 = ss_pick(&r, SS_KIND_SCREEN, eu_first);
+	check(m2 && !strcmp(m2->url, "https://ss/shot.png"), "a screenshot is picked by its own type list");
+
+	m2 = ss_pick(&r, SS_KIND_WHEEL, eu_first);
+	check(m2 && !strcmp(m2->url, "https://ss/wheel.png"),
+		"a media carrying no region at all is used rather than dropped");
+
+	/*
+	  Placement 2: child elements and the URL as element text. This is the form we
+	  could not confirm, and the reason the parser reads it at all - if the live
+	  reply turns out to look like this, nothing has to change.
+	*/
+	put_file("/tmp/chome_ss_child.xml",
+		"<Data><jeu id=\"7\"><medias>"
+		"<media><type>box-2D</type><region>us</region><format>png</format>"
+		"<url>https://ss/child-2d.png</url></media>"
+		"</medias></jeu></Data>\n");
+
+	check(ss_parse_file("/tmp/chome_ss_child.xml", &r) == SS_OK, "a child-element reply parses too");
+	check(r.nmedia == 1, "and yields its one media");
+	m2 = ss_pick(&r, SS_KIND_COVER, us_first);
+	check(m2 && !strcmp(m2->url, "https://ss/child-2d.png"), "with the URL taken from element text");
+
+	// Placement 3: attributes for the metadata, text for the URL.
+	put_file("/tmp/chome_ss_mixed.xml",
+		"<Data><jeu id=\"8\"><medias>"
+		"<media type=\"box-2D\" region=\"us\">https://ss/mixed.png</media>"
+		"</medias></jeu></Data>\n");
+
+	check(ss_parse_file("/tmp/chome_ss_mixed.xml", &r) == SS_OK, "so does the mixed form");
+	m2 = ss_pick(&r, SS_KIND_COVER, us_first);
+	check(m2 && !strcmp(m2->url, "https://ss/mixed.png"), "taking the URL from the text");
+
+	/*
+	  A reply that parses and names no game. This has to be distinguishable from a
+	  broken reply, because the right response differs: remember the miss, versus
+	  try again later.
+	*/
+	put_file("/tmp/chome_ss_nogame.xml", "<Data><ssuser><id>dinofly</id></ssuser></Data>\n");
+	check(ss_parse_file("/tmp/chome_ss_nogame.xml", &r) == SS_ERR_NOTFOUND,
+		"a well-formed reply with no game is not-found, not malformed");
+
+	// An error body that is not XML at all, which is a thing this API does.
+	put_file("/tmp/chome_ss_err.txt", "Erreur : Rom/Iso/Dossier non trouvée !\n");
+	check(ss_parse_file("/tmp/chome_ss_err.txt", &r) == SS_ERR_NOTFOUND,
+		"an error body that is not XML is still classified, not just rejected");
+
+	put_file("/tmp/chome_ss_broken.xml", "<Data><jeu id=\"9\"><medias><media type=\"box-2D\"\n");
+	int broken = ss_parse_file("/tmp/chome_ss_broken.xml", &r);
+	check(broken == SS_ERR_MALFORMED || broken == SS_ERR_NOTFOUND,
+		"a truncated reply fails without yielding a media");
+	check(ss_pick(&r, SS_KIND_COVER, eu_first) == 0, "and the picker refuses a failed result");
+
+	check(ss_parse_file("/tmp/chome_ss_does_not_exist.xml", &r) == SS_ERR_TRANSPORT,
+		"a reply that never landed is transport, not a verdict on the game");
+
+	// A media with no URL, and one whose URL is not a URL, are both useless.
+	put_file("/tmp/chome_ss_nourl.xml",
+		"<Data><jeu id=\"10\"><medias>"
+		"<media type=\"box-2D\" region=\"us\"/>"
+		"<media type=\"box-2D\" region=\"eu\" url=\"/etc/passwd\"/>"
+		"<media type=\"box-2D\" region=\"jp\" url=\"https://ss/ok.png\"/>"
+		"</medias></jeu></Data>\n");
+	check(ss_parse_file("/tmp/chome_ss_nourl.xml", &r) == SS_OK, "a reply with unusable media parses");
+	check(r.nmedia == 1, "and keeps only the one with a real URL");
+	check(!strcmp(r.media[0].url, "https://ss/ok.png"), "which is the http one");
+
+	// Nothing of the kind asked for.
+	check(ss_pick(&r, SS_KIND_WHEEL, eu_first) == 0, "no media of that kind is no media");
+
+	cfg.classicui_ss_user[0] = 0;
+	cfg.classicui_ss_pass[0] = 0;
 }
 
 static int count_lines(const char *rel, int *bad_sum, int *maxlen)
@@ -4748,6 +5079,7 @@ int main()
 	assert_slots();
 	assert_art();
 	assert_gamelist();
+	assert_screenscraper();
 	assert_video();
 	assert_index_cache();
 
