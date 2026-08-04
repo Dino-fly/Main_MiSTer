@@ -87,15 +87,31 @@ struct chome_item
 #define ENT_FOLDER 1
 #define ENT_BROWSE 2   // computer system: opens the file browser
 
+/*
+  One entry is one card. For a game that means one *title*, which can be several files:
+  see "title groups" in chome_lib.cpp. `game` is the file on show, and every per-game
+  thing in the UI - favourite, play count, suspend points, per-game core options, the
+  launch itself - reads it, so all of them act on the file the player is looking at
+  rather than on the group or on whichever variant happened to be indexed first.
+
+  Downstream code must not assume one entry means one file: walk the variants with
+  lib_view_variant() where it matters, and use lib_view_select_key() /
+  lib_view_select_path() rather than comparing only against `game`.
+*/
 struct chome_entry
 {
 	uint8_t kind;
-	int     game;      // index into the item array
+	int     game;      // index into the item array: the variant currently on show
 	int     view;      // target view for folders
 	int     sysidx;    // system for the target view / browse
-	int     count;     // games behind a folder, 0 for games
+	int     count;     // titles behind a folder, 0 for games
 	char    label[CH_TITLE_LEN];
 	const char *icon;
+
+	int     nvar;      // files behind this card; 1 for an ordinary game, 0 for a folder
+	int     vsel;      // which of them `game` is, 0-based
+	int     vhead;     // first item of the chain, in filename order
+	uint8_t dup;       // another entry in this view carries the same title
 };
 
 #define SORT_RECENT  0
@@ -141,6 +157,30 @@ int  lib_view_build(int view, int sysidx, int sort);
 int  lib_view_count();
 const chome_entry *lib_view_entry(int i);
 const char *lib_view_title(int view, int sysidx);
+
+/*
+  Title groups: several files sharing one title, drawn as one card the player cycles.
+
+  lib_view_cycle() moves a card to its next file and returns 1 when it moved. The
+  entry's `game` follows, so nothing else has to be told.
+
+  lib_view_variant() is the item index of one of a card's files, -1 out of range, and
+  lib_view_variant_file() names it the way the title block shows it: the part of the
+  path that differs from the other files behind the same card. That one answers into a
+  static buffer, like gfx_clip() does, so a second call overwrites the first.
+*/
+int  lib_view_cycle(int entry, int dir);
+int  lib_view_variant(int entry, int which);
+const char *lib_view_variant_file(int entry, int which);
+
+/*
+  Finds a game anywhere in the view *including behind a card*, selects that variant and
+  returns the entry index, or -1. Both callers - coming back to where the player was,
+  and parking the shelf on the running game - would otherwise miss a game that is not
+  the variant its card happens to be showing.
+*/
+int  lib_view_select_key(uint32_t key);
+int  lib_view_select_path(int sysidx, const char *relpath);
 
 // Suspend-point slots for a game, refreshed from disk. Lock flags come from the
 // state file: MiSTer's savestate files have no lock concept, it is ours.

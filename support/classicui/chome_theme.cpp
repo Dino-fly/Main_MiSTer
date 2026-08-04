@@ -97,8 +97,17 @@ void theme_update(int w, int h, int force)
 	P.y_pos    = pct(h, 0.808);
 	P.y_legend = h - (P.inset > P.safe_y ? P.inset : P.safe_y) - 8 * P.ts_ui;
 
-	// Keep the shelf clear of the title block on short canvases.
-	int need = P.y_meta + 12 * P.ts_ui + P.sel_h;
+	/*
+	  Keep the shelf clear of the title block on short canvases.
+
+	  The block is three lines deep, not two: under the title and the system line sits the
+	  file name of the selected game, drawn only on the cards where the title alone does
+	  not say which file it is (draw_title_block). Reserved unconditionally, because a row
+	  of cards that moved when the cursor reached such a card would be worse than the space
+	  it costs - and at the three nominal canvases this changes no metric at all, the
+	  clamp only ever bites on a canvas far shorter than it is wide.
+	*/
+	int need = P.y_meta + 12 * P.ts_ui + 10 * P.ts_tiny + P.sel_h;
 	if (P.y_shelf < need) P.y_shelf = need;
 	if (P.y_shelf > P.y_legend - 10 * P.ts_ui) P.y_shelf = P.y_legend - 10 * P.ts_ui;
 	if (P.y_pips < P.y_shelf + 4) P.y_pips = P.y_shelf + 4;
