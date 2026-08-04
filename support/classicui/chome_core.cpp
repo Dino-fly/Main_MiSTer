@@ -13,6 +13,7 @@
 
 #include "../../user_io.h"
 #include "../../spi.h"
+#include "../../file_io.h"
 #include "chome_lib.h"
 #include "chome_core.h"
 
@@ -310,6 +311,253 @@ void core_opts_save()
 
 	user_io_status_save(name);
 	printf("ClassicUI: wrote the core's config (%s)\n", name);
+}
+
+/* --------------------------------------------------------- per-game opts --- */
+
+/*
+  See chome_core.h for what this is and why the records name their option and their
+  value rather than numbering them.
+*/
+#define CO_PG_MAX  128
+#define CO_PG_FILE "classicui_coreopts.cfg"
+
+/*
+  One record per (game, option). A uint32 followed by nothing but char arrays, so the
+  compiler has no padding to insert and the file means the same thing on the device as
+  it does in the host harness - which is the only reason a raw struct dump is a safe
+  file format at all. Keep it that way if a field is ever added.
+*/
+struct co_pg
+{
+	uint32_t key;                 // game: hash of "<system id>/<relative path>"
+	char name[CO_NAME_LEN];       // the option, as the core names it
+	char val[CO_VAL_LEN];         // the value this game keeps
+	char base[CO_VAL_LEN];        // what the core's own config held, so undo can undo
+};
+
+static co_pg pgrecs[CO_PG_MAX];
+static int npgrecs = 0;
+static int pg_loaded = 0;
+static uint32_t pg_bound = 0;
+
+static void pg_load()
+{
+	if (pg_loaded) return;
+	pg_loaded = 1;
+
+	memset(pgrecs, 0, sizeof(pgrecs));
+	int len = FileLoadConfig(CO_PG_FILE, pgrecs, sizeof(pgrecs));
+	npgrecs = (len > 0) ? len / (int)sizeof(co_pg) : 0;
+	if (npgrecs > CO_PG_MAX) npgrecs = CO_PG_MAX;
+
+	if (npgrecs) printf("ClassicUI: %d per-game core settings\n", npgrecs);
+}
+
+static void pg_save()
+{
+	FileSaveConfig(CO_PG_FILE, pgrecs, npgrecs * (int)sizeof(co_pg));
+}
+
+uint32_t core_opts_game_key(int sysidx, const char *relpath)
+{
+	const chome_sys *s = lib_sys(sysidx);
+	if (!s || !relpath || !relpath[0]) return 0;
+
+	/*
+	  Deliberately the same string chome_lib.cpp hashes for chome_item.key, and the same
+	  FNV-1a over it, so the two cannot drift apart and mean different games by the same
+	  number. Not quite identical: 0 is this module's "no game bound" sentinel, so a string
+	  hashing to 0 is stored as 1 here where the library would keep 0. Nothing
+	  cross-references the two values, so that is a difference without a consequence -
+	  noted because a comment claiming they are the same would be the sort of thing someone
+	  later relies on.
+	*/
+	char buf[CH_PATH_LEN + 32];
+	snprintf(buf, sizeof(buf), "%s/%s", s->id, relpath);
+
+	uint32_t h = 2166136261u;
+	for (const char *p = buf; *p; p++) { h ^= (unsigned char)*p; h *= 16777619u; }
+	return h ? h : 1;
+}
+
+void core_opts_bind_game(uint32_t key) { pg_bound = key; }
+uint32_t core_opts_bound_game() { return pg_bound; }
+
+static co_pg *pg_find(uint32_t key, const char *name)
+{
+	if (!key || !name || !name[0]) return 0;
+	for (int i = 0; i < npgrecs; i++)
+	{
+		if (pgrecs[i].key != key) continue;
+		if (!strcasecmp(pgrecs[i].name, name)) return &pgrecs[i];
+	}
+	return 0;
+}
+
+// The index of a value by its name, -1 when the core no longer publishes it.
+static int pg_val_index(const core_opt *o, const char *val)
+{
+	if (!o || !val || !val[0]) return -1;
+	for (int v = 0; v < o->nvals; v++) if (!strcmp(o->vals[v], val)) return v;
+	return -1;
+}
+
+/*
+  Nothing the front-end owns may ever become per-game, whatever a record says.
+
+  The screen cannot offer them - they never reach the option table, tier_for() drops
+  them - but the file is a file, and a stale record from an older build or an edited
+  card must not be able to reach one either. "Pause when OSD is open" is the reason
+  this is a check and not a comment: it is the mechanism the in-game menu's freeze
+  depends on, and a per-game copy of it would silently change what the menu button
+  does on one game only.
+*/
+static int pg_allowed(const char *name)
+{
+	return (name && name[0] && !in_list(ours, name)) ? 1 : 0;
+}
+
+int core_opt_per_game(const core_opt *o)
+{
+	if (!o || !pg_bound) return 0;
+	pg_load();
+	return pg_find(pg_bound, o->name) ? 1 : 0;
+}
+
+void core_opt_keep_for_game(const core_opt *o, int value, int global)
+{
+	if (!o || !pg_bound) return;
+	if (value < 0 || value >= o->nvals) return;
+	if (!pg_allowed(o->name)) return;
+
+	pg_load();
+
+	co_pg *r = pg_find(pg_bound, o->name);
+	if (!r)
+	{
+		if (npgrecs >= CO_PG_MAX)
+		{
+			printf("ClassicUI: no room for another per-game core setting (%d)\n", CO_PG_MAX);
+			return;
+		}
+		r = &pgrecs[npgrecs++];
+		memset(r, 0, sizeof(*r));
+		r->key = pg_bound;
+		snprintf(r->name, sizeof(r->name), "%s", o->name);
+
+		/*
+		  Only on the first override: this is the one moment the value being replaced is
+		  known to be the core's own, because nothing of ours has touched it yet. Later
+		  changes to the same option must not overwrite it with another per-game value,
+		  or "put the shared value back" would put back the player's own last choice.
+		*/
+		if (global >= 0 && global < o->nvals)
+			snprintf(r->base, sizeof(r->base), "%s", o->vals[global]);
+	}
+
+	snprintf(r->val, sizeof(r->val), "%s", o->vals[value]);
+	pg_save();
+
+	printf("ClassicUI: %s = %s kept for this game only (shared value %s)\n",
+		o->name, r->val, r->base[0] ? r->base : "unknown");
+}
+
+int core_opt_drop_for_game(const core_opt *o)
+{
+	if (!o || !pg_bound) return 0;
+	pg_load();
+
+	co_pg *r = pg_find(pg_bound, o->name);
+	if (!r) return 0;
+
+	/*
+	  Put the shared value back on the core before forgetting where it was, so the row
+	  changes under the player's cursor. A clear that leaves the screen exactly as it
+	  was until the next launch is the kind of undo nobody believes happened.
+	*/
+	int back = pg_val_index(o, r->base);
+	if (back >= 0) core_opt_set(o, back);
+
+	printf("ClassicUI: %s is no longer kept for this game%s\n", o->name,
+		(back >= 0) ? ", shared value restored" : " (its shared value is gone from the core)");
+
+	int i = (int)(r - pgrecs);
+	if (i < npgrecs - 1) pgrecs[i] = pgrecs[npgrecs - 1];
+	npgrecs--;
+	pg_save();
+	return 1;
+}
+
+// Passes over the record list. More than one because an option can reveal another:
+// the N64's whole VI group is masked off until Video Out is Original(VI), so an
+// override on Video Out has to be applied before the group is even in the table.
+#define CO_PG_PASSES 3
+
+int core_opts_apply_for_game(int sysidx, const char *relpath)
+{
+	uint32_t k = core_opts_game_key(sysidx, relpath);
+	if (!k) return 0;
+
+	pg_load();
+
+	int mine = 0;
+	for (int i = 0; i < npgrecs; i++) if (pgrecs[i].key == k) mine++;
+	if (!mine) return 0;
+
+	int applied = 0, dirty = 0;
+
+	for (int pass = 0; pass < CO_PG_PASSES; pass++)
+	{
+		core_opts_scan();
+
+		int moved = 0;
+		for (int i = 0; i < npgrecs; i++)
+		{
+			co_pg *r = &pgrecs[i];
+			if (r->key != k) continue;
+			if (!pg_allowed(r->name)) continue;
+
+			const core_opt *o = 0;
+			for (int j = 0; j < nopts; j++)
+			{
+				if (!strcasecmp(opts[j].name, r->name)) { o = &opts[j]; break; }
+			}
+			if (!o) continue;
+
+			int want = pg_val_index(o, r->val);
+			if (want < 0) continue;                  // the core dropped that value
+
+			int now = core_opt_value(o);
+			if (now == want) continue;
+
+			/*
+			  The core has just loaded <CORE>.CFG, so what it holds now is the shared
+			  value - refreshed here rather than trusted from whenever the override was
+			  made, so that changing the setting for every game in the classic OSD is
+			  still undoable per game afterwards.
+			*/
+			if (now < o->nvals && strcmp(r->base, o->vals[now]))
+			{
+				snprintf(r->base, sizeof(r->base), "%s", o->vals[now]);
+				dirty = 1;
+			}
+
+			core_opt_set(o, want);
+			applied++;
+			moved = 1;
+		}
+
+		if (!moved) break;
+	}
+
+	if (dirty) pg_save();
+
+	// Leave the table describing the core as it now is, not as it booted.
+	core_opts_scan();
+
+	printf("ClassicUI: applied %d of %d per-game core settings\n", applied, mine);
+	return applied;
 }
 
 /* ------------------------------------------------------------ short name --- */

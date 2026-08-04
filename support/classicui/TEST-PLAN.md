@@ -80,6 +80,30 @@ For A5.4 there is a known overlap: our Display look also applies a GBA colour cu
 both together may over-correct. **Tell me if it looks over-saturated or too contrasty** —
 that is the double-correction I flagged, and this is the test that confirms it.
 
+### A5b. A core setting kept for one game
+
+This is the widescreen problem you raised: right for one PSX title, wrong for the next. The
+host harness proves the bookkeeping — the choice is stored against the game, re-applied at
+launch, and not applied to any other game on the core — but only the machine can show that a
+real core comes up with it, and that it lands at the launch rather than a moment later.
+
+| Step | I do | You look at | Report |
+|---|---|---|---|
+| A5b.1 | PSX game A, set `Widescreen Hack` to 16:9 | The row | Is the value marked with a green `*`, and does the footer say it is kept for this game? |
+| A5b.2 | Quit to the shelf, start PSX game B | The picture | Is game B in its normal aspect — did the setting stay behind? |
+| A5b.3 | Quit, start game A again | The very first frame | Is it already widescreen, or does it snap into widescreen a moment after the game appears? |
+| A5b.4 | In game A, press X on that row | The row and the picture | Does the `*` clear and the picture go back at once? |
+| A5b.5 | Same as A5b.1 on **N64** with `VI Deblur`, which the core masks off under Clean HDMI | The row | Does it come back deblurred? And does the row still grey out when Video Out is Clean HDMI? |
+
+A5b.3 is the one I cannot see from here. The setting is written before the MGL hands the ROM
+over, so it should be in effect on the first frame. If you can see it change *after* the game
+appears, say so — that means the apply lands too late, and options that only take effect at
+load time will not work.
+
+A5b.5 is an interaction I reasoned about rather than measured: an override on one option can
+reveal or hide another, so the apply runs more than one pass over the stored settings. If a
+masked-off group comes back wrong, that is where to look.
+
 ### A6. The two newest features
 
 | Step | I do | You look at | Report |
