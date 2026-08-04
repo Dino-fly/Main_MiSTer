@@ -4414,13 +4414,22 @@ static void move_v(int dir)
 {
 	switch (screen)
 	{
-	// Up and down walk the list; the last row is the page switch.
+	/*
+	  Up and down walk the list; the last row is the page switch.
+
+	  mark_dirty() is not optional here, and its absence is a real bug a user found: move_v()
+	  has no trailing repaint - every case does its own - so the row moved and nothing was
+	  drawn. The cursor then appeared to jump only when left or right changed a value, because
+	  move_h() does repaint. "The selected item does not change until you press left or
+	  right" was exactly right.
+	*/
 	case SCR_CORE:
 	{
 		int n = co_rows();
 		int next = co_row + dir;
 		if (next < 0 || next >= n) { nudge(); return; }
 		co_row = next;
+		mark_dirty();
 		break;
 	}
 
