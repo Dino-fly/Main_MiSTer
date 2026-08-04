@@ -215,6 +215,7 @@ static void ref_shot_path(const char *sysid, const char *rompath, char *out, int
 #define SCR_SET     15
 #define SCR_CORE    16
 #define SCR_DISC    17
+#define SCR_DISCBAR 18
 
 // Rows on the Options panel. Several places step over them.
 /*
@@ -269,15 +270,14 @@ static void ref_shot_path(const char *sysid, const char *rompath, char *out, int
 #define MB_POWER    2
 #define MB_ABOUT    3
 #define MB_CORE     4
-#define MB_DISC     5
-#define MB_COUNT    6
+#define MB_COUNT    5
 
 /*
   Language and Manuals are gone. The first opened a panel with nothing behind it,
   and the second only handed the screen to the classic OSD - which is exactly what
   the front-end is not supposed to do on its own.
 */
-static const char *mb_label[MB_COUNT] = { "Display", "Options", "Power", "About", "Core", "Disc" };
+static const char *mb_label[MB_COUNT] = { "Display", "Options", "Power", "About", "Core" };
 
 /*
   The core entry is labelled with the running system rather than the word "Core": a player
@@ -294,13 +294,6 @@ static const char *mb_text(int i);
 */
 static int mb_visible(int i)
 {
-	/*
-	  The disc entry exists only while there is a disc in the drive, which is what
-	  makes it the answer to "I dismissed the prompt, how do I get it back": the
-	  entry is there for exactly as long as the disc is, and gone the moment it is
-	  ejected.
-	*/
-	if (i == MB_DISC) return disc_state() != DISC_ABSENT;
 
 	/*
 	  The core's own options, which only exist while a core is running - and only if it
@@ -1829,6 +1822,15 @@ static int build_legend(legend_pair *out, int max)
 	case SCR_ABOUT:
 		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
 		break;
+	case SCR_DISCBAR:
+		if (n < max) { out[n++] = lp(LBL_A, "Use Disc", "Disc"); }
+		if (n < max) { out[n++] = { CH_UP CH_DOWN, "dpad_ud", "Move", "Move", 0, COL_WHITE }; }
+		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
+		break;
+	case SCR_DISC:
+		if (n < max) { out[n++] = lp(LBL_A, "Choose", "Choose"); }
+		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
+		break;
 	case SCR_MENUBAR:
 		if (n < max) { out[n++] = lp(LBL_A, "Open", "Open"); }
 		if (n < max) { out[n++] = { CH_LEFT CH_RIGHT, "dpad_lr", "Move", "Move", 0, COL_WHITE }; }
@@ -2131,7 +2133,7 @@ static const uint32_t disc_bands[8] =
 */
 static int disc_radius(const chome_profile *p)
 {
-	return (p->ts_ui >= 2) ? 16 : 8;
+	return (p->ts_ui >= 2) ? 32 : 16;
 }
 
 /*
@@ -3705,71 +3707,87 @@ static void draw_disc(const chome_profile *p)
 	disc_build_rows();
 
 	int ps = p->ts_ui;
-	int pw = p->w - 2 * p->inset;
-	if (pw > 34 * 8 * ps) pw = 34 * 8 * ps;
+
+	/*
+	  The disc is the subject of this screen, so the panel is as wide as the inset allows
+	  rather than the usual 34 characters, and the disc is sized off the canvas height
+	  rather than off the width: a sixth of the height reads as large at every profile
+	  without a 240p panel swallowing the screen. Snapped to a multiple of 8 so
+	  gfx_disc's cells stay whole pixels.
+	*/
+	int r = (p->h / 6) & ~7;
+	if (r < 16) r = 16;
+
+	/*
+	  The panel is sized to its contents rather than to the screen: the disc plus a text
+	  column wide enough for the longest row - "Play on PlayStation" is nineteen
+	  characters. Stretching it to the full width instead left half the panel empty,
+	  which looked like a mistake rather than a design.
+
+	  If that will not fit the canvas the disc gives the room back, because a clipped row
+	  is worse than a smaller disc.
+	*/
+	int tcol = 22 * 8 * ps;
+	int maxw = p->w - 2 * p->inset;
+
+	while (r > 16 && 2 * r + tcol + 24 * ps > maxw) r -= 8;
+
+	int pw = 2 * r + tcol + 24 * ps;
+	if (pw > maxw) { pw = maxw; tcol = pw - 2 * r - 24 * ps; }
 
 	int nrows = disc_nrows ? disc_nrows : 1;
-	// The footer wraps to three lines at the narrow profiles, and 34 was measured
-	// against two - it ran off the bottom edge on the device.
-	int ph = (10 * ps + 6) + 22 * ps + nrows * 14 * ps + 46 * ps;
+	int rows_h = 24 * ps + nrows * 14 * ps;
+
+	int body_h = 2 * r + 8 * ps;
+	if (body_h < rows_h + 8 * ps) body_h = rows_h + 8 * ps;
+
+	int ph = (10 * ps + 6) + body_h + 8 * ps;
 
 	panel_box b = draw_panel_ex(p, pw, ph, disc_picking ? "Which core?" : "Disc");
 	int s = b.s;
 
+	// Centred in the body, which is as tall as the disc or the rows, whichever is taller.
+	int cx = b.x + 8 * s + r;
+	int cy = b.y + body_h / 2;
+
 	/*
-	  The disc itself, spinning, at the same rate the corner indicator uses: the
-	  player should see the same object they navigated to, not a different rendering
-	  of the same idea.
+	  Always the art when there is art. There is none yet - a physical disc has no
+	  filename to match on, so it needs a serial-to-title table and a scraper that this
+	  build has no credential for - and until then the drawn disc stands in. When art
+	  arrives it belongs here, masked to the same circle.
 	*/
-	int r = disc_radius(p);
-	int cy = b.y + r + 2 * s;
-	gfx_disc(b.x + 12 * s + r, cy, r, anim_ms(), disc_spin_period(),
+	gfx_disc(cx, cy, r, anim_ms(), disc_spin_period(),
 		disc_bands, DISC_BANDS_N, COL_WHITE, COL_PANELHI, COL_BGDARK);
 
-	int tx = b.x + 12 * s + 2 * r + 8 * s;
+	int tx = cx + r + 10 * s;
+	int tw = tcol;
+	int y = b.y + 6 * s;
 
-	// What it is, then what it is called. The type is the certain part.
 	const char *what = (disc_state() == DISC_SPINNING) ? "Reading the disc"
 		: (disc_state() == DISC_UNKNOWN) ? "Unrecognised disc"
 		: disc_type_name(disc_type());
 
-	gfx_text(gfx_clip(what, s, b.w - (tx - b.x) - 10 * s), tx, cy - 8 * s, s, COL_WHITE, 0);
+	gfx_text(gfx_clip(what, s, tw), tx, y, s, COL_WHITE, 0);
 
 	const char *name = disc_display_name();
 	if (name && name[0] && strcmp(name, what))
 	{
-		gfx_text(gfx_clip(name, s, b.w - (tx - b.x) - 10 * s), tx, cy + 1 * s, s, COL_PANELHI, 0);
+		gfx_text(gfx_clip(name, s, tw), tx, y + 10 * s, s, COL_PANELHI, 0);
 	}
 
-	int y = b.y + 22 * ps + 6 * s;
+	if (disc_state() == DISC_SPINNING) return;
+
+	int ry = y + 24 * s;
 	int rowh = 14 * s;
-
-	if (disc_state() == DISC_SPINNING)
-	{
-		gfx_text_c("Working out what it is...", b.x + b.w / 2, y + 4 * s, s, COL_PANELHI, 0);
-		return;
-	}
 
 	for (int i = 0; i < disc_nrows; i++)
 	{
 		int on = (i == disc_row);
-		int ry = y + i * rowh;
+		int yy = ry + i * rowh;
 
-		if (on) gfx_fill(b.x + 4 * s, ry - 3 * s, b.w - 8 * s, rowh - 2 * s, COL_BLUE);
-		gfx_text(disc_rowtext[i], b.x + 10 * s, ry, s, on ? COL_WHITE : COL_INK, 0);
+		if (on) gfx_fill(tx - 4 * s, yy - 3 * s, tw + 8 * s, rowh - 2 * s, COL_BLUE);
+		gfx_text(gfx_clip(disc_rowtext[i], s, tw), tx, yy, s, on ? COL_WHITE : COL_INK, 0);
 	}
-
-	int ny = y + disc_nrows * rowh + 6 * s;
-
-	/*
-	  Said plainly, on the screen, because the alternative is a player pressing Play
-	  and watching nothing happen. See the comment above this section.
-	*/
-	char lines[4][64];
-	int nl = wrap_text("Reading discs is not finished: this identifies the disc but cannot"
-		" hand it to a core yet.", (b.w - 16 * s) / (8 * s), lines, 3);
-	for (int i = 0; i < nl; i++)
-		gfx_text_c(lines[i], b.x + b.w / 2, ny + i * 10 * s, s, COL_PANELHI, 0);
 }
 
 /*
@@ -3792,24 +3810,43 @@ static void draw_disc_badge(const chome_profile *p)
 
 	int s = p->ts_ui;
 	int r = disc_radius(p);
+	int focused = (screen == SCR_DISCBAR);
 
 	int cx = p->safe_x + p->inset + r;
 	int cy = p->safe_y + p->inset + r;
+
+	/*
+	  Focused, it gets a plate behind it and the game's name beside it. Unfocused it is
+	  the disc alone: an indicator, not a card. Both live in the same corner so pressing
+	  up does not appear to move it anywhere.
+	*/
+	if (focused)
+	{
+		int tw = gfx_text_w(disc_display_name(), s);
+		int pw = 2 * r + 12 * s + tw + 8 * s;
+		gfx_fill(cx - r - 4 * s, cy - r - 4 * s, pw, 2 * r + 8 * s, COL_BLUE);
+	}
 
 	gfx_disc(cx, cy, r, anim_ms(), disc_spin_period(),
 		disc_bands, DISC_BANDS_N, COL_WHITE, COL_PANELHI, COL_BGDARK);
 
 	/*
-	  A short label beside it, but only where there is room: at 240p the shelf is
-	  already tight and a word here would collide with the title. The disc alone still
-	  says "there is a disc", and the menu bar entry says what to do about it.
+	  What is on the disc, beside it. Unfocused this is the console name and is dropped
+	  at 240p, where the shelf is tight enough that a word here reaches the title.
+	  Focused it is always drawn and names the game, because naming the thing is the
+	  reason the tier exists.
 	*/
-	if (p->id == PROF_LO) return;
+	if (!focused && p->id == PROF_LO) return;
 
-	const char *tag = (disc_state() == DISC_SPINNING) ? "Reading"
-		: (disc_state() == DISC_UNKNOWN) ? "Disc?" : disc_type_name(disc_type());
+	const char *tag;
+	if (disc_state() == DISC_SPINNING) tag = "Reading the disc";
+	else if (disc_state() == DISC_UNKNOWN) tag = "Unrecognised disc";
+	else if (focused) tag = disc_display_name();
+	else tag = disc_type_name(disc_type());
 
-	gfx_text(gfx_clip(tag, s, 14 * 8 * s), cx + r + 4 * s, cy - 4 * s, s, COL_PANELHI, COL_BGDARK);
+	int tx = cx + r + 6 * s;
+	gfx_text(gfx_clip(tag, s, p->w - tx - p->inset), tx, cy - 4 * s, s,
+		focused ? COL_WHITE : COL_PANELHI, COL_BGDARK);
 }
 
 static void draw_power(const chome_profile *p)
@@ -4831,7 +4868,16 @@ static void move_v(int dir)
 	}
 
 	case SCR_HOME:
-		if (dir < 0) { mb_idx = 0; go_screen(SCR_MENUBAR); }
+		/*
+		  Up goes to the disc before it goes to the menu bar, when there is a disc.
+
+		  Somebody who has just pushed a disc in wants that disc, not Display settings,
+		  so it gets the first press and the menu bar gets the second. It costs a press
+		  only while a disc is actually in the drive, which is a state the player
+		  created deliberately and can end by taking it out.
+		*/
+		if (dir < 0 && disc_state() != DISC_ABSENT) { go_screen(SCR_DISCBAR); }
+		else if (dir < 0) { mb_idx = 0; go_screen(SCR_MENUBAR); }
 		else
 		{
 			chome_item *it = cur_game();
@@ -4843,8 +4889,14 @@ static void move_v(int dir)
 		break;
 
 	case SCR_MENUBAR:
-		if (dir > 0) go_screen(SCR_HOME);
+		if (dir > 0) go_screen(disc_state() != DISC_ABSENT ? SCR_DISCBAR : SCR_HOME);
 		else nudge();
+		break;
+
+	case SCR_DISCBAR:
+		// Between the two: up carries on to the menu bar, down returns to the shelf.
+		if (dir < 0) { mb_idx = 0; go_screen(SCR_MENUBAR); }
+		else go_screen(SCR_HOME);
 		break;
 
 	case SCR_SUSPEND:
@@ -5012,7 +5064,6 @@ static void accept()
 		case MB_OPTIONS:  opt_row = 0; go_screen(SCR_OPTIONS); break;
 		case MB_POWER:    pwr_row = 0; pwr_arm = -1; go_screen(SCR_POWER); break;
 		case MB_ABOUT:    go_screen(SCR_ABOUT); break;
-		case MB_DISC:     disc_open_screen(); break;
 		case MB_CORE:
 			core_opts_scan();
 			co_tier = CO_TIER_PICTURE;
@@ -5155,6 +5206,10 @@ static void accept()
 			}
 			break;
 		}
+		break;
+
+	case SCR_DISCBAR:
+		disc_open_screen();
 		break;
 
 	case SCR_DISC:
@@ -5416,6 +5471,10 @@ static void back()
 	  altogether: the player who opened the chooser to look at their options should
 	  not lose the prompt for doing so.
 	*/
+	case SCR_DISCBAR:
+		go_screen(SCR_HOME);
+		return;
+
 	case SCR_DISC:
 		if (disc_picking)
 		{
@@ -5425,7 +5484,11 @@ static void back()
 			mark_dirty();
 			return;
 		}
-		break;
+
+		// Back to the disc it belongs to, which is where the prompt was opened from -
+		// falling through to the generic back dropped the player onto the shelf.
+		go_screen(SCR_DISCBAR);
+		return;
 
 	case SCR_HOME:
 		if (nav_pop()) break;
@@ -7145,6 +7208,8 @@ void chome_core_boot()
 	core_opts_apply_for_game(ig_item.sysidx, ig_item.path);
 }
 
+int chome_screen_id() { return screen; }
+
 int chome_active()
 {
 	return active || ig_active;
@@ -7817,6 +7882,16 @@ int chome_handle(uint32_t key)
 		  comes through a keypress, so if this does not ask for a repaint, nothing will.
 		*/
 		mark_dirty();
+
+		/*
+		  Taken out while we were looking at it. Both disc screens describe a disc that
+		  is no longer there, so they have to be left rather than sitting there
+		  offering to play nothing.
+		*/
+		if (disc_state() == DISC_ABSENT && (screen == SCR_DISC || screen == SCR_DISCBAR))
+		{
+			go_screen(SCR_HOME);
+		}
 
 		printf("ClassicUI: disc state=%d type=%s name=\"%s\"\n",
 			disc_state(), disc_type_name(disc_type()), disc_display_name());

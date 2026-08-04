@@ -2096,6 +2096,80 @@ static void assert_disc_ui()
 	int cap = disc_capable_systems(ids, 2);
 	check(cap == 2, "and the caller's limit is respected");
 
+	/* --------------------------------------------------- the focus tier --- */
+
+	/*
+	  Up from the shelf reaches the disc first and the menu bar second, but only while
+	  there is a disc. Checked by pressing keys rather than by reading `screen`, because
+	  the thing that would break is the order, and the order is only visible from the
+	  outside.
+
+	  The menu bar and the disc tier both draw over the top of the shelf, so the top
+	  strip of the canvas tells them apart: the bar fills it with entries, the disc tier
+	  puts a plate and a name in the corner.
+	*/
+	disc_ingest_present(1);
+	fake_disc d2; memset(&d2, 0, sizeof(d2));
+	static const char *const none2[] = { "" };
+	fake_iso(&d2, 0, "PLAYSTATION", "PLAYSTATION", none2, 0);
+	fake_put(&d2, 20, 0, "BOOT = cdrom:\\SLUS_006.26;1", 27, 100);
+	disc_set_reader(fake_read, &d2);
+	disc_ingest_identify(0);
+	frame(6);
+
+	/*
+	  Asserted on the screen id rather than on pixels. Both of these screens animate, so
+	  two visits to the same one hash differently and two different ones might not -
+	  which is exactly the trap the first version of this test fell into.
+	*/
+	enum { S_HOME = 0, S_MENUBAR = 1, S_DISC = 17, S_DISCBAR = 18 };
+
+	check(chome_screen_id() == S_HOME, "starting on the shelf");
+
+	press(KEY_UP);
+	check(chome_screen_id() == S_DISCBAR, "up from the shelf focuses the disc, not the menu bar");
+	dump("disc-3-focused");
+
+	press(KEY_UP);
+	check(chome_screen_id() == S_MENUBAR, "a second up carries on to the menu bar");
+
+	press(KEY_DOWN);
+	check(chome_screen_id() == S_DISCBAR, "coming back down lands on the disc again");
+
+	press(KEY_DOWN);
+	check(chome_screen_id() == S_HOME, "and once more is the shelf");
+
+	// A on the tier is what opens the prompt, so the tier is not a dead end.
+	press(KEY_UP);
+	press(KEY_ENTER);
+	check(chome_screen_id() == S_DISC, "confirming on the disc opens its prompt");
+	dump("disc-4-panel");
+
+	press(KEY_ESC);
+	check(chome_screen_id() == S_DISCBAR, "and back returns to the disc, not to the shelf");
+	press(KEY_ESC);
+
+	/*
+	  Ejected while the prompt is up. Both disc screens describe something that is no
+	  longer in the drive, so staying on one would leave the player offering to play
+	  nothing.
+	*/
+	press(KEY_UP);
+	press(KEY_ENTER);
+	check(chome_screen_id() == S_DISC, "on the prompt again");
+	disc_ingest_present(0);
+	frame(6);
+	check(chome_screen_id() == S_HOME, "taking the disc out leaves the prompt rather than stranding it");
+
+	/*
+	  With no disc there is no tier: one press has to reach the menu bar, or a player
+	  with an empty drive pays for a feature they are not using.
+	*/
+	press(KEY_UP);
+	check(chome_screen_id() == S_MENUBAR, "with no disc, one up reaches the menu bar as it always did");
+	press(KEY_DOWN);
+	check(chome_screen_id() == S_HOME, "and down is the shelf, with no tier in between");
+
 	disc_reset_reader();
 	disc_ingest_present(0);
 	(void)disc_take_dirty();

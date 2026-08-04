@@ -18,6 +18,16 @@ int chome_enabled();
 // repeat for the shelf.
 int chome_active();
 
+/*
+  Which screen is up, as one of the SCR_* values in chome_ui.cpp.
+
+  Exported for diagnostics and for the harness: navigation between animated screens
+  cannot be tested by hashing pixels, because two rotation phases of the same screen
+  differ and two different screens may not. Asserting the screen id is the only way to
+  test an ordering like "up reaches the disc, then the menu bar".
+*/
+int chome_screen_id();
+
 // Called from HandleUI() with the decoded key. Returns 1 when the key was
 // consumed and the classic menu should not run this frame.
 int chome_handle(uint32_t key);
