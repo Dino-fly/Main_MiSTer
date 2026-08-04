@@ -28,6 +28,7 @@ gcc -std=gnu99 -O1 -g -I. -c sxmlc.c -o /tmp/harness/sxmlc.o
 # testable, and the value being obviously fake is the point: a test that needed a
 # real credential would be a test nobody but Derek could run.
 g++ -std=gnu++14 -O1 -g -Wall -Wextra -Wno-unused-parameter -Wno-format-truncation \
+    -DCHOME_HOST_TEST \
     -DCLASSICUI_SS_DEVID=\"testdev\" \
     -DCLASSICUI_SS_DEVPASS=\"testpass\" \
     -DCLASSICUI_SS_SOFTNAME=\"classichome-test\" \
@@ -38,6 +39,7 @@ g++ -std=gnu++14 -O1 -g -Wall -Wextra -Wno-unused-parameter -Wno-format-truncati
     support/classicui/chome_art.cpp \
     support/classicui/chome_gamelist.cpp \
     support/classicui/chome_ss.cpp \
+    support/classicui/chome_disc.cpp \
     support/classicui/chome_ui.cpp \
     support/classicui/chome_osk.cpp \
     support/classicui/chome_net.cpp \

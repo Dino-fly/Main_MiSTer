@@ -21,6 +21,7 @@
 #include "chome_btn12.h"
 #include "chome_osk.h"
 #include "chome_net.h"
+#include "chome_disc.h"
 #include "chome_bt.h"
 #include "chome_ini.h"
 #include "chome_opt.h"
@@ -6824,6 +6825,7 @@ void chome_leave()
 
 	lib_state_save();
 	net_watch(0);
+	disc_watch_stop();
 	OsdMenuCtl(1);            // OSD overlay back on for the classic menu
 
 	// Repaint the wallpaper over our UI: the classic menu only draws the
@@ -7444,6 +7446,23 @@ int chome_handle(uint32_t key)
 	net_poll();
 	bt_poll();
 	chome_pend_poll();
+
+	/*
+	  The optical drive, if there is one. One status ioctl per pass, and sectors are
+	  only read on the pass after a disc turns up - see chome_disc.h for why that
+	  matters on the thread that draws.
+
+	  Nothing is drawn from this yet: detection and identification are wired up and
+	  logged first so they can be proven against real discs, because playing a disc
+	  needs each CD core's daemon taught to source from the drive, which is a separate
+	  and much larger piece of work.
+	*/
+	disc_poll();
+	if (disc_take_dirty())
+	{
+		printf("ClassicUI: disc state=%d type=%s name=\"%s\"\n",
+			disc_state(), disc_type_name(disc_type()), disc_display_name());
+	}
 
 	/*
 	  Nothing about the network arrives on a keypress: the scan finishes, an address

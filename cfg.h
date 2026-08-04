@@ -127,6 +127,8 @@ typedef struct {
 	uint8_t classicui_overscan;
 	// Inert until this build carries a ScreenScraper devid; see chome_ss.h.
 	uint8_t classicui_screenscraper;
+	// OFF by default: see support/classicui/chome_disc.h.
+	uint8_t classicui_disc;
 	char classicui_artdir[256];
 	char classicui_arturl[512];
 	char classicui_ss_user[64];

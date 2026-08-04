@@ -161,6 +161,7 @@ static const ini_var_t ini_vars[] =
 	{ "CLASSICUI_FREEZE", (void*)(&(cfg.classicui_freeze)), UINT8, 0, 1 },
 	{ "CLASSICUI_ARTURL", (void*)(&(cfg.classicui_arturl)), STRING, 0, sizeof(cfg.classicui_arturl) - 1 },
 	{ "CLASSICUI_SCREENSCRAPER", (void*)(&(cfg.classicui_screenscraper)), UINT8, 0, 1 },
+	{ "CLASSICUI_DISC", (void*)(&(cfg.classicui_disc)), UINT8, 0, 1 },
 	{ "CLASSICUI_SS_USER", (void*)(&(cfg.classicui_ss_user)), STRING, 0, sizeof(cfg.classicui_ss_user) - 1 },
 	{ "CLASSICUI_SS_PASS", (void*)(&(cfg.classicui_ss_pass)), STRING, 0, sizeof(cfg.classicui_ss_pass) - 1 },
 };
@@ -637,6 +638,14 @@ void cfg_parse()
 	  support/classicui/chome_ss.h.
 	*/
 	cfg.classicui_screenscraper = 0;
+
+	/*
+	  Physical disc detection, OFF by default. Every ioctl on /dev/sr0 serialises
+	  behind whatever the drive is doing, and getting that wrong froze the front-end
+	  twice during development - so this stays opt-in until it has been proven on a
+	  range of drives and discs.
+	*/
+	cfg.classicui_disc = 0;
 	cfg.wheel_force = 50;
 	cfg.dvi_mode = 2;
 	cfg.lookahead = 1;
