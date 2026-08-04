@@ -108,6 +108,48 @@ still with a save state instead, and `classicui_freeze=0` opts out of that.
 
 And where a core can do neither, it says so, rather than leaving you to notice.
 
+### One card per title, whatever the ROM is called
+
+![Variants](docs/img/device/variants-filename.png)
+
+`Mega Man (U).nes` and `Mega Man (E).nes` both displayed as "Mega Man" with no way to tell
+them apart. Same-titled files are now one card, **X** cycles the files behind it, and the
+title block names the file on show — in the file's own case, because `MEGA MAN (E).NES` is not
+a filename.
+
+The grouping key is title + system + directory + extension. The last three each prevent a
+merge that would be *wrong*: Aladdin on SNES is not Aladdin on Mega Drive, a hack in its own
+folder is not a regional variant, `Sonic 2.sms` is not `Sonic 2.gg`. The cost is that a
+`USA/` + `Europe/` layout groups nothing, which is the safe way to be wrong — and cards that
+merely *share* a title show the filename anyway, so the original complaint is answered either
+way. Above, Chrono Cross's two discs stay separate cards and each says which disc it is.
+
+### Recently Played
+
+![Recently Played card](docs/img/device/recently-played-card.png)
+![Recently Played view](docs/img/device/recently-played-view.png)
+
+A third leading card, after Favourites. Twenty games, most recent first, one place per game
+however often it is played — and absent entirely until something has been played.
+
+Recency is stored as *order*, not a timestamp: the DE10-Nano has no battery-backed clock, so
+anything played before NTP comes up would be filed under 1970 and outrank everything since.
+
+### Starting a game at a save state
+
+![Choosing a slot](docs/img/device/launch-from-state.png)
+
+Choose a suspend point from the shelf with no core loaded and the game starts *there* rather
+than from the beginning. Below, the same game fifty seconds after launch — with a state armed,
+and without. The control is still on the title screen; the resumed one is past it.
+
+| Resumed from slot 1 | Control, no state |
+|---|---|
+| ![Resumed](docs/img/device/launch-from-state-result.png) | ![Control](docs/img/device/launch-from-state-control.png) |
+
+MiSTer's own "Saving the state" and "Save to state N" pop-ups are suppressed while this
+front-end is up — the strip already shows the moment and whether it landed.
+
 ### The core's own settings, in our UI
 
 ![Core options on Game Boy](docs/img/device/core-options-gb.png)
@@ -124,6 +166,8 @@ second. **Risky** last — and an option lands there automatically when the core
 values unsafe, as PSX does with `(U) = unsafe -> can crash`.
 
 Changes apply at once. Where they are *kept* depends on whether a game is running.
+
+![Per-game core option](docs/img/device/core-options-per-game.png)
 
 **With a game running, the change belongs to that game.** PSX's widescreen hack flatters a
 3D racer and ruins the 2D game next to it on the same card, so a setting changed from inside
