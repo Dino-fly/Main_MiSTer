@@ -2039,7 +2039,14 @@ int process_ss(const char *rom_name, int enable)
 					  front-end hides the OSD itself; there is nothing here to hide.
 					*/
 					if (!chome_active() && !chome_ingame_active()) MenuHide();
-					if (!hidden) Info("Saving the state", 500);
+					/*
+					  And no pop-up while Classic Home is up, whatever the slot. It shows
+					  the slot filling on its own strip - MiSTer's panel over the top is a
+					  second answer to a question already answered, and it lands on our
+					  screen rather than the game's.
+					*/
+					if (!hidden && !chome_active() && !chome_ingame_active())
+						Info("Saving the state", 500);
 
 					*ss_sufx = i + '1';
 					if (FileOpenEx(&f, ss_name, O_CREAT | O_TRUNC | O_RDWR | O_SYNC))
