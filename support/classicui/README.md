@@ -879,10 +879,19 @@ whether a core accepts the MGL.
   `savestates/<core>/<rom>_<n>.png`, which the strip displays and falls back to
   the cover when absent. The poll can be up to a second behind the actual save,
   so the frame is close but not exact.
-- **Scraping from ScreenScraper ourselves.** Asked for, and read up properly before
-  being turned down. Their data is CC BY-NC-SA, which is not the blocker - nobody is
-  proposing we redistribute it, and a player scraping their own library with their own
-  account would be entirely within their rights. The blocker is the API contract:
+- **Scraping from ScreenScraper ourselves.** Now **written but inert**, pending a
+  credential. `support/classicui/chome_ss.{cpp,h}` builds the request, parses the
+  reply, classifies the failures and picks the media; what it will not do is make a
+  call, because the whole module is gated on a `CLASSICUI_SS_DEVID` that is defined
+  in no build we ship. `support/classicui/test/gate.cpp` compiles that same source
+  the shipped way and asserts that a fully valid query still produces no URL, and
+  the release binary does not even contain the API hostname - with the gate false
+  the compiler drops the request path entirely, which `strings bin/MiSTer | grep
+  screenscraper.fr` returns nothing for.
+
+  Their data is CC BY-NC-SA, which is not the blocker - nobody is proposing we
+  redistribute it, and a player scraping their own library with their own account
+  would be entirely within their rights. The blocker is the API contract:
   `jeuInfos.php` requires **`devid`/`devpassword`/`softname`** as well as the user's
   own `ssid`/`sspassword`, and a `devid` is granted per *application* by the
   ScreenScraper team on request in their forum, tied to the `softname` it was issued
@@ -892,26 +901,41 @@ whether a core accepts the MGL.
   are issued user accounts, not developer keys. Reusing another scraper's registered
   key (Skyscraper's is in its source) is what gets an application blacklisted.
 
-  Three more reasons it would not be the good version of the feature even with a key:
-  matching is by hash for accuracy (`crc`/`md5`/`sha1`, ideally with `romtaille`), and
-  hashing a 700 MB disc image on a DE10-Nano off an SD card is not something to do
-  behind a shelf that is already slow, so we would be on `romnom` filename matching -
-  the fallback the scrapers themselves call the error-prone one. `systemeid` is a
-  numeric per-platform id we could not verify against a live `systemesListe.php`
-  without a key, and a wrong one scrapes the wrong console. And the quota surface is
+  Three problems that remain problems even with a key, and what the module does about
+  each. Matching is by hash for accuracy (`crc`/`md5`/`sha1`, ideally with
+  `romtaille`), and hashing a 700 MB disc image on a DE10-Nano off an SD card is not
+  something to do behind a shelf that is already slow - so files up to
+  `SS_HASH_MAX_BYTES` (32 MB, which is every cartridge system) are hashed properly
+  and larger ones fall back to `romnom`/`romtaille`, the matching the scrapers
+  themselves call the error-prone one. `systemeid` is a numeric per-platform id, and a
+  wrong one silently scrapes the wrong console rather than failing, so the built-in
+  table carries **only the eleven values that could be cross-checked against a working
+  client's source** and every other system returns nothing at all; the gaps are filled
+  from `classicui_ss_systems.cfg` or, once there is a key, from `systemesListe.php`.
+  Two systems ride in another core's shelf and are a different platform to the API -
+  `.gbc` in the Game Boy shelf is `10` not `9`, and `.gg` in the Master System shelf
+  is refused outright rather than scraped as Master System. And the quota surface is
   real work: HTTP 429/430/431 for threads-per-minute, daily quota and too-many-unknown
   ROMs, plus `maxthreads`/`requeststoday` in every response body to throttle against
   ([batocera-emulationstation#1090](https://github.com/batocera-linux/batocera-emulationstation/issues/1090),
   [Skyscraper's screenscraper.cpp](https://github.com/muldjord/skyscraper/blob/master/src/screenscraper.cpp)).
 
-  What the gamelist reader does instead is the same outcome by a better route: scrape
-  on a PC with Skraper or Skyscraper, which already hold registered keys and already
-  hash properly, and the result works here untouched. If a `devid` is ever registered
-  for this firmware, the client itself is perhaps 200 lines on the fork/poll shape
-  `fetch_start()`/`fetch_poll()` already has - the media `url` in a `jeuInfos.php`
-  reply is directly fetchable, so it is two curls and a small JSON scrape - and the
-  place it would write is layer 1 above, where the gamelist reader would see it
-  immediately.
+  Until a `devid` is issued, the gamelist reader is the same outcome by a better
+  route: scrape on a PC with Skraper or Skyscraper, which already hold registered keys
+  and already hash properly, and the result works here untouched.
+
+  What is left to do when a credential arrives is the network half: two `curl` calls
+  on the fork/poll shape `fetch_start()`/`fetch_poll()` already has, writing into
+  layer 1 above where the gamelist reader would see it immediately. Two decisions are
+  deliberately **not** pre-made. The reply is parsed as **xml** rather than json, only
+  because `sxmlc` is already in the tree and trusted for three other formats - but the
+  exact XML placement of `type`/`region`/`url` could not be confirmed from the
+  documentation, so the parser accepts all three plausible placements and the first
+  live reply must be read by a human before any of it is trusted. And a `devid` in a
+  string literal is greppable out of a binary in seconds; Skyscraper obfuscates its
+  pair and decrypts at use, which is theatre against anyone determined but is also the
+  accepted norm, and shipping ours in clear would be a gift to whoever wants to burn
+  it. Settle that before the first public build with a key in it, not after.
 
 - **i18n.** The Language panel lists the EU unit's languages and marks the six
   non-English ones as untranslated. Strings are still inline English; a string
