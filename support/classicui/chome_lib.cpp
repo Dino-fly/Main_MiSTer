@@ -1317,9 +1317,20 @@ void lib_rescan()
     the directory  a card that keeps hacks, translations or a region in a folder of its
                    own is the player saying those are separate collections, so
                    games/SNES/Hacks/Super Mario World.sfc is not a regional variant of
-                   the one in games/SNES. The cost is that a library filed as
-                   games/NES/USA + games/NES/Europe groups nothing; that is the safe way
-                   round, since the folders may just as easily hold different games.
+                   ...was the argument for including it, and Derek's call is the other
+                   way: he would rather a hack shared a card with the original than have
+                   multi-disc sets split up. So the directory is NOT part of the key.
+
+                   What that buys: Chrono Cross (Disc 1)/ and (Disc 2)/ become one card,
+                   which is what a player wants and what the folder-based key could never
+                   do - clean_title() already reduces both to "Chrono Cross". A library
+                   filed as games/NES/USA + games/NES/Europe now groups too.
+
+                   What it costs: games/SNES/Hacks/Super Mario World.sfc shares a card
+                   with games/SNES/Super Mario World.sfc, and two files of the same name
+                   in two folders become one card with two entries. Both are accepted -
+                   the filename line names whichever is on show, so nothing is hidden,
+                   and X cycles to the other.
     the extension  a shared core hosts more than one machine and is told apart by
                    extension exactly here - "Sonic The Hedgehog 2.sms" and
                    "Sonic The Hedgehog 2.gg" are different games with different levels,
@@ -1364,8 +1375,7 @@ static int group_dir_len(const char *path)
 static void group_key(const chome_item *it, char *out, int len)
 {
 	const char *dot = strrchr(it->path, '.');
-	snprintf(out, len, "%d|%.*s|%s|%s", (int)it->sysidx,
-		group_dir_len(it->path), it->path, dot ? dot + 1 : "", it->title);
+	snprintf(out, len, "%d|%s|%s", (int)it->sysidx, dot ? dot + 1 : "", it->title);
 
 	for (char *p = out; *p; p++) *p = (char)tolower((unsigned char)*p);
 }
@@ -1837,10 +1847,33 @@ const char *lib_view_variant_file(int entry, int which)
 	const char *path = items[k].path;
 	int skip = 0;
 
+	/*
+	  The folder is dropped only when every file behind this card is in the same one - it
+	  would be noise repeated on each line. Once the directory left the grouping key a card
+	  can span folders, and then the folder is the *only* thing telling two files apart:
+	  games/MD/Streets of Rage 2 (Europe).bin and games/MD/Proto/Streets of Rage 2
+	  (Europe).bin have the same filename, and without this both lines read identically and
+	  the player cannot tell which they are about to start.
+	*/
 	if (e->nvar > 1)
 	{
-		skip = group_dir_len(path);
-		if (skip && path[skip] == '/') skip++;
+		int mine = group_dir_len(path);
+		int shared = 1;
+
+		for (int i = 0; i < e->nvar && shared; i++)
+		{
+			int o = lib_view_variant(entry, i);
+			if (o < 0 || o == k) continue;
+
+			int od = group_dir_len(items[o].path);
+			if (od != mine || strncasecmp(items[o].path, path, (size_t)mine)) shared = 0;
+		}
+
+		if (shared)
+		{
+			skip = mine;
+			if (skip && path[skip] == '/') skip++;
+		}
 	}
 
 	snprintf(buf, sizeof(buf), "%s", path + skip);
