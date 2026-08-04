@@ -895,6 +895,22 @@ static unsigned int last_menu_key = 0;
 char user_io_osd_is_visible() { return (char)osd_visible; }
 
 /*
+  MiSTer's own recents list. The harness records the last thing offered to it, which is
+  enough to assert that a launch from this front-end reaches the firmware's list at all -
+  the point of the interop. What the firmware then does with it is recent.cpp's business.
+*/
+static char last_recent[512] = {};
+static int recent_calls = 0;
+void recent_update(char *dir, char *path, char *label, int)
+{
+	snprintf(last_recent, sizeof(last_recent), "%s|%s|%s",
+		dir ? dir : "", path ? path : "", label ? label : "");
+	recent_calls++;
+}
+const char *harness_last_recent() { return last_recent; }
+int harness_recent_calls() { return recent_calls; }
+
+/*
   Holding OSD_STATUS into the core with no overlay on screen. The harness records only what
   the front-end asked for, which is enough to assert that a core with an OSD-tied pause is
   now used rather than written off.
