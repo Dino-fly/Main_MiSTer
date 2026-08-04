@@ -1607,6 +1607,28 @@ static void assert_core_options(int hd_mask_bit1)
 	check(!owned, "nothing the front-end owns is offered a second time");
 }
 
+/*
+  Which row a list has highlighted, as the y of the selection bar.
+
+  By its own colour rather than by hashing the panel, because a hash cannot tell "the cursor
+  moved" from "a cover finished decoding" - and this is used to check exactly that the cursor
+  moved. -1 when nothing is highlighted.
+*/
+static int sel_bar_y()
+{
+	const uint32_t *fb = harness_fb_shown();
+	if (!fb) return -1;
+
+	int w = gfx_w(), h = gfx_h();
+	for (int y = 0; y < h; y++)
+	{
+		int n = 0;
+		for (int x = 0; x < w; x++) if (fb[(size_t)y * w + x] == 0xff2e6fb8u) n++;
+		if (n > w / 8) return y;
+	}
+	return -1;
+}
+
 static void assert_core_options_screen()
 {
 	printf("\n== the core's own options ==\n");
@@ -1670,6 +1692,26 @@ static void assert_core_options_screen()
 
 	const core_opt *first = core_opt_tier_at(CO_TIER_PICTURE, 0);
 	check(first != 0, "the screen opens on something");
+
+	/*
+	  Up and down have to move the visible cursor, not just the variable behind it.
+
+	  A user reported the selection never appearing to change until they pressed left or
+	  right. That is exactly what happens when the row moves and nothing repaints: move_v()
+	  has no trailing mark_dirty() - each case calls it - and this screen's case did not,
+	  while move_h() does. So changing a value revealed a cursor that had silently moved
+	  several rows earlier.
+	*/
+	int bar0 = sel_bar_y();
+	check(bar0 >= 0, "the selected row is highlighted");
+	press(KEY_DOWN, 14);
+	frame(10);
+	int bar1 = sel_bar_y();
+	printf("  selection bar y: %d -> %d\n", bar0, bar1);
+	check(bar1 > bar0, "down moves the highlight without needing another keypress");
+	press(KEY_UP, 14);
+	frame(10);
+	check(sel_bar_y() == bar0, "and up moves it back");
 
 	int before = first ? core_opt_value(first) : 0;
 	int saves = harness_cfg_saves();
@@ -2169,6 +2211,17 @@ static void strip_pixels(int *slots, int *message)
   table in chome_lib - and that table must never outrank a core that is actually running,
   in either direction.
 */
+// Is the warning band on this row? Its own colour, so this says what it says.
+static int band_red_at(int y)
+{
+	const uint32_t *fb = harness_fb_shown();
+	if (!fb || y < 0 || y >= gfx_h()) return 0;
+
+	int w = gfx_w(), red = 0;
+	for (int x = 0; x < w; x++) if (fb[(size_t)y * w + x] == 0xffc4353cu) red++;
+	return red > w / 2;
+}
+
 static void assert_no_savestates()
 {
 	printf("\n== systems with no save states ==\n");
@@ -2953,14 +3006,38 @@ static void assert_ingame()
 	  because a hash only says the top of the screen differs and the whole point is
 	  *what* it says.
 	*/
+	/*
+	  Read at the band's own row, which is theme safe_y and not zero. This used to scan row
+	  0 and passed anyway, because the harness runs at 720p where safe_y is 0 - so it could
+	  not have caught the band being drawn outside the safe area, and it did not. A CRT did,
+	  where 6% of 240 lines put the whole band behind the bezel.
+	*/
 	frame(6);
-	{
-		const uint32_t *fb = harness_fb_shown();
-		int w = gfx_w(), red = 0;
-		for (int x = 0; fb && x < w; x++) if (fb[x] == 0xffc4353cu) red++;
-		check(red > w / 2, "and warns across the top that the game is still playing");
-		dump("still-playing-warning");
-	}
+	check(band_red_at(theme_get()->safe_y),
+		"and warns across the top that the game is still playing");
+	dump("still-playing-warning");
+
+	/*
+	  The converse, and the point of the whole band: it is a statement about the *game*, not
+	  about the core's feature list. A core that cannot pause but can hold the game still with
+	  a save state is, as far as the player is concerned, paused - so it must say nothing.
+	  Dinofly's point, and worth a check of its own because the two conditions are set in
+	  different places and could drift apart.
+	*/
+	harness_set_confstr(2);                   // savestates, no pause: the freeze applies
+	press(KEY_MENU, 16);
+	frame(6);
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 40 && lib_scanning(); i++) frame(2);
+	frame(16);
+	check(chome_ingame_active(), "the menu opens on a core that freezes instead of pausing");
+	check(!band_red_at(theme_get()->safe_y),
+		"a game held still by a save state is not called still playing");
+	press(KEY_MENU, 16);
+	frame(6);
+	harness_set_confstr(0);
+	press(KEY_MENU, 20);
+	frame(10);
 	press(KEY_DOWN, 16);
 	harness_reset_status();
 	press(KEY_BACKSPACE, 8);
@@ -3104,6 +3181,39 @@ static void assert_overscan()
 	dump("overscan-menubar");
 	check(margin_bright(p, 1) == 0, "the menu bar clears the top margin");
 	press(KEY_ESC, 12);
+
+	/*
+	  And the still-playing band, which is the one thing that got this wrong: drawn at row 0
+	  it sat entirely behind a CRT's bezel, and every check for it passed because they all
+	  ran at 720p where safe_y is 0. This is the profile where the difference exists.
+	*/
+	/*
+	  This needs a game core, not the menu core: the band only exists over a running game,
+	  which is why a first attempt at putting these checks here silently skipped them behind
+	  an if - coverage that looked like coverage and was not.
+	*/
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "gb\nTetris (World).gb\n"); fclose(f); }
+	}
+	harness_set_menu_core(0);
+	harness_set_confstr(0);                 // no pause and no savestates: the band applies
+	chome_leave();
+	chome_handle(0);
+	if (chome_ingame_active()) { press(KEY_MENU, 16); frame(6); }
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 40 && lib_scanning(); i++) frame(2);
+	frame(16);
+
+	check(chome_ingame_active(), "the in-game menu opens at 240p");
+	check(band_red_at(p->safe_y), "the still-playing band is inside the safe area");
+	check(!band_red_at(0), "and not at the very top, where a television hides it");
+	dump("overscan-still-playing");
+
+	press(KEY_MENU, 16);
+	frame(6);
+	harness_set_menu_core(1);
+	harness_set_confstr(1);
 
 	// Hand the canvas back as it was found: this section is the only one that pins
 	// a small one, and what follows should not have to know that.
