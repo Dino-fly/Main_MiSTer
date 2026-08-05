@@ -633,6 +633,23 @@ static chome_item *ig_running_disc()
 }
 
 /*
+  The item the suspend strip is about: the shelf's selection, or the running disc when
+  there is no selection to be had.
+
+  One accessor rather than a cur_game() call at each site, because that is how the first
+  version of this went wrong on hardware. The strip opened on the disc - the disc was
+  passed in explicitly - and then every question *about* it was asked of cur_game()
+  independently, in six places. With a folder focused, which is what a disc launch leaves
+  behind, all six answered "no game", so a running disc was offered "ENT PLAY" on its own
+  savestate strip and neither saving nor loading was reachable.
+*/
+static chome_item *susp_target()
+{
+	chome_item *it = cur_game();
+	return it ? it : ig_running_disc();
+}
+
+/*
   True when this game's core is known to have no save states, so the strip can say so
   instead of offering slots that can never fill.
 
@@ -1690,11 +1707,11 @@ static int build_legend(legend_pair *out, int max)
 	case SCR_SUSPEND:
 	{
 		// Inside that very game the slots become live: A restores, Y writes.
-		int here = ig_is_running(cur_game());
+		int here = ig_is_running(susp_target());
 
 		// Nothing to offer for a core with no savestates - see draw_suspend(). Also from
 		// the shelf, where the answer comes from the table instead of the core.
-		if (no_savestates_for(cur_game()))
+		if (no_savestates_for(susp_target()))
 		{
 			// From the shelf A starts the game rather than going back to it, and the
 			// only prompt on screen must not say otherwise.
@@ -2552,7 +2569,7 @@ static void draw_suspend(const chome_profile *p)
 {
 	if (strip_y <= 0.002) return;
 
-	chome_item *it = cur_game();
+	chome_item *it = susp_target();
 	int ph = p->strip_h;
 
 	// Comes to rest above the overscan margin, and its panel is extended down into
@@ -5328,8 +5345,7 @@ static void move_v(int dir)
 		else if (dir < 0) { mb_idx = 0; go_screen(SCR_MENUBAR); }
 		else
 		{
-			chome_item *it = cur_game();
-			if (!it) it = ig_running_disc();  // a disc has no card to be standing on
+			chome_item *it = susp_target();
 			if (!it) { nudge(); return; }     // folders have no suspend points
 			lib_refresh_slots(it);
 			slot_idx = 0;
@@ -5864,7 +5880,7 @@ static void accept()
 
 	case SCR_SUSPEND:
 	{
-		chome_item *it = cur_game();
+		chome_item *it = susp_target();
 		if (!it || !slot_state(it, slot_idx)) { nudge(); return; }
 
 		// Inside that very game we restore directly, through the same status bit
@@ -8194,7 +8210,7 @@ int chome_handle(uint32_t key)
 
 		case KEY_BACKSPACE:      // pad Y
 		{
-			chome_item *it = cur_game();
+			chome_item *it = susp_target();
 
 			if (screen == SCR_SUSPEND && ig_is_running(it) && ss_can_save())
 			{
@@ -8348,7 +8364,7 @@ int chome_handle(uint32_t key)
 			// two presses: the first arms it and says so on screen.
 			if (screen != SCR_SUSPEND) { nudge(); break; }
 
-			chome_item *it = cur_game();
+			chome_item *it = susp_target();
 			if (!it) { nudge(); break; }
 
 			int st = slot_state(it, slot_idx);
