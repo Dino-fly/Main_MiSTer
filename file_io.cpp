@@ -973,8 +973,22 @@ void FileGenerateSavestatePath(const char *name, char* out_name, int sufx)
 		strcat(fname, name);
 	}
 
+	/*
+	  A name with no extension is legal here and used to crash.
+
+	  strrchr() returns NULL when there is no '.', and while the truncation below was
+	  guarded, the two lines that *write through* e were not - so sprintf(NULL, ...).
+	  Every caller until now passed a real filename ending in .cue/.chd/.bin, so e was
+	  never NULL and the bug sat here unreached.
+
+	  A physical disc is the first caller with no filename to offer: it is named for its
+	  serial ("SLES-01506"), which has no extension, and it took the firmware down on
+	  every attempt to mount one. Point e at the terminator instead, so the append below
+	  works whether or not there was an extension to strip.
+	*/
 	char *e = strrchr(fname, '.');
 	if (e) e[0] = 0;
+	else e = fname + strlen(fname);
 
 	if(sufx) sprintf(e, "_%d.ss", sufx);
 	else strcat(e, ".ss");
