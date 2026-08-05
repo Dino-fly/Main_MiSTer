@@ -4768,9 +4768,11 @@ static void launch_selected()
   Which core slot a physical disc goes into, by shelf system id, and only for the
   systems whose firmware-side daemon can read from the drive.
 
-  Two so far. PC Engine CD reads a real disc at full speed; PlayStation is wired the
-  same way in psx.cpp but upstream reports it short of full speed from a drive, so
-  expect FMV and CD audio to be the rough parts there. The other CD daemons each need
+  PC Engine CD reads a real disc at full speed; PlayStation is wired the same way in
+  psx.cpp but upstream reports it short of full speed from a drive, so expect FMV and
+  CD audio to be the rough parts there. Neo Geo CD's daemon is the shared cdd_t in
+  support/megacd - neocd_set_image() recognises the sentinel and cdd_t reads off the
+  drive. The other CD daemons each need
   the same work done to them separately; a system that is not in this table is still
   identified and still named by the prompt, but its row is marked "(not yet)" and
   refuses - see disc_build_rows() - instead of loading a core that would find nothing
@@ -4788,9 +4790,13 @@ struct disc_playable
 
 static const disc_playable disc_playables[] =
 {
-	{ "tg16", { 's', 0 } },      // "S0,CUECHD,Insert CD" in TurboGrafx16.sv
-	{ "psx",  { 's', 1 } },      // "H7S1,CUECHD,Load CD" in PSX.sv (H7 is a hide mask,
+	{ "tg16",   { 's', 0 } },    // "S0,CUECHD,Insert CD" in TurboGrafx16.sv
+	{ "psx",    { 's', 1 } },    // "H7S1,CUECHD,Load CD" in PSX.sv (H7 is a hide mask,
 	                             // not part of the slot; S2/S3 are its memory cards)
+	{ "neogeo", { 's', 1 } },    // "S1,CUECHD,Load CD Image" in neogeo.sv. Index 1 is
+	                             // also its romset slot ("FS1,*,Load ROM set") but that
+	                             // one is type 'f' - menu.cpp routes any 's' mount on
+	                             // this core to neocd_set_image().
 };
 
 static const chome_slot *disc_slot_for(int sysidx)
