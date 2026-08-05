@@ -8,6 +8,7 @@
 #include "../../user_io.h"
 
 #include "../chd/mister_chd.h"
+#include "../physical_disc/physical_disc.h"
 #include "pcecd.h"
 
 #define PCECD_DATA_IO_INDEX 2
@@ -258,7 +259,23 @@ int pcecdd_t::Load(const char *filename)
 	Unload();
 
 	const char *ext = filename+strlen(filename)-4;
-	if (!strncasecmp(".cue", ext, 4))
+	if (!strcmp(filename, PHYSICAL_DISC_SENTINEL))
+	{
+		/*
+		  The disc in the drive rather than a file. The table of contents comes off the
+		  disc in place of a cue sheet, and then the drive is spun up and read ahead of
+		  the core before it asks for anything - both of those block, for up to about
+		  eight seconds between them, which is why this is on the load path and not
+		  anywhere near the first sector the core wants.
+		*/
+		if (physical_disc_open(NULL) || physical_disc_load_toc(&this->toc))
+		{
+			physical_disc_close();
+			printf("\x1b[32mPCECD: no readable physical disc\n\x1b[0m");
+			return -1;
+		}
+		physical_disc_prewarm_blocking();
+	} else if (!strncasecmp(".cue", ext, 4))
 	{
 		if (LoadCUE(filename)) return -1;
 	} else if (!strncasecmp(".chd", ext, 4)) {
@@ -280,19 +297,24 @@ int pcecdd_t::Load(const char *filename)
 		this->toc.tracks[this->toc.last].start = this->toc.end;
 		this->loaded = 1;
 
-		memcpy(subcode_name, filename, strlen(filename));
-		subcode_name[strlen(filename)] = 0x00;
-		memcpy(&subcode_name[strlen(subcode_name) - 4], ".sub", 4);
+		// A physical disc has no sidecar .sub to look for - the sentinel is not a
+		// filename - so ReadSubcode() synthesises subcode-Q from the table of contents.
+		if (!this->toc.phys)
+		{
+			memcpy(subcode_name, filename, strlen(filename));
+			subcode_name[strlen(filename)] = 0x00;
+			memcpy(&subcode_name[strlen(subcode_name) - 4], ".sub", 4);
 
-		this->subcode_file = fopen(getFullPath(subcode_name), "r");
+			this->subcode_file = fopen(getFullPath(subcode_name), "r");
+
+			if (this->subcode_file != NULL) {
+				printf("\x1b[32mPCECD: SUBCODE FILE located = %s\n\x1b[0m", subcode_name);
+			} else {
+				printf("\x1b[32mPCECD: No SUBCODE file located.  Searched for '%s'.\n\x1b[0m", subcode_name);
+			}
+		}
 
 		printf("\x1b[32mPCECD: CD mounted , last track = %u\n\x1b[0m", this->toc.last);
-
-		if (this->subcode_file != NULL) {
-			printf("\x1b[32mPCECD: SUBCODE FILE located = %s\n\x1b[0m", subcode_name);
-		} else {
-			printf("\x1b[32mPCECD: No SUBCODE file located.  Searched for '%s'.\n\x1b[0m", subcode_name);
-		}
 		return 1;
 	}
 
@@ -303,7 +325,10 @@ void pcecdd_t::Unload()
 {
 	if (this->loaded)
 	{
-		if (this->toc.chd_f)
+		if (this->toc.phys)
+		{
+			physical_disc_close();
+		} else if (this->toc.chd_f)
 		{
 			chd_close(this->toc.chd_f);
 			this->toc.chd_f = NULL;
@@ -494,6 +519,8 @@ void pcecdd_t::Update() {
 		{
 			if (this->CDDAMode == PCECD_CDDAMODE_LOOP) {
 				this->lba = this->CDDAStart;
+				if (this->toc.phys)
+					physical_disc_seek_hint(this->lba);
 			}
 			else {
 				this->state = PCECD_STATE_IDLE;
@@ -757,6 +784,11 @@ void pcecdd_t::CommandExec() {
 
 		this->index = index;
 
+		// Audio is prefetched in its own lane, so tell the reader where the head is
+		// about to go rather than making it discover that a sector behind.
+		if (this->toc.phys && !this->toc.tracks[index].type)
+			physical_disc_seek_hint(new_lba);
+
 		this->CDDAStart = new_lba;
 		this->CDDAEnd = this->toc.end;
 		this->CDDAMode = comm[1];
@@ -909,7 +941,13 @@ void pcecdd_t::ReadData(uint8_t *buf)
 {
 	if (this->toc.tracks[this->index].type && (this->lba >= 0))
 	{
-		if (this->toc.chd_f)
+		if (this->toc.phys)
+		{
+			// 2048 bytes of user area, whether the sector on the disc is mode 1 or
+			// mode 2 form 1 - the reader works that out from the sector header.
+			physical_disc_read_data2048(this->lba, buf);
+		}
+		else if (this->toc.chd_f)
 		{
 			int s_offset = 0;
 			if (this->toc.tracks[this->index].sector_size != 2048)
@@ -936,7 +974,13 @@ int pcecdd_t::ReadCDDA(uint8_t *buf)
 	this->audioOffset = 0;// 2352;
 
 
-	if (this->toc.chd_f)
+	if (this->toc.phys)
+	{
+		// A raw CD-DA frame off the disc is already in the order the core wants, so
+		// unlike the chd path below there is nothing to byte swap.
+		physical_disc_read_sector(this->lba, buf, NULL);
+	}
+	else if (this->toc.chd_f)
 	{
 		mister_chd_read_sector(this->toc.chd_f, this->lba + this->toc.tracks[this->index].offset, 0, 0, this->audioLength, buf, this->chd_hunkbuf, &this->chd_hunknum);
 		for (int swapidx = 0; swapidx < this->audioLength; swapidx += 2)

@@ -52,6 +52,9 @@
 // PCECD  support
 #include "support/pcecd/pcecd.h"
 
+// Physical disc in the optical drive - PHYSICAL_DISC_SENTINEL and the sector reader
+#include "support/physical_disc/physical_disc.h"
+
 // PSX support
 #include "support/psx/psx.h"
 

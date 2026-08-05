@@ -10,6 +10,7 @@
 #include "../../hardware.h"
 #include "../../menu.h"
 #include "pcecd.h"
+#include "../physical_disc/physical_disc.h"
 
 
 static int need_reset=0;
@@ -181,8 +182,20 @@ static int load_bios(char *biosname, const char *cuename, int sgx)
 		user_io_file_tx_data((uint8_t*)buf, chunk);
 	}
 
-	FileGenerateSavePath(cuename, buf);
-	user_io_file_mount(buf, 0, 1);
+	/*
+	  An empty name means "this disc has no backup RAM file": an audio CD has no game
+	  to save, and a save path built out of the sentinel would be a file called
+	  *PHYSICAL_DISC*. Mounting nothing is how the core is told there is no save.
+	*/
+	if (cuename && *cuename)
+	{
+		FileGenerateSavePath(cuename, buf);
+		user_io_file_mount(buf, 0, 1);
+	}
+	else
+	{
+		user_io_file_mount("");
+	}
 
 	user_io_set_download(0);
 	pcecdd.SetRegion(swap | us_cart);
@@ -208,6 +221,20 @@ void pcecd_set_image(int num, const char *filename)
 
 			int sgx = 0;
 
+			/*
+			  A physical disc has no path, so the two things a path is used for have to
+			  come from the disc instead: the save file is named after the disc (its
+			  volume label, or a uuid derived from the table of contents), and an audio
+			  CD gets no save file at all. The sgx marker and the local cd_bios.rom are
+			  looked for next to the game, which a disc has no "next to", so the sentinel
+			  falls through to the system-wide BIOS below.
+			*/
+			int phys = !strcmp(filename, PHYSICAL_DISC_SENTINEL);
+			toc_t disc_toc = {};
+			int audio_only = phys && !physical_disc_current_toc(&disc_toc) && physical_disc_toc_audio_only(&disc_toc);
+			char save_name[64] = "physical_disc";
+			if (phys) physical_disc_save_name(PHYSICAL_DISC_DISC_PCECD, save_name, sizeof(save_name));
+
 			// load CD BIOS
 			strcpy(buf, filename);
 			char *p = strrchr(buf, '/');
@@ -220,13 +247,13 @@ void pcecd_set_image(int num, const char *filename)
 				if (FileExists(buf)) sgx = 1;
 
 				strcpy(p, "cd_bios.rom");
-				loaded = load_bios(buf, filename, sgx);
+				loaded = load_bios(buf, audio_only ? "" : (phys ? save_name : filename), sgx);
 			}
 
 			if (!loaded)
 			{
 				sprintf(buf, "%s/cd_bios.rom", HomeDir(PCECD_DIR));
-				loaded = load_bios(buf, filename, sgx);
+				loaded = load_bios(buf, audio_only ? "" : (phys ? save_name : filename), sgx);
 			}
 
 			if (!loaded) Info("CD BIOS not found!", 4000);

@@ -36,6 +36,7 @@
 #include "../../file_io.h"
 #include "../../menu.h"
 #include "../arcade/mra_loader.h"
+#include "../physical_disc/physical_disc.h"
 #include "../../scaler.h"
 #include "../../audio.h"
 #include "../../fpga_io.h"
@@ -4477,20 +4478,38 @@ static void draw_browse(const chome_profile *p)
 
 /* -------------------------------------------------------------- launch ---- */
 
-static void launch_write_mgl(const chome_sys *s, const char *relpath)
+/*
+  A slot other than the system's usual one.
+
+  A shelf entry knows one slot per system, because a game is one file: TurboGrafx-16
+  is 'f'/0, which is its "FS0,PCEBIN,Load TurboGrafx". A disc goes into a different
+  slot of the same core - "S0,CUECHD,Insert CD" - so a disc launch is the system's
+  rbf with the slot swapped, and nothing else about launching changes. Passed rather
+  than stored in the systems table so there is still exactly one launch path.
+*/
+struct chome_slot
+{
+	char type;
+	int  index;
+};
+
+static void launch_write_mgl(const chome_sys *s, const char *relpath, const chome_slot *slot)
 {
 	FILE *f = fopen("/tmp/classicui_launch.mgl", "wt");
 	if (!f) return;
 
+	char type = slot ? slot->type : s->type;
+	int index = slot ? slot->index : s->index;
+
 	fprintf(f, "<mistergamedescription>\n");
 	fprintf(f, "\t<rbf>%s</rbf>\n", s->rbf);
 	fprintf(f, "\t<file delay=\"%d\" type=\"%c\" index=\"%d\" path=\"%s\"/>\n",
-		s->delay ? s->delay : 2, s->type == 's' ? 's' : 'f', s->index, relpath);
+		s->delay ? s->delay : 2, type == 's' ? 's' : 'f', index, relpath);
 	fprintf(f, "</mistergamedescription>\n");
 	fclose(f);
 }
 
-static void do_launch(int sysidx, const char *relpath, chome_item *it)
+static void do_launch(int sysidx, const char *relpath, chome_item *it, const chome_slot *slot = 0)
 {
 	const chome_sys *s = lib_sys(sysidx);
 	if (!s) return;
@@ -4541,7 +4560,7 @@ static void do_launch(int sysidx, const char *relpath, chome_item *it)
 		return;
 	}
 
-	launch_write_mgl(s, relpath);
+	launch_write_mgl(s, relpath, slot);
 	printf("ClassicUI: launching %s via %s\n", relpath, s->rbf);
 	active = 0;
 	xml_load("/tmp/classicui_launch.mgl");
@@ -4556,6 +4575,85 @@ static void launch_selected()
 	if (!it) { nudge(); return; }
 
 	do_launch(it->sysidx, it->path, it);
+}
+
+/* ------------------------------------------------------- launch a disc ---- */
+
+/*
+  Which core slot a physical disc goes into, by shelf system id, and only for the
+  systems whose firmware-side daemon can read from the drive.
+
+  PC Engine CD is first and for now the only one: the TurboGrafx16 core reads a real
+  disc at full speed, and its daemon is the one that has the branches for it. The
+  other CD daemons each need the same work done to them separately, so a system that
+  is not in this table is still identified and still offered - it just says it cannot
+  play the disc yet instead of loading a core that would find nothing in the slot.
+*/
+struct disc_playable
+{
+	const char *sysid;
+	chome_slot slot;
+};
+
+static const disc_playable disc_playables[] =
+{
+	{ "tg16", { 's', 0 } },      // "S0,CUECHD,Insert CD" in TurboGrafx16.sv
+};
+
+static const chome_slot *disc_slot_for(int sysidx)
+{
+	const chome_sys *s = (sysidx >= 0) ? lib_sys(sysidx) : 0;
+	if (!s) return 0;
+
+	for (unsigned i = 0; i < sizeof(disc_playables) / sizeof(disc_playables[0]); i++)
+	{
+		if (!strcasecmp(disc_playables[i].sysid, s->id)) return &disc_playables[i].slot;
+	}
+	return 0;
+}
+
+/*
+  Set once the drive has been handed to a core, and cleared only when the menu core is
+  running again.
+
+  The drive can have exactly one owner. Detection is a helper process that holds
+  /dev/sr0 open and polls its status; the core's reader opens the same device in *this*
+  process and streams sectors from it on the thread that also draws. Every ioctl on
+  that device serialises behind whatever the drive is doing, so a status poll from the
+  helper would put itself in front of a sector the core needs now - see chome_disc.h
+  for the two freezes that measured this.
+
+  So the helper is stopped before the launch and must not come back, and disc_poll()
+  restarts it whenever it finds it stopped. Hence a latch rather than just stopping it:
+  the in-game menu runs this same loop over the top of the running core, and that is
+  where the helper would otherwise be resurrected mid-game.
+
+  Cleared on is_menu() because the firmware process survives a core change: quitting
+  the game loads the menu core, and at that point nothing can be holding a disc.
+*/
+static int disc_handed_to_core = 0;
+
+static void disc_launch(int sysidx)
+{
+	const chome_slot *slot = disc_slot_for(sysidx);
+	const chome_sys *s = (sysidx >= 0) ? lib_sys(sysidx) : 0;
+
+	// The whole feature is off by default, and the only way here is through a screen
+	// that only exists when it is on - but this is the point where the drive gets used
+	// in earnest, so it does not rely on that.
+	if (!cfg.classicui_disc || !slot || !s) { nudge(); return; }
+
+	printf("ClassicUI: handing the disc to %s (%s)\n", s->name, disc_display_name());
+
+	disc_watch_stop();
+	disc_handed_to_core = 1;
+
+	/*
+	  The sentinel goes in as the file. It is not a path: menu.cpp keeps it out of the
+	  games-folder resolution and pcecdd's Load() recognises it and reads the table of
+	  contents off the disc instead of parsing a cue sheet.
+	*/
+	do_launch(sysidx, PHYSICAL_DISC_SENTINEL, 0, slot);
 }
 
 /* -------------------------------------------------------------- compose --- */
@@ -5228,11 +5326,11 @@ static void accept()
 
 		/*
 		  A core was chosen. Remembered so re-opening the prompt shows the decision
-		  rather than starting from the guess, and so the eventual mount has it.
+		  rather than starting from the guess.
 
-		  It does not launch: handing the disc to the core needs each CD core's daemon
-		  taught to read from the drive, which is not merged. Saying so in the log and
-		  on the panel beats a button that appears to do nothing.
+		  It launches if that core's daemon can read from the drive - PC Engine CD is
+		  the only one so far - and otherwise says why not, in the log and with a nudge.
+		  A button that silently does nothing would be worse than one that refuses.
 		*/
 		disc_chosen_sys = disc_rowsys[disc_row];
 		disc_picking = 0;
@@ -5240,8 +5338,16 @@ static void accept()
 
 		{
 			const chome_sys *sc = (disc_chosen_sys >= 0) ? lib_sys(disc_chosen_sys) : 0;
-			printf("ClassicUI: disc -> %s (%s), not launched: core-side disc reading is not merged\n",
+
+			if (disc_slot_for(disc_chosen_sys))
+			{
+				disc_launch(disc_chosen_sys);
+				break;
+			}
+
+			printf("ClassicUI: disc -> %s (%s), not launched: that core's daemon does not read from the drive yet\n",
 				sc ? sc->name : "?", disc_display_name());
+			nudge();
 		}
 
 		mark_dirty();
@@ -7867,13 +7973,15 @@ int chome_handle(uint32_t key)
 	  only read on the pass after a disc turns up - see chome_disc.h for why that
 	  matters on the thread that draws.
 
-	  Nothing is drawn from this yet: detection and identification are wired up and
-	  logged first so they can be proven against real discs, because playing a disc
-	  needs each CD core's daemon taught to source from the drive, which is a separate
-	  and much larger piece of work.
+	  Not while a core has the disc. Once it has been handed over, the core's reader
+	  owns /dev/sr0 and our detection helper must stay dead: this loop also runs behind
+	  a running game, for the in-game menu, and disc_poll() restarts the helper
+	  whenever it finds it stopped. See disc_launch().
 	*/
-	disc_poll();
-	if (disc_take_dirty())
+	if (disc_handed_to_core && is_menu()) disc_handed_to_core = 0;
+
+	if (!disc_handed_to_core) disc_poll();
+	if (!disc_handed_to_core && disc_take_dirty())
 	{
 		/*
 		  mark_dirty() is the point of the dirty flag, and leaving it off is how the
