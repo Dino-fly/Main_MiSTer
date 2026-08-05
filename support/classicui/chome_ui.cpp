@@ -22,6 +22,7 @@
 #include "chome_osk.h"
 #include "chome_net.h"
 #include "chome_disc.h"
+#include "chome_titles.h"
 #include "chome_bt.h"
 #include "chome_ini.h"
 #include "chome_opt.h"
@@ -650,8 +651,29 @@ static chome_item *ig_running_disc()
   behind, all six answered "no game", so a running disc was offered "ENT PLAY" on its own
   savestate strip and neither saving nor loading was reachable.
 */
+/*
+  Set while the strip was opened from the disc dialog, and only then.
+
+  The fallback below is the right rule from the shelf - Down there means the card under
+  the cursor - and the wrong one from the disc's own dialog, where the shelf's selection
+  has nothing to do with what is on screen. It is only *accidentally* right today: a disc
+  launch leaves a folder focused, so cur_game() is 0 and the disc drops out of the
+  fallback. Park the cursor on a game card, open the disc dialog, press Down, and the
+  same code would have shown that game's slots under the disc's name.
+
+  So the disc dialog says who its Down was for instead of relying on the shelf being
+  parked somewhere harmless. Cleared by whoever opens the strip the ordinary way.
+*/
+static int susp_is_disc = 0;
+
 static chome_item *susp_target()
 {
+	if (susp_is_disc)
+	{
+		chome_item *d = ig_running_disc();
+		if (d) return d;
+	}
+
 	chome_item *it = cur_game();
 	return it ? it : ig_running_disc();
 }
@@ -1704,6 +1726,13 @@ static void btn_hint_c(int cx, int y, int s, uint32_t col, const char *pre, int 
 	btn_hint_l(cx - btn_hint_w(s, pre, which, post) / 2, y, s, col, pre, which, post);
 }
 
+/*
+  Defined with the disc dialog further down, where the state it describes lives. The
+  legend is assembled up here, but it must not hold a second opinion about what that
+  screen does: the dialog answers for itself.
+*/
+static int disc_dlg_legend(legend_pair *out, int max);
+
 static int build_legend(legend_pair *out, int max)
 {
 	int n = 0;
@@ -1876,9 +1905,14 @@ static int build_legend(legend_pair *out, int max)
 		if (n < max) { out[n++] = { CH_UP CH_DOWN, "dpad_ud", "Move", "Move", 0, COL_WHITE }; }
 		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
 		break;
+	/*
+	  Built by the dialog itself rather than here, because what it offers depends on
+	  whether the disc is in the drive or already playing and on which of its two buttons
+	  the cursor is on - and a legend naming a press the screen does not offer is worse
+	  than no legend at all. See disc_dlg_legend().
+	*/
 	case SCR_DISC:
-		if (n < max) { out[n++] = lp(LBL_A, "Choose", "Choose"); }
-		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
+		n = disc_dlg_legend(out, max);
 		break;
 	case SCR_MENUBAR:
 		if (n < max) { out[n++] = lp(LBL_A, "Open", "Open"); }
@@ -3873,24 +3907,28 @@ static void draw_padtest(const chome_profile *p)
 /* ------------------------------------------------------------------ disc --- */
 
 /*
-  The prompt for a disc in the drive.
+  The dialog for a disc: the one screen this front-end has about a physical disc, whether
+  the disc is sitting in the drive or already playing.
 
-  Two shapes, because there are two situations and they need different answers:
+  It is the disc's card. A shelf game gets a cover, a title, A to start it and Down to its
+  save states; a disc has no card because nothing scanned it, so this is where those four
+  things live for it. Hence the shape: the game's name, a large disc under it, and the
+  actions as buttons side by side - Play, and Options for the core choice. The rows it
+  replaced ("Play on PlayStation", "Use a different core") said the same two things in a
+  list, and put the disc - the only picture on the screen - in a column beside them at a
+  third of the size the panel could afford.
 
-    - we recognised the disc and this firmware has a core for it: offer to play it,
-      and offer to override the choice anyway (a Mega Drive+ disc is a real case
-      where the player may want the other core).
-    - we did not, or the core does not exist here (Saturn, 3DO and CD-i are all
-      identified and all have no shelf system): ask which core to try.
+  Two sources, one dialog. See disc_dlg_get(): from the shelf the drive answers, and over
+  a running disc the drive is the core's and the mount's published identity answers
+  instead. Everything below reads that struct, so the layout, the title, the scan and the
+  save states are the same code either way.
 
-  Playing is real now, core by core: a system whose firmware-side daemon has been
-  taught to read sectors from the drive is in disc_playables below, and its row
-  launches. A system whose daemon has not been is shown the truth instead - its row
-  says "(not yet)", draws dim, and refuses without recording the choice. Shown rather
-  than omitted, because this screen's one claim is the identification: hiding the
-  console the disc actually belongs to while offering the ones it does not would make
-  the honest list into a lie. A prompt that silently did nothing would be worse than
-  one that explains itself.
+  Playing is real core by core: a system whose firmware-side daemon has been taught to
+  read sectors from the drive is in disc_playables below. A system whose daemon has not
+  been is still named - the identification is this screen's one claim and hiding the
+  console the disc actually belongs to would turn an honest answer into a lie - but the
+  Play button draws dim and refuses, and the line under the title says "(not yet)". A
+  button that silently did nothing would be worse than one that explains itself.
 */
 
 // Defined further down, with the rest of the navigation.
@@ -3903,10 +3941,9 @@ static int disc_wired(int sysidx);
 #define DISC_ROW_MAX 8
 
 #define DACT_PLAY   0
-#define DACT_CHOOSE 1
-#define DACT_NONE   2   // named but not playable: the daemon work has not been done
+#define DACT_NONE   1   // named but not playable: the daemon work has not been done
 
-static int disc_row = 0;
+static int disc_row = 0;                      // the core chooser's cursor
 static int disc_picking = 0;                  // 0: the offer, 1: choosing a core
 static char disc_rowtext[DISC_ROW_MAX][48];
 static int  disc_rowact[DISC_ROW_MAX];
@@ -3928,61 +3965,150 @@ static int disc_sys_by_id(const char *id)
 	return -1;
 }
 
+/*
+  Who the dialog is about, gathered once per draw and per press.
+
+  There are two moments a player wants this screen and only one of them can ask the drive.
+
+  Sitting on the shelf, the detection helper owns /dev/sr0 and disc_state(), disc_type(),
+  disc_serial() and disc_label() describe what is in it.
+
+  Playing that disc, the drive belongs to the core: the helper was stopped before the
+  launch and must not come back - see disc_launch() and core_holds_disc() - so
+  disc_state() is DISC_ABSENT and the type and both identifiers are empty. A dialog built
+  off the drive would therefore be *blank* in exactly the case that matters most, which is
+  the trap this struct exists to avoid. The running disc is described from what the mount
+  published instead: ig_item, whose path is the key disc_ident_read() lifted out of
+  PHYSICAL_DISC_IDENT_FILE, which is deliberately the same name the core's save files use.
+
+  Copied into buffers rather than kept as pointers on purpose: disc_title_for() hands back
+  a slot in a small cache that a later query can reuse, and one frame asks it more than
+  once.
+*/
+struct disc_dlg
+{
+	int running;                 // playing: the drive is the core's, not ours
+	int sysidx;                  // the shelf system that takes it, or -1
+	chome_item *susp;            // what Down is about, or 0 when there is nothing to reach
+	char title[DISC_TITLE_LEN];  // the game, by the best name anything here knows
+	char sub[64];                // what it is, or how the identification is getting on
+	char key[128];               // what the scan and the savestates are filed under
+};
+
+static void disc_dlg_get(disc_dlg *d)
+{
+	memset(d, 0, sizeof(*d));
+	d->sysidx = -1;
+
+	chome_item *run = ig_running_disc();
+	if (run)
+	{
+		d->running = 1;
+		d->susp = run;
+		d->sysidx = run->sysidx;
+		snprintf(d->key, sizeof(d->key), "%s", run->path);
+
+		/*
+		  The title table first, then the name the mount published. ig_item.title is the
+		  volume label, which is whatever the mastering engineer typed - "PLAYSTATION" as
+		  often as the game - so a real title beats it when the card has one. Exactly the
+		  order disc_display_name() uses for the disc in the drive, so the same disc reads
+		  the same before and after it is playing.
+		*/
+		const char *t = disc_title_for(d->key);
+		snprintf(d->title, sizeof(d->title), "%s", (t && *t) ? t : run->title);
+
+		const chome_sys *sc = lib_sys(run->sysidx);
+		if (sc) snprintf(d->sub, sizeof(d->sub), "%s", sc->name);
+	}
+	else
+	{
+		/*
+		  Serial first, label second, matching disc_display_name() and disc_art_path():
+		  they are the only two handles a pressed disc gives us, and PlayStation discs
+		  carry a serial while PC Engine and Neo Geo ones do not.
+		*/
+		snprintf(d->key, sizeof(d->key), "%s",
+			disc_serial()[0] ? disc_serial() : disc_label());
+
+		snprintf(d->title, sizeof(d->title), "%s", disc_display_name());
+
+		snprintf(d->sub, sizeof(d->sub), "%s",
+			(disc_state() == DISC_SPINNING) ? "Reading the disc"
+			: (disc_state() == DISC_UNKNOWN) ? "Unrecognised disc"
+			: disc_type_name(disc_type()));
+
+		d->sysidx = (disc_chosen_sys >= 0) ? disc_chosen_sys
+			: disc_sys_by_id(disc_system_id(disc_type()));
+
+		/*
+		  The console this firmware would load it on, when that is a different fact from
+		  the console that pressed it - a Mega CD disc chosen onto the Mega Drive card, or
+		  a core the player picked by hand through Options.
+		*/
+		const chome_sys *sc = (d->sysidx >= 0) ? lib_sys(d->sysidx) : 0;
+		if (sc && !disc_wired(d->sysidx))
+		{
+			// Named, and marked. Hiding the console the disc belongs to would make the
+			// identification - this screen's one claim - into a lie.
+			snprintf(d->sub, sizeof(d->sub), "%s (not yet)", sc->name);
+		}
+	}
+
+	/*
+	  Nothing knows a name for it, which is the whole of the SPINNING state and is also what
+	  an unidentified disc leaves behind: no title table hit, no volume label, no serial, and
+	  disc_type_name(DISC_T_NONE) is the empty string. Promote what we do know into the title
+	  rather than drawing the panel's largest line blank with the answer whispered under it.
+	*/
+	if (!d->title[0])
+	{
+		snprintf(d->title, sizeof(d->title), "%s", d->sub);
+		d->sub[0] = 0;
+	}
+
+	// The same line twice reads as a drawing fault rather than as two facts, and it
+	// happens whenever nothing knows the disc by any name but its console's.
+	if (!strcmp(d->title, d->sub)) d->sub[0] = 0;
+}
+
+/*
+  Whether A will hand this disc to a core.
+
+  Only ever from the drive. disc_play_for() picks its row by disc_type(), and over a
+  running disc the type went with the rest of the drive state - so it would match only the
+  any-disc rows and mark every typed one unplayable. A Mega CD disc, mid-game, would be
+  told by its own dialog that its own core cannot read it. The running case does not offer
+  the launch at all; A resumes instead, which is what pressing it inside a game means
+  everywhere else in this front-end.
+*/
+static int disc_can_play(const disc_dlg *d)
+{
+	return !d->running && d->sysidx >= 0 && disc_wired(d->sysidx);
+}
+
 static void disc_build_rows()
 {
 	disc_nrows = 0;
 
-	if (disc_picking)
+	/*
+	  Only systems that are actually in this library. A card offering to load the Neo Geo
+	  core on a machine with no Neo Geo core would be a dead end.
+	*/
+	const char *ids[16];
+	int n = disc_capable_systems(ids, 16);
+
+	for (int i = 0; i < n && disc_nrows < DISC_ROW_MAX; i++)
 	{
-		/*
-		  Only systems that are actually in this library. A card offering to load the
-		  Neo Geo core on a machine with no Neo Geo core would be a dead end.
-		*/
-		const char *ids[16];
-		int n = disc_capable_systems(ids, 16);
+		int sx = disc_sys_by_id(ids[i]);
+		if (sx < 0) continue;
 
-		for (int i = 0; i < n && disc_nrows < DISC_ROW_MAX; i++)
-		{
-			int sx = disc_sys_by_id(ids[i]);
-			if (sx < 0) continue;
-
-			const chome_sys *sc = lib_sys(sx);
-			int wired = disc_wired(sx);
-			snprintf(disc_rowtext[disc_nrows], sizeof(disc_rowtext[0]),
-				wired ? "%s" : "%s (not yet)", sc->name);
-			disc_rowact[disc_nrows] = wired ? DACT_PLAY : DACT_NONE;
-			disc_rowsys[disc_nrows] = sx;
-			disc_nrows++;
-		}
-		return;
-	}
-
-	int match = disc_chosen_sys;
-	if (match < 0) match = disc_sys_by_id(disc_system_id(disc_type()));
-
-	if (match >= 0)
-	{
-		/*
-		  "Play on X" only when it will: a core whose daemon cannot read the drive is
-		  named - the identification is this screen's claim and hiding it would lie -
-		  but marked instead of offered, so nothing on this screen promises what the
-		  launch would refuse.
-		*/
-		const chome_sys *sc = lib_sys(match);
-		int wired = disc_wired(match);
+		const chome_sys *sc = lib_sys(sx);
+		int wired = disc_wired(sx);
 		snprintf(disc_rowtext[disc_nrows], sizeof(disc_rowtext[0]),
-			wired ? "Play on %s" : "%s (not yet)", sc->name);
+			wired ? "%s" : "%s (not yet)", sc->name);
 		disc_rowact[disc_nrows] = wired ? DACT_PLAY : DACT_NONE;
-		disc_rowsys[disc_nrows] = match;
-		disc_nrows++;
-	}
-
-	if (disc_nrows < DISC_ROW_MAX)
-	{
-		snprintf(disc_rowtext[disc_nrows], sizeof(disc_rowtext[0]),
-			match >= 0 ? "Use a different core" : "Choose a core");
-		disc_rowact[disc_nrows] = DACT_CHOOSE;
-		disc_rowsys[disc_nrows] = -1;
+		disc_rowsys[disc_nrows] = sx;
 		disc_nrows++;
 	}
 }
@@ -3993,106 +4119,488 @@ static int disc_rows()
 	return disc_nrows;
 }
 
+/* --------------------------------------------------------- the two buttons --- */
+
+/*
+  Two, side by side, in place of the list of rows.
+
+  A list of one or two entries is a list only in the code: on screen it was two lines of
+  left-aligned text in a column beside the disc, which is why the disc could only have a
+  third of the panel. Buttons stack horizontally, so the whole width above them is the
+  disc's, and they say what they do in two words rather than in a sentence per row.
+*/
+#define DBTN_MAX 2
+
+#define DBTN_ACT  0        // Play the disc, or Resume the game it is already running
+#define DBTN_OPTS 1        // the core choice the "Use a different core" row used to offer
+
+static int disc_btn = 0;
+static char disc_btntext[DBTN_MAX][12];
+static int  disc_btnact[DBTN_MAX];
+static int  disc_btndim[DBTN_MAX];
+static int  disc_nbtn = 0;
+
+static void disc_build_btns(const disc_dlg *d)
+{
+	disc_nbtn = 0;
+
+	/*
+	  "Resume" rather than "Play" over a running disc, and it is the same word the shelf
+	  and the savestate strip use for the same press: the game is already going, so A
+	  closes the menu and drops back into it - see the SCR_HOME case of confirm().
+	*/
+	snprintf(disc_btntext[disc_nbtn], sizeof(disc_btntext[0]), "%s",
+		d->running ? "Resume" : "Play");
+	disc_btnact[disc_nbtn] = DBTN_ACT;
+	disc_btndim[disc_nbtn] = (!d->running && !disc_can_play(d));
+	disc_nbtn++;
+
+	/*
+	  And the core choice, from the drive only.
+
+	  Not over a running disc, for the reason disc_can_play() gives: without the type,
+	  every core whose entry names one would be listed "(not yet)", so the chooser would
+	  be a screenful of wrong answers. The core is also already chosen at that point - it
+	  is the one playing - and swapping it means restarting the game, which is what
+	  closing the game and coming back is for.
+	*/
+	if (!d->running)
+	{
+		snprintf(disc_btntext[disc_nbtn], sizeof(disc_btntext[0]), "Options");
+		disc_btnact[disc_nbtn] = DBTN_OPTS;
+		disc_btndim[disc_nbtn] = 0;
+		disc_nbtn++;
+	}
+}
+
+static int disc_dlg_legend(legend_pair *out, int max)
+{
+	int n = 0;
+
+	if (disc_picking)
+	{
+		if (n < max) { out[n++] = lp(LBL_A, "Choose", "Choose"); }
+		if (n < max) { out[n++] = { CH_UP CH_DOWN, "dpad_ud", "Move", "Move", 0, COL_WHITE }; }
+		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
+		return n;
+	}
+
+	disc_dlg d;
+	disc_dlg_get(&d);
+	disc_build_btns(&d);
+
+	int on_opts = (disc_btn < disc_nbtn && disc_btnact[disc_btn] == DBTN_OPTS);
+
+	/*
+	  A names what the button under the cursor will do, and dims when that button does -
+	  the legend showing a live "PLAY" over a Play button that refuses is the two of them
+	  disagreeing about the same press.
+	*/
+	if (n < max)
+	{
+		out[n] = on_opts ? lp(LBL_A, "Options", "Opts")
+			: lp(LBL_A, d.running ? "Resume" : "Play", "Play");
+		out[n].dim = (!on_opts && !d.running && !disc_can_play(&d));
+		n++;
+	}
+
+	// The same chip a shelf card gets, for the same press and the same destination, and
+	// only while there is a strip to reach - see the SCR_DISC case of move_v().
+	if (d.susp && n < max) { out[n++] = { CH_DOWN, "dpad_down", "Suspend Points", "Saves", 0, COL_WHITE }; }
+
+	if (disc_nbtn > 1 && n < max) { out[n++] = { CH_LEFT CH_RIGHT, "dpad_lr", "Move", "Move", 0, COL_WHITE }; }
+	if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
+	return n;
+}
+
+// Where the cursor should start: the action, unless it cannot act - an unrecognised disc
+// opens with Options under the cursor, because that is the only press that leads anywhere.
+static void disc_dlg_enter()
+{
+	disc_dlg d;
+	disc_dlg_get(&d);
+	disc_build_btns(&d);
+
+	disc_picking = 0;
+	disc_row = 0;
+	disc_btn = 0;
+	for (int i = 0; i < disc_nbtn; i++)
+	{
+		if (!disc_btndim[i]) { disc_btn = i; break; }
+	}
+}
+
 static void disc_open_screen()
 {
-	disc_row = 0;
-	disc_picking = 0;
-	disc_build_rows();
+	disc_dlg_enter();
 	go_screen(SCR_DISC);
 }
 
-static void draw_disc(const chome_profile *p)
+/* ------------------------------------------------------------- the layout --- */
+
+/*
+  The dialog's geometry, computed in one place because the drawing and the rectangle the
+  spin repaint replays under a clip both depend on it, and a second copy of this
+  arithmetic would drift the first time the panel was resized. See disc_note_rect().
+*/
+struct disc_layout
+{
+	int pw, ph;              // the panel
+	int r;                   // in gfx_disc's units: the disc is 2r pixels across
+	int ts;                  // the title's text scale
+	int bw, bh, gap;         // one button, and the air between two of them
+};
+
+static void disc_layout_for(const chome_profile *p, const disc_dlg *d, disc_layout *L)
+{
+	int s = p->ts_ui;
+
+	L->ts = p->ts_title;
+	L->bh = 12 * s + 6;
+	L->gap = 8 * s;
+
+	/*
+	  Buttons wide enough for the longest label and no wider, then both the same width:
+	  two buttons of different sizes read as one button and one label.
+	*/
+	L->bw = 40 * s;
+	for (int i = 0; i < disc_nbtn; i++)
+	{
+		int w = gfx_text_w(disc_btntext[i], s) + 12 * s;
+		if (w > L->bw) L->bw = w;
+	}
+
+	int nb = disc_nbtn ? disc_nbtn : 1;
+	int btnrow = nb * L->bw + (nb - 1) * L->gap;
+
+	// Everything above and below the disc, so the disc can be given what is left.
+	int chrome = (10 * s + 6)                 // draw_panel_ex's own title bar
+		+ 6 * s + 8 * L->ts                   // the game's name
+		+ 4 * s + 8 * s                       // the line under it
+		+ 8 * s                               // air above the disc
+		+ 8 * s + L->bh                       // air, then the row of buttons
+		+ 8 * s;                              // and the panel's bottom margin
+
+	int maxw = p->w - 2 * p->inset;
+	int maxh = p->h - 2 * (p->safe_y + 4);
+
+	/*
+	  Sized in whole cells rather than in pixels, because a radius that is not a multiple
+	  of 16 buys nothing: gfx_disc draws a 32-cell sprite at r/16 pixels per cell, so the
+	  cell size is an integer division and anything between two multiples renders as the
+	  lower one with a fractional grid. Cells are also what a rotated scan is cached
+	  against, so this is the number that decides how much work a turn costs.
+
+	  Two fifths of the canvas height to start with - 288px at 720p, 224 at 960x540, 192 at
+	  480p and 96 at 240p, against 224, 160, 160 and 64 for the column layout this replaced -
+	  then walked down until the panel fits both ways. A clipped button is worse than a
+	  smaller disc, which is the same order the old layout gave way in.
+
+	  Rounded to the nearest whole cell rather than truncated, and 960x540 is the reason:
+	  two fifths of 540 is 6.75 cells, truncating took it to 6, and the disc came out a
+	  sixth smaller than the canvas had room for.
+	*/
+	int side = 12 * s;                        // the margin either side of the widest line
+
+	int cell = (p->h * 2 / 5 + 16) / 32;
+	if (cell < 1) cell = 1;
+
+	while (cell > 1 && (chrome + 32 * cell > maxh || 32 * cell + 2 * side > maxw)) cell--;
+
+	L->r = 16 * cell;
+	L->ph = chrome + 32 * cell;
+
+	/*
+	  As wide as its widest line, not as wide as the screen: stretching the panel to the
+	  inset left half of it empty, which looks like a mistake rather than a decision.
+
+	  Both text lines are measured, not just the title. Sizing to the title alone was
+	  enough to make "Super Nintendo (not yet)" come out as "Super Nintendo (n>" on the one
+	  disc whose whole point is that line - the panel was as wide as "MSU1" plus the
+	  buttons, and the sentence that explains the refusal was the thing that got cut.
+	  gfx_clip() still cuts either of them when even the full width will not hold it.
+	*/
+	int content = 32 * cell;
+	if (btnrow > content) content = btnrow;
+
+	int tw = gfx_text_w(d->title, L->ts);
+	if (tw > content) content = tw;
+
+	tw = gfx_text_w(d->sub, s);
+	if (tw > content) content = tw;
+
+	L->pw = content + 2 * side;
+	if (L->pw > maxw) L->pw = maxw;
+}
+
+/* -------------------------------------------------------------- the scan --- */
+
+/*
+  A real photograph of the disc, turning, when the card has one.
+
+  Cosine at 64 positions to a turn, in 8.8 fixed point, quarter-turn table plus symmetry.
+  64 because that is what disc_step() quantises the phase accumulator to and what
+  gfx_disc's own wedges move by, so the scan and the drawn disc turn at exactly the same
+  rate - and because it is what makes this affordable: the rotated image only has to be
+  recomputed when the angle actually changes, which at the slow rate is sixteen times a
+  second and not sixty. See disc_rot() for the arithmetic that would otherwise be per
+  frame.
+*/
+static const int disc_cos_tab[17] =
+{
+	256, 255, 251, 245, 237, 226, 213, 198, 181, 162, 142, 121, 98, 74, 50, 25, 0
+};
+
+static int disc_cos_q8(int q)
+{
+	q &= 63;
+	if (q <= 16) return disc_cos_tab[q];
+	if (q <= 32) return -disc_cos_tab[32 - q];
+	if (q <= 48) return -disc_cos_tab[q - 32];
+	return disc_cos_tab[64 - q];
+}
+
+static int disc_sin_q8(int q)
+{
+	return disc_cos_q8(q + 48);
+}
+
+/*
+  The rotated, circular-masked scan, cached until something about it changes.
+
+  Rotation is inverse-mapped - for each destination pixel, where in the source it came
+  from - which is the only way round that leaves no unwritten pixels. Done into a buffer
+  and blitted rather than drawn pixel by pixel: gfx_fill() records damage per call, and
+  20k to 80k one-pixel fills a frame would spend more time in the damage bookkeeping than
+  in the resampling.
+
+  Deliberately NOT 64 pre-rendered frames. At 288px square that would be 27MB, on a board
+  with 1GB shared with the FPGA; recomputing one angle costs 83k samples, and only when
+  the angle moves.
+
+  Outside the circle the buffer is filled with the panel colour rather than left alone,
+  because the blit is square and the panel is what is behind it. The spindle hole and hub
+  are punched in afterwards at gfx_disc's own proportions, so that whatever the scan
+  actually is - a disc face, a label, a square crop - the result still reads as a disc.
+*/
+static uint32_t *disc_rot_buf = 0;
+static int disc_rot_dia = 0;
+static int disc_rot_step = -1;
+static char disc_rot_path[1024] = {};
+static const uint32_t *disc_rot_src = 0;
+
+static const uint32_t *disc_rot(const char *path, int dia, int step)
+{
+	const uint32_t *src = art_thumb(path, dia, dia);
+	if (!src) return 0;
+
+	/*
+	  The decode is in the key as well as the path, because art_thumb() hands back a fresh
+	  allocation when it notices the file was rewritten - which is precisely what happens
+	  when the fetcher lands a scan while this dialog is up. Keyed on the path alone, the
+	  first angle after that would still be the picture that was there before.
+	*/
+	if (disc_rot_buf && disc_rot_dia == dia && disc_rot_step == step
+		&& disc_rot_src == src && !strcmp(disc_rot_path, path))
+	{
+		return disc_rot_buf;
+	}
+
+	if (!disc_rot_buf || disc_rot_dia != dia)
+	{
+		free(disc_rot_buf);
+		disc_rot_buf = (uint32_t*)malloc((size_t)dia * dia * 4);
+		disc_rot_dia = disc_rot_buf ? dia : 0;
+		if (!disc_rot_buf) return 0;
+	}
+
+	snprintf(disc_rot_path, sizeof(disc_rot_path), "%s", path);
+	disc_rot_step = step;
+	disc_rot_src = src;
+
+	int r = dia / 2;
+	int cs = disc_cos_q8(step), sn = disc_sin_q8(step);
+
+	/*
+	  gfx_disc's radii, in the same 32nds of the radius it uses: the clear inner ring at
+	  9/32, the hub at 6/32, the hole inside that.
+
+	  The outer edge is one 32nd rather than the drawn disc's five. There it is an edge and a
+	  bright rim, which is what makes a flat circle of colour read as a pressed disc; a
+	  photograph has its own printed edge and does not need lending one, but it does need
+	  separating from the panel it sits on - without any ring at all the scan was a circular
+	  crop rather than an object.
+	*/
+	int r2_edge = r * r;
+	int r2_dark = (r * 31 / 32) * (r * 31 / 32);
+	int r2_ring = (r * 9 / 32) * (r * 9 / 32);
+	int r2_hub  = (r * 6 / 32) * (r * 6 / 32);
+
+	uint32_t edge = ((COL_WHITE >> 1) & 0x7f7f7f7f) + ((COL_BGDARK >> 1) & 0x7f7f7f7f);
+	edge |= 0xff000000u;
+
+	for (int y = 0; y < dia; y++)
+	{
+		int dy = y - r;
+		uint32_t *dst = disc_rot_buf + (size_t)y * dia;
+
+		for (int x = 0; x < dia; x++)
+		{
+			int dx = x - r;
+			int d2 = dx * dx + dy * dy;
+
+			if (d2 > r2_edge) { dst[x] = COL_PANEL; continue; }
+			if (d2 > r2_dark) { dst[x] = edge; continue; }
+			if (d2 <= r2_hub) { dst[x] = COL_BGDARK; continue; }
+			if (d2 <= r2_ring) { dst[x] = edge; continue; }
+
+			int sx = (dx * cs + dy * sn) >> 8;
+			int sy = (dy * cs - dx * sn) >> 8;
+
+			int u = sx + r, v = sy + r;
+			if (u < 0) u = 0; else if (u >= dia) u = dia - 1;
+			if (v < 0) v = 0; else if (v >= dia) v = dia - 1;
+
+			dst[x] = src[(size_t)v * dia + u] | 0xff000000u;
+		}
+	}
+
+	return disc_rot_buf;
+}
+
+/*
+  The scan if there is one, the drawn disc if there is not - and the second is the normal
+  case, not a fallback for a broken one: a physical disc has no filename to match on, so a
+  picture only exists once something has fetched one against the disc's identity. Both are
+  drawn at the same centre and the same radius, so the rectangle disc_note_rect() records
+  covers whichever turned up.
+
+  His decision, and it only applies here: the badge on the shelf keeps the drawn disc at
+  every profile. At badge size a photograph is 32 pixels of mud, and the badge's job is to
+  say "there is a disc", which the drawing already does better.
+*/
+static void disc_draw_face(const disc_dlg *d, int cx, int cy, int r)
+{
+	int step = disc_step();
+	char path[1024];
+
+	if (d->key[0] && disc_art_path(d->key, path, sizeof(path)))
+	{
+		const uint32_t *img = disc_rot(path, 2 * r, step);
+		if (img)
+		{
+			gfx_blit(img, 2 * r, 2 * r, cx - r, cy - r, 2 * r, 2 * r);
+			return;
+		}
+	}
+
+	gfx_disc(cx, cy, r, step,
+		disc_bands, DISC_BANDS_N, COL_WHITE, COL_PANELHI, COL_BGDARK, 0);
+}
+
+/* ------------------------------------------------------------ the drawing --- */
+
+static void draw_disc_picker(const chome_profile *p, const disc_dlg *d)
 {
 	disc_build_rows();
 
-	int ps = p->ts_ui;
-
-	/*
-	  The disc is the subject of this screen, so the panel is as wide as the inset allows
-	  rather than the usual 34 characters, and the disc is sized off the canvas height
-	  rather than off the width: a sixth of the height reads as large at every profile
-	  without a 240p panel swallowing the screen. Snapped to a multiple of 8 so
-	  gfx_disc's cells stay whole pixels.
-	*/
-	int r = (p->h / 6) & ~7;
-	if (r < 16) r = 16;
-
-	/*
-	  The panel is sized to its contents rather than to the screen: the disc plus a text
-	  column wide enough for the longest row - "Play on PlayStation" is nineteen
-	  characters. Stretching it to the full width instead left half the panel empty,
-	  which looked like a mistake rather than a design.
-
-	  If that will not fit the canvas the disc gives the room back, because a clipped row
-	  is worse than a smaller disc.
-	*/
-	int tcol = 22 * 8 * ps;
-	int maxw = p->w - 2 * p->inset;
-
-	while (r > 16 && 2 * r + tcol + 24 * ps > maxw) r -= 8;
-
-	int pw = 2 * r + tcol + 24 * ps;
-	if (pw > maxw) { pw = maxw; tcol = pw - 2 * r - 24 * ps; }
-
+	int s = p->ts_ui;
+	int rowh = 14 * s;
 	int nrows = disc_nrows ? disc_nrows : 1;
-	int rows_h = 24 * ps + nrows * 14 * ps;
 
-	int body_h = 2 * r + 8 * ps;
-	if (body_h < rows_h + 8 * ps) body_h = rows_h + 8 * ps;
+	int tw = 24 * 8 * s;
+	int maxw = p->w - 2 * p->inset;
+	if (tw > maxw - 16 * s) tw = maxw - 16 * s;
 
-	int ph = (10 * ps + 6) + body_h + 8 * ps;
+	int ph = (10 * s + 6) + 6 * s + 8 * s + 8 * s + nrows * rowh + 8 * s;
+	panel_box b = draw_panel_ex(p, tw + 16 * s, ph, "Which core?");
 
-	panel_box b = draw_panel_ex(p, pw, ph, disc_picking ? "Which core?" : "Disc");
-	int s = b.s;
-
-	// Centred in the body, which is as tall as the disc or the rows, whichever is taller.
-	int cx = b.x + 8 * s + r;
-	int cy = b.y + body_h / 2;
-
-	disc_note_rect(1, cx, cy, r);
-
-	/*
-	  Always the art when there is art. There is none yet - a physical disc has no
-	  filename to match on, so it needs a serial-to-title table and a scraper that this
-	  build has no credential for - and until then the drawn disc stands in. When art
-	  arrives it belongs here, masked to the same circle.
-	*/
-	gfx_disc(cx, cy, r, disc_step(),
-		disc_bands, DISC_BANDS_N, COL_WHITE, COL_PANELHI, COL_BGDARK, 0);
-
-	int tx = cx + r + 10 * s;
-	int tw = tcol;
+	int x = b.x + 8 * s;
 	int y = b.y + 6 * s;
 
-	const char *what = (disc_state() == DISC_SPINNING) ? "Reading the disc"
-		: (disc_state() == DISC_UNKNOWN) ? "Unrecognised disc"
-		: disc_type_name(disc_type());
-
-	gfx_text(gfx_clip(what, s, tw), tx, y, s, COL_WHITE, 0);
-
-	const char *name = disc_display_name();
-	if (name && name[0] && strcmp(name, what))
-	{
-		gfx_text(gfx_clip(name, s, tw), tx, y + 10 * s, s, COL_PANELHI, 0);
-	}
-
-	if (disc_state() == DISC_SPINNING) return;
-
-	int ry = y + 24 * s;
-	int rowh = 14 * s;
+	/*
+	  The disc's name at the head of the list, dim, because the question underneath it is
+	  "which core for *this*" and the answer list names consoles rather than the disc.
+	  No disc drawn here: the chooser is a question about the library, and the picture
+	  belongs to the offer it came from.
+	*/
+	gfx_text(gfx_clip(d->title, s, tw), x, y, s, COL_PANELLO, 0);
+	y += 16 * s;
 
 	for (int i = 0; i < disc_nrows; i++)
 	{
 		int on = (i == disc_row);
-		int yy = ry + i * rowh;
+		int yy = y + i * rowh;
 
-		// A "(not yet)" row stays dim even under the selection bar: it can be read
-		// and landed on, but nothing about it may look like it will launch.
+		// A "(not yet)" row stays dim even under the selection bar: it can be read and
+		// landed on, but nothing about it may look like it will launch.
 		int dis = (disc_rowact[i] == DACT_NONE);
 
-		if (on) gfx_fill(tx - 4 * s, yy - 3 * s, tw + 8 * s, rowh - 2 * s, COL_BLUE);
-		gfx_text(gfx_clip(disc_rowtext[i], s, tw), tx, yy, s,
+		if (on) gfx_fill(x - 4 * s, yy - 3 * s, tw + 8 * s, rowh - 2 * s, COL_BLUE);
+		gfx_text(gfx_clip(disc_rowtext[i], s, tw), x, yy, s,
 			dis ? COL_DIM : (on ? COL_WHITE : COL_INK), 0);
+	}
+}
+
+static void draw_disc(const chome_profile *p)
+{
+	disc_dlg d;
+	disc_dlg_get(&d);
+
+	if (disc_picking) { draw_disc_picker(p, &d); return; }
+
+	disc_build_btns(&d);
+	if (disc_btn >= disc_nbtn) disc_btn = disc_nbtn ? disc_nbtn - 1 : 0;
+
+	disc_layout L;
+	disc_layout_for(p, &d, &L);
+
+	int s = p->ts_ui;
+	panel_box b = draw_panel_ex(p, L.pw, L.ph, "Disc");
+	int cx = b.x + b.w / 2;
+	int y = b.y + 6 * s;
+
+	int inner = b.w - 24 * s;              // the margin disc_layout_for() sized it for
+
+	// The game, above its disc, in the size the shelf gives a card's title.
+	gfx_text_c(gfx_clip(d.title, L.ts, inner), cx, y, L.ts, COL_INK, 0);
+	y += 8 * L.ts + 4 * s;
+
+	gfx_text_c(gfx_clip(d.sub, s, inner), cx, y, s, COL_PANELLO, 0);
+	y += 8 * s + 8 * s;
+
+	int cy = y + L.r;
+	disc_note_rect(1, cx, cy, L.r);
+	disc_draw_face(&d, cx, cy, L.r);
+	y = cy + L.r + 8 * s;
+
+	/*
+	  The row of buttons. The focused one is filled with the selection blue this front-end
+	  uses for a selected row everywhere else; a dim one is drawn as a hollow outline
+	  rather than a plate, so that "cannot" and "not selected" cannot be confused with
+	  each other under a CRT's gamma.
+	*/
+	int total = disc_nbtn * L.bw + (disc_nbtn - 1) * L.gap;
+	int bx = cx - total / 2;
+
+	for (int i = 0; i < disc_nbtn; i++)
+	{
+		int x = bx + i * (L.bw + L.gap);
+		int on = (i == disc_btn);
+		int dim = disc_btndim[i];
+
+		if (dim)
+		{
+			gfx_frame_rect(x, y, L.bw, L.bh, on ? COL_DIM : COL_PANELLO, 2);
+		}
+		else
+		{
+			gfx_fill(x, y, L.bw, L.bh, on ? COL_BLUE : COL_PANELLO);
+			gfx_frame_rect(x, y, L.bw, L.bh, on ? COL_BLUE : COL_PANELLO, 2);
+		}
+
+		gfx_text_c(disc_btntext[i], x + L.bw / 2, y + (L.bh - 8 * s) / 2, s,
+			dim ? COL_DIM : (on ? COL_WHITE : COL_INK), 0);
 	}
 }
 
@@ -5280,6 +5788,26 @@ static void move_h(int dir)
 		slot_idx = n;
 		break;
 	}
+	/*
+	  The disc dialog's buttons sit side by side, so this is the axis that walks them -
+	  and the core chooser, which is a column, has nothing on it.
+
+	  Clamped rather than wrapping, like every other short list here: two entries that
+	  wrap make left and right the same key.
+	*/
+	case SCR_DISC:
+	{
+		if (disc_picking) { nudge(); return; }
+
+		disc_dlg d;
+		disc_dlg_get(&d);
+		disc_build_btns(&d);
+
+		int n = disc_btn + dir;
+		if (n < 0 || n >= disc_nbtn) { nudge(); return; }
+		disc_btn = n;
+		break;
+	}
 	case SCR_DISPLAY:
 	{
 		int opts[VP_MAX_OPTIONS];
@@ -5417,6 +5945,9 @@ static void move_v(int dir)
 		else if (dir < 0) { mb_idx = 0; go_screen(SCR_MENUBAR); }
 		else
 		{
+			// Down here is about the card under the cursor, whatever else is running.
+			susp_is_disc = 0;
+
 			chome_item *it = susp_target();
 			if (!it) { nudge(); return; }     // folders have no suspend points
 			lib_refresh_slots(it);
@@ -5437,12 +5968,14 @@ static void move_v(int dir)
 		break;
 
 	case SCR_SUSPEND:
-		if (dir < 0) go_screen(SCR_HOME);
+		// Back where the strip was opened from, which for a disc is its dialog and not
+		// the shelf - the shelf is not what the player was looking at.
+		if (dir < 0) go_screen(susp_is_disc ? SCR_DISC : SCR_HOME);
 		else
 		{
 			// Down on a slot locks or unlocks it. Locking is ours to track:
 			// there is no lock concept in MiSTer's savestate files.
-			chome_item *it = cur_game();
+			chome_item *it = susp_target();
 			if (!it) { nudge(); return; }
 			int st = slot_state(it, slot_idx);
 			if (!st) { nudge(); return; }
@@ -5465,19 +5998,49 @@ static void move_v(int dir)
 
 	case SCR_DISC:
 	{
+		if (disc_picking)
+		{
+			/*
+			  Clamped rather than wrapping, and mark_dirty() at the end: leaving that off
+			  is the bug a user reported on the core options screen, where the cursor
+			  moved and the screen did not.
+			*/
+			int n = disc_rows();
+			if (n <= 0) { nudge(); break; }
+
+			int next = disc_row + dir;
+			if (next < 0 || next >= n) { nudge(); break; }
+
+			disc_row = next;
+			mark_dirty();
+			break;
+		}
+
 		/*
-		  Clamped rather than wrapping, and mark_dirty() at the end: leaving that off
-		  is the bug a user reported on the core options screen, where the cursor
-		  moved and the screen did not.
+		  The buttons are a row, so up and down leave the dialog rather than walking it.
+
+		  Down goes to the disc's save states, which is what Down does on a shelf card and
+		  the reason this dialog exists at all in a running game: a disc has no card to
+		  press Down on. Only when there is a strip to reach - from the shelf the disc has
+		  not been played, and there is no identity for its states to be filed under until
+		  the mount publishes one. Up goes back to the badge it was opened from, when there
+		  is a badge; in a game there is not, because the drive is the core's.
 		*/
-		int n = disc_rows();
-		if (n <= 0) { nudge(); break; }
+		if (dir > 0)
+		{
+			disc_dlg d;
+			disc_dlg_get(&d);
+			if (!d.susp) { nudge(); break; }
 
-		int next = disc_row + dir;
-		if (next < 0 || next >= n) { nudge(); break; }
+			susp_is_disc = 1;
+			lib_refresh_slots(d.susp);
+			slot_idx = 0;
+			go_screen(SCR_SUSPEND);
+			break;
+		}
 
-		disc_row = next;
-		mark_dirty();
+		if (disc_state() != DISC_ABSENT) go_screen(SCR_DISCBAR);
+		else nudge();
 		break;
 	}
 
@@ -5751,10 +6314,45 @@ static void accept()
 
 	case SCR_DISC:
 	{
-		disc_build_rows();
-		if (disc_row < 0 || disc_row >= disc_nrows) { nudge(); break; }
+		disc_dlg d;
+		disc_dlg_get(&d);
 
-		if (disc_rowact[disc_row] == DACT_CHOOSE)
+		if (disc_picking)
+		{
+			disc_build_rows();
+			if (disc_row < 0 || disc_row >= disc_nrows) { nudge(); break; }
+
+			/*
+			  A "(not yet)" row refuses, and records nothing: remembering a choice that
+			  cannot launch would re-offer the refusal every time the dialog opens. The
+			  row already says why; the log says it in full.
+			*/
+			if (disc_rowact[disc_row] == DACT_NONE)
+			{
+				const chome_sys *sc = (disc_rowsys[disc_row] >= 0) ? lib_sys(disc_rowsys[disc_row]) : 0;
+				printf("ClassicUI: disc -> %s (%s), not launched: that core's daemon does not read from the drive yet\n",
+					sc ? sc->name : "?", disc_display_name());
+				nudge();
+				break;
+			}
+
+			/*
+			  A core was chosen. Remembered so re-opening the dialog shows the decision
+			  rather than starting from the guess. Rows only offer what disc_playables
+			  can launch, so this launches; disc_launch() keeps its own guard for the
+			  day the two disagree.
+			*/
+			disc_chosen_sys = disc_rowsys[disc_row];
+			disc_picking = 0;
+			disc_row = 0;
+			disc_launch(disc_chosen_sys);
+			break;
+		}
+
+		disc_build_btns(&d);
+		if (disc_btn < 0 || disc_btn >= disc_nbtn) { nudge(); break; }
+
+		if (disc_btnact[disc_btn] == DBTN_OPTS)
 		{
 			disc_picking = 1;
 			disc_row = 0;
@@ -5763,29 +6361,27 @@ static void accept()
 			break;
 		}
 
+		// A over the running disc goes back to it, exactly as A on the running game's
+		// own card does - see the SCR_HOME case above.
+		if (d.running) { ig_close(1); break; }
+
 		/*
-		  A "(not yet)" row refuses, and records nothing: remembering a choice that
-		  cannot launch would re-offer the refusal every time the prompt opens. The
-		  row already says why; the log says it in full.
+		  And a dim Play refuses in the same words its label and the line under the title
+		  already say. Nothing is remembered: a choice that cannot launch would re-offer
+		  the refusal every time the dialog opens.
 		*/
-		if (disc_rowact[disc_row] == DACT_NONE)
+		if (!disc_can_play(&d))
 		{
-			const chome_sys *sc = (disc_rowsys[disc_row] >= 0) ? lib_sys(disc_rowsys[disc_row]) : 0;
-			printf("ClassicUI: disc -> %s (%s), not launched: that core's daemon does not read from the drive yet\n",
-				sc ? sc->name : "?", disc_display_name());
+			const chome_sys *sc = (d.sysidx >= 0) ? lib_sys(d.sysidx) : 0;
+			printf("ClassicUI: disc -> %s (%s), not launched: %s\n",
+				sc ? sc->name : "no core for this disc", disc_display_name(),
+				sc ? "that core's daemon does not read from the drive yet"
+				: "nothing here claims it - use Options to pick a core");
 			nudge();
 			break;
 		}
 
-		/*
-		  A core was chosen. Remembered so re-opening the prompt shows the decision
-		  rather than starting from the guess. Rows only offer what disc_playables
-		  can launch, so this launches; disc_launch() keeps its own guard for the
-		  day the two disagree.
-		*/
-		disc_chosen_sys = disc_rowsys[disc_row];
-		disc_picking = 0;
-		disc_row = 0;
+		disc_chosen_sys = d.sysidx;
 		disc_launch(disc_chosen_sys);
 		break;
 	}
@@ -6020,16 +6616,25 @@ static void back()
 	case SCR_DISC:
 		if (disc_picking)
 		{
-			disc_picking = 0;
-			disc_row = 0;
-			disc_build_rows();
+			disc_dlg_enter();
 			mark_dirty();
 			return;
 		}
 
-		// Back to the disc it belongs to, which is where the prompt was opened from -
-		// falling through to the generic back dropped the player onto the shelf.
-		go_screen(SCR_DISCBAR);
+		/*
+		  Back to the disc it belongs to, which is where the dialog was opened from -
+		  falling through to the generic back dropped the player onto the shelf.
+
+		  There is no badge to go back to in a game, though: the drive belongs to the core,
+		  so nothing is drawn in the corner and SCR_DISCBAR would be a state with nothing
+		  on screen and no way to tell it from this one.
+		*/
+		go_screen(disc_state() != DISC_ABSENT ? SCR_DISCBAR : SCR_HOME);
+		return;
+
+	case SCR_SUSPEND:
+		// As Up does: back where the strip was opened from.
+		go_screen(susp_is_disc ? SCR_DISC : SCR_HOME);
 		return;
 
 	case SCR_HOME:
@@ -7602,6 +8207,7 @@ static int ig_open()
 	screen = SCR_HOME;
 	slot_idx = 0;
 	del_arm_slot = -1;
+	susp_is_disc = 0;
 	/*
 	  A save that gave up marks its slot NOT SAVED, which is worth seeing once and not
 	  worth seeing forever: it is only a slot number, so without this it would still be
@@ -7613,6 +8219,25 @@ static int ig_open()
 	strip_y = 0;
 
 	ig_select_running();
+
+	/*
+	  Over a disc the menu opens on the disc's own dialog, not on the shelf.
+
+	  The shelf is where a file-launched game lives, and opening there lands the player on
+	  the card they came from. A disc has no card - nothing scanned it, so ig_select_running()
+	  finds nothing to park on and the shelf shows whatever it was last showing, which after
+	  a disc launch is a folder. So the menu opened on a screen that had nothing to do with
+	  what was playing, and getting back to the disc meant knowing it was up the menu bar.
+
+	  The dialog is set up directly rather than through disc_open_screen(), for the same
+	  reason `screen` is assigned above: go_screen() belongs to navigation between screens
+	  and this is the first screen of the session.
+	*/
+	if (ig_running_disc())
+	{
+		disc_dlg_enter();
+		screen = SCR_DISC;
+	}
 
 	gfx_damage_all();
 	mark_dirty();                 // damage alone does not schedule a draw
@@ -8593,7 +9218,13 @@ int chome_handle(uint32_t key)
 	  must. Rate-limited to the animation step so a spinning disc does not mean a full
 	  repaint every pass of this loop.
 	*/
-	if (disc_state() != DISC_ABSENT)
+	/*
+	  Or while the dialog is up over a disc that is already playing, which is the one case
+	  where a disc is on screen and the drive says there is none: it is the core's, so
+	  disc_poll() is not running and disc_state() has been ABSENT since the launch. Without
+	  this arm the in-game dialog drew its disc once and it sat there, stopped.
+	*/
+	if (disc_state() != DISC_ABSENT || (screen == SCR_DISC && !disc_picking && ig_running_disc()))
 	{
 		/*
 		  Faster than the other animations, because the disc travels further per frame -
