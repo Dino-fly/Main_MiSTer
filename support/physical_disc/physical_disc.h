@@ -48,6 +48,28 @@
 #define PHYSICAL_DISC_RAW  2352
 #define PHYSICAL_DISC_SUB  96
 
+/*
+  Who the disc in the drive *is*, published by the mount for the front-end to read.
+
+  The sentinel above says "the disc" and nothing more, so everything a front-end keys
+  on a game - savestate paths, per-game core options, suspend and resume - had no disc
+  to key on and either collided across every disc or pointed at a filename containing
+  '*', which cannot exist on exFAT.
+
+  physical_disc_save_name() already answers "who is this disc" for the save files, and
+  it is the only thing that does: the serial for a PlayStation disc, the header product
+  id for Saturn and Mega CD, else the volume label, else a hash of the table of
+  contents. Nobody else can recompute it - the front-end has no drive of its own, and
+  the detection helper reads the disc with its own reader and never builds this name.
+  Reimplementing the choice elsewhere would drift from the save files the moment a disc
+  had no serial, so the mount writes its answer here instead, once, and the front-end
+  reads it rather than guessing.
+
+  Two lines: the name (a legal filename), then a human title for a caption, which may
+  be empty. Lives in tmpfs and is removed when the game is left.
+*/
+#define PHYSICAL_DISC_IDENT_FILE "/tmp/classicui_disc_ident"
+
 // How long a core holds its disc-swap door open after a swap is seen.
 #define PHYSICAL_DISC_SWAP_DWELL_MS 500
 

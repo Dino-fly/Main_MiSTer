@@ -49,6 +49,7 @@ static int ig_active = 0;
 static int ig_fb = 1;                 // framebuffer we page-flip in-game
 static int ig_have_item = 0;
 static chome_item ig_item;            // the running game, from CURRENT_FILE
+static int ig_is_disc = 0;            // ...and it is the disc in the drive, not a file
 
 static uint32_t *ig_shot = 0;         // live capture, core resolution
 static int ig_shot_w = 0, ig_shot_h = 0;
@@ -615,6 +616,20 @@ static int ig_is_running(const chome_item *it)
 {
 	if (!ig_active || !ig_have_item || !it) return 0;
 	return (it->sysidx == ig_item.sysidx) && !strcmp(it->path, ig_item.path);
+}
+
+/*
+  The running disc, when there is one, as something the screens can be handed.
+
+  A disc is not on the shelf: nothing scanned it, so there is no card to walk onto and
+  no card for the in-game menu to park on. Everything those screens need is in ig_item
+  already, so where the shelf would have supplied a selection this supplies the disc
+  instead. Returns nothing when a file-launched game is running, which leaves browsing
+  another game's slots from the in-game menu exactly as it was.
+*/
+static chome_item *ig_running_disc()
+{
+	return (ig_active && ig_have_item && ig_is_disc) ? &ig_item : 0;
 }
 
 /*
@@ -5314,6 +5329,7 @@ static void move_v(int dir)
 		else
 		{
 			chome_item *it = cur_game();
+			if (!it) it = ig_running_disc();  // a disc has no card to be standing on
 			if (!it) { nudge(); return; }     // folders have no suspend points
 			lib_refresh_slots(it);
 			slot_idx = 0;
@@ -6892,6 +6908,7 @@ static void quit_to_home(int suspend)
 	lib_state_save();
 	ig_active = 0;
 	unlink(CURRENT_FILE);
+	unlink(PHYSICAL_DISC_IDENT_FILE);   // nothing is mounted after this, so nobody is playing
 	printf("ClassicUI: leaving the game for Classic Home\n");
 	fpga_load_rbf("menu.rbf");
 }
@@ -7088,12 +7105,68 @@ static int cur_read(char *sysid, int syslen, char *rompath, int pathlen)
 	return 1;
 }
 
+/*
+  Who the disc in the drive is, as the mount named it - see PHYSICAL_DISC_IDENT_FILE.
+
+  Read rather than derived. The front-end has no drive of its own here: the detection
+  helper has been stopped and the core owns the hardware, so this is the only way to
+  learn the name, and it is deliberately the same name the core's save files use.
+*/
+static int disc_ident_read(char *key, int klen, char *title, int tlen)
+{
+	FILE *f = fopen(PHYSICAL_DISC_IDENT_FILE, "rt");
+	if (!f) return 0;
+
+	char k[128] = {}, t[128] = {};
+	int ok = (fgets(k, sizeof(k), f) != 0);
+	int have_t = (fgets(t, sizeof(t), f) != 0);
+	fclose(f);
+	if (!ok) return 0;
+
+	for (char *q = k; *q; q++) if (*q == '\n') { *q = 0; break; }
+	for (char *q = t; *q; q++) if (*q == '\n') { *q = 0; break; }
+	if (!k[0]) return 0;
+
+	snprintf(key, klen, "%s", k);
+	if (title && tlen) snprintf(title, tlen, "%s", have_t ? t : "");
+	return 1;
+}
+
+/*
+  What is running, by the name the rest of the firmware knows it by.
+
+  The sentinel is what got *mounted*, not who is playing, and everything keyed on a
+  game's path needs the latter: savestate slots, per-game core options, the suspend
+  record. Substituting it in one place is the point - susp_write() stores this name and
+  resume_poll() compares against it, so a disc whose two sides disagreed by a single
+  byte would suspend and then silently never resume.
+
+  When the name is missing the sentinel is kept rather than the record dropped: a core
+  that predates the ident file still deserves a captioned menu, and it degrades to
+  exactly the behaviour that shipped.
+*/
+static int cur_read_ident(char *sysid, int syslen, char *path, int pathlen,
+	char *title, int tlen, int *is_disc)
+{
+	if (is_disc) *is_disc = 0;
+	if (title && tlen) title[0] = 0;
+
+	if (!cur_read(sysid, syslen, path, pathlen)) return 0;
+	if (strcmp(path, PHYSICAL_DISC_SENTINEL)) return 1;
+
+	if (is_disc) *is_disc = 1;
+	disc_ident_read(path, pathlen, title, tlen);
+	return 1;
+}
+
 static int ig_load_item()
 {
 	ig_have_item = 0;
+	ig_is_disc = 0;
 
-	char sysid[64] = {}, rompath[CH_PATH_LEN] = {};
-	if (!cur_read(sysid, sizeof(sysid), rompath, sizeof(rompath))) return 0;
+	char sysid[64] = {}, rompath[CH_PATH_LEN] = {}, disc_title[CH_PATH_LEN] = {};
+	if (!cur_read_ident(sysid, sizeof(sysid), rompath, sizeof(rompath),
+		disc_title, sizeof(disc_title), &ig_is_disc)) return 0;
 
 	lib_load_systems();
 
@@ -7114,6 +7187,9 @@ static int ig_load_item()
 	snprintf(ig_item.title, sizeof(ig_item.title), "%s", fn);
 	char *dot = strrchr(ig_item.title, '.');
 	if (dot) *dot = 0;
+
+	// A disc's own label reads better than its serial, when it has one.
+	if (disc_title[0]) snprintf(ig_item.title, sizeof(ig_item.title), "%s", disc_title);
 
 	lib_refresh_slots(&ig_item);
 
@@ -7494,9 +7570,9 @@ static void resume_poll()
 	int slot = 0;
 	if (!susp_read(sysid, sizeof(sysid), relpath, sizeof(relpath), &slot)) return;
 
-	// Only for the game this core actually booted.
+	// Only for the game this core actually booted - by the same name susp_write() used.
 	char cur_sys[64] = {}, cur_path[CH_PATH_LEN] = {};
-	if (!cur_read(cur_sys, sizeof(cur_sys), cur_path, sizeof(cur_path))) return;
+	if (!cur_read_ident(cur_sys, sizeof(cur_sys), cur_path, sizeof(cur_path), 0, 0, 0)) return;
 	if (strcmp(cur_sys, sysid) || strcmp(cur_path, relpath)) return;
 
 	if (!ss_hk_valid) ss_scan_hooks();
@@ -7531,8 +7607,13 @@ void chome_core_poll()
 
 	done = 1;
 
+	/*
+	  By the disc's name too. The sentinel contains '*', which exFAT will not hold, so a
+	  disc's reference frame could never be written - and this runs once per core session
+	  with no retry, so it was one lost capture per disc, not a delayed one.
+	*/
 	char sysid[64] = {}, rompath[CH_PATH_LEN] = {};
-	if (!cur_read(sysid, sizeof(sysid), rompath, sizeof(rompath))) return;
+	if (!cur_read_ident(sysid, sizeof(sysid), rompath, sizeof(rompath), 0, 0, 0)) return;
 
 	char path[1024];
 	ref_shot_path(sysid, rompath, path, sizeof(path));
@@ -7583,7 +7664,12 @@ void chome_core_boot()
 	*/
 	{
 		char sysid[64] = {}, rel[CH_PATH_LEN] = {};
-		if (cur_read(sysid, sizeof(sysid), rel, sizeof(rel)))
+		/*
+		  Not for a disc. This list is MiSTer's own file browser's, and every entry in it
+		  is meant to be openable from there; a disc is not a file, so the best that could
+		  be written is a path to something that is not on the card. Picking it would fail.
+		*/
+		if (cur_read(sysid, sizeof(sysid), rel, sizeof(rel)) && strcmp(rel, PHYSICAL_DISC_SENTINEL))
 		{
 			const chome_sys *sy = 0;
 			for (int i = 0; i < lib_sys_count() && !sy; i++)
