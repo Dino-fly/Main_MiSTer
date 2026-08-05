@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "chome_disc.h"
+#include "chome_titles.h"
 
 #ifndef CHOME_HOST_TEST
 #include <fcntl.h>
@@ -404,8 +405,33 @@ int disc_take_dirty()
 	return d;
 }
 
+/*
+  What to put under the icon.
+
+  The title table comes first, because it is the only layer that can produce a name a
+  player recognises. A pressed disc has no filename, so the two things below it are
+  the two things the disc itself carries: a volume label, which is whatever the
+  mastering engineer typed and is sometimes the game and sometimes "PLAYSTATION", and
+  a serial, which is exact and unreadable. "SLES-01506" is the right answer to the
+  wrong question.
+
+  Below the table, the order is unchanged - label, then serial, then the console's
+  name - so a card with no table on it behaves exactly as it did before this existed.
+  That is the whole contract: disc_title_for() returns 0 for a missing file, and 0
+  falls straight through to what was here before.
+
+  Both identifiers are offered to the table, serial first, because they are the only
+  handle each system gives us: PlayStation discs carry a serial and PC Engine and Neo
+  Geo discs do not, so for those the label *is* the key. Asking twice is free after
+  the first frame - chome_titles.cpp caches both answers, misses included, which it
+  has to because this function runs on every frame that draws the disc.
+*/
 const char *disc_display_name()
 {
+	const char *t = dserial[0] ? disc_title_for(dserial) : 0;
+	if (!t && dlabel[0]) t = disc_title_for(dlabel);
+	if (t) return t;
+
 	if (dlabel[0]) return dlabel;
 	if (dserial[0]) return dserial;
 	return disc_type_name(dtype);

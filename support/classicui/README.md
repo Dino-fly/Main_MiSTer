@@ -903,6 +903,57 @@ whether a core accepts the MGL.
   Known gap: a disc-launched game has **no shelf identity**, so the in-game menu opens on the
   root shelf rather than the game and the savestate strip is unreachable. See the backlog.
 
+### Showing the disc's real name
+
+A disc has no filename, which is the whole problem: everything else on the shelf is named
+after the file it came from, and a pressed disc offers a serial - `SLES-01506` - and
+nothing else. So `chome_titles.{cpp,h}` looks the serial up in an **optional** table on
+the card and `disc_display_name()` prefers what it finds:
+
+    /media/fat/classicui/disctitles.txt
+
+    #classicui-disctitles 1
+    MK4407	Sonic the Hedgehog CD
+    SLES01506	Metal Gear Solid
+
+With no such file the fallback is exactly what it was before - label, then serial, then
+the console's name - and nothing is logged, because not having one is the normal state of
+every card. The absence is decided **once** and cached; `disc_titles_forget()` is the only
+way back, so a lookup on a card without a table costs one failed `open()` for the life of
+the process rather than one per frame.
+
+Sorted ASCII text, binary-searched in place, ~640 KB for all four systems and never read
+into RAM: the worst case is a 4 KB stdio buffer, four cached answers and one 256-byte line
+on the stack. A packed binary index would have been ~25% smaller and is the wrong trade -
+the keys are not fixed width (a serial normalises to 9-10 characters, a volume label to
+40), and the one thing certain to happen is a disc whose title is missing, for which the
+answer wants to be "add a line" rather than "re-run a script over a DAT you no longer
+have". See the file's own header for the full argument.
+
+Keys are normalised - upper case, `A-Z0-9` only - so the disc's `SLES_015.06`, Redump's
+`SLES-01506` and a Japanese serial's `SLPS 01204` are all one key. Regional variants are
+**not** collapsed: `SLES-01506` and `SLUS-00594` are different discs and get different
+rows.
+
+Build the table with `python3 support/classicui/tools/disctitles.py --fetch`, which pulls
+the four [Redump](https://redump.info) DATs - note `redump.info`, not the dead
+`redump.org`, and note the mandatory `/serial` suffix on those URLs, without which the DAT
+contains no serials at all. **No third-party data is committed here**: Redump's position
+is that their metadata "is considered public domain", which is a clearly stated intent and
+not a formal grant, so the script asks the user to fetch it. MAME's `hash/*.xml` is
+supported as an alternative and is the only source with an unambiguous licence (CC0 1.0,
+stated in `COPYING` and in each file) at the cost of about a quarter of Redump's
+PlayStation coverage; libretro-database works too and is CC-BY-SA-4.0, which is viral.
+DuckStation's `gamedb.yaml` is the most convenient shape of all and is CC BY-NC-**ND** -
+deliberately unsupported.
+
+Only PlayStation reaches this end to end today. `disc_serial_at()` digs out PlayStation
+serials and nothing else, so a PC Engine or Neo Geo disc is looked up by its volume label
+(hit or miss, by luck) and a Mega CD disc is not looked up at all - its identifier is the
+product code at 0x180 of the disc header, which `support/physical_disc/` reads and
+`chome_disc.cpp` does not. Rows are generated for all four so that closing that gap needs
+no new table.
+
 - **Scraping from ScreenScraper ourselves.** Now **written but inert**, pending a
   credential. `support/classicui/chome_ss.{cpp,h}` builds the request, parses the
   reply, classifies the failures and picks the media; what it will not do is make a
