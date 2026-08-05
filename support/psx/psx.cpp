@@ -559,32 +559,7 @@ void psx_read_cd(uint8_t *buffer, int lba, int cnt)
 		*/
 		while (cnt > 0)
 		{
-			int rc = physical_disc_read_sector(lba - 150, buffer, NULL);
-
-			/*
-			  Diagnostic for the boot failure: the disc validates and reaches the licence
-			  screen, then the BIOS shell - the signature of the executable not being
-			  found rather than of a read error. Logging the first reads distinguishes
-			  the two candidates in one run:
-
-			    rc != 0                     the drive failed the read - media or drive
-			    rc == 0, no sync pattern    the bytes are not a raw sector: wrong mode
-			    rc == 0, sync pattern ok    reads work, so the address is wrong
-
-			  A raw Mode 2 sector begins 00 FF FF FF FF FF FF FF FF FF FF 00, so the
-			  sync is the cheapest way to tell a real sector from anything else. Bounded
-			  to the first reads because this is on the core's data path.
-			*/
-			static int diag = 0;
-			if (diag < 20)
-			{
-				diag++;
-				printf("PSXDISC: core lba=%d drive=%d rc=%d sync=%02x%02x%02x%02x "
-					"hdr=%02x%02x%02x%02x mode=%02x\n",
-					lba, lba - 150, rc,
-					buffer[0], buffer[1], buffer[2], buffer[3],
-					buffer[12], buffer[13], buffer[14], buffer[15], buffer[15]);
-			}
+			physical_disc_read_sector(lba - 150, buffer, NULL);
 
 			buffer += CD_SECTOR_LEN;
 			cnt--;
@@ -816,7 +791,6 @@ void psx_mount_cd(int f_index, int s_index, const char *filename)
 			if (region == region_t::UNKNOWN)
 				region = game_info.region;
 			printf("Game ID: %s, region: %s\n", game_id, region_string(region));
-			printf("MOUNT: A region done, phys=%d\n", toc.phys);
 
 			// Write game ID if it's not empty (BIOS check is handled in user_io_write_gameid)
 			if (game_id && game_id[0] != '\0')
@@ -893,8 +867,6 @@ void psx_mount_cd(int f_index, int s_index, const char *filename)
 				}
 			}
 
-			printf("MOUNT: B past bios/save block\n");
-
 			uint16_t mask = 0;
 
 			fileTYPE sbi_file = {};
@@ -920,8 +892,6 @@ void psx_mount_cd(int f_index, int s_index, const char *filename)
 				mask = libCryptMask(&sbi_file);
 			}
 
-			printf("MOUNT: C past sbi lookup\n");
-
 			// The savestate files also take the disc's name: a '*' from the sentinel
 			// is not even a legal name on the exFAT card.
 			process_ss(toc.phys ? phys_save_name : filename, name_len != 0);
@@ -934,8 +904,6 @@ void psx_mount_cd(int f_index, int s_index, const char *filename)
 			  requested a single sector, and the two reads logged were the firmware's own
 			  licence and region probes.
 			*/
-			printf("MOUNT: D past process_ss\n");
-
 			printf("PSXTOC: phys=%d last=%d end=%d (bytes=%lld)\n",
 				toc.phys, toc.last, toc.end, (long long)toc.end * CD_SECTOR_LEN);
 			for (int t = 0; t < toc.last && t < 4; t++)
@@ -950,7 +918,6 @@ void psx_mount_cd(int f_index, int s_index, const char *filename)
 			user_io_set_index(f_index);
 
 			mount_cd(toc.end*CD_SECTOR_LEN, s_index);
-			printf("MOUNT: E mounted, loaded=1\n");
 			loaded = 1;
 		}
 	}

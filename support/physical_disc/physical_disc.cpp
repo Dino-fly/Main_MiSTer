@@ -48,6 +48,7 @@
 #include <limits.h>
 
 #include "physical_disc.h"
+#include "../../cfg.h"       // cfg.debug, to keep the stats log off a release build
 
 #define RING_SECTORS        4096
 #define LANE_COUNT          2
@@ -677,7 +678,7 @@ static void *ring_worker_main(void *arg)
 		rr = (rr + 1) % LANE_COUNT;
 
 		if (clock_ms() - last_stats >= STATS_PERIOD_MS) {
-			if (drv.hit_count || drv.miss_count) write_stats_log();
+			if (cfg.debug && (drv.hit_count || drv.miss_count)) write_stats_log();
 			last_stats = clock_ms();
 		}
 
