@@ -105,9 +105,11 @@ void gfx_spinner(int cx, int cy, int r, int dot, unsigned long ms, uint32_t hot,
   cells (a 32px icon) and r=32 gives 2x2 (a 64px one). Pass a multiple of 16 or the
   cells come out fractional and the look is lost.
 
-  `outline` non-zero draws a ring one cell outside the disc, which is how the front-end
-  shows the disc has focus. It grows the sprite by a cell rather than putting anything
-  behind it: a filled plate covered the shelf title at 240p. 0 for no ring.
+  `outline` non-zero draws a ring two cells thick just outside the disc, which is how
+  the front-end shows the disc has focus. It grows the sprite by two cells rather than
+  putting anything behind it: a filled plate covered the shelf title at 240p. Two cells
+  because one cell is one pixel at 240p, and a one-pixel ring was invisible on a real
+  TV. 0 for no ring.
 
   `step` is the rotation, 0-63, and the caller owns it. This does *not* derive the angle
   from a clock and a period, which is how it used to work and which was wrong: the angle
@@ -132,6 +134,10 @@ void gfx_spinner(int cx, int cy, int r, int dot, unsigned long ms, uint32_t hot,
 #define GFX_DISC_FOCUS_MS 800UL
 #define GFX_DISC_FAST_MS  1500UL
 #define GFX_DISC_SLOW_MS  4000UL
+
+// One breath of the focus ring's pulse; see disc_focus_col() in chome_ui.cpp. Here
+// with the disc's other periods so the harness can park the clock on its trough.
+#define GFX_DISC_PULSE_MS 1200UL
 
 // Repaint interval while a disc is on screen. Faster than GFX_SPIN_MS because the disc
 // moves further per frame than the activity ring does.
