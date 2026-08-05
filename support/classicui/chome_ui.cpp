@@ -7877,6 +7877,28 @@ static int ui_busy()
 	return 0;
 }
 
+/*
+  How often to advance the disc: 60fps when only the disc will be repainted, the old
+  rate when the whole frame will be.
+
+  These are the two cases the dispatch at the bottom of chome_handle() distinguishes, and
+  asking the same questions here is what keeps the rate honest - a 16ms tick that then
+  took the full-repaint branch would be 31% of the loop spent redrawing a whole screen to
+  move a disc by a third of a position.
+
+  Both answers describe the frame that was last drawn rather than the one about to be:
+  ui_busy() can turn on between this and the render, and the disc's rectangle is where it
+  was. That is the same window the dispatch already lives with - the worst case is one
+  tick at the wrong rate, which is invisible.
+*/
+static unsigned long disc_spin_ms()
+{
+	int x, y, w, h;
+	if (ui_busy()) return GFX_DISC_MS;
+	if (!disc_spin_rect(&x, &y, &w, &h)) return GFX_DISC_MS;
+	return GFX_DISC_PART_MS;
+}
+
 static void animate()
 {
 	unsigned long now = GetTimer(0);
@@ -8485,11 +8507,14 @@ int chome_handle(uint32_t key)
 		  Not mark_dirty(): the disc turning is the one change on screen, so it asks for
 		  the partial path - see the dispatch at the bottom of this function - and a
 		  full repaint every 50ms was most of what a spinning disc cost.
+
+		  The rate follows which path that dispatch will take; disc_spin_ms() asks the
+		  same two questions it does.
 		*/
 		static unsigned long disc_next_spin = 0;
 		if (CheckTimer(disc_next_spin))
 		{
-			disc_next_spin = GetTimer(GFX_DISC_MS);
+			disc_next_spin = GetTimer(disc_spin_ms());
 			disc_spin_due = 1;
 		}
 	}
