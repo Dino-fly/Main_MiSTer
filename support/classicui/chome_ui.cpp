@@ -7554,6 +7554,35 @@ void chome_core_boot()
 
 int chome_screen_id() { return screen; }
 
+/*
+  1 when the machine is not doing anything the scheduler needs to be prompt about, so it
+  may sleep a little between passes instead of spinning.
+
+  True whenever the front-end owns the screen: its shelf in the menu core, or its in-game
+  menu over any core at all - paused, frozen, or still running.
+
+  The still-running case is included, and the reason is that the player can neither see
+  nor hear that game. ig_mute_engage() is called unconditionally when the in-game menu
+  opens, before any pause or freeze decision, so every core is silenced; and the HPS
+  framebuffer *replaces* the scaler's input rather than blending over it, so the game is
+  not on screen either. An earlier version of this excluded still-running cores on the
+  grounds that they were "still making sound", which was simply wrong.
+
+  The residual risk, stated rather than hidden: a core actively streaming sectors - a CD
+  or floppy game left running behind the menu - does still want prompt service. One
+  millisecond is small next to a 13ms CD sector at 1x, so this should be invisible, but if
+  a streaming core ever misbehaves with the menu open then excluding those specific cores
+  is the first thing to try.
+*/
+int chome_core_idle()
+{
+	if (!cfg.classicui) return 0;
+
+	if (is_menu()) return chome_active();
+
+	return ig_active;
+}
+
 int chome_active()
 {
 	return active || ig_active;
