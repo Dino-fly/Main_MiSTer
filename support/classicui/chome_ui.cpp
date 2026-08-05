@@ -4777,13 +4777,15 @@ static void launch_selected()
   Which core slot a physical disc goes into, by shelf system id, and only for the
   systems whose firmware-side daemon can read from the drive.
 
-  Three so far. PC Engine CD and Mega CD read a real disc at full speed upstream;
+  Four so far. PC Engine CD and Mega CD read a real disc at full speed upstream;
   PlayStation is wired the same way in psx.cpp but upstream reports it short of full
-  speed from a drive, so expect FMV and CD audio to be the rough parts there. The
-  other CD daemons each need the same work done to them separately; a system that is
-  not in this table is still identified and still named by the prompt, but its row is
-  marked "(not yet)" and refuses - see disc_build_rows() - instead of loading a core
-  that would find nothing in the slot.
+  speed from a drive, so expect FMV and CD audio to be the rough parts there. Neo Geo
+  CD has no daemon of its own - neocd_set_image() recognises the sentinel and the
+  sectors come from the same shared cdd_t in support/megacd that serves Mega CD, which
+  is why that port had to land first. The other CD daemons each need the same work done
+  to them separately; a system that is not in this table is still identified and still
+  named by the prompt, but its row is marked "(not yet)" and refuses - see
+  disc_build_rows() - instead of loading a core that would find nothing in the slot.
 
   The slot is the core's own SD-card index for its CD image and comes from the "S"
   entry in each core's config string; getting it wrong mounts the disc into the wrong
@@ -4820,6 +4822,10 @@ static const disc_playable disc_playables[] =
 	{ "md",   DISC_T_MEGACD, { 's', 0 }, "_Console/MegaCD" },  // "S0,CUECHD,Insert Disk" in MegaCD.sv
 	{ "md",   DISC_T_AUDIO,  { 's', 0 }, "_Console/MegaCD" },  // the Mega CD BIOS is a CD player,
 	                                            // and megacd.cpp mounts an audio-only disc
+	{ "neogeo", DISC_T_NONE, { 's', 1 }, 0 },   // "S1,CUECHD,Load CD Image" in neogeo.sv. Index 1
+	                                            // is also its romset slot ("FS1,*,Load ROM set")
+	                                            // but that one is type 'f' - menu.cpp routes any
+	                                            // 's' mount on this core to neocd_set_image().
 };
 
 static const disc_playable *disc_play_for(int sysidx)
@@ -8319,6 +8325,15 @@ int chome_handle(uint32_t key)
 		{
 			go_screen(SCR_HOME);
 		}
+
+		/*
+		  The remembered core choice is "for this disc" - see disc_chosen_sys - and
+		  this is where that promise is kept. Every disc change passes through ABSENT,
+		  so forgetting here is what stops a choice outliving its disc: play a
+		  PlayStation disc, put a Neo Geo CD in afterwards, and a remembered PSX pick
+		  would caption the new disc's prompt "Play on PlayStation" - and launch it.
+		*/
+		if (disc_state() == DISC_ABSENT) disc_chosen_sys = -1;
 
 		printf("ClassicUI: disc state=%d type=%s name=\"%s\"\n",
 			disc_state(), disc_type_name(disc_type()), disc_display_name());
