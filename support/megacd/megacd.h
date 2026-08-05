@@ -54,6 +54,10 @@ public:
 
 	cdd_t();
 	int Load(const char *filename);
+	// Adopt the disc now in the drive as this daemon's disc; see megacdd.cpp.
+	int SwapPhys();
+	// Whether the mounted "image" is the physical drive, for mcd_poll()'s swap watch.
+	int is_phys() { return toc.phys; }
 	void Unload();
 	void Reset();
 	void Update();
@@ -97,7 +101,8 @@ extern cdd_t cdd;
 
 
 void mcd_poll();
-void mcd_set_image(int num, const char *filename);
+// Returns 1 when a disc image (file or physical disc) was actually mounted.
+int mcd_set_image(int num, const char *filename);
 void mcd_reset();
 int mcd_send_data(uint8_t* buf, int len, uint8_t index);
 int mcd_can_send_data(uint8_t type);

@@ -7,6 +7,7 @@
 
 #include "megacd.h"
 #include "../chd/mister_chd.h"
+#include "../physical_disc/physical_disc.h"
 
 cdd_t cdd;
 
@@ -246,7 +247,23 @@ int cdd_t::Load(const char *filename)
 	Unload();
 
 	const char *ext = filename+strlen(filename)-4;
-	if (!strncasecmp(".cue", ext, 4))
+	if (!strcmp(filename, PHYSICAL_DISC_SENTINEL))
+	{
+		/*
+		  The disc in the drive rather than a file: the table of contents comes off
+		  the disc in place of a cue sheet, and toc.phys makes every read below
+		  branch to the streaming reader. The drive was already opened and spun up
+		  by mcd_set_image() - it needed the TOC and the region before it chose a
+		  BIOS - so this open is a no-op and the read-ahead worker is re-armed on
+		  the fresh table.
+		*/
+		if (physical_disc_open(NULL) || physical_disc_load_toc(&this->toc))
+		{
+			physical_disc_close();
+			printf("\x1b[32mMCD: no readable physical disc\n\x1b[0m");
+			return (-1);
+		}
+	} else if (!strncasecmp(".cue", ext, 4))
 	{
 		if (LoadCUE(filename)) {
 			return (-1);
@@ -271,7 +288,13 @@ int cdd_t::Load(const char *filename)
 
 	}
 
-	if (this->toc.chd_f)
+	if (this->toc.phys)
+	{
+		// Nothing to sniff: a real disc's first track is raw 2352-byte sectors and
+		// physical_disc_load_toc() already set tracks[0].sector_size accordingly,
+		// so the sector-size decision below never reaches the header bytes.
+	}
+	else if (this->toc.chd_f)
 	{
 		mister_chd_read_sector(this->toc.chd_f, 0, 0, 0, 0x10, (uint8_t *)header, this->chd_hunkbuf, &this->chd_hunknum);
 	} else {
@@ -309,10 +332,39 @@ int cdd_t::Load(const char *filename)
 	return 0;
 }
 
+/*
+  A new physical disc was put in the drive while this daemon owned it (mcd_poll()
+  saw the swap event). The reader has already read the new table of contents; take
+  it over and rewind every cursor, exactly the state a fresh Load() would leave.
+  The caller acts out the tray-open/close for the core.
+*/
+int cdd_t::SwapPhys()
+{
+	toc_t nt = {};
+	if (physical_disc_current_toc(&nt) || !nt.last) return 0;
+	this->toc = nt;
+	this->sectorSize = this->toc.tracks[0].sector_size ? this->toc.tracks[0].sector_size : 2352;
+	this->toc.tracks[this->toc.last].start = this->toc.end;
+	this->loaded = 1;
+
+	this->index = 0;
+	this->lba = 0;
+	this->scanOffset = 0;
+	this->audioLength = 0;
+	this->audioOffset = 0;
+	this->chd_audio_read_lba = 0;
+	return 1;
+}
+
 void cdd_t::Unload()
 {
 	if (this->loaded)
 	{
+		if (this->toc.phys)
+		{
+			physical_disc_close();
+		}
+
 		if (this->toc.chd_f)
 		{
 			chd_close(this->toc.chd_f);
@@ -484,7 +536,12 @@ void cdd_t::Update() {
 
 		if (this->toc.sub.opened()) FileSeek(&this->toc.sub, this->lba * 96, SEEK_SET);
 
-		if (this->toc.tracks[this->index].type)
+		if (this->toc.phys)
+		{
+			// No file cursor to move; point the drive's read-ahead at the scan target.
+			physical_disc_seek_hint(this->lba);
+		}
+		else if (this->toc.tracks[this->index].type)
 		{
 			// DATA track
 			FileSeek(&this->toc.tracks[0].f, this->lba * this->sectorSize, SEEK_SET);
@@ -894,7 +951,12 @@ void cdd_t::SeekToLBA(int lba, int play) {
 		lba = this->toc.tracks[index].start;
 	}
 
-	if (this->toc.tracks[index].type)
+	if (this->toc.phys)
+	{
+		/* the drive: tell the read-ahead worker where the core is about to read */
+		physical_disc_seek_hint(lba);
+	}
+	else if (this->toc.tracks[index].type)
 	{
 		/* DATA track */
 		FileSeek(&this->toc.tracks[0].f, lba * this->sectorSize, SEEK_SET);
@@ -920,7 +982,13 @@ void cdd_t::ReadData(uint8_t *buf)
 	if (this->toc.tracks[this->index].type && (this->lba >= 0))
 	{
 
-		if (this->toc.chd_f)
+		if (this->toc.phys)
+		{
+			// The drive hands back the 2048-byte user area directly; served from
+			// the read-ahead ring when the worker got there first.
+			physical_disc_read_data2048(this->lba, buf);
+		}
+		else if (this->toc.chd_f)
 		{
 			int read_offset = 0;
 			if (this->sectorSize != 2048)
@@ -954,7 +1022,26 @@ int cdd_t::ReadCDDA(uint8_t *buf)
 		return this->audioLength;
 	}
 
-	if (this->toc.chd_f)
+	if (this->toc.phys)
+	{
+		/*
+		  Same shape as the CHD path below: the core asks for one or two whole
+		  sectors depending on how much of the previous one it has consumed, and
+		  chd_audio_read_lba - advanced by Update() alongside lba - is the audio
+		  read cursor for both. Raw sectors off a disc are already little-endian
+		  PCM, so no byteswap here.
+		*/
+		for (int i = 0; i < this->audioLength / 2352; i++)
+		{
+			physical_disc_read_sector(this->chd_audio_read_lba + i, buf + 2352 * i, NULL);
+		}
+
+		if ((this->audioLength / 2352) > 1)
+		{
+			this->chd_audio_read_lba++;
+		}
+	}
+	else if (this->toc.chd_f)
 	{
 		for(int i = 0; i < this->audioLength / 2352; i++)
 		{
@@ -1001,7 +1088,25 @@ int cdd_t::ReadSubcode(uint16_t* buf)
 {
 	int err = 0;
 	uint8_t subc[96];
-	if (this->toc.chd_f)
+	if (this->toc.phys)
+	{
+		uint8_t rawsec[2352];
+		/*
+		  Subchannel comes with the sector when the drive can deliver it. The sector
+		  just went through ReadData()/ReadCDDA() so it is in the ring; when the
+		  drive cannot read subchannel at all this reports failure and the caller
+		  simply sends none, same as a cue with no .sub file.
+		*/
+		if (!physical_disc_read_sector_sub(this->chd_audio_read_lba, rawsec, subc))
+		{
+			err = -1;
+		}
+		else
+		{
+			InterleaveSubcode(subc, buf);
+		}
+	}
+	else if (this->toc.chd_f)
 	{
 		//Just use the read sector call with an offset, since we previously read that sector, it is already in the hunk cache
 		if (this->toc.tracks[this->index].sbc_type == SUBCODE_RW_RAW) {
