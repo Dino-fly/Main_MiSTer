@@ -49,6 +49,18 @@ IMLIB2_LIB  = -Llib/imlib2 -lfreetype -lbz2 -lpng16 -lz -lImlib2
 OBJ	= $(C_SRC:%.c=$(BUILDDIR)/%.c.o) $(CPP_SRC:%.cpp=$(BUILDDIR)/%.cpp.o) $(IMG:%.png=$(BUILDDIR)/%.png.o)
 DEP	= $(C_SRC:%.c=$(BUILDDIR)/%.c.d) $(CPP_SRC:%.cpp=$(BUILDDIR)/%.cpp.d)
 
+# ScreenScraper developer credentials, on a machine that has them.
+#
+# Regenerated on every invocation, at parse time, because it has to exist before the
+# first object is compiled and an ordinary rule would need chome_ss.cpp's object to
+# depend on it - which the generated .d files would then have to know about. A machine
+# with no credentials file gets no header and the scraper compiles inert, which is what
+# every shipped build does. See the script for why this is not a -D.
+SS_ENV ?= $(HOME)/.config/classicui/ss.env
+ifneq ($(MAKECMDGOALS), clean)
+$(shell mkdir -p $(BUILDDIR) && sh ./support/classicui/tools/ss_creds.sh "$(SS_ENV)" "$(BUILDDIR)/ss_credentials.h")
+endif
+
 DFLAGS	= $(INCLUDE) -D_7ZIP_ST -DPACKAGE_VERSION=\"1.3.3\" -DHAVE_LROUND -DHAVE_STDINT_H -DHAVE_STDLIB_H -DHAVE_SYS_PARAM_H -DENABLE_64_BIT_WORDS=0 -D_FILE_OFFSET_BITS=64 -D_LARGEFILE64_SOURCE -DVDATE=\"`date +"%y%m%d"`\"
 CFLAGS	= $(DFLAGS) -Wall -Wextra -Wno-strict-aliasing -Wno-stringop-overflow -Wno-stringop-truncation -Wno-format-truncation -Wno-psabi -Wno-restrict -c
 LFLAGS	= -lc -lstdc++ -lm -lrt $(IMLIB2_LIB) -Llib/bluetooth -lbluetooth -lpthread

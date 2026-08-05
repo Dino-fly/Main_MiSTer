@@ -38,7 +38,39 @@
   CLASSICUI_SS_DEVID / CLASSICUI_SS_DEVPASS are build-time only, and undefined in
   every build we ship. The test build defines them with dummy values so everything
   below stays covered.
+
+  On a machine that has real credentials they arrive through this header, written by
+  support/classicui/tools/ss_creds.sh from a file outside the repository and left in
+  bin/ where nothing tracks it. Deliberately not a -D: that would put the password in
+  every build log and in `ps` while the compiler ran. __has_include rather than a
+  makefile conditional so a tree without the header still compiles on its own.
+
+  These identify the *application*. The player's own ScreenScraper account is a
+  separate pair, read from MiSTer.ini at runtime (classicui_ss_user / _ss_pass), and
+  that is the one that earns a player their own request quota rather than sharing the
+  guest pool.
 */
+/*
+  Two guards, both learned the hard way when this was added.
+
+  CLASSICUI_SS_DEVID already being set means a -D wins over the file: the main harness
+  passes dummy credentials that way and would otherwise collide with a real header on
+  the developer's own machine, and a build that says "testdev" on the command line must
+  mean it.
+
+  CLASSICUI_SS_NO_CREDS is how the gate binary says "compile me the way we ship". Its
+  whole purpose is to prove that the shipped configuration cannot reach the network, and
+  it compiles this same file with no devid - so picking up a local credentials header
+  made it fail the moment the developer had credentials, which is precisely when that
+  reassurance is worth having. The shipped configuration is a property of the build, not
+  of whose machine it is on, so the gate states it rather than inferring it.
+*/
+#if !defined(CLASSICUI_SS_DEVID) && !defined(CLASSICUI_SS_NO_CREDS) && defined(__has_include)
+#if __has_include("bin/ss_credentials.h")
+#include "bin/ss_credentials.h"
+#endif
+#endif
+
 #ifdef CLASSICUI_SS_DEVID
 #define SS_HAVE_DEV 1
 #else
