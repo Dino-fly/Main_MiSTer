@@ -2775,7 +2775,14 @@ void HandleUI(void)
 		{
 			if (!mgl->done)
 			{
-				if (mgl->item[mgl->current].path[0] == '/') snprintf(selPath, sizeof(selPath), "%s", mgl->item[mgl->current].path);
+				/*
+				  The physical-disc sentinel is not a filename: it means "the disc in the
+				  drive", and the CD daemons recognise it by an exact compare. Resolving it
+				  against the games folder the way a real path is resolved would hand them
+				  ".../TGFX16-CD/*PHYSICAL_DISC*", which matches nothing and mounts nothing.
+				*/
+				if (!strcmp(mgl->item[mgl->current].path, PHYSICAL_DISC_SENTINEL)) snprintf(selPath, sizeof(selPath), "%s", PHYSICAL_DISC_SENTINEL);
+				else if (mgl->item[mgl->current].path[0] == '/') snprintf(selPath, sizeof(selPath), "%s", mgl->item[mgl->current].path);
 				else snprintf(selPath, sizeof(selPath), "%s/%s", HomeDir(((is_pce() && !strncasecmp(fs_pFileExt, "CUE", 3)) ? PCECD_DIR : NULL)), mgl->item[mgl->current].path);
 
 				// Update /tmp/ files to reflect the actual image being loaded by MGL

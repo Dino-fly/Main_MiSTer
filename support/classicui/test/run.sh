@@ -27,12 +27,15 @@ gcc -std=gnu99 -O1 -g -I. -c sxmlc.c -o /tmp/harness/sxmlc.o
 # code that no test could reach. Defining a fake pair here is what makes it
 # testable, and the value being obviously fake is the point: a test that needed a
 # real credential would be a test nobody but Derek could run.
+# -I./lib/libchdr/include because the disc launch path includes physical_disc.h, which
+# reaches cd.h, which includes libchdr/chd.h. A comment cannot go inside the argument
+# list below - a '#' line mid-continuation ends the command and g++ sees no inputs.
 g++ -std=gnu++14 -O1 -g -Wall -Wextra -Wno-unused-parameter -Wno-format-truncation \
     -DCHOME_HOST_TEST \
     -DCLASSICUI_SS_DEVID=\"testdev\" \
     -DCLASSICUI_SS_DEVPASS=\"testpass\" \
     -DCLASSICUI_SS_SOFTNAME=\"classichome-test\" \
-    -I. -o /tmp/harness/chome_test \
+    -I. -I./lib/libchdr/include -o /tmp/harness/chome_test \
     support/classicui/chome_gfx.cpp \
     support/classicui/chome_theme.cpp \
     support/classicui/chome_lib.cpp \

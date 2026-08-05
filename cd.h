@@ -43,6 +43,14 @@ typedef struct
 	int end;
 	int last;
 	int sectorSize;
+	/*
+	  1: the tracks are on a physical disc in the drive, not in a file or a chd, so
+	  every read goes through support/physical_disc instead. Adding this field moves
+	  everything below it, and this tree's makefile does not rebuild objects when a
+	  header changes - a partial rebuild here produces a binary with two layouts of
+	  this struct. Rebuild from clean after touching it.
+	*/
+	int phys;
 	chd_file *chd_f;
 	int chd_hunksize;
 	cd_track_t tracks[100];
