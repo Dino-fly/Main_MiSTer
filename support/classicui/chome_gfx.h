@@ -82,18 +82,35 @@ void gfx_spinner(int cx, int cy, int r, int dot, unsigned long ms, uint32_t hot,
   shows the disc has focus. It grows the sprite by a cell rather than putting anything
   behind it: a filled plate covered the shelf title at 240p. 0 for no ring.
 
-  `period_ms` is one full turn, and it is the whole state indicator: fast while the
-  drive is still working out what the disc is, slow once it is known. Nothing else
-  about the drawing changes between the two.
+  `step` is the rotation, 0-63, and the caller owns it. This does *not* derive the angle
+  from a clock and a period, which is how it used to work and which was wrong: the angle
+  came out of `ms % period_ms`, so changing the period moved the *angle* as well as the
+  speed and the disc visibly teleported. At ms=10000 a 4s period gives step 32 and a
+  400ms period gives step 0 - half a turn, instantly, every time it gained focus.
 
-  Repaint at GFX_SPIN_MS like the other animations. 64 positions per turn, so a period
-  under ~6 seconds moves at least one position per repaint.
+  So the caller accumulates phase instead, which is also what makes a smooth speed change
+  possible at all. See disc_step() in chome_ui.cpp.
+
+  Repaint at GFX_SPIN_MS like the other animations; 64 positions per turn.
 */
-#define GFX_DISC_FOCUS_MS 400UL
-#define GFX_DISC_FAST_MS  700UL
+/*
+  One full turn, per state. These are chosen against the repaint rate, not picked for
+  feel alone: there are 64 positions in a turn, and a disc that advances more than about
+  four of them between repaints strobes instead of spinning. At GFX_DISC_MS these give
+  roughly 4, 2 and 1 positions per frame.
+
+  The first attempt used 400ms for focus, which at a 100ms repaint was sixteen positions
+  a frame - a disc that looked like it was juddering rather than turning quickly.
+*/
+#define GFX_DISC_FOCUS_MS 800UL
+#define GFX_DISC_FAST_MS  1500UL
 #define GFX_DISC_SLOW_MS  4000UL
 
-void gfx_disc(int cx, int cy, int r, unsigned long ms, unsigned long period_ms,
+// Repaint interval while a disc is on screen. Faster than GFX_SPIN_MS because the disc
+// moves further per frame than the activity ring does.
+#define GFX_DISC_MS       50UL
+
+void gfx_disc(int cx, int cy, int r, int step,
 	const uint32_t *bands, int nbands, uint32_t rim, uint32_t ring, uint32_t hole,
 	uint32_t outline);
 
