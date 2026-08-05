@@ -4678,7 +4678,7 @@ struct chome_slot
 	int  index;
 };
 
-static void launch_write_mgl(const chome_sys *s, const char *relpath, const chome_slot *slot)
+static void launch_write_mgl(const chome_sys *s, const char *relpath, const chome_slot *slot, const char *rbf)
 {
 	FILE *f = fopen("/tmp/classicui_launch.mgl", "wt");
 	if (!f) return;
@@ -4687,14 +4687,22 @@ static void launch_write_mgl(const chome_sys *s, const char *relpath, const chom
 	int index = slot ? slot->index : s->index;
 
 	fprintf(f, "<mistergamedescription>\n");
-	fprintf(f, "\t<rbf>%s</rbf>\n", s->rbf);
+	fprintf(f, "\t<rbf>%s</rbf>\n", rbf ? rbf : s->rbf);
 	fprintf(f, "\t<file delay=\"%d\" type=\"%c\" index=\"%d\" path=\"%s\"/>\n",
 		s->delay ? s->delay : 2, type == 's' ? 's' : 'f', index, relpath);
 	fprintf(f, "</mistergamedescription>\n");
 	fclose(f);
 }
 
-static void do_launch(int sysidx, const char *relpath, chome_item *it, const chome_slot *slot = 0)
+/*
+  `slot` and `rbf` are the two ways a launch can deviate from the system's shelf
+  defaults, and both exist for the physical disc: the disc goes into the core's CD
+  slot rather than the shelf's ROM slot, and - for Mega CD alone so far - into a
+  different core than the shelf system's own, because the Genesis core has no disc
+  input at all. Everything else about launching is identical, which is why these
+  are parameters on the one launch path rather than a second one.
+*/
+static void do_launch(int sysidx, const char *relpath, chome_item *it, const chome_slot *slot = 0, const char *rbf = 0)
 {
 	const chome_sys *s = lib_sys(sysidx);
 	if (!s) return;
@@ -4718,10 +4726,11 @@ static void do_launch(int sysidx, const char *relpath, chome_item *it, const cho
 			  Arcade writes "*" because an .mra picks its own core name.
 			*/
 			const char *core = "*";
-			if (!s->mra && s->rbf[0])
+			const char *rbfpath = rbf ? rbf : s->rbf;
+			if (!s->mra && rbfpath[0])
 			{
-				const char *slash = strrchr(s->rbf, '/');
-				core = slash ? slash + 1 : s->rbf;
+				const char *slash = strrchr(rbfpath, '/');
+				core = slash ? slash + 1 : rbfpath;
 			}
 			fprintf(f, "%s\n%s\n%s\n", s->id, relpath, core);
 			fclose(f);
@@ -4745,8 +4754,8 @@ static void do_launch(int sysidx, const char *relpath, chome_item *it, const cho
 		return;
 	}
 
-	launch_write_mgl(s, relpath, slot);
-	printf("ClassicUI: launching %s via %s\n", relpath, s->rbf);
+	launch_write_mgl(s, relpath, slot, rbf);
+	printf("ClassicUI: launching %s via %s\n", relpath, rbf ? rbf : s->rbf);
 	active = 0;
 	xml_load("/tmp/classicui_launch.mgl");
 }
@@ -4768,46 +4777,72 @@ static void launch_selected()
   Which core slot a physical disc goes into, by shelf system id, and only for the
   systems whose firmware-side daemon can read from the drive.
 
-  Two so far. PC Engine CD reads a real disc at full speed; PlayStation is wired the
-  same way in psx.cpp but upstream reports it short of full speed from a drive, so
-  expect FMV and CD audio to be the rough parts there. The other CD daemons each need
-  the same work done to them separately; a system that is not in this table is still
-  identified and still named by the prompt, but its row is marked "(not yet)" and
-  refuses - see disc_build_rows() - instead of loading a core that would find nothing
-  in the slot.
+  Three so far. PC Engine CD and Mega CD read a real disc at full speed upstream;
+  PlayStation is wired the same way in psx.cpp but upstream reports it short of full
+  speed from a drive, so expect FMV and CD audio to be the rough parts there. The
+  other CD daemons each need the same work done to them separately; a system that is
+  not in this table is still identified and still named by the prompt, but its row is
+  marked "(not yet)" and refuses - see disc_build_rows() - instead of loading a core
+  that would find nothing in the slot.
 
   The slot is the core's own SD-card index for its CD image and comes from the "S"
   entry in each core's config string; getting it wrong mounts the disc into the wrong
   core input, so each entry cites its source.
+
+  Two qualifiers beyond the slot:
+
+  - `dtype`: which identified disc the row is for, because one shelf system can host
+    discs that need different cores - a Mega CD disc and a Mega Drive+ disc both map
+    to "md". DISC_T_NONE means any disc, which keeps tg16 and psx behaving as before
+    (their cores are also where an unknown or forced disc is allowed to go). A system
+    whose entries all name types refuses discs of any other type, so an "md" row for
+    a Mega Drive+ disc stays "(not yet)" until mdplus.cpp learns the drive.
+
+  - `rbf`: the core that takes the disc, when it is not the shelf system's own.
+    "md"'s shelf core is Genesis, whose config string has no "S" entry at all - a
+    disc handed to it would mount into nothing - so Mega CD discs load the separate
+    MegaCD core instead.
 */
 struct disc_playable
 {
 	const char *sysid;
+	int dtype;              // DISC_T_* this row serves; DISC_T_NONE = any disc
 	chome_slot slot;
+	const char *rbf;        // 0 = the system's own core takes the disc
 };
 
 static const disc_playable disc_playables[] =
 {
-	{ "tg16", { 's', 0 } },      // "S0,CUECHD,Insert CD" in TurboGrafx16.sv
-	{ "psx",  { 's', 1 } },      // "H7S1,CUECHD,Load CD" in PSX.sv (H7 is a hide mask,
-	                             // not part of the slot; S2/S3 are its memory cards)
+	{ "tg16", DISC_T_NONE,   { 's', 0 }, 0 },   // "S0,CUECHD,Insert CD" in TurboGrafx16.sv
+	{ "psx",  DISC_T_NONE,   { 's', 1 }, 0 },   // "H7S1,CUECHD,Load CD" in PSX.sv (H7 is a hide
+	                                            // mask, not part of the slot; S2/S3 are its
+	                                            // memory cards)
+	{ "md",   DISC_T_MEGACD, { 's', 0 }, "_Console/MegaCD" },  // "S0,CUECHD,Insert Disk" in MegaCD.sv
+	{ "md",   DISC_T_AUDIO,  { 's', 0 }, "_Console/MegaCD" },  // the Mega CD BIOS is a CD player,
+	                                            // and megacd.cpp mounts an audio-only disc
 };
 
-static const chome_slot *disc_slot_for(int sysidx)
+static const disc_playable *disc_play_for(int sysidx)
 {
 	const chome_sys *s = (sysidx >= 0) ? lib_sys(sysidx) : 0;
 	if (!s) return 0;
 
+	// The disc now in the drive decides among a system's rows; a typed row outranks
+	// the any-disc one so a future specific entry can carve a type out of it.
+	const disc_playable *any = 0;
 	for (unsigned i = 0; i < sizeof(disc_playables) / sizeof(disc_playables[0]); i++)
 	{
-		if (!strcasecmp(disc_playables[i].sysid, s->id)) return &disc_playables[i].slot;
+		const disc_playable *pl = &disc_playables[i];
+		if (strcasecmp(pl->sysid, s->id)) continue;
+		if (pl->dtype == disc_type()) return pl;
+		if (pl->dtype == DISC_T_NONE) any = pl;
 	}
-	return 0;
+	return any;
 }
 
 static int disc_wired(int sysidx)
 {
-	return disc_slot_for(sysidx) != 0;
+	return disc_play_for(sysidx) != 0;
 }
 
 /*
@@ -4833,13 +4868,22 @@ static int disc_handed_to_core = 0;
 
 static void disc_launch(int sysidx)
 {
-	const chome_slot *slot = disc_slot_for(sysidx);
+	const disc_playable *pl = disc_play_for(sysidx);
 	const chome_sys *s = (sysidx >= 0) ? lib_sys(sysidx) : 0;
 
 	// The whole feature is off by default, and the only way here is through a screen
 	// that only exists when it is on - but this is the point where the drive gets used
 	// in earnest, so it does not rely on that.
-	if (!cfg.classicui_disc || !slot || !s) { nudge(); return; }
+	if (!cfg.classicui_disc || !pl || !s) { nudge(); return; }
+
+	// A row's own core rather than the system's, renamed the way this card names it
+	// (a US-named card carries SegaCD where the table says MegaCD).
+	char rbf[64];
+	if (pl->rbf)
+	{
+		snprintf(rbf, sizeof(rbf), "%s", pl->rbf);
+		lib_resolve_rbf(rbf, sizeof(rbf));
+	}
 
 	printf("ClassicUI: handing the disc to %s (%s)\n", s->name, disc_display_name());
 
@@ -4848,10 +4892,10 @@ static void disc_launch(int sysidx)
 
 	/*
 	  The sentinel goes in as the file. It is not a path: menu.cpp keeps it out of the
-	  games-folder resolution and pcecdd's Load() recognises it and reads the table of
-	  contents off the disc instead of parsing a cue sheet.
+	  games-folder resolution and the CD daemons' load paths recognise it and read the
+	  table of contents off the disc instead of parsing a cue sheet.
 	*/
-	do_launch(sysidx, PHYSICAL_DISC_SENTINEL, 0, slot);
+	do_launch(sysidx, PHYSICAL_DISC_SENTINEL, 0, &pl->slot, pl->rbf ? rbf : 0);
 }
 
 /* -------------------------------------------------------------- compose --- */
@@ -8257,6 +8301,14 @@ int chome_handle(uint32_t key)
 		  comes through a keypress, so if this does not ask for a repaint, nothing will.
 		*/
 		mark_dirty();
+
+		/*
+		  The remembered core choice is per disc - that is its whole meaning - so any
+		  change of what is in the drive forgets it. Left standing, the next disc
+		  inherited the previous one's core: play a PlayStation disc, insert a Mega CD
+		  one, and the prompt offered "Play on PlayStation" for it.
+		*/
+		disc_chosen_sys = -1;
 
 		/*
 		  Taken out while we were looking at it. Both disc screens describe a disc that

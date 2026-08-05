@@ -1135,6 +1135,9 @@ int lib_scan_progress() { return nitems; }
 static const char *const name_alias[][ALIAS_MAX] =
 {
 	{ "Genesis",       "MegaDrive",       "Mega Drive",    0            },
+	// Not a shelf system: the physical-disc launch loads this core for a Mega CD
+	// disc - see disc_playables in chome_ui.cpp - and US naming renames it.
+	{ "MegaCD",        "SegaCD",          "Sega CD",       0            },
 	{ "TurboGrafx16",  "TGFX16",          "PCEngine",      "PC Engine"  },
 	{ "NeoGeo-Pocket", "NeoGeoPocket",    "NGP",           0            },
 	{ "Atari7800",     "A7800",           0,               0            },
@@ -1202,31 +1205,41 @@ static const char *alias_pick(const char *name, const char *coredir, int games)
 	return 0;
 }
 
+/*
+  Rewrite a core path ("_Console/MegaCD") in place to the name this card actually
+  carries, using the alias table above. 1 when it was rewritten. Exported because
+  the physical-disc launch names a core that is not any shelf system's own - see
+  disc_launch() in chome_ui.cpp - so it cannot ride on resolve_names() below.
+*/
+int lib_resolve_rbf(char *rbf, int size)
+{
+	if (!rbf || !rbf[0]) return 0;
+
+	char dir[80];
+	snprintf(dir, sizeof(dir), "%s", rbf);
+	char *slash = strrchr(dir, '/');
+	if (!slash) return 0;
+
+	*slash = 0;
+	const char *base = slash + 1;
+	if (rbf_present(dir, base)) return 0;
+
+	const char *alt = alias_pick(base, dir, 0);
+	if (!alt) return 0;
+
+	snprintf(rbf, size, "%s/%s", dir, alt);
+	return 1;
+}
+
 static void resolve_names()
 {
 	for (int i = 0; i < nsys; i++)
 	{
 		chome_sys *s = &systems[i];
 
-		if (s->rbf[0])
+		if (lib_resolve_rbf(s->rbf, sizeof(s->rbf)))
 		{
-			char dir[80];
-			snprintf(dir, sizeof(dir), "%s", s->rbf);
-			char *slash = strrchr(dir, '/');
-			if (slash)
-			{
-				*slash = 0;
-				const char *base = slash + 1;
-				if (!rbf_present(dir, base))
-				{
-					const char *alt = alias_pick(base, dir, 0);
-					if (alt)
-					{
-						printf("ClassicUI: %s core is %s/%s on this card\n", s->id, dir, alt);
-						snprintf(s->rbf, sizeof(s->rbf), "%s/%s", dir, alt);
-					}
-				}
-			}
+			printf("ClassicUI: %s core is %s on this card\n", s->id, s->rbf);
 		}
 
 		if (!s->mra)
