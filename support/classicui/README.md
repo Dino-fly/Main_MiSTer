@@ -900,8 +900,23 @@ whether a core accepts the MGL.
   `disc_playables` carries an rbf override per disc type. And Neo Geo CD has no daemon of its
   own; it shares Mega CD's `cdd_t`.
 
-  Known gap: a disc-launched game has **no shelf identity**, so the in-game menu opens on the
-  root shelf rather than the game and the savestate strip is unreachable. See the backlog.
+  The disc gets a screen of its own rather than a row on the shelf, because it has no card:
+  the game's name, a large disc under it, and two buttons - **Play** and **Options**, the
+  latter being the core chooser. `Down` from it reaches the savestate strip, exactly as it
+  does on a shelf card, and in a game the menu opens **on that dialog** instead of on the
+  shelf, since the shelf is showing whatever the disc launch left behind.
+
+  One dialog, two sources, and the difference matters: from the shelf the drive answers, but
+  once the disc is playing the drive belongs to the core - the detection helper was stopped at
+  the launch and must not come back - so `disc_state()` is `DISC_ABSENT` and the type and
+  serial are empty. The running disc is described from what the mount published instead
+  (`PHYSICAL_DISC_IDENT_FILE`), and that is also why the in-game dialog offers no core choice:
+  without the disc type every typed entry in `disc_playables` would read "(not yet)".
+
+  A scan of the disc, if one has been fetched under its identity, is drawn in the dialog and
+  rotated on the fly inside the rectangle the spin repaint already owns. The badge in the
+  corner keeps the drawn disc at every profile: at thirty-two pixels a photograph is mud, and
+  all the badge has to say is that there is a disc.
 
 ### Showing the disc's real name
 
