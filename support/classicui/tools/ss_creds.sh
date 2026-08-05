@@ -30,8 +30,19 @@ if [ ! -f "$env" ]; then rm -f "$out"; exit 0; fi
 
 # The value is everything after the first '=', taken from the first matching line, so
 # a password containing '=' survives intact.
+#
+# Surrounding quotes are stripped, because SS_DEVID="..." is what anyone writing a file
+# full of secrets writes, and taking them literally is silent and awful: the quotes get
+# escaped into the generated header, the binary sends "abc" instead of abc, and the API
+# rejects a credential that looks perfectly correct in every file you inspect. Only a
+# matched pair is removed, so a password that genuinely contains a quote is untouched.
 field() {
-	sed -n "s/^$1=//p" "$env" | head -1
+	v=$(sed -n "s/^$1=//p" "$env" | head -1)
+	case "$v" in
+	'"'*'"') v=$(printf '%s' "$v" | sed -e 's/^"//' -e 's/"$//') ;;
+	"'"*"'") v=$(printf '%s' "$v" | sed -e "s/^'//" -e "s/'\$//") ;;
+	esac
+	printf '%s' "$v"
 }
 
 # What the C string literal needs escaped. Backslash first, or it doubles the escapes
