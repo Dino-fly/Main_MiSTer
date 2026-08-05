@@ -912,6 +912,18 @@ static void walk_profile(const char *tag, int profile, int w, int h)
 	dump(name);
 	press(KEY_ESC, 10);
 
+	/*
+	  And a title long enough that the header cannot hold it *and* the words "SUSPEND
+	  POINTS": this one is 22 characters and the label another 17, where 240p fits 35. The
+	  label is what gives way, so this is where to look if the header ever starts eating
+	  the game's name again ("LEGEND OF ZELDA, THE - SUSPEND POI>", on his own card).
+	*/
+	select_titled("Zelda - Oracle");
+	press(KEY_DOWN, 25);
+	snprintf(name, sizeof(name), "%s-3c-suspend-long-title", tag);
+	dump(name);
+	press(KEY_ESC, 10);
+
 	select_first_game();
 	frame(10);
 
@@ -4880,6 +4892,33 @@ static void strip_pixels(int *slots, int *message)
 }
 
 /*
+  The row the strip's panel starts on, read off the framebuffer rather than from the
+  metrics: its top edge is a rule in COL_PANELLO across the whole width, and with the menu
+  bar closed - which it is, on the way down into the strip - nothing else on the screen
+  draws one. The shelf's cards and their frames are that colour too, hence the whole width
+  rather than a colour match on one pixel.
+
+  Searched from the top of the canvas and not from the middle: the panel rests above the
+  overscan margin, so it starts higher up the further the margin is raised, and a search
+  from h/2 found it only at a margin of zero - which is exactly the case that does not
+  need testing.
+*/
+static int strip_top_row()
+{
+	const uint32_t *fb = harness_fb_shown();
+	int w = gfx_w(), h = gfx_h();
+	if (!fb || w < 1 || h < 1) return -1;
+
+	for (int y = 0; y < h; y++)
+	{
+		int n = 0;
+		for (int x = 0; x < w; x++) if ((fb[(size_t)y * w + x] | 0xff000000u) == COL_PANELLO) n++;
+		if (n >= w - w / 10) return y;
+	}
+	return -1;
+}
+
+/*
   Backlog 6: a system whose core has no save states says so before the player has spent
   an hour on it, from the shelf as well as from inside the game. On the shelf no core is
   loaded and no CONF_STR has been read, so the answer can only come from the measured
@@ -6352,6 +6391,73 @@ static void assert_overscan()
 	dump("overscan-menubar");
 	check(margin_bright(p, 1) == 0, "the menu bar clears the top margin");
 	press(KEY_ESC, 12);
+
+	/*
+	  And the save-state strip, at the two ends of the margin and at the one he runs.
+
+	  The strip is the element the margin does the most to: it rests above the margin and is
+	  filled down through it to the bottom edge, so the panel starts higher up as the margin
+	  grows and the strip keeps its room. The tiles inside it are sized from that room
+	  (chome_theme.cpp), which is why this walks three margins rather than trusting one: the
+	  same code lays the row out three different sizes, and the row has to stay inside the
+	  panel and out of the legend and the margin at every one of them.
+
+	  The panel top is read off the pixels, like the rest of this section, because that is
+	  where a bug in this element would be - the metric it comes from can be right while the
+	  draw call puts the panel somewhere else.
+	*/
+	{
+		uint8_t was_over = cfg.classicui_overscan;
+		static const uint8_t margins[3] = { 0, 6, 15 };
+
+		for (int i = 0; i < 3; i++)
+		{
+			cfg.classicui_overscan = margins[i];
+			theme_invalidate();
+			theme_update(320, 240, 3);
+			chome_leave();
+			press(KEY_MENU, 20);
+			for (int j = 0; j < 40 && lib_scanning(); j++) frame(2);
+			frame(12);
+
+			check(select_titled("Super Metroid") != 0, "a game with suspend points at 240p");
+			press(KEY_DOWN, 25);
+
+			int top = strip_top_row();
+
+			// Where the legend takes the band over, and how far down the tile row and the
+			// slot number under it reach - draw_suspend() draws the caption 5 px below the
+			// tile. The row is centred, and the focus frame is 3 px outside the tile it is
+			// drawn around, so this is the leftmost pixel the row can put on screen.
+			int band = p->y_legend - 6 * p->ts_ui;
+			int row_bottom = top + p->thumb_y + p->thumb_h + 5 + 8 * p->ts_tiny;
+			int row_left = (p->w - (3 * p->thumb_w + 2 * p->thumb_gap)) / 2 - 3;
+
+			printf("  overscan %d: margin %d, strip top %d, panel %d tall, tile %dx%d\n",
+				margins[i], p->safe_y, top, p->h - top, p->thumb_w, p->thumb_h);
+
+			check(top == p->h - p->safe_y - p->strip_h, "the strip rests above the margin");
+			check(top + p->strip_h + p->safe_y == p->h,
+				"and is filled down through it to the bottom edge");
+			check(row_bottom <= band && row_left >= p->inset,
+				"the tiles and their slot numbers stay inside the panel");
+			check(margin_bright(p, 0) == 0, "and out of the margin at the bottom");
+
+			char nm[64];
+			snprintf(nm, sizeof(nm), "overscan-strip-%d", margins[i]);
+			dump(nm);
+			press(KEY_ESC, 12);
+		}
+
+		// Back to the margin the rest of this section was written against.
+		cfg.classicui_overscan = was_over;
+		theme_invalidate();
+		theme_update(320, 240, 3);
+		chome_leave();
+		press(KEY_MENU, 20);
+		for (int j = 0; j < 40 && lib_scanning(); j++) frame(2);
+		frame(12);
+	}
 
 	/*
 	  And the still-playing band, which is the one thing that got this wrong: drawn at row 0
