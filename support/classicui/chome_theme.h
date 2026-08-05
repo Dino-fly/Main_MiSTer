@@ -19,6 +19,16 @@
 #define PROF_SD 1
 #define PROF_LO 2
 
+/*
+  How many suspend slots the strip lays out a row of. The same number as CH_SLOTS_USER in
+  chome_ui.cpp, which is what draws them, and tied to it by a static_assert there: the tile
+  size is derived from a full row fitting between the insets, and a profile cannot ask
+  chome_ui.cpp how wide a row is. A core offering fewer slots draws the same tiles in a
+  narrower row rather than bigger ones - a suspend point is looked at at one size, whatever
+  the core it came from happens to keep.
+*/
+#define CHOME_STRIP_SLOTS 3
+
 struct chome_profile
 {
 	int id;
@@ -47,7 +57,20 @@ struct chome_profile
 	int y_title, y_meta, y_shelf, y_pips, y_pos, y_legend;
 	int bar_h;
 
-	int thumb_w, thumb_h, thumb_gap;
+	/*
+	  The suspend strip: the panel across the bottom, and the row of slot tiles in it.
+
+	  strip_h is the strip's height above the overscan margin. The panel is drawn
+	  strip_h + safe_y tall from h - safe_y - strip_h, so it reaches the bottom edge of
+	  the canvas whatever the margin is, and the strip keeps the same room inside it.
+
+	  thumb_y is the top of the tile row measured from the panel's own top edge, so the
+	  draw site and the metrics below cannot disagree about where the row starts. The
+	  tiles are always 4:3, whatever room is left over: what goes in one is a frame of
+	  the game, written 4:3 by ss_write_thumb(), and it is blitted to the tile without
+	  letterboxing - so a tile of another shape is a stretched screenshot.
+	*/
+	int thumb_w, thumb_h, thumb_gap, thumb_y;
 	int strip_h;
 
 	int panel_w, panel_h;
