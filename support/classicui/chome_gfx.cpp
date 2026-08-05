@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "chome_gfx.h"
 #include "../../video.h"
@@ -85,8 +86,57 @@ int gfx_begin()
 	return 1;
 }
 
+/*
+  Repaint cost, measured rather than guessed.
+
+  Two numbers, because the two halves of a repaint are not alike: composing into the
+  cached RAM buffer, and copying the damaged rows into the framebuffer, which is an
+  uncached /dev/mem mapping shared with the FPGA. The second is expected to dominate and
+  the point of measuring is to find out by how much.
+
+  Why this exists at all: the firmware busy-polls, so it sits at 100% of one core whether
+  it is drawing or not - measured on the device, both with the front-end open and closed.
+  That means repaint work cannot be seen in CPU time at all. It can only be seen by
+  timing it.
+
+  Reported as a summary every GFX_STAT_EVERY copies so the log stays readable; at a 50ms
+  repaint that is roughly every ten seconds.
+*/
+#define GFX_STAT_EVERY 200
+
+static unsigned long gfx_us()
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (unsigned long)ts.tv_sec * 1000000UL + (unsigned long)(ts.tv_nsec / 1000);
+}
+
+static unsigned long stat_n = 0;
+static unsigned long stat_copy_us = 0, stat_copy_max = 0;
+static unsigned long stat_rows = 0;
+static unsigned long compose_t0 = 0;
+static unsigned long stat_compose_us = 0, stat_compose_max = 0;
+
+// Called by the front-end when it starts composing a frame.
+void gfx_stat_compose_begin()
+{
+	compose_t0 = gfx_us();
+}
+
 void gfx_end()
 {
+	/*
+	  Compose time is everything between gfx_stat_compose_begin() and here, which is the
+	  drawing itself - all the fills, text and blits - minus the copy below.
+	*/
+	if (compose_t0)
+	{
+		unsigned long c = gfx_us() - compose_t0;
+		compose_t0 = 0;
+		stat_compose_us += c;
+		if (c > stat_compose_max) stat_compose_max = c;
+	}
+
 	if (!cb) return;
 
 	// The two framebuffers alternate, so the one we are about to fill is two
@@ -101,6 +151,7 @@ void gfx_end()
 		uint32_t *fb = video_menu_fb(fbn);
 		if (fb)
 		{
+			unsigned long t_copy = gfx_us();
 			int x = u.x0;
 			int bytes = (u.x1 - u.x0 + 1) * sizeof(uint32_t);
 			for (int y = u.y0; y <= u.y1; y++)
@@ -109,6 +160,25 @@ void gfx_end()
 			}
 			video_menu_fb_present(fbn);
 			fbn = (fbn == 1) ? 2 : 1;
+
+			unsigned long cp = gfx_us() - t_copy;
+			stat_copy_us += cp;
+			if (cp > stat_copy_max) stat_copy_max = cp;
+			stat_rows += (unsigned long)(u.y1 - u.y0 + 1);
+
+			if (++stat_n >= GFX_STAT_EVERY)
+			{
+				printf("ClassicUI: repaint %dx%d over %lu frames: compose avg %lu us (max %lu), "
+					"copy avg %lu us (max %lu), rows avg %lu\n",
+					cw, ch, stat_n,
+					stat_compose_us / stat_n, stat_compose_max,
+					stat_copy_us / stat_n, stat_copy_max,
+					stat_rows / stat_n);
+				stat_n = 0;
+				stat_compose_us = stat_compose_max = 0;
+				stat_copy_us = stat_copy_max = 0;
+				stat_rows = 0;
+			}
 		}
 	}
 

@@ -34,6 +34,16 @@ void gfx_damage_all();
 // Height in rows of the damage submitted this frame, for telemetry.
 int  gfx_damage_rows();
 
+/*
+  Repaint cost instrumentation. Call at the start of composing a frame; gfx_end() closes
+  the measurement and logs a summary every couple of hundred frames.
+
+  This exists because repaint work is invisible in CPU time on this board: the firmware
+  busy-polls and sits at 100% of one core whether it draws or not, measured both ways on
+  the device. Timing is the only way to see it.
+*/
+void gfx_stat_compose_begin();
+
 void gfx_fill(int x, int y, int w, int h, uint32_t col);
 void gfx_frame_rect(int x, int y, int w, int h, uint32_t col, int t);
 void gfx_blend(int x, int y, int w, int h, uint32_t col, int alpha);

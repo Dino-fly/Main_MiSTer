@@ -4787,6 +4787,8 @@ static void draw_launch(const chome_profile *p)
 
 static void render()
 {
+	gfx_stat_compose_begin();
+
 	const chome_profile *p = theme_get();
 
 	if (screen == SCR_BROWSE)
