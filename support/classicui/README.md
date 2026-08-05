@@ -879,6 +879,30 @@ whether a core accepts the MGL.
   `savestates/<core>/<rom>_<n>.png`, which the strip displays and falls back to
   the cover when absent. The poll can be up to a second behind the actual save,
   so the frame is close but not exact.
+- **Playing a physical CD.** Working, and hardware-verified for PlayStation on 2026-08-05:
+  Metal Gear Solid booted and ran from a disc in a USB drive, launched from the shelf. Off by
+  default behind `classicui_disc`.
+
+  Detection and identification are ours (`chome_disc.{cpp,h}`): a helper *process* owns
+  `/dev/sr0` and publishes a one-line state file, because every ioctl on that device serialises
+  behind whatever the drive is doing and doing it inline froze the console three times. The
+  streaming reader under it (`support/physical_disc/`) is taken **whole** from
+  [Anime0t4ku/Main_MiSTer_Physical_Disc](https://github.com/Anime0t4ku/Main_MiSTer_Physical_Disc)
+  (GPLv3, as are we) rather than paraphrased - the one time that lifecycle was rewritten
+  smaller it cost two frozen consoles.
+
+  Four cores are wired: PC Engine CD, PlayStation, Mega CD, Neo Geo CD. Only PlayStation is
+  hardware-tested. Upstream reports Mega CD and PC Engine CD at full speed and PSX "nearly
+  fluid" with FMV and CD-audio problems, so expect the PSX experience to be imperfect.
+
+  Two things worth knowing before extending it. A Mega CD disc launches the **separate MegaCD
+  core**, not the shelf's Genesis core - `Genesis.sv` has no disc mount entry at all - so
+  `disc_playables` carries an rbf override per disc type. And Neo Geo CD has no daemon of its
+  own; it shares Mega CD's `cdd_t`.
+
+  Known gap: a disc-launched game has **no shelf identity**, so the in-game menu opens on the
+  root shelf rather than the game and the savestate strip is unreachable. See the backlog.
+
 - **Scraping from ScreenScraper ourselves.** Now **written but inert**, pending a
   credential. `support/classicui/chome_ss.{cpp,h}` builds the request, parses the
   reply, classifies the failures and picks the media; what it will not do is make a
