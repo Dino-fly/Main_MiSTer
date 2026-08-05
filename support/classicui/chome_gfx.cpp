@@ -304,58 +304,88 @@ static int disc_iatan(int y, int x)
 }
 
 void gfx_disc(int cx, int cy, int r, unsigned long ms, unsigned long period_ms,
-	const uint32_t *bands, int nbands, uint32_t rim, uint32_t ring, uint32_t hole)
+	const uint32_t *bands, int nbands, uint32_t rim, uint32_t ring, uint32_t hole,
+	uint32_t outline)
 {
-	if (r < 4 || !bands || nbands < 1) return;
+	if (r < 8 || !bands || nbands < 1) return;
 	if (!period_ms) period_ms = 1;
 
 	/*
-	  Drawn as a 16x16 sprite of square cells rather than as a smooth circle, which is
-	  the whole point of the look: chunky pixels, hard edges, no antialiasing. The cell
-	  size comes from the radius asked for, so a caller that wants it chunky asks for a
-	  bigger disc - at 8 the cells are single pixels, which is a 16px icon, and at 16
-	  they are 2x2.
+	  A 32x32 sprite, not a 16x16 one scaled up.
+
+	  Doubling a 16x16 disc gives bigger blocks and no more information: the same eight
+	  wedges, the same two-cell rim. Drawing on twice the grid buys detail the smaller
+	  one had no room for - a dark outer edge so the disc reads against a light panel as
+	  well as a dark shelf, a rim that is thin in proportion rather than a quarter of the
+	  radius, a hub ring distinct from the spindle hole, and enough angular resolution
+	  for twelve or more wedges instead of eight.
+
+	  Cells are r/16 pixels square, so r=16 gives a 32px icon at one pixel per cell and
+	  r=32 gives 64px at 2x2. Callers pass multiples of 16 to keep cells whole.
 	*/
-	int cell = r / 8;
+	int cell = r / 16;
 	if (cell < 1) cell = 1;
 
 	int step = (int)(((ms % period_ms) * 64UL) / period_ms);
 
 	/*
-	  Radii in half-cells, squared, so cell centres land on odd numbers and nothing
-	  needs fractions. The disc is 8 cells (16 half-cells) to the edge.
-	*/
-	const int r2_edge = 16 * 16;
-	const int r2_rim  = 14 * 14;
-	const int r2_ring =  6 * 6;
-	const int r2_hole =  4 * 4;
+	  Radii in half-cells, squared: cell centres land on odd numbers so nothing needs
+	  fractions. The disc is 16 cells (32 half-cells) to the edge.
 
-	for (int gy = -8; gy < 8; gy++)
+	  The proportions are a CD's, roughly to scale: the clear inner ring is about a third
+	  of the radius and the hole about a sixth, which is what makes it read as a disc
+	  rather than a washer.
+	*/
+	const int r2_edge  = 32 * 32;      // outside this, nothing
+	const int r2_dark  = 30 * 30;      // outer edge, one cell of shadow
+	const int r2_rim   = 27 * 27;      // bright rim
+	const int r2_data  = 13 * 13;      // data area runs down to here
+	const int r2_ring  =  9 * 9;       // clear inner ring
+	const int r2_hub   =  6 * 6;       // hub ring
+	// inside r2_hub is the spindle hole
+
+	// One step of shadow between the rim and the outer edge, mixed from the two so the
+	// palette does not need another entry.
+	uint32_t edge = ((rim >> 1) & 0x7f7f7f7f) + ((hole >> 1) & 0x7f7f7f7f);
+	edge |= 0xff000000u;
+
+	/*
+	  One cell wider than the disc when there is an outline to draw, which is how focus is
+	  shown: a ring just outside it. A filled plate behind the disc was the alternative
+	  and it covered the shelf title at 240p.
+	*/
+	int g = outline ? 17 : 16;
+	const int r2_out = 34 * 34;
+
+	for (int gy = -g; gy < g; gy++)
 	{
 		int Y = 2 * gy + 1;
 
-		for (int gx = -8; gx < 8; gx++)
+		for (int gx = -g; gx < g; gx++)
 		{
 			int X = 2 * gx + 1;
 			int d2 = X * X + Y * Y;
 
-			if (d2 > r2_edge) continue;                 // outside the disc
+			if (d2 > (outline ? r2_out : r2_edge)) continue;
 
 			uint32_t col;
 
-			if (d2 <= r2_hole)      col = hole;         // the spindle hole
-			else if (d2 <= r2_ring) col = ring;         // the clear inner ring
-			else if (d2 >= r2_rim)  col = rim;          // hard bright edge
-			else
+			if (d2 > r2_edge)       col = outline;
+			else if (d2 > r2_dark)  col = edge;
+			else if (d2 > r2_rim)   col = rim;
+			else if (d2 > r2_data)
 			{
 				/*
-					The iridescence: the data area split into wedges that sweep round as
-					`step` advances. Sweeping colour rather than a couple of dark spokes is
-					what makes it read as a CD catching the light instead of a wheel.
+				  The iridescence: wedges that sweep round as `step` advances. Sweeping
+				  colour is what reads as a disc catching the light - a plain circle
+				  turning is indistinguishable from one standing still.
 				*/
 				int sector = (disc_iatan(Y, X) + step) & 63;
 				col = bands[(sector * nbands / 64) % nbands];
 			}
+			else if (d2 > r2_ring)  col = ring;
+			else if (d2 > r2_hub)   col = edge;
+			else                    col = hole;
 
 			gfx_fill(cx + gx * cell, cy + gy * cell, cell, cell, col);
 		}
