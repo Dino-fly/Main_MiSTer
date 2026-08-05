@@ -303,12 +303,13 @@ static int disc_iatan(int y, int x)
 	return (64 - r) & 63;
 }
 
-void gfx_disc(int cx, int cy, int r, unsigned long ms, unsigned long period_ms,
+void gfx_disc(int cx, int cy, int r, int step,
 	const uint32_t *bands, int nbands, uint32_t rim, uint32_t ring, uint32_t hole,
 	uint32_t outline)
 {
 	if (r < 8 || !bands || nbands < 1) return;
-	if (!period_ms) period_ms = 1;
+
+	step &= 63;
 
 	/*
 	  A 32x32 sprite, not a 16x16 one scaled up.
@@ -325,8 +326,6 @@ void gfx_disc(int cx, int cy, int r, unsigned long ms, unsigned long period_ms,
 	*/
 	int cell = r / 16;
 	if (cell < 1) cell = 1;
-
-	int step = (int)(((ms % period_ms) * 64UL) / period_ms);
 
 	/*
 	  Radii in half-cells, squared: cell centres land on odd numbers so nothing needs

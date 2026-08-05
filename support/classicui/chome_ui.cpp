@@ -2100,19 +2100,103 @@ static unsigned long anim_ms() { return GetTimer(0); }
   is still working out what the disc is, slow once it is known. Nothing else about the
   drawing changes between the two, so there is exactly one place to get this wrong.
 */
-static unsigned long disc_spin_period()
-{
-	/*
-	  Focused is faster than either state rather than equal to one of them. Reusing the
-	  "still identifying" rate for focus would have made a focused known disc and an
-	  unfocused unknown one look the same, and the rate is the only thing distinguishing
-	  those. Three rates, three meanings.
+/*
+  How fast the disc should be turning, as phase units per second rather than as a period,
+  because a speed is what gets eased and 1/period does not interpolate sensibly.
 
-	  Only the badge is ever focused - the prompt's disc turns at the state rate, which is
-	  the slow one once the disc is known.
+  A full turn is DISC_TURN units. Three rates, three meanings: focused is faster than
+  either state, because reusing the "still identifying" rate for focus would make a
+  focused known disc and an unfocused unknown one identical, and the rate is the only
+  thing that distinguishes those.
+
+  Only the badge is ever focused; the prompt's disc turns at the state rate.
+*/
+#define DISC_TURN     1024UL
+#define DISC_RAMP_MS  300UL
+
+static unsigned long disc_target_speed()
+{
+	unsigned long period = (screen == SCR_DISCBAR) ? GFX_DISC_FOCUS_MS
+		: (disc_state() == DISC_SPINNING) ? GFX_DISC_FAST_MS : GFX_DISC_SLOW_MS;
+
+	return DISC_TURN * 1000UL / period;
+}
+
+static unsigned long disc_spd_from = 0;
+static unsigned long disc_spd_to = 0;
+static unsigned long disc_ramp_t0 = 0;
+static unsigned long disc_phase = 0;          // 0..DISC_TURN-1
+static unsigned long disc_phase_ms = 0;
+static unsigned long disc_step_ms = 0;        // when disc_step() last recomputed
+static int disc_step_cached = 0;
+
+/*
+  Where the ramp has got to. Smoothstep rather than linear, which is the difference
+  between "accelerating" and "changing speed instantly to a new constant" - the eye reads
+  a linear ramp as two kinks with a straight line between them.
+*/
+static unsigned long disc_speed_now(unsigned long now)
+{
+	unsigned long dt = now - disc_ramp_t0;
+	if (dt >= DISC_RAMP_MS) return disc_spd_to;
+
+	// smoothstep in 0..1024 fixed point: x*x*(3-2x)
+	unsigned long x = dt * 1024UL / DISC_RAMP_MS;
+	unsigned long e = (x * x / 1024UL) * (3072UL - 2UL * x) / 1024UL;
+	if (e > 1024UL) e = 1024UL;
+
+	if (disc_spd_to >= disc_spd_from)
+		return disc_spd_from + (disc_spd_to - disc_spd_from) * e / 1024UL;
+
+	return disc_spd_from - (disc_spd_from - disc_spd_to) * e / 1024UL;
+}
+
+/*
+  The disc's rotation, 0-63.
+
+  Accumulates phase from elapsed time at the current speed, so a speed change moves the
+  speed and nothing else. Memoised on the clock because two discs can be on screen in one
+  frame - the badge and the prompt's - and advancing the phase once per *draw* would spin
+  it at double rate on that screen.
+*/
+static int disc_step()
+{
+	unsigned long now = anim_ms();
+
+	if (!disc_spd_to)
+	{
+		disc_spd_from = disc_spd_to = disc_target_speed();
+		disc_ramp_t0 = now;
+		disc_phase_ms = now;
+		disc_step_ms = now;
+	}
+
+	if (now == disc_step_ms && disc_phase_ms) return disc_step_cached;
+
+	unsigned long target = disc_target_speed();
+	if (target != disc_spd_to)
+	{
+		// From wherever the ramp had reached, not from the old target: changing the
+		// target mid-ramp must not snap the speed back.
+		disc_spd_from = disc_speed_now(now);
+		disc_spd_to = target;
+		disc_ramp_t0 = now;
+	}
+
+	unsigned long dt = now - disc_phase_ms;
+	/*
+	  Capped. The front-end only draws when something changed, so the gap across a closed
+	  menu or a long stall can be seconds - and an uncapped catch-up would spin the disc
+	  through several turns the instant it came back.
 	*/
-	if (screen == SCR_DISCBAR) return GFX_DISC_FOCUS_MS;
-	return (disc_state() == DISC_SPINNING) ? GFX_DISC_FAST_MS : GFX_DISC_SLOW_MS;
+	if (dt > 250) dt = 250;
+	disc_phase_ms = now;
+
+	disc_phase = (disc_phase + disc_speed_now(now) * dt / 1000UL) % DISC_TURN;
+
+	disc_step_ms = now;
+	disc_step_cached = (int)(disc_phase * 64UL / DISC_TURN);
+	return disc_step_cached;
 }
 
 /*
@@ -3773,7 +3857,7 @@ static void draw_disc(const chome_profile *p)
 	  build has no credential for - and until then the drawn disc stands in. When art
 	  arrives it belongs here, masked to the same circle.
 	*/
-	gfx_disc(cx, cy, r, anim_ms(), disc_spin_period(),
+	gfx_disc(cx, cy, r, disc_step(),
 		disc_bands, DISC_BANDS_N, COL_WHITE, COL_PANELHI, COL_BGDARK, 0);
 
 	int tx = cx + r + 10 * s;
@@ -3847,7 +3931,7 @@ static void draw_disc_badge(const chome_profile *p)
 	*/
 	int focused = (screen == SCR_DISCBAR);
 
-	gfx_disc(cx, cy, r, anim_ms(), disc_spin_period(),
+	gfx_disc(cx, cy, r, disc_step(),
 		disc_bands, DISC_BANDS_N, COL_WHITE, COL_PANELHI, COL_BGDARK,
 		focused ? COL_BLUE : 0);
 
@@ -8023,12 +8107,17 @@ int chome_handle(uint32_t key)
 	  must. Rate-limited to the animation step so a spinning disc does not mean a full
 	  repaint every pass of this loop.
 	*/
-	if (disc_state() == DISC_SPINNING || disc_state() == DISC_READY)
+	if (disc_state() != DISC_ABSENT)
 	{
+		/*
+		  Faster than the other animations, because the disc travels further per frame -
+		  see GFX_DISC_MS. Only while a disc is in the drive, so a machine with an empty
+		  one repaints exactly as often as it did before any of this existed.
+		*/
 		static unsigned long disc_next_spin = 0;
 		if (CheckTimer(disc_next_spin))
 		{
-			disc_next_spin = GetTimer(GFX_SPIN_MS);
+			disc_next_spin = GetTimer(GFX_DISC_MS);
 			mark_dirty();
 		}
 	}
