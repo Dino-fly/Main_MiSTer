@@ -2175,6 +2175,143 @@ static void assert_disc_ui()
 	(void)disc_take_dirty();
 }
 
+/*
+  The partial repaint path: while a disc spins on the shelf, only its rectangle is
+  recomposed and copied, and everything else on the presented frame is byte-identical
+  frame to frame. Byte-identical is checkable here because the framebuffers alternate
+  and gfx_end() unions each frame's damage with the previous frame's - so if that union
+  were wrong, these very hashes would flicker between a current and a stale buffer.
+
+  The trap the file's own comments warn about - two hashes of a region containing the
+  disc differ with no bug present - is why every equality below is of a region that
+  excludes the badge's box, and the box itself is only ever asserted to have *changed*.
+*/
+static void assert_partial_repaint()
+{
+	printf("\n== partial repaint: the disc turns without repainting the world ==\n");
+
+	// A PSX disc in the drive, identified, sitting on the shelf.
+	disc_ingest_present(1);
+	fake_disc d; memset(&d, 0, sizeof(d));
+	static const char *const none[] = { "" };
+	fake_iso(&d, 0, "PLAYSTATION", "PLAYSTATION", none, 0);
+	fake_put(&d, 20, 0, "BOOT = cdrom:\\SLUS_006.26;1", 27, 100);
+	disc_set_reader(fake_read, &d);
+	disc_ingest_identify(0);
+	frame(8);
+	check(chome_screen_id() == 0 && disc_state() == DISC_READY, "on the shelf with a known disc");
+
+	// The badge's box, from the same numbers draw_disc_badge() and disc_note_rect() use:
+	// centre at safe_x+inset+r, 17 cells of r/16 pixels each side.
+	const chome_profile *p = theme_get();
+	int r = (p->ts_ui >= 2) ? 32 : 16;
+	int cell = r / 16;
+	int bx0 = p->safe_x + p->inset + r - 17 * cell;
+	int by0 = p->safe_y + p->inset + r - 17 * cell;
+	int bx1 = bx0 + 34 * cell, by1 = by0 + 34 * cell;
+	int w = gfx_w(), h = gfx_h();
+
+	// Everything outside the box, in four hashes; and the box itself.
+	unsigned long L = harness_fb_hash_box(0, 0, bx0, h);
+	unsigned long R = harness_fb_hash_box(bx1, 0, w, h);
+	unsigned long T = harness_fb_hash_box(bx0, 0, bx1, by0);
+	unsigned long B = harness_fb_hash_box(bx0, by1, bx1, h);
+	unsigned long box = harness_fb_hash_box(bx0, by0, bx1, by1);
+	int flips = harness_present_count();
+
+	/*
+	  Half a second of nothing but the spin timer. At the slow rate that is ~8 of the 64
+	  rotation steps, so the disc must have turned; and no key arrived and no state
+	  changed, so nothing else may have.
+	*/
+	frame(32);
+
+	check(harness_present_count() > flips, "spin repaints still reach the framebuffer");
+	check(harness_fb_hash_box(0, 0, bx0, h) == L, "left of the badge is byte-identical");
+	check(harness_fb_hash_box(bx1, 0, w, h) == R, "and right of it");
+	check(harness_fb_hash_box(bx0, 0, bx1, by0) == T, "and above it");
+	check(harness_fb_hash_box(bx0, by1, bx1, h) == B, "and below it");
+	check(harness_fb_hash_box(bx0, by0, bx1, by1) != box, "while the disc itself has turned");
+	check(gfx_damage_rows() <= 34 * cell, "a spin frame damages only the disc's rows");
+
+	/*
+	  The strongest thing that can be said about the partial path: a frame it finishes
+	  is byte-for-byte the frame a full repaint of the same instant produces. The disc's
+	  rotation is memoised on the clock (see disc_step()), so two repaints in the same
+	  millisecond draw the same rotation - which lets a full repaint be forced without
+	  the subject of the comparison moving: up onto the disc tier and straight back
+	  down, no clock in between, is two full repaints that end on the very frame the
+	  partial one drew.
+	*/
+	harness_advance(60);                       // past the spin interval, nothing else due
+	chome_handle(0);
+	check(gfx_damage_rows() <= 34 * cell, "the frame under comparison took the partial path");
+	unsigned long partial_frame = harness_fb_hash_box(0, 0, w, h);
+
+	chome_handle(KEY_UP);                      // the disc tier: a structural change
+	check(gfx_damage_rows() == h, "a structural change still repaints every row");
+	chome_handle(KEY_UP | UPSTROKE);
+	chome_handle(KEY_DOWN);                    // and back, still at the same instant
+	chome_handle(KEY_DOWN | UPSTROKE);
+	check(chome_screen_id() == 0, "back on the shelf without the clock moving");
+
+	check(harness_fb_hash_box(0, 0, w, h) == partial_frame,
+		"a partially repainted frame is byte-identical to a full repaint of the same instant");
+
+	/*
+	  The buffer-alternation carry, provoked head on: a full frame (the tier, whose
+	  legend and ring differ from the shelf's) followed by one partial frame. The
+	  partial lands in the buffer the full frame never touched, so unless its copy
+	  carries the previous frame's damage across, that buffer still shows the shelf
+	  everywhere the disc is not.
+	*/
+	chome_handle(KEY_UP);
+	chome_handle(KEY_UP | UPSTROKE);
+	unsigned long tier_right = harness_fb_hash_box(bx1, 0, w, h);
+	check(tier_right != R, "the tier reads differently to the shelf outside the badge");
+
+	harness_advance(60);
+	chome_handle(0);                           // one partial, into the other buffer
+	check(gfx_damage_rows() <= 34 * cell, "and it was partial");
+	check(harness_fb_hash_box(bx1, 0, w, h) == tier_right,
+		"one partial frame later the other buffer shows the tier, not the stale shelf");
+
+	press(KEY_DOWN);
+
+	/*
+	  The same equivalence on the disc prompt, which is the hard case for reconstructing
+	  what is underneath: there the region sits on a scrim over the shelf and on a
+	  panel, and the badge and the prompt's disc are both on screen, so the repainted
+	  rectangle is the union of the two. A partial repaint that guessed at any layer -
+	  or drew the scrim's checkerboard out of register with the clip edge - diverges
+	  from the full frame here.
+	*/
+	press(KEY_UP);
+	press(KEY_ENTER);
+	check(chome_screen_id() == 17, "on the disc prompt");
+
+	harness_advance(60);
+	chome_handle(0);                           // one spin frame, the partial path
+	unsigned long prompt_partial = harness_fb_hash_box(0, 0, w, h);
+
+	chome_handle(KEY_ESC);                     // back to the tier: a full repaint
+	chome_handle(KEY_ESC | UPSTROKE);
+	chome_handle(KEY_ENTER);                   // and onto the prompt again, same instant
+	chome_handle(KEY_ENTER | UPSTROKE);
+	check(chome_screen_id() == 17, "on the prompt again without the clock moving");
+	check(harness_fb_hash_box(0, 0, w, h) == prompt_partial,
+		"a partial repaint over the scrim and panel matches a full repaint of the same instant");
+
+	press(KEY_ESC);
+	press(KEY_ESC);
+
+	// Eject through the UI's own path this time, so the badge's removal is drawn.
+	disc_reset_reader();
+	disc_ingest_present(0);
+	frame(6);
+	check(harness_fb_hash_box(bx0, by0, bx1, by1) != box, "ejecting repaints the corner");
+}
+
 /* --------------------------------------------------------- screenscraper --- */
 
 /*
@@ -5587,6 +5724,7 @@ int main()
 	assert_screenscraper();
 	assert_physical_disc();
 	assert_disc_ui();
+	assert_partial_repaint();
 	assert_video();
 	assert_index_cache();
 

@@ -470,6 +470,15 @@ static unsigned long last_ms = 0;
 
 static int dirty = 1;
 
+/*
+  The disc's periodic spin repaint, kept apart from `dirty` on purpose: dirty means
+  "something about the frame changed, redraw it all", and the spinning disc is the one
+  thing that changes without anything else doing so - it repaints through the partial
+  path (render_region) instead, which redraws only the disc's rectangle. Anything that
+  marks dirty in the same pass wins, because a full repaint repaints the disc too.
+*/
+static int disc_spin_due = 0;
+
 static uint32_t last_key = 0;
 static int key_run = 0;
 
@@ -2238,6 +2247,59 @@ static int disc_radius(const chome_profile *p)
 }
 
 /*
+  Where the discs were drawn, recorded as they are drawn.
+
+  The spin repaint needs the rectangle a disc occupies *before* it composes anything,
+  and the honest source of that rectangle is the drawing itself: draw_disc() computes
+  its centre from a panel layout that depends on the profile and the row count, and a
+  second copy of that arithmetic would drift the first time someone resized the panel.
+  So both disc draws note their bounds, compose() clears the notes first, and the
+  partial repaint uses what the previous frame recorded.
+
+  Using last frame's rectangles is safe, not merely convenient: a partial repaint only
+  happens on a pass where nothing marked dirty, and everything that could move, add or
+  remove a disc - a screen change, a disc arriving or leaving, a resolution change -
+  marks dirty and takes the full path, which re-records these.
+
+  Sized at 17 cells' radius (the focus-ring variant of gfx_disc's grid) whether or not
+  the ring is on: one cell of slack costs a couple of rows, and the ring appearing is a
+  screen change anyway.
+*/
+static struct { int x, y, w, h, on; } disc_rc[2];   // 0 the badge, 1 the prompt's
+
+static void disc_note_rect(int i, int cx, int cy, int r)
+{
+	int cell = r / 16;
+	if (cell < 1) cell = 1;
+	disc_rc[i].x = cx - 17 * cell;
+	disc_rc[i].y = cy - 17 * cell;
+	disc_rc[i].w = 34 * cell;
+	disc_rc[i].h = 34 * cell;
+	disc_rc[i].on = 1;
+}
+
+// The box round every disc the last composed frame drew. 0 when it drew none - the
+// browser, say, or an empty drive - in which case nothing on screen is turning and
+// the spin repaint has nothing to do.
+static int disc_spin_rect(int *x, int *y, int *w, int *h)
+{
+	int x0 = 0x7fffffff, y0 = 0x7fffffff, x1 = -1, y1 = -1;
+
+	for (int i = 0; i < 2; i++)
+	{
+		if (!disc_rc[i].on) continue;
+		if (disc_rc[i].x < x0) x0 = disc_rc[i].x;
+		if (disc_rc[i].y < y0) y0 = disc_rc[i].y;
+		if (disc_rc[i].x + disc_rc[i].w > x1) x1 = disc_rc[i].x + disc_rc[i].w;
+		if (disc_rc[i].y + disc_rc[i].h > y1) y1 = disc_rc[i].y + disc_rc[i].h;
+	}
+
+	if (x1 < 0) return 0;
+	*x = x0; *y = y0; *w = x1 - x0; *h = y1 - y0;
+	return 1;
+}
+
+/*
   Two lines and the air round them, in units of s. Wider than a settings row (12)
   because the second line is the whole point: it is where "paired, not awake" and
   "needs a password" go, which is what the old screens said in a column of symbols and
@@ -3851,6 +3913,8 @@ static void draw_disc(const chome_profile *p)
 	int cx = b.x + 8 * s + r;
 	int cy = b.y + body_h / 2;
 
+	disc_note_rect(1, cx, cy, r);
+
 	/*
 	  Always the art when there is art. There is none yet - a physical disc has no
 	  filename to match on, so it needs a serial-to-title table and a scraper that this
@@ -3912,6 +3976,8 @@ static void draw_disc_badge(const chome_profile *p)
 	int r = disc_radius(p);
 	int cx = p->safe_x + p->inset + r;
 	int cy = p->safe_y + p->inset + r;
+
+	disc_note_rect(0, cx, cy, r);
 
 	/*
 	  The disc and nothing else. No plate behind it and no name beside it, at any
@@ -4785,17 +4851,26 @@ static void draw_launch(const chome_profile *p)
 	}
 }
 
-static void render()
+/*
+  One frame's drawing, back to front. Called bare for a full repaint and under
+  gfx_clip_set() for a partial one: the partial case replays exactly this stack, so
+  whatever sits underneath the repainted region - the shelf background, a scrim, the
+  edge of a panel - is reconstructed by the same code in the same order as a full
+  frame, rather than cached per element or read back from a previous frame. That is
+  what makes a region repaint smear-proof: nothing here ever depends on what the
+  region used to contain.
+*/
+static void compose()
 {
-	gfx_stat_compose_begin();
-
 	const chome_profile *p = theme_get();
+
+	// Re-recorded by whichever discs draw this frame; see disc_note_rect().
+	disc_rc[0].on = disc_rc[1].on = 0;
 
 	if (screen == SCR_BROWSE)
 	{
 		draw_browse(p);
 		draw_legend(p);
-		gfx_end();
 		return;
 	}
 
@@ -4840,7 +4915,39 @@ static void render()
 	// Last, and over everything: while the keyboard is up it is the only thing the
 	// player can act on.
 	if (osk_active()) osk_draw(p, using_pad);
+}
 
+static void render()
+{
+	gfx_stat_compose_begin();
+	compose();
+	gfx_end();
+}
+
+/*
+  Repaint only what intersects one rectangle - the spinning disc's, in practice.
+
+  The frame is composed as usual but under a clip, so only the region's pixels are
+  drawn or damaged, and gfx_end() copies only that region into the framebuffer. The
+  copy is row-based and the disc spans ~34 rows of 240, so this is the difference
+  between ~5ms a frame and well under 1ms.
+
+  The alternating framebuffers need no special handling here, and that is worth
+  spelling out because it is the likeliest place for a stale-disc bug: gfx_end()
+  already unions this frame's damage with the previous frame's before copying, because
+  the buffer it fills is two frames stale. The compose buffer always holds a complete
+  current frame (a clip only limits what changes, never invalidates the rest), so that
+  union is exactly the set of rows in which the stale buffer differs - a partial
+  repaint following a full one carries the full frame's damage across to the second
+  buffer, and a chain of partials carries the disc's rectangle. Neither buffer can be
+  left holding an old rotation.
+*/
+static void render_region(int x, int y, int w, int h)
+{
+	gfx_stat_compose_begin();
+	gfx_clip_set(x, y, w, h);
+	compose();
+	gfx_clip_clear();
 	gfx_end();
 }
 
@@ -8115,12 +8222,16 @@ int chome_handle(uint32_t key)
 		  Faster than the other animations, because the disc travels further per frame -
 		  see GFX_DISC_MS. Only while a disc is in the drive, so a machine with an empty
 		  one repaints exactly as often as it did before any of this existed.
+
+		  Not mark_dirty(): the disc turning is the one change on screen, so it asks for
+		  the partial path - see the dispatch at the bottom of this function - and a
+		  full repaint every 50ms was most of what a spinning disc cost.
 		*/
 		static unsigned long disc_next_spin = 0;
 		if (CheckTimer(disc_next_spin))
 		{
 			disc_next_spin = GetTimer(GFX_DISC_MS);
-			mark_dirty();
+			disc_spin_due = 1;
 		}
 	}
 
@@ -8261,7 +8372,26 @@ int chome_handle(uint32_t key)
 	if (dirty)
 	{
 		dirty = 0;
+		disc_spin_due = 0;             // a full repaint repaints the disc too
 		render();
+	}
+	else if (disc_spin_due)
+	{
+		disc_spin_due = 0;
+
+		/*
+		  When in doubt, the full repaint. ui_busy() means a progress track may be on
+		  screen, and gfx_track's sweep is continuous in milliseconds - a track crossing
+		  the disc's rectangle would advance inside the clip and not outside it, and the
+		  seam would sit there until the next full frame. While something is busy this
+		  UI is repainting fully every GFX_SPIN_MS anyway, so a full frame at the disc
+		  rate is what shipped before this path existed.
+		*/
+		int x, y, w, h;
+		if (ui_busy()) render();
+		else if (disc_spin_rect(&x, &y, &w, &h)) render_region(x, y, w, h);
+		// Otherwise the last frame drew no disc (the browser, say): nothing on screen
+		// is turning, so nothing needs painting at all.
 	}
 
 	return 1;
