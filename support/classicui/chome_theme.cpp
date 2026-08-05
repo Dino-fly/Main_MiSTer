@@ -113,10 +113,55 @@ void theme_update(int w, int h, int force)
 	if (P.y_pips < P.y_shelf + 4) P.y_pips = P.y_shelf + 4;
 	if (P.y_pos < P.y_pips + 10 * P.ts_tiny) P.y_pos = P.y_pips + 10 * P.ts_tiny;
 
-	P.thumb_w = pct(w, 0.156);
-	P.thumb_h = (P.thumb_w * 3) / 4;
-	P.thumb_gap = pct(w, 0.019);
+	/*
+	  The suspend strip, and the row of slot tiles inside it.
+
+	  strip_h is the strip's own height, above the overscan margin: draw_suspend() rests the
+	  panel at h - safe_y - strip_h and fills it strip_h + safe_y tall, so the panel reaches
+	  the bottom edge of the canvas and the screen shows no seam under it. The strip keeps
+	  its strip_h of room whatever the margin is - on a television that hides 15% of every
+	  edge the panel simply starts higher up - and the tiles below are derived from whatever
+	  room that leaves, so a bigger margin gives them a little more rather than less.
+
+	  The tiles were pct(w, 0.156) regardless of what the strip had spare, which at 240p is
+	  50x37 - a row of three spanning 168 px of the 276 the header spans, with about a third
+	  of the panel below them empty. They are derived from the room instead: as wide as a
+	  full row fits between the insets, as tall as fits between the header and the legend,
+	  and the tighter of the two decides, because the tile keeps 4:3 (see chome_theme.h).
+	  On a tall-enough canvas that is the width; at 240p and on a 540-line canvas it is
+	  the height, and the width left over is the price of not stretching a screenshot.
+	*/
 	P.strip_h = pct(h, (id == PROF_LO) ? 0.50 : 0.47);
+	P.thumb_gap = pct(w, 0.019);
+
+	// Clears the header: armed, that line is a drawn button, which btn_chip() hangs 2*s
+	// above its text row and 12*s tall - so 18*ts_ui is the first row below either form
+	// of it, and the 6 is the gap under it.
+	P.thumb_y = 18 * P.ts_ui + 6;
+
+	/*
+	  What the row has to itself. Horizontally both insets, less the 3 px the focus frame
+	  is drawn outside the selected tile on each side; vertically from the top of the tile
+	  row down to the top of the legend's own band (draw_legend fills from y_legend -
+	  6*ts_ui), less the slot number under each tile and two rows so the caption does not
+	  sit on the legend's rule.
+	*/
+	int strip_top = h - P.safe_y - P.strip_h;              // where draw_suspend() rests it
+	int room_w = w - P.inset * 2 - 6 - (CHOME_STRIP_SLOTS - 1) * P.thumb_gap;
+	int room_h = (P.y_legend - 8 * P.ts_ui) - (strip_top + P.thumb_y) - (5 + 8 * P.ts_tiny);
+
+	P.thumb_w = room_w / CHOME_STRIP_SLOTS;
+	P.thumb_h = (P.thumb_w * 3) / 4;
+	if (P.thumb_h > room_h)
+	{
+		P.thumb_h = room_h;
+		P.thumb_w = (P.thumb_h * 4) / 3;
+	}
+
+	// No profile is this cramped, but the metrics have to stay drawable on any
+	// framebuffer: a zero or negative tile is a blit of garbage, not a small tile.
+	if (P.thumb_w < 16) P.thumb_w = 16;
+	if (P.thumb_h < 12) P.thumb_h = 12;
 
 	P.panel_w = pct(w, (id == PROF_LO) ? 0.78 : 0.46);
 	P.panel_h = pct(h, (id == PROF_LO) ? 0.62 : 0.56);
@@ -124,4 +169,6 @@ void theme_update(int w, int h, int force)
 
 	printf("ClassicUI: profile %s, canvas %dx%d, card %dx%d, pitch %d, text %dx/%dx\n",
 		P.name, P.w, P.h, P.card_w, P.card_h, P.pitch, P.ts_title, P.ts_ui);
+	printf("ClassicUI: strip %d tall at y=%d, slot tile %dx%d, margin %dx%d\n",
+		P.strip_h, P.h - P.safe_y - P.strip_h, P.thumb_w, P.thumb_h, P.safe_x, P.safe_y);
 }

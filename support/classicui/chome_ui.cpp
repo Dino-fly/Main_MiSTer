@@ -267,6 +267,13 @@ static void ref_shot_path(const char *sysid, const char *rompath, char *out, int
 #define CH_SLOTS      4
 #define CH_SLOTS_USER 3
 
+// The strip sizes its tiles for a full row of these, in chome_theme.cpp, which cannot see
+// this number - so the two are checked against each other here rather than left to drift:
+// a profile laying out four tiles for a screen that draws three would simply look wrong,
+// with nothing to point at.
+static_assert(CH_SLOTS_USER == CHOME_STRIP_SLOTS,
+	"the strip lays out a different number of slots than it draws");
+
 #define MB_DISPLAY  0
 #define MB_OPTIONS  1
 #define MB_POWER    2
@@ -2565,6 +2572,25 @@ static void draw_progress(const panel_box *b, int mark, const char *head, const 
 // their panel from it and the two must not drift apart.
 #define PROGRESS_H(s) (100 * (s))
 
+/*
+  A word across the middle of a slot tile - "EMPTY", "SAVING" - and nothing at all when
+  the tile is too small to hold one.
+
+  The longest of them, "NOT SAVED", is 72 px at the size the strip draws them, and a 240p
+  tile has been narrower than that for as long as the strip has existed: centred in one it
+  ran clean across its neighbours. The tiles are sized from the room the strip has now
+  (chome_theme.cpp), so how narrow they get depends on the canvas and the margin, which is
+  a reason to measure rather than to assume there is room. Clipped to the tile rather than
+  shortened by hand, and dropped entirely below three characters - an empty frame already
+  reads as empty, where "N>" over it reads as a fault in the drawing.
+*/
+static void slot_word(const char *word, int x, int y, int tw, int s, uint32_t col)
+{
+	int room = tw - 4 * s;
+	if (room < 3 * GLYPH_W * s) return;
+	gfx_text_c(gfx_clip(word, s, room), x, y, s, col, 0);
+}
+
 static void draw_suspend(const chome_profile *p)
 {
 	if (strip_y <= 0.002) return;
@@ -2573,7 +2599,9 @@ static void draw_suspend(const chome_profile *p)
 	int ph = p->strip_h;
 
 	// Comes to rest above the overscan margin, and its panel is extended down into
-	// it so the bottom of the screen stays filled rather than showing a seam.
+	// it so the bottom of the screen stays filled rather than showing a seam. The
+	// strip therefore keeps ph of room whatever the margin is, and the tile row is
+	// sized from that room - see chome_theme.cpp.
 	int y = p->h - p->safe_y - (int)(ph * strip_y);
 
 	gfx_fill(0, y, p->w, ph + p->safe_y, COL_BGDARK);
@@ -2581,17 +2609,33 @@ static void draw_suspend(const chome_profile *p)
 
 	int s = p->ts_ui;
 	int armed = (del_arm_slot >= 0 && !CheckTimer(del_arm_until));
+	int room = p->w - p->inset * 2;
 
 	char hdr[128];
 	if (armed) snprintf(hdr, sizeof(hdr), "DELETE SLOT %d? PRESS", del_arm_slot + 1);
-	else snprintf(hdr, sizeof(hdr), "%s - SUSPEND POINTS", it ? it->title : "");
+	else
+	{
+		/*
+		  The game, and the label after it only when both fit. "LEGEND OF ZELDA, THE -
+		  SUSPEND POINTS" is 37 characters where a 240p header holds 35, and gfx_clip cut
+		  the tail - which is the label, except that reaching it had already eaten the end
+		  of the title: "LEGEND OF ZELDA, THE - SUSPEND POI>". Dropping the label whole is
+		  the better trade. Which screen this is the row of numbered tiles below says, and
+		  the legend under them says it again; which game these slots belong to nothing
+		  else on the screen says at all. A title too long even on its own is still
+		  clipped below - there is nothing left to give it.
+		*/
+		const char *title = it ? it->title : "";
+		snprintf(hdr, sizeof(hdr), "%s - SUSPEND POINTS", title);
+		if ((int)strlen(hdr) * GLYPH_W * s > room) snprintf(hdr, sizeof(hdr), "%s", title);
+	}
 	for (char *q = hdr; *q; q++) *q = (char)toupper((unsigned char)*q);
 
 	// Armed, the header draws the button rather than naming it - the legend under it is
 	// showing that same button, and one of them saying "X" while the other drew a square
 	// was the two of them describing different controllers.
 	if (armed) btn_hint_l(p->inset, y + 6 * s, s, COL_RED, hdr, LBL_X, "AGAIN");
-	else gfx_text(gfx_clip(hdr, s, p->w - p->inset * 2), p->inset, y + 6 * s, s, COL_PANELHI, 0);
+	else gfx_text(gfx_clip(hdr, s, room), p->inset, y + 6 * s, s, COL_PANELHI, 0);
 
 	/*
 	  A core with no savestate entries at all - most arcade hardware - can never fill
@@ -2614,7 +2658,7 @@ static void draw_suspend(const chome_profile *p)
 		int s2 = p->ts_ui;
 		char lines[4][64];
 		int nl = wrap_text("This system cannot save your place - it has no save states.",
-			(p->w - p->inset * 2 - 16 * s2) / (8 * s2), lines, 2);
+			(room - 16 * s2) / (8 * s2), lines, 2);
 		for (int i = 0; i < nl; i++)
 			gfx_text_c(lines[i], p->w / 2, y + 22 * s2 + i * 11 * s2, s2, COL_PANELHI, 0);
 		return;
@@ -2622,7 +2666,7 @@ static void draw_suspend(const chome_profile *p)
 
 	int n = user_slots(), tw = p->thumb_w, th = p->thumb_h, gap = p->thumb_gap;
 	int x0 = (p->w - (n * tw + (n - 1) * gap)) / 2;
-	int ty = y + 18 * s + 6;
+	int ty = y + p->thumb_y;
 
 	const chome_entry *e = cur_entry();
 	int aw = 0, ah = 0;
@@ -2650,15 +2694,15 @@ static void draw_suspend(const chome_profile *p)
 
 			gfx_scrim(x, ty, tw, th, COL_SHADOW, 2);
 			gfx_frame_rect(x, ty, tw, th, COL_YELLOW, 2);
-			gfx_text_c("SAVING", x + tw / 2, ty + th / 2 - 4 * p->ts_tiny, p->ts_tiny, COL_YELLOW, 0);
+			slot_word("SAVING", x + tw / 2, ty + th / 2 - 4 * p->ts_tiny, tw, p->ts_tiny, COL_YELLOW);
 		}
 		else if (!st)
 		{
 			gfx_fill(x, ty, tw, th, COL_BG);
 			gfx_frame_rect(x, ty, tw, th, COL_DIM, 1);
-			gfx_text_c(i == pend_failed ? "NOT SAVED" : "EMPTY",
-				x + tw / 2, ty + th / 2 - 4 * p->ts_tiny, p->ts_tiny,
-				i == pend_failed ? COL_RED : COL_DIM, 0);
+			slot_word(i == pend_failed ? "NOT SAVED" : "EMPTY",
+				x + tw / 2, ty + th / 2 - 4 * p->ts_tiny, tw, p->ts_tiny,
+				i == pend_failed ? COL_RED : COL_DIM);
 		}
 		else
 		{
