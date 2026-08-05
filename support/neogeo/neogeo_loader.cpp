@@ -7,6 +7,7 @@
 #include <time.h>   // clock_gettime, CLOCK_REALTIME
 #include "neogeo_loader.h"
 #include "neogeocd.h"
+#include "../physical_disc/physical_disc.h"
 #include "../../sxmlc.h"
 #include "../../user_io.h"
 #include "../../fpga_io.h"
@@ -1140,9 +1141,27 @@ void load_neo(char *path)
 
 int neogeo_romset_tx(char* name, int cd_en)
 {
+	/*
+	  The physical-disc sentinel is not a path: it has no directory, no extension and
+	  no romset behind it. All this function needs from it is a display name, the CD
+	  BIOS load below (which comes from the NeoGeo-CD home dir, never from "next to
+	  the game") and a save file - so it passes through everywhere a path would have
+	  been taken apart. The romsets.xml lookup is already skipped for every CD load,
+	  sentinel or not, by the !cd_en guards further down.
+	*/
+	int phys = !strcmp(name, PHYSICAL_DISC_SENTINEL);
+
+	/*
+	  Whether the CD system ROM was actually found. A CD boots through its BIOS, so a
+	  missing one is the difference between a game and a black screen; the caller
+	  (neocd_set_image) reports it rather than pretending the load went fine.
+	*/
+	int cd_bios_ok = 1;
+
 	char *romset = strrchr(name, '/');
-	if (!romset) return 0;
-	romset++;
+	if (romset) romset++;
+	else if (phys) romset = name;
+	else return 0;
 
 	int system_mvs, system_cdz;
 	static char full_path[1024];
@@ -1240,9 +1259,13 @@ int neogeo_romset_tx(char* name, int cd_en)
 				neogeo_tx(home, "uni-bioscd.rom", NEO_FILE_RAW, 0, 0, 0x80000);
 			} else if (!system_cdz) {
 				// NeoGeo CD
+				sprintf(full_path, "%s/top-sp1.bin", home);
+				cd_bios_ok = FileExists(full_path);
 				neogeo_tx(home, "top-sp1.bin", NEO_FILE_RAW, 0, 0, 0x80000);
 			} else {
 				// NeoGeo CDZ
+				sprintf(full_path, "%s/neocd.bin", home);
+				cd_bios_ok = FileExists(full_path);
 				neogeo_tx(home, "neocd.bin", NEO_FILE_RAW, 0, 0, 0x80000);
 			}
 		}
@@ -1269,10 +1292,19 @@ int neogeo_romset_tx(char* name, int cd_en)
 
 	notify_conf();
 
-	FileGenerateSavePath(name, (char*)full_path);
+	/*
+	  The CD backup RAM is a mounted save file named after the game. A physical disc
+	  has no path to name it after, so the name comes off the disc instead - its
+	  volume label, or a uuid derived from the table of contents - the same way
+	  pcecd.cpp names its save. The fallback matters: a disc the reader cannot name
+	  still gets *a* save rather than one keyed to the sentinel string.
+	*/
+	char save_name[64] = "physical_disc";
+	if (phys) physical_disc_save_name(PHYSICAL_DISC_DISC_NEOGEO, save_name, sizeof(save_name));
+	FileGenerateSavePath(phys ? save_name : name, (char*)full_path);
 	user_io_file_mount((char*)full_path, 0, 1);
 
 	user_io_status_set("[0]", 0); // Release reset
 
-	return 1;
+	return cd_bios_ok;
 }

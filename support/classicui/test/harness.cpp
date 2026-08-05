@@ -2452,6 +2452,62 @@ static void assert_disc_launch()
 			"and it goes into SD slot 0, the MegaCD core's only S entry");
 	}
 
+	/* ------------------------------------------------- and so does Neo Geo --- */
+
+	/*
+	  Neo Geo CD, the romset system. Its shelf entries are board-named archives
+	  resolved through romsets.xml, but a disc takes none of that path: disc_launch()
+	  writes the sentinel with the slot swapped to the core's CD input, and menu.cpp
+	  hands any 's' mount on this core to neocd_set_image(). What can be proven here
+	  is exactly what the blocks above prove - the right core, the sentinel, the right
+	  slot.
+
+	  Its sectors come from the same shared cdd_t as Mega CD, which is why that port
+	  had to land first; this block would pass either way, since the MGL is written
+	  before any daemon is involved.
+	*/
+	disc_reset_reader();
+	disc_ingest_present(0);
+	(void)disc_take_dirty();
+	chome_leave();
+	press(KEY_MENU, 20);
+	frame(10);
+	check(chome_screen_id() == S_HOME, "the shelf is back after the Mega CD launch");
+
+	disc_ingest_present(1);
+	fake_disc dn; memset(&dn, 0, sizeof(dn));
+	fake_iso(&dn, 0, "NEOGEO CD", "NGCD", none, 0);
+	disc_set_reader(fake_read, &dn);
+	disc_ingest_identify(0);
+	frame(6);
+	check(disc_type() == DISC_T_NEOGEO, "a Neo Geo CD disc is identified");
+
+	press(KEY_UP);
+	press(KEY_ENTER);
+	check(chome_screen_id() == S_DISC, "and its prompt is up");
+
+	harness_clear_launch();
+	press(KEY_ENTER, 4);
+	frame(80);
+
+	check(strstr(harness_last_launch(), ".mgl") != 0, "\"Play on Neo Geo\" launches");
+
+	f = fopen("/tmp/classicui_launch.mgl", "rt");
+	check(f != 0, "and wrote the MGL");
+	if (f)
+	{
+		char buf[1024] = {};
+		size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+		buf[n] = 0;
+		fclose(f);
+		printf("---- /tmp/classicui_launch.mgl ----\n%s-----------------------------------\n", buf);
+		check(strstr(buf, "_Console/NeoGeo") != 0, "the MGL names the NeoGeo core");
+		check(strstr(buf, PHYSICAL_DISC_SENTINEL) != 0, "the file is the sentinel, not a path");
+		check(strstr(buf, "type=\"s\" index=\"1\"") != 0,
+			"and it goes into SD slot 1 - \"S1,CUECHD,Load CD Image\" in neogeo.sv, "
+			"the 's' slot, not the FS1 romset slot");
+	}
+
 	// Leave things as the sections after this expect: no disc, the flag back off,
 	// and the UI reopened on the shelf - the launch closed it. Re-entered the way
 	// every other section re-enters, leave then menu key.
