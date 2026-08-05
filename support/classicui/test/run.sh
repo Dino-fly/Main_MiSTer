@@ -61,7 +61,16 @@ g++ -std=gnu++14 -O1 -g -Wall -Wextra -Wno-unused-parameter -Wno-format-truncati
 
 # The same chome_ss.cpp compiled the way it actually ships - no devid - to prove that
 # configuration cannot reach the network. See support/classicui/test/gate.cpp.
-g++ -std=gnu++14 -O1 -g -Wall -Wextra -I. -o /tmp/harness/chome_gate \
+#
+# -DCLASSICUI_SS_NO_CREDS says so out loud, because chome_ss.cpp will otherwise include
+# bin/ss_credentials.h when real credentials exist on this machine - and then this binary
+# would be testing that local build rather than the one we ship, and would fail exactly
+# when its reassurance matters most.
+#
+# No apostrophes in here. This whole script is one single-quoted argument to bash -c, so
+# one apostrophe ends the quote and the rest of it runs on the host instead of in the
+# container - which shows up as clang++ complaining that it cannot find these files.
+g++ -std=gnu++14 -O1 -g -Wall -Wextra -DCLASSICUI_SS_NO_CREDS -I. -o /tmp/harness/chome_gate \
     support/classicui/chome_ss.cpp \
     support/classicui/test/gate.cpp \
     /tmp/harness/sxmlc.o
