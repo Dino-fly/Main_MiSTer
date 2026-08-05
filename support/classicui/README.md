@@ -178,6 +178,14 @@ every game, putting the shared value on screen as it goes. With no game identifi
 something else loaded — a change goes into the same `<CORE>.CFG` the classic OSD writes,
 exactly as before.
 
+**And Y is the other answer: keep the value, but for the whole system.** Sometimes a setting
+tried out in one game turns out to be how the machine should behave everywhere. Y writes that
+one option into `<CORE>.CFG` — *only* that one, leaving the other settings the running game
+keeps to itself exactly where they are, which is the thing that used to make this impossible.
+The star goes, because the value is no longer this game's, and the footer says so for a few
+seconds so it cannot be mistaken for X. Both prompts appear only on a row the game actually
+overrides; there is nothing to hand over anywhere else.
+
 Per-game settings live in `config/classicui_coreopts.cfg`, keyed by system and ROM path like
 the rest of the front-end's per-game state. They name the option and the value rather than
 numbering them, so a core update that grows one of its own value lists cannot turn a
@@ -1032,13 +1040,19 @@ no new table.
   table is the next step, not a rewrite.
 - **Attract mode and a first-run wizard.** Neither exists. Options hands off to the
   classic menu for anything it does not own.
-- ~~Per-game core options.~~ **Done**, in one direction only: a setting changed from
-  inside a game is kept for that game, and X hands it back to every game. There is no
-  way to make a value the *shared* one from in there, because writing `<CORE>.CFG`
-  writes the whole status word - including the running game's other overrides, which
-  would then leak to every game on the core. The classic OSD remains the route to a
-  global change, and note that using it while a game with overrides is running bakes
-  those overrides into `<CORE>.CFG` for the same reason.
+- ~~Per-game core options.~~ ~~**Done**, in one direction only.~~ **Both directions
+  now.** A setting changed from inside a game is still kept for that game, X hands it
+  back to every game, and Y makes it the shared value without going near the classic
+  OSD. What made the second direction look impossible was assuming it had to go through
+  `user_io_status_save()`, which dumps the whole status word - the running game's other
+  overrides with it. It does not: `<CORE>.CFG` *is* that word, byte for byte, so the
+  promotion reads the file, sets one option's bits and writes it back. The core's copy
+  is never involved and no other option in the file is touched.
+
+  Still true, and untouched by that: **opening the classic OSD over a game with
+  overrides and saving there bakes those overrides into `<CORE>.CFG`**, because that
+  save is the whole-word one. Nothing here can fix the OSD's own save; what has changed
+  is that wanting one setting shared is no longer a reason to go there.
 - **Aspect and scaling** (4:3 vs pixel-perfect) are not in the Video Look panel:
   `video_loadPreset` has no key for them and `vscale_mode` does not survive the
   core switch. They stay an ini setting.

@@ -463,6 +463,16 @@ void core_opt_keep_for_game(const core_opt *o, int value, int global)
 		o->name, r->val, r->base[0] ? r->base : "unknown");
 }
 
+// Drop a record and write the store. The list has no order that means anything - every
+// lookup is by (key, name) - so the hole is filled from the end rather than shifted.
+static void pg_forget(co_pg *r)
+{
+	int i = (int)(r - pgrecs);
+	if (i < npgrecs - 1) pgrecs[i] = pgrecs[npgrecs - 1];
+	npgrecs--;
+	pg_save();
+}
+
 int core_opt_drop_for_game(const core_opt *o)
 {
 	if (!o || !pg_bound) return 0;
@@ -482,10 +492,121 @@ int core_opt_drop_for_game(const core_opt *o)
 	printf("ClassicUI: %s is no longer kept for this game%s\n", o->name,
 		(back >= 0) ? ", shared value restored" : " (its shared value is gone from the core)");
 
-	int i = (int)(r - pgrecs);
-	if (i < npgrecs - 1) pgrecs[i] = pgrecs[npgrecs - 1];
-	npgrecs--;
-	pg_save();
+	pg_forget(r);
+	return 1;
+}
+
+/* -------------------------------------------------- one option, shared ----- */
+
+/*
+  How big the shared config is. <CORE>.CFG is a raw dump of user_io.cpp's cur_status[16],
+  so sixteen bytes is what user_io_status_save() always writes and what the core reads back
+  at boot. The buffer is larger and the length actually read is what gets written again, so
+  a firmware that one day grows the status word cannot have its file truncated by this.
+*/
+#define CO_CFG_BYTES 16
+#define CO_CFG_MAX   64
+
+int core_opt_can_promote(const core_opt *o)
+{
+	if (!o || !pg_bound) return 0;
+	if (!pg_allowed(o->name)) return 0;
+
+	// A spec this firmware cannot address and a core with no config name are both
+	// "promotion is impossible", and the screen asks this before it offers the press.
+	if (!user_io_status_bits(o->spec, 0, 0)) return 0;
+
+	char *name = user_io_create_config_name(1);
+	if (!name || !name[0]) return 0;
+
+	pg_load();
+	return pg_find(pg_bound, o->name) ? 1 : 0;
+}
+
+/*
+  Making one option shared, from inside a game, without writing the status word.
+
+  The trap this exists to avoid: user_io_status_save() persists by dumping the *live*
+  status word, and while a game with overrides is running that word is that game's. Save it
+  and PSX's widescreen hack, its region and its dithering all become the core's own values
+  because one of them was meant to. That is why README.md carried "no way to make a value
+  the shared one from in there" as a limitation rather than a bug, and it is the reason the
+  classic OSD is still a trap when it is opened over a game with overrides: its save is the
+  same call.
+
+  What makes the narrow write possible is that <CORE>.CFG has no format. It is cur_status[]
+  memcpy'd to a file (see user_io_status_save), so the file *is* the shared status word,
+  byte for byte and bit for bit - and the running core's copy of it need not be involved at
+  all. Read the file, put this option's bits in it, write it back. Every other option in
+  the result is the bytes that were already there, so the shared value of everything this
+  game overrides survives untouched. Nothing is asked of the core and nothing is asked of
+  the classic OSD.
+
+  A missing file is sixteen zero bytes rather than a failure. That is not a guess: it is
+  what the core boots from when there is no config, because user_io.cpp memsets cur_status
+  before it tries to load one. So zeros *are* the shared config when there is none.
+
+  The bit arithmetic below is user_io_status_set()'s, deliberately: the same start%8 shift
+  and the same "at most two adjacent bytes" span, and the same ex=0 that core_opt_set()
+  passes. If it drifted from that pair the file would disagree with the core it is meant to
+  describe, which is a bug nothing on screen could show.
+*/
+int core_opt_promote_to_core(const core_opt *o)
+{
+	if (!core_opt_can_promote(o)) return 0;
+
+	int start = 0, end = 0;
+	int size = user_io_status_bits(o->spec, &start, &end);
+	if (!size) return 0;
+
+	char *name = user_io_create_config_name(1);
+	if (!name || !name[0]) return 0;
+
+	uint8_t img[CO_CFG_MAX];
+	memset(img, 0, sizeof(img));
+
+	int len = FileLoadConfig(name, img, sizeof(img));
+	if (len < CO_CFG_BYTES) len = CO_CFG_BYTES;
+	if (len > CO_CFG_MAX) len = CO_CFG_MAX;
+	if (end / 8 >= len) return 0;
+
+	int value = core_opt_value(o);
+
+	uint32_t mask = ~(0xffffffffu << size);
+	mask <<= start % 8;
+	uint32_t x = ((uint32_t)img[end / 8] << 8) | img[start / 8];
+	x = (x & ~mask) | (((uint32_t)value << (start % 8)) & mask);
+
+	img[start / 8] = (uint8_t)x;
+	if (end / 8 != start / 8) img[end / 8] = (uint8_t)(x >> 8);
+
+	if (!FileSaveConfig(name, img, len)) return 0;
+
+	printf("ClassicUI: %s = %s is now the shared value, in %s (bits %d..%d only)\n",
+		o->name, o->vals[value], name, start, end);
+
+	/*
+	  And this game stops overriding it, because the override has just become a copy of
+	  the shared value.
+
+	  The other choice is defensible and was rejected on two counts. Keeping the record
+	  would store one value in two places with the per-game copy winning, so the row would
+	  keep its green star - and that star says "kept for this game, not for the core",
+	  which would no longer be true of a value the player has just asked every game to
+	  have. Worse, if the shared value were later moved again from the classic OSD, this
+	  one game would silently stay behind on the value it had asked to *share*, which is
+	  the opposite of what the press meant. Dropping it leaves one value in one place, and
+	  the star going is how the screen says the promotion landed.
+
+	  Nothing else this game overrides is touched: only this option's record goes.
+
+	  Not core_opt_drop_for_game(): that puts the record's base - the value we have just
+	  replaced - back on the core, so the picture would revert at the moment the player
+	  asked to keep it everywhere.
+	*/
+	co_pg *r = pg_find(pg_bound, o->name);
+	if (r) pg_forget(r);
+
 	return 1;
 }
 

@@ -20,6 +20,14 @@
 
 #include "../../../cfg.h"
 #include "../../../input.h"
+/*
+  For user_io_status_bits() and user_io_create_config_name(). The shared-config section
+  reads <CORE>.CFG off the fake card and decodes one option out of it with the firmware's
+  own bit parser rather than a copy of it - a promotion that wrote the right value into the
+  wrong bits has to fail here, and it cannot if the test agrees with the implementation by
+  construction.
+*/
+#include "../../../user_io.h"
 #include "../chome.h"
 #include "../chome_lib.h"
 #include "../chome_core.h"
@@ -795,6 +803,15 @@ static int box_pixels(int x0, int y0, int x1, int y1, uint32_t want)
 			if ((fb[(size_t)y * w + x] | 0xff000000u) == want) n++;
 
 	return n;
+}
+
+// The rows the legend occupies, which is where its button prompts and nothing else are.
+// Up here with the other pixel helpers because two sections apart in this file count a
+// button's colour in that band to ask whether a prompt is being offered at all.
+static int legend_colour(uint32_t want)
+{
+	const chome_profile *p = theme_get();
+	return box_pixels(0, p->y_legend - 6 * p->ts_ui, p->w, p->h, want);
 }
 
 // Over the same box pt_panel_hash() fingerprints, which at every profile is inside the
@@ -5415,6 +5432,277 @@ static void assert_per_game_core_options()
 	harness_set_confstr(1);
 }
 
+/*
+  One option's value as the shared config on the card holds it, or -1 when there is no
+  shared config at all.
+
+  Read out of the file with the firmware's own bit parser, so the placement is checked and
+  not assumed: a promotion that put the right number in the wrong bits would come back as
+  the wrong number here, and one that rebuilt the file instead of editing it would come
+  back as zero for everything it did not mean to write.
+*/
+static int shared_cfg_field(const char *spec)
+{
+	unsigned char img[64];
+	memset(img, 0, sizeof(img));
+
+	char p[1024];
+	snprintf(p, sizeof(p), "%s/config/%s", ROOT, user_io_create_config_name(1));
+	FILE *f = fopen(p, "rb");
+	if (!f) return -1;
+	int len = (int)fread(img, 1, sizeof(img), f);
+	fclose(f);
+
+	int start = 0, end = 0;
+	int size = user_io_status_bits(spec, &start, &end);
+	if (!size || end / 8 >= len) return -1;
+
+	uint32_t x = ((uint32_t)img[end / 8] << 8) | img[start / 8];
+	x >>= start % 8;
+	return (int)(x & ~(0xffffffffu << size));
+}
+
+static void forget_shared_cfg()
+{
+	char p[1024];
+	snprintf(p, sizeof(p), "%s/config/%s", ROOT, user_io_create_config_name(1));
+	unlink(p);
+}
+
+/*
+  A core setting handed to the whole system, from inside a game.
+
+  Derek asked for both halves: a change made while a game is running belongs to that game -
+  which the section above is entirely about keeping true - and one deliberate press makes it
+  the value every game on that core gets instead.
+
+  Why that needed a mechanism rather than a call is what most of these checks are about.
+  <CORE>.CFG is written by handing user_io_status_save() the *live* status word, and while a
+  game with overrides is running that word carries all of them. Saving it to share one
+  setting would push the rest out to every game on the card - exactly the leak per-game
+  settings exist to stop, and the reason README.md carried this direction as impossible. So
+  the promotion edits the file: this option's bits, nothing else.
+
+  What has to hold:
+
+  - the promoted value is really in the shared config, in that option's own bits;
+  - the running game's *other* overrides are not - the crux, and why two of them are set up
+    before anything is promoted;
+  - those other overrides are still the game's afterwards, not quietly lost;
+  - promoting a second option keeps the first, so the file is edited and not rebuilt;
+  - the whole status word is never written, which is the mechanism check rather than an
+    effect of it;
+  - per-game is still what a plain value change does, for anyone who never presses it;
+  - the prompt exists only where the press does something;
+  - and the player is told, because a star going away is also what undoing one looks like.
+*/
+static void assert_core_option_for_all_games()
+{
+	printf("\n== a core setting given to the whole system ==\n");
+
+	int gb = sysidx_of("gb");
+	const char *game_a = "Tetris (World).gb";
+	const char *game_b = "Zelda - Oracle of Ages (Europe).gbc";
+
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "gb\n%s\n", game_a); fclose(f); }
+	}
+
+	harness_set_menu_core(0);
+	harness_set_fb_supported(1);
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+	harness_set_confstr(6);
+	harness_set_osd_mask(0x0000);
+	harness_set_osd_visible(0);
+	harness_set_input_pad(1);
+
+	/*
+	  A pad whose layout is known, because the check on the prompt counts one button's
+	  colour in the legend band. A pad that cannot be placed draws its letters with no
+	  colour at all, and the count would be zero whether the prompt was offered or not -
+	  which would make the check pass for the wrong reason and keep passing if the prompt
+	  were removed.
+	*/
+	harness_set_pad_name("Nintendo Switch Pro Controller");
+
+	/*
+	  No shared config on the card to begin with. That is not just a clean slate: it is the
+	  case the promotion has to read as sixteen zero bytes rather than as a failure, because
+	  zeros are what the core itself boots from when there is no config.
+	*/
+	forget_shared_cfg();
+	check(shared_cfg_field("[54:53]") == -1, "the core has no shared config yet");
+
+	core_opts_scan();
+	core_opts_bind_game(core_opts_game_key(gb, game_a));
+	for (int i = 0; i < core_opts_count(); i++) core_opt_drop_for_game(core_opt_at(i));
+
+	harness_set_opt("FH", 0);              // Palette = Kitrinx
+	harness_set_opt("[54:53]", 0);         // Widescreen Hack = Off
+
+	chome_handle(0);
+	if (chome_ingame_active()) press(KEY_MENU, 14);
+	frame(6);
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 40 && lib_scanning(); i++) frame(2);
+	frame(16);
+	check(chome_ingame_active(), "the menu is up over the running game");
+
+	press(KEY_UP, 14);
+	for (int i = 0; i < 6; i++) press(KEY_RIGHT, 8);
+	press(KEY_ENTER, 18);
+	frame(10);
+
+	const core_opt *pal = core_opt_tier_at(CO_TIER_PICTURE, 0);
+	check(pal && !strcasecmp(pal->name, "Palette"), "the screen opens on Palette");
+
+	/*
+	  Nothing to hand over yet, so nothing may be offered. The green west button is the Y
+	  prompt on a Nintendo pad, and this screen draws no other green one.
+	*/
+	check(legend_colour(COL_SNES_Y) == 0,
+		"on a row this game does not override, no button is offered to share it");
+
+	/*
+	  Two overrides, on two different options, both belonging to the one game. This is what
+	  makes the crux checkable at all: with only one there is nothing that could leak.
+	*/
+	press(KEY_RIGHT, 14);                   // Palette -> Smooth
+	frame(8);
+	pal = core_opt_tier_at(CO_TIER_PICTURE, 0);
+	check(pal && core_opt_value(pal) == 1 && core_opt_per_game(pal),
+		"a change is still kept for the game alone, as it always was");
+
+	press(KEY_DOWN, 14);
+	press(KEY_RIGHT, 14);
+	press(KEY_RIGHT, 14);                   // Widescreen Hack -> 16:9
+	frame(10);
+	const core_opt *ws = core_opt_tier_at(CO_TIER_PICTURE, 1);
+	check(ws && !strcasecmp(ws->name, "Widescreen Hack") && core_opt_value(ws) == 2
+		&& core_opt_per_game(ws), "and so is a second one, on another option");
+
+	int saves = harness_cfg_saves();
+	check(legend_colour(COL_SNES_Y) > 0,
+		"on a row it does override, the button to share it is offered");
+	dump("core-options-for-all-games");
+
+	/*
+	  Let anything still easing finish before the confirmation is measured. Sections before
+	  this one leave the suspend strip on its way out, and its tiles are framed in the same
+	  green - so an animation ending mid-measurement would read as the message appearing or
+	  going away, and the check would pass whether the message existed or not.
+	*/
+	harness_advance(2500);
+	frame(8);
+	int green_before = px_count(COL_GREEN);
+
+	// Y. One press, on Widescreen Hack, with Palette overridden and untouched.
+	press(KEY_BACKSPACE, 14);
+	frame(10);
+
+	check(shared_cfg_field("[54:53]") == 2,
+		"the shared config now holds the promoted value, in that option's own bits");
+
+	/*
+	  The crux. Palette is this game's own choice and must not have been carried out with
+	  the setting that was promoted - which is precisely what saving the status word would
+	  have done, and it is the reason this direction did not exist before.
+	*/
+	check(shared_cfg_field("FH") == 0,
+		"and the other override this game holds did NOT go into it");
+	check(harness_cfg_saves() == saves,
+		"because the whole status word was never written - only those bits");
+
+	// Nor was it thrown away in the other direction: it is still the game's.
+	pal = core_opt_tier_at(CO_TIER_PICTURE, 0);
+	check(pal && core_opt_per_game(pal) && core_opt_value(pal) == 1,
+		"the other override is still this game and still on its own value");
+
+	/*
+	  And the promoted one stops being this game's, which is the decision made in
+	  core_opt_promote_to_core(): the override has become a copy of the shared value, and a
+	  row still starred would be claiming to differ from a value it now equals.
+	*/
+	ws = core_opt_tier_at(CO_TIER_PICTURE, 1);
+	check(ws && !core_opt_per_game(ws),
+		"the promoted setting is no longer kept for this game, being the shared one now");
+	check(ws && core_opt_value(ws) == 2,
+		"and the core was left on it rather than reverted under the player");
+
+	// Which also means there is nothing left to hand over on that row.
+	check(legend_colour(COL_SNES_Y) == 0, "so the button is no longer offered there");
+
+	/*
+	  The player has to be told, because the only other visible effect is the star going -
+	  and X produces the same disappearance while meaning the opposite.
+
+	  The direction of the first count is what makes it a check rather than an observation.
+	  Promoting *removes* green from the screen: the row it happened to loses both its star
+	  and the green its value was drawn in. So if the total green goes up across that press,
+	  something green was added that is larger than what was taken away, and the only thing
+	  on this screen that can be is the confirmation. It is on a timer, so the second count
+	  is that it goes again on its own.
+	*/
+	int green_now = px_count(COL_GREEN);
+	dump("core-options-shared-now");
+	harness_advance(4000);
+	frame(6);
+	int green_later = px_count(COL_GREEN);
+	printf("  green pixels: %d before, %d while it says so, %d after\n",
+		green_before, green_now, green_later);
+	check(green_now > green_before, "the screen says the promotion happened, in green");
+	check(green_now > green_later, "and stops saying it on its own a moment later");
+	check(green_later > 0, "while the row that is still this game only keeps its mark");
+
+	/*
+	  A second promotion, on the option that was left alone. If the file were rebuilt from
+	  anything rather than edited, the first one would vanish here.
+	*/
+	press(KEY_UP, 14);
+	frame(8);
+	press(KEY_BACKSPACE, 14);
+	frame(10);
+	check(shared_cfg_field("FH") == 1, "a second option can be promoted too");
+	check(shared_cfg_field("[54:53]") == 2, "and the first one is still in the file");
+	check(harness_cfg_saves() == saves, "still without writing the status word");
+
+	/*
+	  What the whole thing was for: the next game on the same core has no overrides left to
+	  find, so it comes up on values that are now the core's own. The core reading the file it
+	  boots from is the firmware's own business and cannot be exercised here, so this checks
+	  the half that is ours - that nothing is waiting to be re-applied per game.
+	*/
+	check(core_opts_apply_for_game(gb, game_b) == 0, "another game on the core overrides none");
+	check(core_opts_apply_for_game(gb, game_a) == 0, "and neither does the game it came from");
+
+	/*
+	  And with no game to hang a choice on there is nothing to promote: a change there
+	  already goes into the shared config, as it did before any of this existed. The press
+	  must do nothing rather than write something.
+	*/
+	core_opts_bind_game(0);
+	frame(8);
+	check(legend_colour(COL_SNES_Y) == 0, "with no game identified the button is not offered");
+
+	int before_fh = shared_cfg_field("FH");
+	press(KEY_BACKSPACE, 14);
+	frame(8);
+	check(shared_cfg_field("FH") == before_fh, "and pressing it anyway writes nothing");
+	check(harness_cfg_saves() == saves, "nor does it fall back to writing the status word");
+
+	press(KEY_ESC, 12);
+	frame(6);
+	press(KEY_MENU, 16);
+	frame(8);
+
+	forget_shared_cfg();
+	harness_set_confstr(1);
+	harness_set_pad_name("Generic USB Gamepad");
+}
+
 static void assert_core_options_are_reachable()
 {
 	printf("\n== the core's own options are reachable from a game ==\n");
@@ -6462,13 +6750,6 @@ static int shelf_cycle_to(int card, int idx)
 		press(KEY_TAB, 10);
 	}
 	return 0;
-}
-
-// The rows the legend occupies, which is where its button prompts and nothing else are.
-static int legend_colour(uint32_t want)
-{
-	const chome_profile *p = theme_get();
-	return box_pixels(0, p->y_legend - 6 * p->ts_ui, p->w, p->h, want);
 }
 
 // The one line of the title block that names the file: between the system line and the
@@ -7616,6 +7897,7 @@ int main()
 	assert_core_idle_predicate();
 	assert_core_options_screen();
 	assert_per_game_core_options();
+	assert_core_option_for_all_games();
 	assert_core_options_are_reachable();
 	assert_look_applies_to_the_running_core();
 	assert_forget_beats_the_stat_check();
