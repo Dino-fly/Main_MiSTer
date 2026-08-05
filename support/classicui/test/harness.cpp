@@ -859,6 +859,24 @@ static void walk_looks()
 	}
 }
 
+/*
+  The disc dialog, captured at every profile.
+
+  It is the one screen here with no shelf card behind it to borrow proportions from - a
+  title, a large disc and a row of buttons, all sized off the canvas - so it is the one
+  most worth looking at on all four canvases rather than only on the one the assertions
+  run at. Nothing is checked in here: the checks live in assert_disc_dialog(), and this is
+  for the eyes.
+
+  A title table goes on the card for the duration, because what the panel has to fit is a
+  real game name and not a serial: "SLES-01506" is ten characters and "Metal Gear Solid"
+  is sixteen, and the wider of the two is the one that decides the panel width. Removed
+  again on the way out, with the module told to forget it - the sections after the walk
+  assert that a card with no table on it draws exactly what it always did.
+*/
+// Defined down with the fake drive it needs, which is declared further on.
+static void walk_disc_dialog(const char *tag);
+
 static void walk_profile(const char *tag, int profile, int w, int h)
 {
 	printf("\n== profile %s (%dx%d) ==\n", tag, w, h);
@@ -968,6 +986,8 @@ static void walk_profile(const char *tag, int profile, int w, int h)
 	snprintf(name, sizeof(name), "%s-10-systems", tag);
 	dump(name);
 	press(KEY_ESC, 12);
+
+	walk_disc_dialog(tag);
 }
 
 /* ------------------------------------------------------------ assertions -- */
@@ -1786,6 +1806,65 @@ static void fake_iso(fake_disc *d, int lba0, const char *label,
 		off += rlen;
 	}
 	fake_put(d, lba0 + (int)extent, 0, dir, sizeof(dir), 0);
+}
+
+// Declared up with walk_profile(), which is what calls it.
+static void walk_disc_dialog(const char *tag)
+{
+	const char *tdb = ROOT "/classicui/disctitles.txt";
+	char name[128];
+
+	mkpath(ROOT "/classicui");
+	{
+		FILE *f = fopen(tdb, "wb");
+		if (f)
+		{
+			fprintf(f, "#classicui-disctitles 1\n");
+			fprintf(f, "SLES01506\tMetal Gear Solid\n");
+			fclose(f);
+		}
+	}
+	disc_titles_forget();
+
+	cfg.classicui_disc = 1;
+
+	fake_disc d; memset(&d, 0, sizeof(d));
+	static const char *const none[] = { "" };
+	fake_iso(&d, 0, "PLAYSTATION", "PLAYSTATION", none, 0);
+	fake_put(&d, 20, 0, "BOOT = cdrom:\\SLES_015.06;1", 27, 100);
+
+	disc_ingest_present(1);
+	disc_set_reader(fake_read, &d);
+	disc_ingest_identify(0);
+	frame(6);
+
+	press(KEY_UP, 18);
+	press(KEY_ENTER, 20);
+	snprintf(name, sizeof(name), "%s-11-disc", tag);
+	dump(name);
+
+	press(KEY_RIGHT, 12);                 // the second button
+	snprintf(name, sizeof(name), "%s-11b-disc-options", tag);
+	dump(name);
+
+	press(KEY_ENTER, 20);                 // the core chooser it opens
+	snprintf(name, sizeof(name), "%s-12-disc-cores", tag);
+	dump(name);
+
+	for (int i = 0; i < 3; i++) press(KEY_ESC, 10);
+
+	/*
+	  The reader points at a local, so it has to go before this returns or the next
+	  disc_poll() would read a dead stack frame.
+	*/
+	disc_reset_reader();
+	disc_ingest_present(0);
+	(void)disc_take_dirty();
+	frame(6);
+	cfg.classicui_disc = 0;
+
+	unlink(tdb);
+	disc_titles_forget();
 }
 
 static void assert_physical_disc()
@@ -2864,6 +2943,204 @@ static void assert_disc_launch()
 	check(chome_screen_id() == S_HOME, "the shelf is back for whatever comes next");
 }
 
+/*
+  The dialog's two buttons.
+
+  A is the default: it launches without the player moving the cursor at all, which is the
+  whole point of replacing the row list - "Play on PlayStation" needed a press to read and
+  a press to confirm. Options is the second button, and it opens the core chooser the
+  removed "Use a different core" row used to offer.
+
+  The two modes of this screen share one screen id, and the offer's disc animates, so a
+  pixel hash of the panel differs between two visits with nothing wrong. The legend does
+  not animate and says something different in each mode, so that is what is read here -
+  and the launches are asserted on the MGL, which is the only thing that cannot lie about
+  which core the disc went to.
+*/
+static void assert_disc_dialog()
+{
+	printf("\n== physical disc: the dialog and its two buttons ==\n");
+
+	enum { S_HOME = 0, S_DISC = 17, S_DISCBAR = 18 };
+
+	int w = gfx_w(), h = gfx_h();
+	int ly0 = h * 9 / 10;                  // inside the legend strip at every profile
+
+	cfg.classicui_disc = 1;
+
+	/*
+	  Openable before the disc is known, which is a real thirty-second window on a slow
+	  drive: nothing has a name for it yet, so the dialog has to say what it is doing rather
+	  than draw its largest line blank.
+	*/
+	disc_ingest_present(1);
+	frame(6);
+	check(disc_state() == DISC_SPINNING, "a disc has arrived and is still being read");
+	press(KEY_UP);
+	press(KEY_ENTER);
+	check(chome_screen_id() == S_DISC, "its dialog opens before anything knows what it is");
+	dump("disc-8b-dialog-reading");
+	press(KEY_ESC);
+	press(KEY_ESC);
+
+	fake_disc dp; memset(&dp, 0, sizeof(dp));
+	static const char *const none[] = { "" };
+	fake_iso(&dp, 0, "PLAYSTATION", "PLAYSTATION", none, 0);
+	fake_put(&dp, 20, 0, "BOOT = cdrom:\\SLUS_006.26;1", 27, 100);
+	disc_set_reader(fake_read, &dp);
+	disc_ingest_identify(0);
+	frame(6);
+	check(disc_type() == DISC_T_PSX, "a PlayStation disc is in the drive");
+
+	press(KEY_UP);
+	press(KEY_ENTER);
+	check(chome_screen_id() == S_DISC, "the dialog opens from the badge");
+	dump("disc-9-dialog");
+
+	/* ---------------------- the scan belongs to the dialog and not to the badge --- */
+
+	/*
+	  His decision, and the reason it is checked from the shelf rather than in a game: both
+	  the badge and the dialog's disc are on screen at once here, so one press can be made to
+	  answer for both. The badge is thirty-two pixels at 240p, where a photograph is mud and
+	  the drawing says "there is a disc" better than any picture could.
+
+	  Counted by an exact colour, not by a hash: everything involved animates, and two hashes
+	  of a turning disc differ with nothing wrong. 0xff20c020 is in no palette this UI draws
+	  with, so any of it on screen came out of the fixture.
+	*/
+	mkpath(ROOT "/classicui/discart");
+	make_cover(ROOT "/classicui/discart/SLUS-00626.png", 400, 400, 0xff20c020);
+	frame(12);
+
+	check(box_pixels(w / 4, h / 2 - h / 6, (3 * w) / 4, h / 2 + h / 6, 0xff20c020u) > 100,
+		"a scan filed under the disc identity is what the dialog draws");
+	check(box_pixels(0, 0, w / 5, h / 5, 0xff20c020u) == 0,
+		"and the badge in the corner keeps the drawn disc");
+	dump("disc-9c-dialog-scan");
+
+	unlink(ROOT "/classicui/discart/SLUS-00626.png");
+	frame(12);
+	check(box_pixels(w / 4, h / 2 - h / 6, (3 * w) / 4, h / 2 + h / 6, 0xff20c020u) == 0,
+		"and taking the scan away puts the drawn disc back rather than leaving a stale one");
+
+	/* --------------------------------------------- left and right, and Options --- */
+
+	unsigned long leg_play = harness_fb_hash_box(0, ly0, w, h);
+
+	press(KEY_RIGHT);
+	unsigned long leg_opts = harness_fb_hash_box(0, ly0, w, h);
+	check(leg_opts != leg_play, "moving onto the second button changes what A is offered for");
+	dump("disc-9b-dialog-options");
+
+	press(KEY_LEFT);
+	check(harness_fb_hash_box(0, ly0, w, h) == leg_play,
+		"and moving back onto the first restores it");
+
+	/*
+	  Back onto Options, then right again - which has nowhere to go.
+
+	  Asserted through A rather than through the legend, deliberately: a refused press paints
+	  the line above the legend red, and this UI only repaints what changed, so that line is
+	  still red the next time anything reads those pixels. What A does is not ambiguous like
+	  that - if right had wrapped round to the first button the disc would have launched and
+	  this screen would be gone.
+	*/
+	press(KEY_RIGHT);
+	press(KEY_RIGHT);
+	press(KEY_ENTER);
+	check(chome_screen_id() == S_DISC,
+		"right stops at the second button, and A there opens the core chooser "
+		"rather than launching");
+	dump("disc-10-dialog-cores");
+
+	press(KEY_ESC);
+	check(chome_screen_id() == S_DISC, "back out of the chooser returns to the dialog");
+	check(harness_fb_hash_box(0, ly0, w, h) == leg_play,
+		"with the cursor back on the action, not left on Options");
+
+	press(KEY_ESC);
+	check(chome_screen_id() == S_DISCBAR, "and a second back leaves the dialog for the badge");
+
+	/* --------------------------------------- A alone, with nothing else pressed --- */
+
+	press(KEY_ENTER);
+	check(chome_screen_id() == S_DISC, "the dialog is up again");
+
+	harness_clear_launch();
+	press(KEY_ENTER, 4);
+	frame(80);                             // let the launch curtain elapse
+
+	check(strstr(harness_last_launch(), ".mgl") != 0,
+		"A on the dialog launches the disc with no navigation at all");
+
+	FILE *f = fopen("/tmp/classicui_launch.mgl", "rt");
+	check(f != 0, "and wrote the MGL");
+	if (f)
+	{
+		char buf[1024] = {};
+		size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+		buf[n] = 0;
+		fclose(f);
+		check(strstr(buf, "_Console/PSX") != 0, "on the core the disc was identified as");
+		check(strstr(buf, PHYSICAL_DISC_SENTINEL) != 0, "with the sentinel as the file");
+	}
+
+	/* ------------------------------- and A through the chooser, on a hand pick --- */
+
+	/*
+	  Row 0 of the chooser is the Mega Drive, which cannot read a PlayStation disc and is
+	  marked "(not yet)"; row 1 is PlayStation. The order is disc_capable_systems()'s, which
+	  walks the disc types in their own order - Mega CD before PlayStation - so this is one
+	  press down and not a guess.
+	*/
+	disc_reset_reader();
+	disc_ingest_present(0);
+	(void)disc_take_dirty();
+	chome_leave();
+	press(KEY_MENU, 20);
+	frame(10);
+
+	disc_ingest_present(1);
+	disc_set_reader(fake_read, &dp);
+	disc_ingest_identify(0);
+	frame(6);
+
+	press(KEY_UP);
+	press(KEY_ENTER);
+	press(KEY_RIGHT);                      // Options
+	press(KEY_ENTER);                      // the chooser
+	press(KEY_DOWN);                       // past the Mega Drive row
+
+	harness_clear_launch();
+	press(KEY_ENTER, 4);
+	frame(80);
+
+	check(strstr(harness_last_launch(), ".mgl") != 0, "a core picked by hand launches too");
+
+	f = fopen("/tmp/classicui_launch.mgl", "rt");
+	check(f != 0, "and wrote its MGL");
+	if (f)
+	{
+		char buf[1024] = {};
+		size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+		buf[n] = 0;
+		fclose(f);
+		check(strstr(buf, "_Console/PSX") != 0, "naming the core the chooser was pointing at");
+		check(strstr(buf, PHYSICAL_DISC_SENTINEL) != 0, "with the sentinel as the file");
+	}
+
+	// As assert_disc_launch leaves things: no disc, the flag off, the shelf back up.
+	disc_reset_reader();
+	disc_ingest_present(0);
+	(void)disc_take_dirty();
+	cfg.classicui_disc = 0;
+	chome_leave();
+	press(KEY_MENU, 20);
+	frame(10);
+	check(chome_screen_id() == S_HOME, "the shelf is back for whatever comes next");
+}
+
 /* --------------------------------------------------------- screenscraper --- */
 
 /*
@@ -2909,7 +3186,7 @@ static void assert_disc_identity()
 {
 	printf("\n== physical disc: the running disc has an identity ==\n");
 
-	enum { S_SUSPEND = 2 };
+	enum { S_SUSPEND = 2, S_DISC = 17 };
 
 	// A state named the way physical_disc_save_name() names a PlayStation disc.
 	mkpath(ROOT "/savestates/PSX");
@@ -2938,7 +3215,27 @@ static void assert_disc_identity()
 	press(KEY_MENU, 14);
 	frame(10);
 	check(chome_ingame_active(), "the in-game menu opens over the disc");
+
+	/*
+	  On the disc's own dialog, and built entirely from the published identity: the drive
+	  belongs to the core, so the detection helper was stopped at the launch and never
+	  restarted. disc_state() has said ABSENT ever since, which is exactly why a dialog
+	  keyed on the drive would have been blank here.
+	*/
+	check(chome_screen_id() == S_DISC,
+		"the menu opens on the disc dialog rather than on the shelf");
+	check(disc_state() == DISC_ABSENT,
+		"and the drive is telling us nothing, because it is the core's now");
 	dump("disc-identity-1-menu");
+
+	{
+		// It is turning, too. The repaint that advances it used to be armed off
+		// disc_state(), so in a game the disc drew once and then sat there stopped.
+		unsigned long a = pt_panel_hash();
+		frame(20);
+		unsigned long b = pt_panel_hash();
+		check(a != b, "the disc on it is turning, with no drive state to arm the repaint");
+	}
 
 	press(KEY_DOWN, 18);
 	frame(8);
@@ -2948,6 +3245,63 @@ static void assert_disc_identity()
 
 	press(KEY_ESC, 14);
 	frame(6);
+	check(chome_screen_id() == S_DISC,
+		"and back from the strip returns to the dialog it was opened from");
+
+	/*
+	  A on the dialog over a running disc goes back to the game, which is what A means on
+	  the running game's own card. There is nothing to launch: the disc is already loaded,
+	  and its type is gone with the drive, so a Play here could only guess at a core.
+	*/
+	press(KEY_ENTER, 14);
+	frame(8);
+	check(!chome_ingame_active(), "A on it resumes the game rather than relaunching the disc");
+
+	/* --------------------------- the scan, drawn in the dialog only ---------- */
+
+	/*
+	  A picture filed under the disc's identity replaces the drawn disc here and nowhere
+	  else - his decision: the badge on the shelf keeps the drawing, because at badge size a
+	  photograph is thirty-two pixels of mud.
+
+	  Square, because that is the shape of a disc scan. decode_into() letterboxes anything
+	  else with black, and inside a circular mask that would read as a fault rather than as
+	  a picture that does not fit.
+
+	  Counted by an exact colour rather than by a hash: both states animate, and two hashes
+	  of a turning disc differ with nothing wrong - the trap this file's own comments warn
+	  about. 0xff20c020 is in no palette this UI draws with, so any of it on screen came out
+	  of the fixture.
+	*/
+	mkpath(ROOT "/classicui/discart");
+
+	// The band pt_panel_hash() reads, which at this canvas holds the whole disc and
+	// nothing of the shelf behind the panel.
+	int bx0 = 1280 / 4, by0 = 720 / 2 - 720 / 6;
+	int bx1 = (3 * 1280) / 4, by1 = 720 / 2 + 720 / 6;
+
+	press(KEY_MENU, 14);
+	frame(10);
+	check(chome_screen_id() == S_DISC, "back on the dialog");
+	check(box_pixels(bx0, by0, bx1, by1, 0xff20c020u) == 0,
+		"with no scan on the card, nothing of the fixture is on screen");
+
+	make_cover(ROOT "/classicui/discart/SLES-01506.png", 400, 400, 0xff20c020);
+	frame(10);
+	check(box_pixels(bx0, by0, bx1, by1, 0xff20c020u) > 100,
+		"and once one is there it is what the dialog draws");
+	dump("disc-identity-3-scan");
+
+	{
+		// Rotating on the fly, inside the recorded rectangle. A scan that stopped turning
+		// the moment it acquired a picture would read as a bug in the animation.
+		unsigned long a = harness_fb_hash_box(bx0, by0, bx1, by1);
+		frame(30);
+		unsigned long b = harness_fb_hash_box(bx0, by0, bx1, by1);
+		check(a != b, "and it turns like the drawn disc does");
+	}
+
+	unlink(ROOT "/classicui/discart/SLES-01506.png");
 
 	/* --------------- a core that published no name still gets a menu --------- */
 
@@ -6470,6 +6824,9 @@ int main()
 	assert_disc_ui();
 	assert_partial_repaint();
 	assert_disc_launch();
+	// After it, because it leaves the same state that one does and starts from it: a disc
+	// in the drive, the flag on, and the shelf up.
+	assert_disc_dialog();
 	assert_video();
 	assert_index_cache();
 
