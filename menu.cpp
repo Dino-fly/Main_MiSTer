@@ -1157,17 +1157,21 @@ static void *close_pipe_async(void *arg)
 */
 int menu_mgl_busy(void)
 {
+	/*
+	  Plain !done, and the ten-second deadline that briefly lived here has gone.
+
+	  It was added to survive `done` never reaching 1, on my diagnosis that the flag was
+	  stuck. That diagnosis was wrong. user_io_init() forces done=1 whenever count is 0 -
+	  which is the case after a restart into an already-loaded core, exactly the state I
+	  measured in - so this guard was already returning 0 and was never what blocked the
+	  backoff. A timeout guarding against a stall that does not happen is a magic number
+	  with no reason behind it.
+
+	  During a real launch count is non-zero and done goes 0 then 1, which is the window
+	  this is for.
+	*/
 	const mgl_struct *m = mgl_get();
-	static uint32_t deadline = 0;
-
-	if (!m || !m->count || m->done)
-	{
-		deadline = 0;
-		return 0;
-	}
-
-	if (!deadline) deadline = GetTimer(10000);
-	return !CheckTimer(deadline);
+	return m ? !m->done : 0;
 }
 
 void HandleUI(void)

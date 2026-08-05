@@ -3069,13 +3069,22 @@ static void assert_core_idle_predicate()
 	press(KEY_MENU, 16);
 	frame(8);
 
-	// The escape hatch: freeze turned off. Nothing is holding the core still any more -
-	// this is the exact case the guard exists to exclude.
+	/*
+	  Freeze turned off, so nothing holds the core still: the game runs on behind the menu.
+
+	  This used to be excluded, on the grounds that a running game is still making sound.
+	  That was wrong and Dinofly pointed it out: ig_mute_engage() is called unconditionally
+	  when the in-game menu opens, before any pause or freeze decision, so every core is
+	  muted - and the HPS framebuffer replaces the scaler's input rather than blending over
+	  it, so the game is not on screen either. Neither seen nor heard means there is nothing
+	  to be prompt for, so this backs off too.
+	*/
 	cfg.classicui_freeze = 0;
 	harness_reset_status();
 	press(KEY_MENU, 20);
 	check(chome_ingame_active(), "the menu still opens");
-	check(!chome_core_idle(), "STILL PLAYING: neither paused nor frozen - must not idle");
+	check(chome_core_idle(),
+		"a running core behind the menu backs off too - it is muted and not composited");
 	press(KEY_MENU, 16);
 	frame(8);
 	cfg.classicui_freeze = 1;
