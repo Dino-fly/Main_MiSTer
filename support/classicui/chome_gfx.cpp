@@ -155,6 +155,40 @@ int gfx_begin()
   bury the number the partial path exists to produce under the occasional full frame,
   and hide a regression in either.
 */
+/*
+  SoC temperature in milli-degrees, or -1 when the kernel does not offer one.
+
+  Here because the repaint summary is the only thing this file already logs periodically,
+  and correlating temperature with drawing load is exactly what it is wanted for. Read
+  fresh each time rather than cached: the point is to watch it move.
+
+  Added after Dinofly's machine dropped off the network following a long session with a disc
+  in the drive, and I could not say whether it had overheated - because in hours of shell
+  access I had never once read this. A number nobody recorded is a question nobody can
+  answer later.
+*/
+static int soc_temp_mc()
+{
+	static const char *const paths[] =
+	{
+		"/sys/class/thermal/thermal_zone0/temp",
+		"/sys/devices/virtual/thermal/thermal_zone0/temp",
+	};
+
+	for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); i++)
+	{
+		FILE *f = fopen(paths[i], "r");
+		if (!f) continue;
+
+		int v = -1;
+		if (fscanf(f, "%d", &v) != 1) v = -1;
+		fclose(f);
+		if (v > 0) return v;
+	}
+
+	return -1;
+}
+
 #define GFX_STAT_EVERY 200
 
 static unsigned long gfx_us()
@@ -245,8 +279,12 @@ void gfx_end()
 				char fs[160], ps[160];
 				stat_fmt(fs, sizeof(fs), "full", &stat_full);
 				stat_fmt(ps, sizeof(ps), "partial", &stat_part);
-				printf("ClassicUI: repaint %dx%d over %lu frames: %s; %s\n",
-					cw, ch, stat_full.n + stat_part.n, fs, ps);
+				int mc = soc_temp_mc();
+				char temp[32] = "";
+				if (mc > 0) snprintf(temp, sizeof(temp), "  soc %d.%01dC", mc / 1000, (mc % 1000) / 100);
+
+				printf("ClassicUI: repaint %dx%d over %lu frames: %s; %s%s\n",
+					cw, ch, stat_full.n + stat_part.n, fs, ps, temp);
 				memset(&stat_full, 0, sizeof(stat_full));
 				memset(&stat_part, 0, sizeof(stat_part));
 			}

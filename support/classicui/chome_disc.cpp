@@ -514,6 +514,13 @@ void disc_reset_reader() { reader = 0; reader_ctx = 0; }
 
 #define DISC_STATE_FILE "/tmp/classicui_disc_state"
 
+/*
+  Poll intervals, in seconds. The one that matters is SETTLED: an optical drive asked once
+  a second with a disc in it never spins down. See the comment in helper_main().
+*/
+#define DISC_POLL_EMPTY_S    1
+#define DISC_POLL_SETTLED_S  5
+
 static pid_t helper_pid = -1;
 static time_t state_mtime = 0;
 
@@ -684,7 +691,37 @@ static void helper_main(const char *dev)
 			}
 		}
 
-		sleep(1);
+		/*
+		  How often to ask the drive again, and it is not a constant on purpose.
+
+		  Every one of these is an ioctl on a USB optical drive, and a drive asked once a
+		  second with a disc in it never gets to spin down: it stays awake, drawing power
+		  from a board that is powering everything else, and making heat. Dinofly's machine
+		  ran for hours with a disc in and this poll at 1Hz before it dropped off the
+		  network - which may or may not have been thermal, but polling a disc nobody is
+		  waiting on once a second cannot be justified either way.
+
+		  So the rate follows what there is left to notice, and it is the *disc present*
+		  case that gets slowed:
+
+		    disc present  slow. Identification has already happened - it runs synchronously
+		                  in the branch above, in the same pass - so the only thing left to
+		                  notice is the disc being taken out. Seeing that a few seconds late
+		                  costs nothing: the badge lingers briefly and nothing acts on it.
+		    no disc       fast, because an insertion is something the player just did and is
+		                  waiting to see acknowledged. An empty drive has nothing to keep
+		                  awake, so asking it often is close to free.
+
+		  An earlier version of this had it backwards - fast while "identifying", slow once
+		  settled - which was both wrong about which case costs power and dead code, since
+		  identification never spans two passes.
+
+		  The kernel's own media polling is already off (events_poll_msecs=-1 in
+		  quiet_the_drive), so this is the only thing touching the drive.
+		*/
+		int wait = (st == CDS_DISC_OK) ? DISC_POLL_SETTLED_S : DISC_POLL_EMPTY_S;
+
+		sleep(wait);
 	}
 }
 
