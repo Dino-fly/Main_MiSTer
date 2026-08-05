@@ -3452,6 +3452,166 @@ static void assert_disc_dialog()
 	check(chome_screen_id() == S_HOME, "the shelf is back for whatever comes next");
 }
 
+/*
+  A disc's suspend points, reached before the disc has ever been played.
+
+  The strip used to be reachable over a *running* disc only, because a disc in the drive
+  has no published identity until the mount writes one - and for most discs that is still
+  true and still the right answer: physical_disc.cpp names them from the volume label or
+  from a hash of the table of contents, and this front-end has neither.
+
+  A PlayStation disc is the exception this section is about. Its save name is its serial,
+  the serial is readable while the disc merely sits there, and both sides derive it by the
+  same algorithm - so the name its states will carry under savestates/PSX is knowable from
+  the shelf, and Down can be offered honestly.
+
+  Both halves are checked, because "offer it when it is derivable" is worthless without
+  "and not otherwise": the wrong key would list some other disc's states and then quietly
+  fail to resume, which is the kind of failure nobody reports because nothing on screen
+  says anything is wrong.
+
+  The fixture state is named SLUS-00626_1.ss, which is what physical_disc_save_name() would
+  publish for this disc: sanitize_name() leaves a serial alone. What cannot be checked here
+  is that claim itself - no call in this harness reaches the mount - so the front-end
+  refuses to guess whenever sanitising the serial *could* change it. See disc_shelf_bind().
+*/
+static void assert_disc_shelf_slots()
+{
+	printf("\n== physical disc: its suspend points, from the shelf ==\n");
+
+	enum { S_HOME = 0, S_SUSPEND = 2, S_DISC = 17 };
+
+	const char *rec = ROOT "/classicui/suspend.txt";
+	unlink(rec);
+
+	cfg.classicui_disc = 1;
+
+	mkpath(ROOT "/savestates/PSX");
+	touch(ROOT "/savestates/PSX", "SLUS-00626_1.ss", 256);
+
+	harness_set_menu_core(1);
+	chome_leave();
+	press(KEY_MENU, 20);
+	frame(10);
+
+	/* ------------------------------------------- the key is derivable: offer it --- */
+
+	disc_ingest_present(1);
+	fake_disc dp; memset(&dp, 0, sizeof(dp));
+	static const char *const none[] = { "" };
+	fake_iso(&dp, 0, "PLAYSTATION", "PLAYSTATION", none, 0);
+	fake_put(&dp, 20, 0, "BOOT = cdrom:\\SLUS_006.26;1", 27, 100);
+	disc_set_reader(fake_read, &dp);
+	disc_ingest_identify(0);
+	frame(6);
+	check(disc_type() == DISC_T_PSX && !strcmp(disc_serial(), "SLUS-00626"),
+		"a PlayStation disc in the drive, with its serial read off it");
+
+	press(KEY_UP);
+	press(KEY_ENTER);
+	check(chome_screen_id() == S_DISC, "its dialog is up, and nothing has been launched");
+
+	press(KEY_DOWN);
+	check(chome_screen_id() == S_SUSPEND,
+		"Down reaches the disc's suspend points from the shelf, with no mount involved");
+	dump("disc-shelf-1-slots");
+
+	press(KEY_ESC);
+	check(chome_screen_id() == S_DISC, "and back returns to the dialog it was opened from");
+
+	/* ------------------------------- A on a slot: start the disc at that point --- */
+
+	press(KEY_DOWN);
+	check(chome_screen_id() == S_SUSPEND, "on the strip again, cursor on the filled slot");
+
+	harness_clear_launch();
+	press(KEY_ENTER, 4);
+	frame(20);
+
+	char body[256] = {};
+	FILE *f = fopen(rec, "rb");
+	if (f) { if (fread(body, 1, sizeof(body) - 1, f)) {} fclose(f); }
+	printf("  suspend record: %s", body[0] ? body : "(none)\n");
+
+	check(strstr(body, "SLUS-00626") != 0,
+		"A on it arms the resume record under the name the mount will publish");
+	check(strncmp(body, "psx\n", 4) == 0, "on the PlayStation core");
+
+	/*
+	  And the launch itself is the disc, not the shelf's cursor. This is the half that made
+	  SCR_LAUNCH the wrong path to reuse: its curtain ends in launch_selected(), and a disc
+	  has no card under the cursor to select.
+	*/
+	check(strstr(harness_last_launch(), ".mgl") != 0, "and hands the disc to that core");
+
+	f = fopen("/tmp/classicui_launch.mgl", "rt");
+	check(f != 0, "with an MGL written for it");
+	if (f)
+	{
+		char buf[1024] = {};
+		size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+		buf[n] = 0;
+		fclose(f);
+		check(strstr(buf, "_Console/PSX") != 0, "naming the PlayStation core");
+		check(strstr(buf, PHYSICAL_DISC_SENTINEL) != 0, "with the sentinel as the file");
+	}
+
+	unlink(rec);
+
+	/* --------------------------- and a disc whose key cannot be derived: hide it --- */
+
+	/*
+	  A PC Engine CD disc. Playable - tg16 is one of the wired cores - so this cannot pass
+	  by accident on "the disc is not launchable": what it lacks is a name. There is no
+	  serial on it, and physical_disc.cpp would fall back to the volume label or to a hash
+	  of a table of contents this side never sees.
+	*/
+	disc_reset_reader();
+	disc_ingest_present(0);
+	(void)disc_take_dirty();
+	chome_leave();
+	press(KEY_MENU, 20);
+	frame(10);
+
+	disc_ingest_present(1);
+	fake_disc dc; memset(&dc, 0, sizeof(dc));
+	fake_put(&dc, 0, 0, "NOTHINGUSEFUL", 13, 0);
+	fake_put(&dc, 1, 0, "xx PC Engine CD-ROM SYSTEM xx", 29, 40);
+	disc_set_reader(fake_read, &dc);
+	disc_ingest_identify(0);
+	frame(6);
+	check(disc_type() == DISC_T_PCECD && !disc_serial()[0],
+		"a PC Engine CD disc in the drive, which carries no serial");
+
+	press(KEY_UP);
+	press(KEY_ENTER);
+	check(chome_screen_id() == S_DISC, "its dialog opens the same way");
+	dump("disc-shelf-2-no-slots");
+
+	harness_clear_launch();
+	press(KEY_DOWN);
+	check(chome_screen_id() == S_DISC,
+		"Down offers nothing for a disc whose save name cannot be worked out");
+	check(harness_last_launch()[0] == 0, "and launches nothing on the way to refusing");
+
+	{
+		FILE *g = fopen(rec, "rb");
+		check(g == 0, "with no resume record armed for a name nobody could look up");
+		if (g) fclose(g);
+	}
+
+	// As the sections around this one leave things: no disc, the flag off, the shelf up.
+	disc_reset_reader();
+	disc_ingest_present(0);
+	(void)disc_take_dirty();
+	cfg.classicui_disc = 0;
+	unlink(ROOT "/savestates/PSX/SLUS-00626_1.ss");
+	chome_leave();
+	press(KEY_MENU, 20);
+	frame(10);
+	check(chome_screen_id() == S_HOME, "and the shelf is back for whatever comes next");
+}
+
 /* --------------------------------------------------------- screenscraper --- */
 
 /*
@@ -7805,6 +7965,9 @@ int main()
 	// After it, because it leaves the same state that one does and starts from it: a disc
 	// in the drive, the flag on, and the shelf up.
 	assert_disc_dialog();
+	// And after that one, which leaves the drive empty and the flag off: this needs both
+	// back, and it launches a disc of its own on the way out.
+	assert_disc_shelf_slots();
 	assert_video();
 	assert_index_cache();
 

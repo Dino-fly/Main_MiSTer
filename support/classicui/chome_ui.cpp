@@ -544,6 +544,11 @@ static int ss_do_load(int slot);
 static void ss_pause_release(int engaged);
 static int ss_pause_engage();
 
+// Defined with the disc dialog, where the state it reads lives: the disc sitting in the
+// drive as an item the suspend strip can be about, or 0 when nothing here can say what
+// name its states would be filed under.
+static chome_item *disc_shelf_susp();
+
 /* ------------------------------------------------------------- helpers ---- */
 
 static const chome_entry *cur_entry()
@@ -671,6 +676,16 @@ static chome_item *susp_target()
 	if (susp_is_disc)
 	{
 		chome_item *d = ig_running_disc();
+		if (d) return d;
+
+		/*
+		  Or the disc that is only sitting in the drive. Reaching the strip from the shelf
+		  needs an item as much as reaching it from a game does, and without this the disc
+		  dropped straight into the fallback below - the shelf's own selection, under the
+		  disc's name in the header. That is the confusion the paragraph above describes,
+		  and it was only ever avoided by a launch happening to leave a folder focused.
+		*/
+		d = disc_shelf_susp();
 		if (d) return d;
 	}
 
@@ -4043,6 +4058,91 @@ struct disc_dlg
 	char key[128];               // what the scan and the savestates are filed under
 };
 
+/* ------------------------------------------- the disc on the shelf, as an item --- */
+
+/*
+  A disc that has not been played yet, as something the suspend strip can be about.
+
+  Down from this dialog used to be offered over a *running* disc only, on the reasoning
+  that a disc in the drive has no published identity until the mount writes one. For most
+  discs that is exactly right: save_name_of() in physical_disc.cpp falls back to the volume
+  label and, failing that, to a hash of the table of contents - and the front-end has no
+  table of contents at all, because the detection helper owns the drive and hands back
+  sectors rather than a TOC.
+
+  PlayStation is the exception, and it is the case that matters here: for a PSX disc that
+  name *is* the serial, and disc_serial() has the serial while the disc merely sits in the
+  drive - dug out of the boot configuration by the same prefix list, the same length bounds
+  and the same normalisation as physical_disc_disc_serial(). So savestates/PSX/<serial>_N.ss
+  is derivable from the shelf, and Derek owns PSX originals, which is what this is for.
+
+  Offered only where the name is *provable*, because the failure mode is silent. A key that
+  is nearly right lists files that are not this disc's states, and resume_poll() - which
+  compares the armed name against the one the mount publishes - then declines to resume
+  without a word. So two conditions, and Down stays hidden unless both hold:
+
+    The disc is a PlayStation disc and the core it would go to is the PlayStation one.
+    psx.cpp asks physical_disc_save_name() for the PSX name; a disc forced onto some other
+    core through Options gets that core's answer instead, which is a different key - so a
+    hand-picked core withdraws the offer rather than filing states under a name nothing
+    will ever look for again.
+
+    sanitize_name() cannot change the serial. That function is what physical_disc.cpp runs
+    the serial through, and it drops spaces and punctuation and puts an underscore where it
+    dropped them. Rather than keep a second copy of that rule here - the copy that would
+    rot the first time the real one changed - this accepts only a serial already in the
+    form sanitize_name() would leave untouched. Every real serial is: four letters, a dash
+    and five digits.
+*/
+static chome_item disc_shelf_item;
+
+// True when sanitize_name() would hand this string straight back, so it can be used as
+// the save name without reproducing that function here. Deliberately stricter than it
+// needs to be: it also refuses the dot sanitize_name() allows, and a serial never has one
+// once disc_serial_at() has taken it out.
+static int disc_name_is_sanitised(const char *s)
+{
+	if (!s || !s[0]) return 0;
+
+	for (const char *q = s; *q; q++)
+	{
+		int ok = (*q >= '0' && *q <= '9') || (*q >= 'A' && *q <= 'Z')
+			|| (*q >= 'a' && *q <= 'z') || *q == '-';
+		if (!ok) return 0;
+	}
+	return 1;
+}
+
+/*
+  Bound from the drive on every pass through the dialog, so the item follows whatever is
+  actually in there. No slot refresh here: this runs per draw, and the strip's opener
+  already asks lib_refresh_slots() once, where four stats of the card are worth paying for.
+*/
+static void disc_shelf_bind(const disc_dlg *d)
+{
+	disc_shelf_item.path[0] = 0;
+
+	if (d->running || disc_type() != DISC_T_PSX) return;
+	if (d->sysidx < 0 || d->sysidx != disc_sys_by_id(disc_system_id(DISC_T_PSX))) return;
+	if (!disc_wired(d->sysidx)) return;
+	if (!disc_name_is_sanitised(disc_serial())) return;
+
+	memset(&disc_shelf_item, 0, sizeof(disc_shelf_item));
+	disc_shelf_item.kind = IT_GAME;
+	disc_shelf_item.sysidx = (int16_t)d->sysidx;
+	snprintf(disc_shelf_item.path, sizeof(disc_shelf_item.path), "%s", disc_serial());
+	snprintf(disc_shelf_item.title, sizeof(disc_shelf_item.title), "%s", d->title);
+}
+
+static chome_item *disc_shelf_susp()
+{
+	// The disc has to still be in there. Tying it to the drive rather than to a flag
+	// somebody has to clear is what stops the strip outliving an eject with a stale item
+	// under the previous disc's name.
+	if (disc_state() == DISC_ABSENT || !disc_shelf_item.path[0]) return 0;
+	return &disc_shelf_item;
+}
+
 static void disc_dlg_get(disc_dlg *d)
 {
 	memset(d, 0, sizeof(*d));
@@ -4118,6 +4218,17 @@ static void disc_dlg_get(disc_dlg *d)
 	// The same line twice reads as a drawing fault rather than as two facts, and it
 	// happens whenever nothing knows the disc by any name but its console's.
 	if (!strcmp(d->title, d->sub)) d->sub[0] = 0;
+
+	/*
+	  And what Down is about, when the disc is not playing. After the title is settled, so
+	  the strip's header reads the same name the dialog above it does - and after `sub`, so
+	  a disc still being read cannot be bound under a name nothing has yet.
+	*/
+	if (!d->running)
+	{
+		disc_shelf_bind(d);
+		d->susp = disc_shelf_susp();
+	}
 }
 
 /*
@@ -6095,10 +6206,14 @@ static void move_v(int dir)
 
 		  Down goes to the disc's save states, which is what Down does on a shelf card and
 		  the reason this dialog exists at all in a running game: a disc has no card to
-		  press Down on. Only when there is a strip to reach - from the shelf the disc has
-		  not been played, and there is no identity for its states to be filed under until
-		  the mount publishes one. Up goes back to the badge it was opened from, when there
-		  is a badge; in a game there is not, because the drive is the core's.
+		  press Down on. Offered from the shelf too, but only where the name those states
+		  are filed under can be worked out before the mount publishes one - which is a
+		  PlayStation disc and its serial, and nothing else. See disc_shelf_bind(); a disc
+		  whose key cannot be derived has no Down at all rather than a Down onto slots
+		  belonging to something else.
+
+		  Up goes back to the badge it was opened from, when there is a badge; in a game
+		  there is not, because the drive is the core's.
 		*/
 		if (dir > 0)
 		{
@@ -6644,6 +6759,22 @@ static void accept()
 		  the same mechanism Resume uses, and resume_poll() loads it once the core is up.
 		*/
 		susp_arm(it, slot_idx);
+
+		/*
+		  The disc in the drive takes the same arming and a different hand-over: Play plus a
+		  starting state, not a second launch path. Not through SCR_LAUNCH like a card, and
+		  the reason is what that curtain ends in - launch_selected(), which launches the
+		  entry under the shelf cursor. A disc has no entry there, which is the whole reason
+		  this dialog exists, so the curtain would arm the resume and then start whatever the
+		  cursor happened to be parked on. The disc's own Play button hands over immediately
+		  for the same reason; this is that button with the record already written.
+		*/
+		if (it == disc_shelf_susp())
+		{
+			disc_launch(it->sysidx);
+			break;
+		}
+
 		curtain = 0;
 		launch_at = GetTimer(0);
 		go_screen(SCR_LAUNCH);
@@ -9267,8 +9398,15 @@ int chome_handle(uint32_t key)
 		  Taken out while we were looking at it. Both disc screens describe a disc that
 		  is no longer there, so they have to be left rather than sitting there
 		  offering to play nothing.
+
+		  The suspend strip counts as a third, when it was opened from the shelf disc: it
+		  is showing that disc's slots under that disc's name, and A on one of them would
+		  hand a drive with nothing in it to a core. disc_shelf_susp() has already stopped
+		  answering by now, so staying here would also mean the strip falling back to the
+		  shelf's own selection mid-screen.
 		*/
-		if (disc_state() == DISC_ABSENT && (screen == SCR_DISC || screen == SCR_DISCBAR))
+		if (disc_state() == DISC_ABSENT && (screen == SCR_DISC || screen == SCR_DISCBAR
+			|| (screen == SCR_SUSPEND && susp_is_disc && !ig_running_disc())))
 		{
 			go_screen(SCR_HOME);
 		}

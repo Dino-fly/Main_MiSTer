@@ -906,6 +906,16 @@ whether a core accepts the MGL.
   does on a shelf card, and in a game the menu opens **on that dialog** instead of on the
   shelf, since the shelf is showing whatever the disc launch left behind.
 
+  That `Down` works from the shelf too - before the disc has ever been launched - but only
+  for a **PlayStation** disc, and the restriction is not caution. A savestate is filed under
+  the name the mount publishes (`physical_disc_save_name()`), which for most discs is the
+  volume label or a hash of the table of contents; the front-end has neither. For a PSX disc
+  that name is the serial, and the serial is readable while the disc merely sits in the
+  drive, so the path is derivable and the slots can be listed. `A` on one of them arms the
+  same resume record `Resume` uses and then hands the disc over, so the game starts *at*
+  that suspend point. Anything whose key cannot be derived gets no `Down` at all: a wrong key
+  would list another disc's states and then silently fail to resume.
+
   One dialog, two sources, and the difference matters: from the shelf the drive answers, but
   once the disc is playing the drive belongs to the core - the detection helper was stopped at
   the launch and must not come back - so `disc_state()` is `DISC_ABSENT` and the type and
