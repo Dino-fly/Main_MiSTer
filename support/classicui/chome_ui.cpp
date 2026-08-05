@@ -4928,8 +4928,7 @@ static int disc_wired(int sysidx)
 }
 
 /*
-  Set once the drive has been handed to a core, and cleared only when the menu core is
-  running again.
+  Set once the drive has been handed to a core, within the process that handed it over.
 
   The drive can have exactly one owner. Detection is a helper process that holds
   /dev/sr0 open and polls its status; the core's reader opens the same device in *this*
@@ -4939,14 +4938,43 @@ static int disc_wired(int sysidx)
   for the two freezes that measured this.
 
   So the helper is stopped before the launch and must not come back, and disc_poll()
-  restarts it whenever it finds it stopped. Hence a latch rather than just stopping it:
-  the in-game menu runs this same loop over the top of the running core, and that is
-  where the helper would otherwise be resurrected mid-game.
+  restarts it whenever it finds it stopped. Hence a latch rather than just stopping it.
 
-  Cleared on is_menu() because the firmware process survives a core change: quitting
-  the game loads the menu core, and at that point nothing can be holding a disc.
+  This latch is NOT enough on its own, and the comment here used to claim it was, on the
+  grounds that "the firmware process survives a core change". It does not: loading a core
+  re-execs the firmware, so every static in this file - including this one - is 0 again in
+  the process that actually runs the game. disc_poll() then found nothing watching and
+  forked a fresh helper straight onto the drive the core was reading. Measured on the
+  device with Metal Gear Solid playing: the firmware held /dev/sr0, and a child of it held
+  the same device on its own descriptor. See core_holds_disc() for the half that survives.
 */
 static int disc_handed_to_core = 0;
+
+/*
+  Whether the drive belongs to the core rather than to us, decided from what this process
+  can actually see rather than from what a previous one remembered.
+
+  A game core with the sentinel mounted is playing the disc, and the drive is its own.
+  Anything else - the menu core, or a game launched from a file - leaves the drive free
+  and detection is welcome to it.
+
+  Cached because it cannot change without another re-exec, and because cur_read() has a
+  side effect: it unlinks a launch record naming a core that is not running.
+*/
+static int cur_read(char *sysid, int syslen, char *rompath, int pathlen);
+
+static int core_holds_disc()
+{
+	static int cached = -1;
+	if (cached >= 0) return cached;
+
+	if (is_menu()) { cached = 0; return cached; }
+
+	char sysid[64] = {}, rompath[CH_PATH_LEN] = {};
+	cached = (cur_read(sysid, sizeof(sysid), rompath, sizeof(rompath))
+		&& !strcmp(rompath, PHYSICAL_DISC_SENTINEL)) ? 1 : 0;
+	return cached;
+}
 
 static void disc_launch(int sysidx)
 {
@@ -8462,11 +8490,19 @@ int chome_handle(uint32_t key)
 	  owns /dev/sr0 and our detection helper must stay dead: this loop also runs behind
 	  a running game, for the in-game menu, and disc_poll() restarts the helper
 	  whenever it finds it stopped. See disc_launch().
+
+	  Two tests, because neither covers the other. The latch is the only thing that knows
+	  during the launch itself, before the core is loaded and while this process is still
+	  the one that handed the drive over. core_holds_disc() is the only thing that knows
+	  afterwards, in the re-exec'd process where the latch is 0 again - which is where the
+	  helper was found alive under a playing game.
 	*/
 	if (disc_handed_to_core && is_menu()) disc_handed_to_core = 0;
 
-	if (!disc_handed_to_core) disc_poll();
-	if (!disc_handed_to_core && disc_take_dirty())
+	int drive_is_ours = !disc_handed_to_core && !core_holds_disc();
+
+	if (drive_is_ours) disc_poll();
+	if (drive_is_ours && disc_take_dirty())
 	{
 		/*
 		  mark_dirty() is the point of the dirty flag, and leaving it off is how the
