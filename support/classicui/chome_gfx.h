@@ -63,16 +63,24 @@ void gfx_spinner(int cx, int cy, int r, int dot, unsigned long ms, uint32_t hot,
   A spinning disc, for the optical drive.
 
   Drawn rather than blitted, so there is no icon asset and nothing to license: a
-  16x16 sprite of square cells, hard edged, no antialiasing - the pixel-art CD look
-  rather than a smooth circle. Rim, a clear inner ring, a spindle hole, and the data
-  area split into `nbands` wedges that sweep round as time passes. Sweeping colour is
-  what makes it read as a disc catching the light; a plain circle spinning is
-  indistinguishable from one sitting still.
+  32x32 sprite of square cells, hard edged, no antialiasing - the pixel-art CD look
+  rather than a smooth circle. A dark outer edge, a bright rim, the data area split
+  into `nbands` wedges that sweep round as time passes, a clear inner ring, a hub ring
+  and a spindle hole. Sweeping colour is what makes it read as a disc catching the
+  light; a plain circle spinning is indistinguishable from one sitting still.
 
-  `r` sets the cell size: cells are r/8 pixels square, so r=8 gives single-pixel cells
-  (a 16px icon) and r=16 gives 2x2 (a 32px one). Ask for a bigger disc to get chunkier
-  pixels - which is why the callers pass a multiple of 8 rather than whatever the
-  layout happens to allow.
+  32x32 rather than a 16x16 grid scaled up, which is a different thing: doubling the
+  cells of a small sprite gives bigger blocks and no more information. Twice the grid
+  buys the outer edge, a rim that is thin in proportion instead of a quarter of the
+  radius, a hub distinct from the hole, and the angular resolution for a dozen wedges.
+
+  `r` sets the cell size: cells are r/16 pixels square, so r=16 gives single-pixel
+  cells (a 32px icon) and r=32 gives 2x2 (a 64px one). Pass a multiple of 16 or the
+  cells come out fractional and the look is lost.
+
+  `outline` non-zero draws a ring one cell outside the disc, which is how the front-end
+  shows the disc has focus. It grows the sprite by a cell rather than putting anything
+  behind it: a filled plate covered the shelf title at 240p. 0 for no ring.
 
   `period_ms` is one full turn, and it is the whole state indicator: fast while the
   drive is still working out what the disc is, slow once it is known. Nothing else
@@ -85,7 +93,8 @@ void gfx_spinner(int cx, int cy, int r, int dot, unsigned long ms, uint32_t hot,
 #define GFX_DISC_SLOW_MS  4000UL
 
 void gfx_disc(int cx, int cy, int r, unsigned long ms, unsigned long period_ms,
-	const uint32_t *bands, int nbands, uint32_t rim, uint32_t ring, uint32_t hole);
+	const uint32_t *bands, int nbands, uint32_t rim, uint32_t ring, uint32_t hole,
+	uint32_t outline);
 
 // Named steps as a row of boxes: `done` behind us, the one being worked on sweeping,
 // the rest empty. See the comment in chome_gfx.cpp for why the active one sweeps
