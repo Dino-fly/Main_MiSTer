@@ -515,11 +515,11 @@ void disc_reset_reader() { reader = 0; reader_ctx = 0; }
 #define DISC_STATE_FILE "/tmp/classicui_disc_state"
 
 /*
-  Poll intervals, in seconds. The one that matters is SETTLED: an optical drive asked once
-  a second with a disc in it never spins down. See the comment in helper_main().
+  Poll intervals, in seconds. Both are status queries; neither reads the disc. See the
+  comment in helper_main() for why the settled one is as long as it is.
 */
 #define DISC_POLL_EMPTY_S    1
-#define DISC_POLL_SETTLED_S  5
+#define DISC_POLL_SETTLED_S  30
 
 static pid_t helper_pid = -1;
 static time_t state_mtime = 0;
@@ -692,32 +692,39 @@ static void helper_main(const char *dev)
 		}
 
 		/*
-		  How often to ask the drive again, and it is not a constant on purpose.
+		  How often to ask the drive again.
 
-		  Every one of these is an ioctl on a USB optical drive, and a drive asked once a
-		  second with a disc in it never gets to spin down: it stays awake, drawing power
-		  from a board that is powering everything else, and making heat. Dinofly's machine
-		  ran for hours with a disc in and this poll at 1Hz before it dropped off the
-		  network - which may or may not have been thermal, but polling a disc nobody is
-		  waiting on once a second cannot be justified either way.
+		  First, what this loop does *not* do, because I described it carelessly once and it
+		  matters: the disc is read exactly once per insertion. Every sector access -
+		  find_data_track, identify, serial, label - happens inside the state-change branch
+		  above, which only runs when the status transitions. Once a disc is identified this
+		  loop never touches its surface again. It does not re-spin the disc to keep the icon
+		  turning; the icon is animation and knows nothing about the drive.
 
-		  So the rate follows what there is left to notice, and it is the *disc present*
-		  case that gets slowed:
+		  What remains is a status ioctl, which asks the drive's controller whether media is
+		  present. That is not a disc read, but it is not free either: on some drives
+		  TEST UNIT READY can provoke a spin-up to check the media, and there is no portable
+		  way to know whether this drive is one of them.
 
-		    disc present  slow. Identification has already happened - it runs synchronously
-		                  in the branch above, in the same pass - so the only thing left to
-		                  notice is the disc being taken out. Seeing that a few seconds late
-		                  costs nothing: the badge lingers briefly and nothing acts on it.
-		    no disc       fast, because an insertion is something the player just did and is
-		                  waiting to see acknowledged. An empty drive has nothing to keep
-		                  awake, so asking it often is close to free.
+		  Which leaves a genuine constraint rather than a bug: tray-open cannot be noticed
+		  without somebody asking periodically. The kernel's own polling
+		  (events_poll_msecs) is the same query on the same drive, just moved, and it is
+		  disabled here anyway. So the choice is how often, and the honest position is "as
+		  rarely as the interface tolerates":
 
-		  An earlier version of this had it backwards - fast while "identifying", slow once
-		  settled - which was both wrong about which case costs power and dead code, since
-		  identification never spans two passes.
+		    disc present, identified   30s. Nothing is waiting on this. The only thing left
+		                               to notice is the disc leaving, and a badge that
+		                               lingers half a minute after an eject costs nothing -
+		                               nothing acts on it, and re-identification happens on
+		                               the transition back.
+		    no disc                    1s. An insertion is something the player just did and
+		                               is waiting to see acknowledged, and an empty drive
+		                               has no disc to disturb.
 
-		  The kernel's own media polling is already off (events_poll_msecs=-1 in
-		  quiet_the_drive), so this is the only thing touching the drive.
+		  If even the 30s query turns out to wake the drive on this hardware, the next step
+		  is to stop entirely once identified and re-check only when the player opens the
+		  disc prompt - at the cost of a badge that can be wrong until they look. That is a
+		  product decision, not a technical one, and it is Dinofly's to make.
 		*/
 		int wait = (st == CDS_DISC_OK) ? DISC_POLL_SETTLED_S : DISC_POLL_EMPTY_S;
 
