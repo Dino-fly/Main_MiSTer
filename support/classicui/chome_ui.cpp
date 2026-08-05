@@ -3703,20 +3703,28 @@ static void draw_padtest(const chome_profile *p)
     - we did not, or the core does not exist here (Saturn, 3DO and CD-i are all
       identified and all have no shelf system): ask which core to try.
 
-  What is deliberately *not* here yet is playing. Handing a disc to a core needs each
-  CD core's firmware-side daemon taught to read sectors from the drive rather than
-  from a .cue, which is the piece that has not been merged - so the action says so
-  rather than pretending, and records the choice for when it lands. A prompt that
-  silently did nothing would be worse than one that explains itself.
+  Playing is real now, core by core: a system whose firmware-side daemon has been
+  taught to read sectors from the drive is in disc_playables below, and its row
+  launches. A system whose daemon has not been is shown the truth instead - its row
+  says "(not yet)", draws dim, and refuses without recording the choice. Shown rather
+  than omitted, because this screen's one claim is the identification: hiding the
+  console the disc actually belongs to while offering the ones it does not would make
+  the honest list into a lie. A prompt that silently did nothing would be worse than
+  one that explains itself.
 */
 
 // Defined further down, with the rest of the navigation.
 static void go_screen(int s);
 
+// Defined further down, with the launch path: whether this system's daemon can
+// read from the drive - the disc_playables table has the details.
+static int disc_wired(int sysidx);
+
 #define DISC_ROW_MAX 8
 
 #define DACT_PLAY   0
 #define DACT_CHOOSE 1
+#define DACT_NONE   2   // named but not playable: the daemon work has not been done
 
 static int disc_row = 0;
 static int disc_picking = 0;                  // 0: the offer, 1: choosing a core
@@ -3759,8 +3767,10 @@ static void disc_build_rows()
 			if (sx < 0) continue;
 
 			const chome_sys *sc = lib_sys(sx);
-			snprintf(disc_rowtext[disc_nrows], sizeof(disc_rowtext[0]), "%s", sc->name);
-			disc_rowact[disc_nrows] = DACT_PLAY;
+			int wired = disc_wired(sx);
+			snprintf(disc_rowtext[disc_nrows], sizeof(disc_rowtext[0]),
+				wired ? "%s" : "%s (not yet)", sc->name);
+			disc_rowact[disc_nrows] = wired ? DACT_PLAY : DACT_NONE;
 			disc_rowsys[disc_nrows] = sx;
 			disc_nrows++;
 		}
@@ -3772,9 +3782,17 @@ static void disc_build_rows()
 
 	if (match >= 0)
 	{
+		/*
+		  "Play on X" only when it will: a core whose daemon cannot read the drive is
+		  named - the identification is this screen's claim and hiding it would lie -
+		  but marked instead of offered, so nothing on this screen promises what the
+		  launch would refuse.
+		*/
 		const chome_sys *sc = lib_sys(match);
-		snprintf(disc_rowtext[disc_nrows], sizeof(disc_rowtext[0]), "Play on %s", sc->name);
-		disc_rowact[disc_nrows] = DACT_PLAY;
+		int wired = disc_wired(match);
+		snprintf(disc_rowtext[disc_nrows], sizeof(disc_rowtext[0]),
+			wired ? "Play on %s" : "%s (not yet)", sc->name);
+		disc_rowact[disc_nrows] = wired ? DACT_PLAY : DACT_NONE;
 		disc_rowsys[disc_nrows] = match;
 		disc_nrows++;
 	}
@@ -3886,8 +3904,13 @@ static void draw_disc(const chome_profile *p)
 		int on = (i == disc_row);
 		int yy = ry + i * rowh;
 
+		// A "(not yet)" row stays dim even under the selection bar: it can be read
+		// and landed on, but nothing about it may look like it will launch.
+		int dis = (disc_rowact[i] == DACT_NONE);
+
 		if (on) gfx_fill(tx - 4 * s, yy - 3 * s, tw + 8 * s, rowh - 2 * s, COL_BLUE);
-		gfx_text(gfx_clip(disc_rowtext[i], s, tw), tx, yy, s, on ? COL_WHITE : COL_INK, 0);
+		gfx_text(gfx_clip(disc_rowtext[i], s, tw), tx, yy, s,
+			dis ? COL_DIM : (on ? COL_WHITE : COL_INK), 0);
 	}
 }
 
@@ -4679,11 +4702,17 @@ static void launch_selected()
   Which core slot a physical disc goes into, by shelf system id, and only for the
   systems whose firmware-side daemon can read from the drive.
 
-  PC Engine CD is first and for now the only one: the TurboGrafx16 core reads a real
-  disc at full speed, and its daemon is the one that has the branches for it. The
-  other CD daemons each need the same work done to them separately, so a system that
-  is not in this table is still identified and still offered - it just says it cannot
-  play the disc yet instead of loading a core that would find nothing in the slot.
+  Two so far. PC Engine CD reads a real disc at full speed; PlayStation is wired the
+  same way in psx.cpp but upstream reports it short of full speed from a drive, so
+  expect FMV and CD audio to be the rough parts there. The other CD daemons each need
+  the same work done to them separately; a system that is not in this table is still
+  identified and still named by the prompt, but its row is marked "(not yet)" and
+  refuses - see disc_build_rows() - instead of loading a core that would find nothing
+  in the slot.
+
+  The slot is the core's own SD-card index for its CD image and comes from the "S"
+  entry in each core's config string; getting it wrong mounts the disc into the wrong
+  core input, so each entry cites its source.
 */
 struct disc_playable
 {
@@ -4694,6 +4723,8 @@ struct disc_playable
 static const disc_playable disc_playables[] =
 {
 	{ "tg16", { 's', 0 } },      // "S0,CUECHD,Insert CD" in TurboGrafx16.sv
+	{ "psx",  { 's', 1 } },      // "H7S1,CUECHD,Load CD" in PSX.sv (H7 is a hide mask,
+	                             // not part of the slot; S2/S3 are its memory cards)
 };
 
 static const chome_slot *disc_slot_for(int sysidx)
@@ -4706,6 +4737,11 @@ static const chome_slot *disc_slot_for(int sysidx)
 		if (!strcasecmp(disc_playables[i].sysid, s->id)) return &disc_playables[i].slot;
 	}
 	return 0;
+}
+
+static int disc_wired(int sysidx)
+{
+	return disc_slot_for(sysidx) != 0;
 }
 
 /*
@@ -5421,32 +5457,29 @@ static void accept()
 		}
 
 		/*
-		  A core was chosen. Remembered so re-opening the prompt shows the decision
-		  rather than starting from the guess.
+		  A "(not yet)" row refuses, and records nothing: remembering a choice that
+		  cannot launch would re-offer the refusal every time the prompt opens. The
+		  row already says why; the log says it in full.
+		*/
+		if (disc_rowact[disc_row] == DACT_NONE)
+		{
+			const chome_sys *sc = (disc_rowsys[disc_row] >= 0) ? lib_sys(disc_rowsys[disc_row]) : 0;
+			printf("ClassicUI: disc -> %s (%s), not launched: that core's daemon does not read from the drive yet\n",
+				sc ? sc->name : "?", disc_display_name());
+			nudge();
+			break;
+		}
 
-		  It launches if that core's daemon can read from the drive - PC Engine CD is
-		  the only one so far - and otherwise says why not, in the log and with a nudge.
-		  A button that silently does nothing would be worse than one that refuses.
+		/*
+		  A core was chosen. Remembered so re-opening the prompt shows the decision
+		  rather than starting from the guess. Rows only offer what disc_playables
+		  can launch, so this launches; disc_launch() keeps its own guard for the
+		  day the two disagree.
 		*/
 		disc_chosen_sys = disc_rowsys[disc_row];
 		disc_picking = 0;
 		disc_row = 0;
-
-		{
-			const chome_sys *sc = (disc_chosen_sys >= 0) ? lib_sys(disc_chosen_sys) : 0;
-
-			if (disc_slot_for(disc_chosen_sys))
-			{
-				disc_launch(disc_chosen_sys);
-				break;
-			}
-
-			printf("ClassicUI: disc -> %s (%s), not launched: that core's daemon does not read from the drive yet\n",
-				sc ? sc->name : "?", disc_display_name());
-			nudge();
-		}
-
-		mark_dirty();
+		disc_launch(disc_chosen_sys);
 		break;
 	}
 
