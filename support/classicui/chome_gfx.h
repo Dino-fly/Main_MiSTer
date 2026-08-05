@@ -101,9 +101,15 @@ void gfx_spinner(int cx, int cy, int r, int dot, unsigned long ms, uint32_t hot,
   buys the outer edge, a rim that is thin in proportion instead of a quarter of the
   radius, a hub distinct from the hole, and the angular resolution for a dozen wedges.
 
-  `r` sets the cell size: cells are r/16 pixels square, so r=16 gives single-pixel
-  cells (a 32px icon) and r=32 gives 2x2 (a 64px one). Pass a multiple of 16 or the
-  cells come out fractional and the look is lost.
+  `r` is the radius in pixels and sets the cell size with it: cells are r/16 pixels
+  square, so r=16 gives single-pixel cells (a 32px icon) and r=32 gives 2x2 (a 64px one).
+  A multiple of 16 keeps every cell the same size, which is what the fixed sizes pass.
+
+  Anything in between is still drawn at exactly that radius rather than rounded down to
+  the multiple below - the grid is mapped onto the pixel box, so one row or column in
+  every few comes out a pixel wider than its neighbours. That is what lets the focused
+  badge breathe: at 240p a cell is one pixel, so a radius quantised to whole cells could
+  only double. See gfx_disc() for the mapping and draw_disc_badge() for the breath.
 
   `outline` non-zero draws a ring two cells thick just outside the disc, which is how
   the front-end shows the disc has focus. It grows the sprite by two cells rather than
@@ -143,6 +149,15 @@ void gfx_spinner(int cx, int cy, int r, int dot, unsigned long ms, uint32_t hot,
 // One breath of the focus ring's pulse; see disc_focus_col() in chome_ui.cpp. Here
 // with the disc's other periods so the harness can park the clock on its trough.
 #define GFX_DISC_PULSE_MS 1200UL
+
+/*
+  How far the focused badge swells over that breath, as the crest in sixteenths of its
+  resting radius: an eighth. Here beside the period for the same reason - the rectangle the
+  partial repaint clips to has to cover the largest size the badge ever reaches, and a test
+  that could not work out what that size is could not check the one thing that matters.
+  See draw_disc_badge() and disc_note_rect() in chome_ui.cpp.
+*/
+#define GFX_DISC_BREATH_16 2
 
 /*
   Repaint interval while a disc is on screen. Faster than GFX_SPIN_MS because the disc

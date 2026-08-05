@@ -2324,7 +2324,15 @@ static const uint32_t disc_bands[12] =
 */
 #define COL_DISC_FOCUS_HI 0xffa3bdddu    // COL_BLUE six-tenths of the way to COL_WHITE
 
-static uint32_t disc_focus_col(void)
+/*
+  Where the breath is: 0 at the trough, 256 at the crest.
+
+  One accessor because the ring's colour and the badge's size both ride it, and they have
+  to ride the *same* one. Two copies of this - or worse, two periods - would put the
+  brightest ring and the biggest badge at different moments, and the corner would read as
+  two things happening rather than as one thing alive.
+*/
+static unsigned long disc_pulse_e(void)
 {
 	unsigned long t = anim_ms() % GFX_DISC_PULSE_MS;
 
@@ -2335,7 +2343,12 @@ static uint32_t disc_focus_col(void)
 	// ...through a smoothstep, so the ends of the breath ease instead of bouncing.
 	// Same 0..256 fixed point as disc_speed_now()'s ramp.
 	unsigned long e = x * x * (768UL - 2UL * x) / (256UL * 256UL);
-	if (e > 256) e = 256;
+	return (e > 256) ? 256 : e;
+}
+
+static uint32_t disc_focus_col(void)
+{
+	unsigned long e = disc_pulse_e();
 
 	uint32_t c = 0xff000000u;
 	for (int sh = 0; sh <= 16; sh += 8)
@@ -2360,6 +2373,28 @@ static int disc_radius(const chome_profile *p)
 }
 
 /*
+  The badge's breath: the resting radius at the trough, GFX_DISC_BREATH_16 sixteenths more
+  at the crest. An eighth, which at 240p is the 32px badge swelling to 36 and back.
+
+  Upward from the resting size rather than either side of it, which is two decisions. The
+  badge is anchored in the corner at p->inset and its centre is fixed - a breath that also
+  shrank would leave the disc's edge drifting away from the edge it is aligned to - and
+  every frame that is *not* focused then draws at exactly the size it drew before any of
+  this existed, so the shelf and the dialog behind its scrim are untouched.
+*/
+static int disc_breath_r(int r)
+{
+	/*
+	  Rounded to the nearest pixel rather than truncated, which is not a nicety: the eased
+	  triangle tops out at 255 and not at 256 - it is folded at 255, so the crest is one
+	  step short of the full swing - and truncating there costs the last pixel of the
+	  growth. At 240p that pixel is half of the whole breath.
+	*/
+	unsigned long g = (unsigned long)r * GFX_DISC_BREATH_16 * disc_pulse_e();
+	return r + (int)((g + 8UL * 256UL) / (16UL * 256UL));
+}
+
+/*
   Where the discs were drawn, recorded as they are drawn.
 
   The spin repaint needs the rectangle a disc occupies *before* it composes anything,
@@ -2374,22 +2409,35 @@ static int disc_radius(const chome_profile *p)
   remove a disc - a screen change, a disc arriving or leaving, a resolution change -
   marks dirty and takes the full path, which re-records these.
 
-  Sized at 18 cells' radius (the focus-ring variant of gfx_disc's grid) whether or not
-  the ring is on: two cells of slack cost a few rows, and the ring appearing is a
-  screen change anyway. This must track the ring's thickness in gfx_disc(): a focused
-  disc drawn outside this rectangle is exactly the smear the partial repaint cannot
+  Sized in cells of the *resting* radius, and the count is the caller's because the two
+  discs do not reach the same distance. This must track what gfx_disc() actually paints:
+  a disc drawn outside this rectangle is exactly the smear the partial repaint cannot
   fix, because it will never repaint those pixels.
+
+  DISC_RECT_CELLS is the focus-ring variant of gfx_disc's grid - 16 cells of disc plus
+  the ring's two - and it is passed whether or not the ring is on, because two cells of
+  slack cost a few rows and the ring appearing is a screen change anyway.
+
+  DISC_BADGE_CELLS is that same sprite at the crest of the badge's breath, rounded up: the
+  ring sits at 18 cells of a radius that has grown by GFX_DISC_BREATH_16 sixteenths, so
+  18 * 18/16 is 20.25 cells and this is 21. Which is the whole reason the count is a
+  parameter - the badge's rectangle has to be recorded at a size the badge only reaches for
+  an instant, and recorded at every size, because a rectangle that tracked the breath would
+  be one frame behind the growing edge.
 */
+#define DISC_RECT_CELLS  18
+#define DISC_BADGE_CELLS ((DISC_RECT_CELLS * (16 + GFX_DISC_BREATH_16) + 15) / 16)
+
 static struct { int x, y, w, h, on; } disc_rc[2];   // 0 the badge, 1 the prompt's
 
-static void disc_note_rect(int i, int cx, int cy, int r)
+static void disc_note_rect(int i, int cx, int cy, int r, int cells)
 {
-	int cell = r / 16;
-	if (cell < 1) cell = 1;
-	disc_rc[i].x = cx - 18 * cell;
-	disc_rc[i].y = cy - 18 * cell;
-	disc_rc[i].w = 36 * cell;
-	disc_rc[i].h = 36 * cell;
+	int ext = cells * r / 16;
+	if (ext < cells) ext = cells;              // under one pixel per cell, keep it whole
+	disc_rc[i].x = cx - ext;
+	disc_rc[i].y = cy - ext;
+	disc_rc[i].w = 2 * ext;
+	disc_rc[i].h = 2 * ext;
 	disc_rc[i].on = 1;
 }
 
@@ -4570,7 +4618,7 @@ static void draw_disc(const chome_profile *p)
 	y += 8 * s + 8 * s;
 
 	int cy = y + L.r;
-	disc_note_rect(1, cx, cy, L.r);
+	disc_note_rect(1, cx, cy, L.r, DISC_RECT_CELLS);
 	disc_draw_face(&d, cx, cy, L.r);
 	y = cy + L.r + 8 * s;
 
@@ -4626,7 +4674,16 @@ static void draw_disc_badge(const chome_profile *p)
 	int cx = p->safe_x + p->inset + r;
 	int cy = p->safe_y + p->inset + r;
 
-	disc_note_rect(0, cx, cy, r);
+	/*
+	  Recorded at the crest, always, and at the resting centre.
+
+	  This is the trap the whole breath is built around: the partial repaint clips to what
+	  the *previous* frame recorded, so a rectangle sized to the radius being drawn now
+	  would clip the next frame's larger edge away and leave a ring of the old, smaller
+	  disc's pixels standing in the corner - pixels nothing would ever paint over, because
+	  the only thing repainting that corner is this same clipped path. See disc_note_rect().
+	*/
+	disc_note_rect(0, cx, cy, r, DISC_BADGE_CELLS);
 
 	/*
 	  The disc and nothing else. No plate behind it and no name beside it, at any
@@ -4641,14 +4698,31 @@ static void draw_disc_badge(const chome_profile *p)
 	  Focus is a ring two cells outside the disc, not a plate behind it, and it breathes
 	  between the COL_BLUE this front-end uses for a selected row everywhere else and a
 	  lighter blue - see disc_focus_col(). Not white: a white ring merged with the disc's
-	  own white rim into one thick band that read as decoration. Growing the radius
-	  instead would have shown nothing at all: the cell size is r/16 as an integer, so
-	  anything short of doubling renders identically. One cell of ring and one steady
-	  colour were both tried and both were too subtle on a real TV at 240p.
+	  own white rim into one thick band that read as decoration. One cell of ring and one
+	  steady colour were both tried and both were too subtle on a real TV at 240p.
+
+	  And the badge itself breathes with it, which is what focus finally reads as from the
+	  sofa. A two-cell ring is two pixels at 240p, in the one corner of the screen the eye
+	  is least likely to be watching when the player presses up; size is the property of a
+	  32-pixel badge that can be seen from across a room. Growing the radius used to show
+	  nothing at all - the cell size was r/16 as an integer, so anything short of doubling
+	  rendered identically - so gfx_disc maps its grid onto the pixel box now and the sizes
+	  in between exist.
+
+	  What the breath quantises to is worth being plain about: at 240p a cell is a pixel
+	  and an eighth of 16 is two of them, so there are three sizes (32, 34 and 36 across)
+	  and not a continuum; a profile with 2x2 cells gets five. Whole pixels are all a 240p
+	  canvas has. The ease is what makes three sizes read as a breath rather than as a
+	  flicker - disc_pulse_e() holds near both ends of the swing and moves fastest through
+	  the middle, so the eye sees a swell and not three steps.
+
+	  Only on the tier, and `focused` is the whole condition: with the dialog open the
+	  screen is SCR_DISC, so the badge behind the scrim neither rings nor breathes. A badge
+	  pulsing under a panel would be movement drawing the eye away from the panel.
 	*/
 	int focused = (screen == SCR_DISCBAR);
 
-	gfx_disc(cx, cy, r, disc_step(),
+	gfx_disc(cx, cy, focused ? disc_breath_r(r) : r, disc_step(),
 		disc_bands, DISC_BANDS_N, COL_WHITE, COL_PANELHI, COL_BGDARK,
 		focused ? disc_focus_col() : 0);
 
