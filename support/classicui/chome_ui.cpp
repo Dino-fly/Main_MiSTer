@@ -555,6 +555,11 @@ static int ss_do_load(int slot);
 static void ss_pause_release(int engaged);
 static int ss_pause_engage();
 
+// Defined with the disc dialog, where the state it reads lives: the disc sitting in the
+// drive as an item the suspend strip can be about, or 0 when nothing here can say what
+// name its states would be filed under.
+static chome_item *disc_shelf_susp();
+
 /* ------------------------------------------------------------- helpers ---- */
 
 static const chome_entry *cur_entry()
@@ -682,6 +687,16 @@ static chome_item *susp_target()
 	if (susp_is_disc)
 	{
 		chome_item *d = ig_running_disc();
+		if (d) return d;
+
+		/*
+		  Or the disc that is only sitting in the drive. Reaching the strip from the shelf
+		  needs an item as much as reaching it from a game does, and without this the disc
+		  dropped straight into the fallback below - the shelf's own selection, under the
+		  disc's name in the header. That is the confusion the paragraph above describes,
+		  and it was only ever avoided by a launch happening to leave a folder focused.
+		*/
+		d = disc_shelf_susp();
 		if (d) return d;
 	}
 
@@ -2362,7 +2377,15 @@ static const uint32_t disc_bands[12] =
 */
 #define COL_DISC_FOCUS_HI 0xffa3bdddu    // COL_BLUE six-tenths of the way to COL_WHITE
 
-static uint32_t disc_focus_col(void)
+/*
+  Where the breath is: 0 at the trough, 256 at the crest.
+
+  One accessor because the ring's colour and the badge's size both ride it, and they have
+  to ride the *same* one. Two copies of this - or worse, two periods - would put the
+  brightest ring and the biggest badge at different moments, and the corner would read as
+  two things happening rather than as one thing alive.
+*/
+static unsigned long disc_pulse_e(void)
 {
 	unsigned long t = anim_ms() % GFX_DISC_PULSE_MS;
 
@@ -2373,7 +2396,12 @@ static uint32_t disc_focus_col(void)
 	// ...through a smoothstep, so the ends of the breath ease instead of bouncing.
 	// Same 0..256 fixed point as disc_speed_now()'s ramp.
 	unsigned long e = x * x * (768UL - 2UL * x) / (256UL * 256UL);
-	if (e > 256) e = 256;
+	return (e > 256) ? 256 : e;
+}
+
+static uint32_t disc_focus_col(void)
+{
+	unsigned long e = disc_pulse_e();
 
 	uint32_t c = 0xff000000u;
 	for (int sh = 0; sh <= 16; sh += 8)
@@ -2398,6 +2426,28 @@ static int disc_radius(const chome_profile *p)
 }
 
 /*
+  The badge's breath: the resting radius at the trough, GFX_DISC_BREATH_16 sixteenths more
+  at the crest. An eighth, which at 240p is the 32px badge swelling to 36 and back.
+
+  Upward from the resting size rather than either side of it, which is two decisions. The
+  badge is anchored in the corner at p->inset and its centre is fixed - a breath that also
+  shrank would leave the disc's edge drifting away from the edge it is aligned to - and
+  every frame that is *not* focused then draws at exactly the size it drew before any of
+  this existed, so the shelf and the dialog behind its scrim are untouched.
+*/
+static int disc_breath_r(int r)
+{
+	/*
+	  Rounded to the nearest pixel rather than truncated, which is not a nicety: the eased
+	  triangle tops out at 255 and not at 256 - it is folded at 255, so the crest is one
+	  step short of the full swing - and truncating there costs the last pixel of the
+	  growth. At 240p that pixel is half of the whole breath.
+	*/
+	unsigned long g = (unsigned long)r * GFX_DISC_BREATH_16 * disc_pulse_e();
+	return r + (int)((g + 8UL * 256UL) / (16UL * 256UL));
+}
+
+/*
   Where the discs were drawn, recorded as they are drawn.
 
   The spin repaint needs the rectangle a disc occupies *before* it composes anything,
@@ -2412,22 +2462,35 @@ static int disc_radius(const chome_profile *p)
   remove a disc - a screen change, a disc arriving or leaving, a resolution change -
   marks dirty and takes the full path, which re-records these.
 
-  Sized at 18 cells' radius (the focus-ring variant of gfx_disc's grid) whether or not
-  the ring is on: two cells of slack cost a few rows, and the ring appearing is a
-  screen change anyway. This must track the ring's thickness in gfx_disc(): a focused
-  disc drawn outside this rectangle is exactly the smear the partial repaint cannot
+  Sized in cells of the *resting* radius, and the count is the caller's because the two
+  discs do not reach the same distance. This must track what gfx_disc() actually paints:
+  a disc drawn outside this rectangle is exactly the smear the partial repaint cannot
   fix, because it will never repaint those pixels.
+
+  DISC_RECT_CELLS is the focus-ring variant of gfx_disc's grid - 16 cells of disc plus
+  the ring's two - and it is passed whether or not the ring is on, because two cells of
+  slack cost a few rows and the ring appearing is a screen change anyway.
+
+  DISC_BADGE_CELLS is that same sprite at the crest of the badge's breath, rounded up: the
+  ring sits at 18 cells of a radius that has grown by GFX_DISC_BREATH_16 sixteenths, so
+  18 * 18/16 is 20.25 cells and this is 21. Which is the whole reason the count is a
+  parameter - the badge's rectangle has to be recorded at a size the badge only reaches for
+  an instant, and recorded at every size, because a rectangle that tracked the breath would
+  be one frame behind the growing edge.
 */
+#define DISC_RECT_CELLS  18
+#define DISC_BADGE_CELLS ((DISC_RECT_CELLS * (16 + GFX_DISC_BREATH_16) + 15) / 16)
+
 static struct { int x, y, w, h, on; } disc_rc[2];   // 0 the badge, 1 the prompt's
 
-static void disc_note_rect(int i, int cx, int cy, int r)
+static void disc_note_rect(int i, int cx, int cy, int r, int cells)
 {
-	int cell = r / 16;
-	if (cell < 1) cell = 1;
-	disc_rc[i].x = cx - 18 * cell;
-	disc_rc[i].y = cy - 18 * cell;
-	disc_rc[i].w = 36 * cell;
-	disc_rc[i].h = 36 * cell;
+	int ext = cells * r / 16;
+	if (ext < cells) ext = cells;              // under one pixel per cell, keep it whole
+	disc_rc[i].x = cx - ext;
+	disc_rc[i].y = cy - ext;
+	disc_rc[i].w = 2 * ext;
+	disc_rc[i].h = 2 * ext;
 	disc_rc[i].on = 1;
 }
 
@@ -4033,6 +4096,91 @@ struct disc_dlg
 	char key[128];               // what the scan and the savestates are filed under
 };
 
+/* ------------------------------------------- the disc on the shelf, as an item --- */
+
+/*
+  A disc that has not been played yet, as something the suspend strip can be about.
+
+  Down from this dialog used to be offered over a *running* disc only, on the reasoning
+  that a disc in the drive has no published identity until the mount writes one. For most
+  discs that is exactly right: save_name_of() in physical_disc.cpp falls back to the volume
+  label and, failing that, to a hash of the table of contents - and the front-end has no
+  table of contents at all, because the detection helper owns the drive and hands back
+  sectors rather than a TOC.
+
+  PlayStation is the exception, and it is the case that matters here: for a PSX disc that
+  name *is* the serial, and disc_serial() has the serial while the disc merely sits in the
+  drive - dug out of the boot configuration by the same prefix list, the same length bounds
+  and the same normalisation as physical_disc_disc_serial(). So savestates/PSX/<serial>_N.ss
+  is derivable from the shelf, and Dinofly owns PSX originals, which is what this is for.
+
+  Offered only where the name is *provable*, because the failure mode is silent. A key that
+  is nearly right lists files that are not this disc's states, and resume_poll() - which
+  compares the armed name against the one the mount publishes - then declines to resume
+  without a word. So two conditions, and Down stays hidden unless both hold:
+
+    The disc is a PlayStation disc and the core it would go to is the PlayStation one.
+    psx.cpp asks physical_disc_save_name() for the PSX name; a disc forced onto some other
+    core through Options gets that core's answer instead, which is a different key - so a
+    hand-picked core withdraws the offer rather than filing states under a name nothing
+    will ever look for again.
+
+    sanitize_name() cannot change the serial. That function is what physical_disc.cpp runs
+    the serial through, and it drops spaces and punctuation and puts an underscore where it
+    dropped them. Rather than keep a second copy of that rule here - the copy that would
+    rot the first time the real one changed - this accepts only a serial already in the
+    form sanitize_name() would leave untouched. Every real serial is: four letters, a dash
+    and five digits.
+*/
+static chome_item disc_shelf_item;
+
+// True when sanitize_name() would hand this string straight back, so it can be used as
+// the save name without reproducing that function here. Deliberately stricter than it
+// needs to be: it also refuses the dot sanitize_name() allows, and a serial never has one
+// once disc_serial_at() has taken it out.
+static int disc_name_is_sanitised(const char *s)
+{
+	if (!s || !s[0]) return 0;
+
+	for (const char *q = s; *q; q++)
+	{
+		int ok = (*q >= '0' && *q <= '9') || (*q >= 'A' && *q <= 'Z')
+			|| (*q >= 'a' && *q <= 'z') || *q == '-';
+		if (!ok) return 0;
+	}
+	return 1;
+}
+
+/*
+  Bound from the drive on every pass through the dialog, so the item follows whatever is
+  actually in there. No slot refresh here: this runs per draw, and the strip's opener
+  already asks lib_refresh_slots() once, where four stats of the card are worth paying for.
+*/
+static void disc_shelf_bind(const disc_dlg *d)
+{
+	disc_shelf_item.path[0] = 0;
+
+	if (d->running || disc_type() != DISC_T_PSX) return;
+	if (d->sysidx < 0 || d->sysidx != disc_sys_by_id(disc_system_id(DISC_T_PSX))) return;
+	if (!disc_wired(d->sysidx)) return;
+	if (!disc_name_is_sanitised(disc_serial())) return;
+
+	memset(&disc_shelf_item, 0, sizeof(disc_shelf_item));
+	disc_shelf_item.kind = IT_GAME;
+	disc_shelf_item.sysidx = (int16_t)d->sysidx;
+	snprintf(disc_shelf_item.path, sizeof(disc_shelf_item.path), "%s", disc_serial());
+	snprintf(disc_shelf_item.title, sizeof(disc_shelf_item.title), "%s", d->title);
+}
+
+static chome_item *disc_shelf_susp()
+{
+	// The disc has to still be in there. Tying it to the drive rather than to a flag
+	// somebody has to clear is what stops the strip outliving an eject with a stale item
+	// under the previous disc's name.
+	if (disc_state() == DISC_ABSENT || !disc_shelf_item.path[0]) return 0;
+	return &disc_shelf_item;
+}
+
 static void disc_dlg_get(disc_dlg *d)
 {
 	memset(d, 0, sizeof(*d));
@@ -4108,6 +4256,17 @@ static void disc_dlg_get(disc_dlg *d)
 	// The same line twice reads as a drawing fault rather than as two facts, and it
 	// happens whenever nothing knows the disc by any name but its console's.
 	if (!strcmp(d->title, d->sub)) d->sub[0] = 0;
+
+	/*
+	  And what Down is about, when the disc is not playing. After the title is settled, so
+	  the strip's header reads the same name the dialog above it does - and after `sub`, so
+	  a disc still being read cannot be bound under a name nothing has yet.
+	*/
+	if (!d->running)
+	{
+		disc_shelf_bind(d);
+		d->susp = disc_shelf_susp();
+	}
 }
 
 /*
@@ -4608,7 +4767,7 @@ static void draw_disc(const chome_profile *p)
 	y += 8 * s + 8 * s;
 
 	int cy = y + L.r;
-	disc_note_rect(1, cx, cy, L.r);
+	disc_note_rect(1, cx, cy, L.r, DISC_RECT_CELLS);
 	disc_draw_face(&d, cx, cy, L.r);
 	y = cy + L.r + 8 * s;
 
@@ -4664,7 +4823,16 @@ static void draw_disc_badge(const chome_profile *p)
 	int cx = p->safe_x + p->inset + r;
 	int cy = p->safe_y + p->inset + r;
 
-	disc_note_rect(0, cx, cy, r);
+	/*
+	  Recorded at the crest, always, and at the resting centre.
+
+	  This is the trap the whole breath is built around: the partial repaint clips to what
+	  the *previous* frame recorded, so a rectangle sized to the radius being drawn now
+	  would clip the next frame's larger edge away and leave a ring of the old, smaller
+	  disc's pixels standing in the corner - pixels nothing would ever paint over, because
+	  the only thing repainting that corner is this same clipped path. See disc_note_rect().
+	*/
+	disc_note_rect(0, cx, cy, r, DISC_BADGE_CELLS);
 
 	/*
 	  The disc and nothing else. No plate behind it and no name beside it, at any
@@ -4679,14 +4847,31 @@ static void draw_disc_badge(const chome_profile *p)
 	  Focus is a ring two cells outside the disc, not a plate behind it, and it breathes
 	  between the COL_BLUE this front-end uses for a selected row everywhere else and a
 	  lighter blue - see disc_focus_col(). Not white: a white ring merged with the disc's
-	  own white rim into one thick band that read as decoration. Growing the radius
-	  instead would have shown nothing at all: the cell size is r/16 as an integer, so
-	  anything short of doubling renders identically. One cell of ring and one steady
-	  colour were both tried and both were too subtle on a real TV at 240p.
+	  own white rim into one thick band that read as decoration. One cell of ring and one
+	  steady colour were both tried and both were too subtle on a real TV at 240p.
+
+	  And the badge itself breathes with it, which is what focus finally reads as from the
+	  sofa. A two-cell ring is two pixels at 240p, in the one corner of the screen the eye
+	  is least likely to be watching when the player presses up; size is the property of a
+	  32-pixel badge that can be seen from across a room. Growing the radius used to show
+	  nothing at all - the cell size was r/16 as an integer, so anything short of doubling
+	  rendered identically - so gfx_disc maps its grid onto the pixel box now and the sizes
+	  in between exist.
+
+	  What the breath quantises to is worth being plain about: at 240p a cell is a pixel
+	  and an eighth of 16 is two of them, so there are three sizes (32, 34 and 36 across)
+	  and not a continuum; a profile with 2x2 cells gets five. Whole pixels are all a 240p
+	  canvas has. The ease is what makes three sizes read as a breath rather than as a
+	  flicker - disc_pulse_e() holds near both ends of the swing and moves fastest through
+	  the middle, so the eye sees a swell and not three steps.
+
+	  Only on the tier, and `focused` is the whole condition: with the dialog open the
+	  screen is SCR_DISC, so the badge behind the scrim neither rings nor breathes. A badge
+	  pulsing under a panel would be movement drawing the eye away from the panel.
 	*/
 	int focused = (screen == SCR_DISCBAR);
 
-	gfx_disc(cx, cy, r, disc_step(),
+	gfx_disc(cx, cy, focused ? disc_breath_r(r) : r, disc_step(),
 		disc_bands, DISC_BANDS_N, COL_WHITE, COL_PANELHI, COL_BGDARK,
 		focused ? disc_focus_col() : 0);
 
@@ -6100,10 +6285,14 @@ static void move_v(int dir)
 
 		  Down goes to the disc's save states, which is what Down does on a shelf card and
 		  the reason this dialog exists at all in a running game: a disc has no card to
-		  press Down on. Only when there is a strip to reach - from the shelf the disc has
-		  not been played, and there is no identity for its states to be filed under until
-		  the mount publishes one. Up goes back to the badge it was opened from, when there
-		  is a badge; in a game there is not, because the drive is the core's.
+		  press Down on. Offered from the shelf too, but only where the name those states
+		  are filed under can be worked out before the mount publishes one - which is a
+		  PlayStation disc and its serial, and nothing else. See disc_shelf_bind(); a disc
+		  whose key cannot be derived has no Down at all rather than a Down onto slots
+		  belonging to something else.
+
+		  Up goes back to the badge it was opened from, when there is a badge; in a game
+		  there is not, because the drive is the core's.
 		*/
 		if (dir > 0)
 		{
@@ -6650,6 +6839,22 @@ static void accept()
 		  the same mechanism Resume uses, and resume_poll() loads it once the core is up.
 		*/
 		susp_arm(it, slot_idx);
+
+		/*
+		  The disc in the drive takes the same arming and a different hand-over: Play plus a
+		  starting state, not a second launch path. Not through SCR_LAUNCH like a card, and
+		  the reason is what that curtain ends in - launch_selected(), which launches the
+		  entry under the shelf cursor. A disc has no entry there, which is the whole reason
+		  this dialog exists, so the curtain would arm the resume and then start whatever the
+		  cursor happened to be parked on. The disc's own Play button hands over immediately
+		  for the same reason; this is that button with the record already written.
+		*/
+		if (it == disc_shelf_susp())
+		{
+			disc_launch(it->sysidx);
+			break;
+		}
+
 		curtain = 0;
 		launch_at = GetTimer(0);
 		go_screen(SCR_LAUNCH);
@@ -9328,8 +9533,15 @@ int chome_handle(uint32_t key)
 		  Taken out while we were looking at it. Both disc screens describe a disc that
 		  is no longer there, so they have to be left rather than sitting there
 		  offering to play nothing.
+
+		  The suspend strip counts as a third, when it was opened from the shelf disc: it
+		  is showing that disc's slots under that disc's name, and A on one of them would
+		  hand a drive with nothing in it to a core. disc_shelf_susp() has already stopped
+		  answering by now, so staying here would also mean the strip falling back to the
+		  shelf's own selection mid-screen.
 		*/
-		if (disc_state() == DISC_ABSENT && (screen == SCR_DISC || screen == SCR_DISCBAR))
+		if (disc_state() == DISC_ABSENT && (screen == SCR_DISC || screen == SCR_DISCBAR
+			|| (screen == SCR_SUSPEND && susp_is_disc && !ig_running_disc())))
 		{
 			go_screen(SCR_HOME);
 		}

@@ -2491,6 +2491,19 @@ static void assert_disc_titles()
   appears and disappears with the disc, via the same predicate the bar uses.
 */
 /*
+  How far the badge's recorded rectangle reaches, in cells of the resting radius, and
+  stated here rather than borrowed so that this file has its own opinion about it.
+
+  Eighteen cells is what gfx_disc paints with a focus ring - sixteen of disc and two of
+  ring - and the breath grows the radius the ring hangs off by GFX_DISC_BREATH_16
+  sixteenths, so the crest reaches 18 * 18/16 = 20.25 cells and the box has to be 21. It
+  is DISC_BADGE_CELLS in chome_ui.cpp, arrived at the same way; the two agreeing is the
+  point, and a change to one that this does not follow shows up as a stale ring in the
+  section below.
+*/
+#define BADGE_CELLS ((18 * (16 + GFX_DISC_BREATH_16) + 15) / 16)
+
+/*
   The badge's focus ring, at the pixel level: two cells thick just outside the disc,
   and breathing on the millisecond clock. A one-cell ring of one steady colour was too
   subtle to see on a real TV at 240p, which is what this pins. Callable at any profile,
@@ -2527,6 +2540,61 @@ static void check_focus_ring()
 		"half a pulse later the ring has changed: it breathes on the clock");
 	check(box_pixels(rx0, cy, rx1, cy + 1, COL_BLUE) == 0,
 		"and at the crest it is no longer the resting blue");
+}
+
+/*
+  The badge's size animation, and the rectangle it is not allowed to leave.
+
+  Two vertical bands beside the badge, each as tall as its whole recorded box, read at the
+  trough of the breath and again at the crest half a period later:
+
+    the sweep, cells 18 to 21 out from the centre. At the resting size nothing is drawn
+    there at all - gfx_disc stops at 18 cells with a ring and 16 without - so this band
+    changing between the two instants is the growth itself, measured rather than assumed.
+
+    the shelf, cells 21 to 24, which is outside the rectangle disc_note_rect() records.
+    Every pixel of it has to read the same at both instants. The spin repaint clips to
+    that rectangle, so a badge that painted out here would be leaving pixels nothing ever
+    paints back - the ring of stale edge that is the whole hazard of animating a size
+    inside a partial repaint.
+
+  Hashes rather than colours: the ring's colour and the disc's rotation are both moving at
+  the same time, and the only question here is whether pixels in those bands moved at all.
+
+  The clock is parked on the trough first and stepped to the crest exactly as
+  check_focus_ring does, so the two instants are the two ends of the swing and not two
+  arbitrary points on it. Callable at any profile; the caller says whether the badge is
+  supposed to be breathing where it has left the UI.
+*/
+static void check_breath(int expect_growth, const char *what)
+{
+	const chome_profile *p = theme_get();
+	int r = (p->ts_ui >= 2) ? 32 : 16;
+	int cell = r / 16;
+	int cx = p->safe_x + p->inset + r;
+	int cy = p->safe_y + p->inset + r;
+
+	int sx0 = cx + 18 * cell, sx1 = cx + BADGE_CELLS * cell;
+	int ox1 = cx + (BADGE_CELLS + 3) * cell;
+	int y0 = cy - BADGE_CELLS * cell, y1 = cy + BADGE_CELLS * cell;
+
+	// Let whatever the caller just pressed finish moving: the menu bar slides across
+	// these rows on its way out, and a frame caught mid-slide is not the badge.
+	frame(6);
+
+	harness_advance(GFX_DISC_PULSE_MS - harness_now() % GFX_DISC_PULSE_MS);
+	frame(1);
+	unsigned long sweep = harness_fb_hash_box(sx0, y0, sx1, y1);
+	unsigned long out = harness_fb_hash_box(sx1, y0, ox1, y1);
+
+	harness_advance(GFX_DISC_PULSE_MS / 2 - 32);
+	frame(1);
+
+	if (expect_growth) check(harness_fb_hash_box(sx0, y0, sx1, y1) != sweep, what);
+	else check(harness_fb_hash_box(sx0, y0, sx1, y1) == sweep, what);
+
+	check(harness_fb_hash_box(sx1, y0, ox1, y1) == out,
+		"and the badge paints nothing outside the rectangle the spin repaint clips to");
 }
 
 static void assert_disc_ui()
@@ -2708,6 +2776,157 @@ static void assert_disc_ui()
 }
 
 /*
+  The badge breathes when it has focus, and nowhere else.
+
+  His instruction, and a section of its own rather than two lines in the one above,
+  because animating a *size* inside the partial repaint is not like animating a colour:
+  the rectangle the repaint clips to comes from the previous frame, so a badge that grew
+  past it would paint its new edge outside the clip and leave the old edge standing -
+  in the corner, permanently, since nothing else ever repaints there.
+
+  Three states, because "only on the tier" is half the requirement: the shelf, the tier,
+  and the tier with the dialog open over it. And then the frame as a whole at the crest,
+  against a full repaint of the same instant, which is the assertion that actually catches
+  a rectangle a cell too small.
+*/
+static void assert_disc_breath()
+{
+	printf("\n== physical disc: the focused badge breathes ==\n");
+
+	enum { S_HOME = 0, S_DISC = 17, S_DISCBAR = 18, S_MENUBAR = 1 };
+
+	// A known PlayStation disc, on the shelf, as the sections either side of this build one.
+	disc_ingest_present(1);
+	fake_disc d; memset(&d, 0, sizeof(d));
+	static const char *const none[] = { "" };
+	fake_iso(&d, 0, "PLAYSTATION", "PLAYSTATION", none, 0);
+	fake_put(&d, 20, 0, "BOOT = cdrom:\\SLUS_006.26;1", 27, 100);
+	disc_set_reader(fake_read, &d);
+	disc_ingest_identify(0);
+	frame(8);
+	check(chome_screen_id() == S_HOME && disc_state() == DISC_READY,
+		"on the shelf with a known disc");
+
+	check_breath(0, "unfocused on the shelf, the badge holds its size");
+
+	press(KEY_UP);
+	check(chome_screen_id() == S_DISCBAR, "up focuses the disc");
+	check_breath(1, "and focused it swells over the pulse and comes back");
+
+	/*
+	  The frame check_breath() has just left on screen is the crest, drawn by the spin
+	  repaint - which is what makes this comparison possible at all: the clock has not moved
+	  since, so two full repaints of the same instant have the same rotation and the same
+	  size. Up to the menu bar and back down is those two full repaints, landing on the tier
+	  again. A rectangle one cell short shows up right here and in no other check: the
+	  partial frame would carry a rim of the previous, smaller badge that the full frame
+	  drew over.
+	*/
+	{
+		const chome_profile *p = theme_get();
+		int cell = ((p->ts_ui >= 2) ? 32 : 16) / 16;
+		int w = gfx_w(), h = gfx_h();
+
+		check(gfx_damage_rows() <= 2 * BADGE_CELLS * cell,
+			"the crest frame was drawn by the partial path");
+		unsigned long crest = harness_fb_hash_box(0, 0, w, h);
+
+		chome_handle(KEY_UP);
+		chome_handle(KEY_UP | UPSTROKE);
+		check(chome_screen_id() == S_MENUBAR, "the menu bar, a full repaint");
+		chome_handle(KEY_DOWN);
+		chome_handle(KEY_DOWN | UPSTROKE);
+		check(chome_screen_id() == S_DISCBAR, "and the tier again, with the clock still");
+		check(gfx_damage_rows() == h, "that one repainted every row");
+
+		check(harness_fb_hash_box(0, 0, w, h) == crest,
+			"a partial frame at the crest of the breath is byte-identical to a full "
+			"repaint of the same instant");
+	}
+
+	/*
+	  A pair for eyes, the two ends of the same breath: a hash can say the badge changed
+	  size, and only the pictures can say whether it looks intentional. Parked on the clock
+	  rather than taken a frame apart, or the pair would be two arbitrary points on the
+	  swing and the difference would look like noise.
+	*/
+	harness_advance(GFX_DISC_PULSE_MS - harness_now() % GFX_DISC_PULSE_MS);
+	frame(1);
+	dump("disc-breath-1-tier-trough");
+	harness_advance(GFX_DISC_PULSE_MS / 2 - 32);
+	frame(1);
+	dump("disc-breath-2-tier-crest");
+
+	/*
+	  With the dialog open the badge is behind the scrim and has no focus, so it must be
+	  still: something growing in the corner would pull the eye off the panel that has just
+	  opened, and the ring is gone for the same reason.
+	*/
+	press(KEY_ENTER);
+	check(chome_screen_id() == S_DISC, "its dialog opens over the badge");
+	check_breath(0, "with the dialog up the badge behind it holds its size");
+	dump("disc-breath-3-dialog");
+
+	press(KEY_ESC);
+	check(chome_screen_id() == S_DISCBAR, "back on the tier");
+
+	/*
+	  And at 240p, which is the profile the breath exists for and the one it is hardest on:
+	  a cell is one pixel there, so the swell is three whole sizes - 32, 34 and 36 pixels
+	  across - rather than a continuum. Before gfx_disc mapped its grid onto the pixel box
+	  there were no sizes in between at all.
+
+	  Nothing here marks the UI dirty - on hardware the mode change does - so the bounce to
+	  the menu bar and back is what gives the new framebuffers two full repaints at the new
+	  size, as in the section above.
+	*/
+	harness_set_fb(320, 240);
+	gfx_shutdown();
+	theme_update(320, 240, 3);
+	press(KEY_UP);
+	press(KEY_DOWN);
+	check(chome_screen_id() == S_DISCBAR, "still on the tier at 240p");
+	check_breath(1, "and the badge breathes there too, in whole pixels");
+
+	harness_advance(GFX_DISC_PULSE_MS - harness_now() % GFX_DISC_PULSE_MS);
+	frame(1);
+	dump("disc-breath-4-tier-trough-240p");
+	harness_advance(GFX_DISC_PULSE_MS / 2 - 32);
+	frame(1);
+	dump("disc-breath-5-tier-crest-240p");
+
+	/*
+	  And one frame from the middle of the swing, at 240p, which is the picture worth
+	  actually looking at: the size in between is the one the grid-to-pixel mapping
+	  invented, drawn with one cell in sixteen a pixel wider than its neighbours. If that
+	  read as a dented circle rather than as a disc, this is where it would show. A quarter
+	  of the way along the eased triangle - x = 128 of 256 - is a radius of 17 at this
+	  profile, one pixel between the two frames above.
+	*/
+	harness_advance(GFX_DISC_PULSE_MS - harness_now() % GFX_DISC_PULSE_MS);
+	frame(1);
+	harness_advance(GFX_DISC_PULSE_MS * 128 / 512 - 32);
+	frame(1);
+	dump("disc-breath-6-tier-mid-240p");
+
+	press(KEY_DOWN);
+	check(chome_screen_id() == S_HOME, "down leaves the tier for the shelf");
+	check_breath(0, "where it is still again");
+
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+	press(KEY_UP);
+	press(KEY_DOWN);
+	check(chome_screen_id() == S_HOME, "and back at 720p on the shelf");
+
+	disc_reset_reader();
+	disc_ingest_present(0);
+	(void)disc_take_dirty();
+	frame(6);
+}
+
+/*
   The partial repaint path: while a disc spins on the shelf, only its rectangle is
   recomposed and copied, and everything else on the presented frame is byte-identical
   frame to frame. Byte-identical is checkable here because the framebuffers alternate
@@ -2734,14 +2953,13 @@ static void assert_partial_repaint()
 	check(chome_screen_id() == 0 && disc_state() == DISC_READY, "on the shelf with a known disc");
 
 	// The badge's box, from the same numbers draw_disc_badge() and disc_note_rect() use:
-	// centre at safe_x+inset+r, 18 cells of r/16 pixels each side (the focus ring is
-	// two cells thick).
+	// centre at safe_x+inset+r, BADGE_CELLS of r/16 pixels each side.
 	const chome_profile *p = theme_get();
 	int r = (p->ts_ui >= 2) ? 32 : 16;
 	int cell = r / 16;
-	int bx0 = p->safe_x + p->inset + r - 18 * cell;
-	int by0 = p->safe_y + p->inset + r - 18 * cell;
-	int bx1 = bx0 + 36 * cell, by1 = by0 + 36 * cell;
+	int bx0 = p->safe_x + p->inset + r - BADGE_CELLS * cell;
+	int by0 = p->safe_y + p->inset + r - BADGE_CELLS * cell;
+	int bx1 = bx0 + 2 * BADGE_CELLS * cell, by1 = by0 + 2 * BADGE_CELLS * cell;
 	int w = gfx_w(), h = gfx_h();
 
 	// Everything outside the box, in four hashes; and the box itself.
@@ -2765,7 +2983,7 @@ static void assert_partial_repaint()
 	check(harness_fb_hash_box(bx0, 0, bx1, by0) == T, "and above it");
 	check(harness_fb_hash_box(bx0, by1, bx1, h) == B, "and below it");
 	check(harness_fb_hash_box(bx0, by0, bx1, by1) != box, "while the disc itself has turned");
-	check(gfx_damage_rows() <= 36 * cell, "a spin frame damages only the disc's rows");
+	check(gfx_damage_rows() <= 2 * BADGE_CELLS * cell, "a spin frame damages only the disc's rows");
 
 	/*
 	  The strongest thing that can be said about the partial path: a frame it finishes
@@ -2778,7 +2996,7 @@ static void assert_partial_repaint()
 	*/
 	harness_advance(60);                       // past the spin interval, nothing else due
 	chome_handle(0);
-	check(gfx_damage_rows() <= 36 * cell, "the frame under comparison took the partial path");
+	check(gfx_damage_rows() <= 2 * BADGE_CELLS * cell, "the frame under comparison took the partial path");
 	unsigned long partial_frame = harness_fb_hash_box(0, 0, w, h);
 
 	chome_handle(KEY_UP);                      // the disc tier: a structural change
@@ -2805,7 +3023,7 @@ static void assert_partial_repaint()
 
 	harness_advance(60);
 	chome_handle(0);                           // one partial, into the other buffer
-	check(gfx_damage_rows() <= 36 * cell, "and it was partial");
+	check(gfx_damage_rows() <= 2 * BADGE_CELLS * cell, "and it was partial");
 	check(harness_fb_hash_box(bx1, 0, w, h) == tier_right,
 		"one partial frame later the other buffer shows the tier, not the stale shelf");
 
@@ -3249,6 +3467,166 @@ static void assert_disc_dialog()
 	press(KEY_MENU, 20);
 	frame(10);
 	check(chome_screen_id() == S_HOME, "the shelf is back for whatever comes next");
+}
+
+/*
+  A disc's suspend points, reached before the disc has ever been played.
+
+  The strip used to be reachable over a *running* disc only, because a disc in the drive
+  has no published identity until the mount writes one - and for most discs that is still
+  true and still the right answer: physical_disc.cpp names them from the volume label or
+  from a hash of the table of contents, and this front-end has neither.
+
+  A PlayStation disc is the exception this section is about. Its save name is its serial,
+  the serial is readable while the disc merely sits there, and both sides derive it by the
+  same algorithm - so the name its states will carry under savestates/PSX is knowable from
+  the shelf, and Down can be offered honestly.
+
+  Both halves are checked, because "offer it when it is derivable" is worthless without
+  "and not otherwise": the wrong key would list some other disc's states and then quietly
+  fail to resume, which is the kind of failure nobody reports because nothing on screen
+  says anything is wrong.
+
+  The fixture state is named SLUS-00626_1.ss, which is what physical_disc_save_name() would
+  publish for this disc: sanitize_name() leaves a serial alone. What cannot be checked here
+  is that claim itself - no call in this harness reaches the mount - so the front-end
+  refuses to guess whenever sanitising the serial *could* change it. See disc_shelf_bind().
+*/
+static void assert_disc_shelf_slots()
+{
+	printf("\n== physical disc: its suspend points, from the shelf ==\n");
+
+	enum { S_HOME = 0, S_SUSPEND = 2, S_DISC = 17 };
+
+	const char *rec = ROOT "/classicui/suspend.txt";
+	unlink(rec);
+
+	cfg.classicui_disc = 1;
+
+	mkpath(ROOT "/savestates/PSX");
+	touch(ROOT "/savestates/PSX", "SLUS-00626_1.ss", 256);
+
+	harness_set_menu_core(1);
+	chome_leave();
+	press(KEY_MENU, 20);
+	frame(10);
+
+	/* ------------------------------------------- the key is derivable: offer it --- */
+
+	disc_ingest_present(1);
+	fake_disc dp; memset(&dp, 0, sizeof(dp));
+	static const char *const none[] = { "" };
+	fake_iso(&dp, 0, "PLAYSTATION", "PLAYSTATION", none, 0);
+	fake_put(&dp, 20, 0, "BOOT = cdrom:\\SLUS_006.26;1", 27, 100);
+	disc_set_reader(fake_read, &dp);
+	disc_ingest_identify(0);
+	frame(6);
+	check(disc_type() == DISC_T_PSX && !strcmp(disc_serial(), "SLUS-00626"),
+		"a PlayStation disc in the drive, with its serial read off it");
+
+	press(KEY_UP);
+	press(KEY_ENTER);
+	check(chome_screen_id() == S_DISC, "its dialog is up, and nothing has been launched");
+
+	press(KEY_DOWN);
+	check(chome_screen_id() == S_SUSPEND,
+		"Down reaches the disc's suspend points from the shelf, with no mount involved");
+	dump("disc-shelf-1-slots");
+
+	press(KEY_ESC);
+	check(chome_screen_id() == S_DISC, "and back returns to the dialog it was opened from");
+
+	/* ------------------------------- A on a slot: start the disc at that point --- */
+
+	press(KEY_DOWN);
+	check(chome_screen_id() == S_SUSPEND, "on the strip again, cursor on the filled slot");
+
+	harness_clear_launch();
+	press(KEY_ENTER, 4);
+	frame(20);
+
+	char body[256] = {};
+	FILE *f = fopen(rec, "rb");
+	if (f) { if (fread(body, 1, sizeof(body) - 1, f)) {} fclose(f); }
+	printf("  suspend record: %s", body[0] ? body : "(none)\n");
+
+	check(strstr(body, "SLUS-00626") != 0,
+		"A on it arms the resume record under the name the mount will publish");
+	check(strncmp(body, "psx\n", 4) == 0, "on the PlayStation core");
+
+	/*
+	  And the launch itself is the disc, not the shelf's cursor. This is the half that made
+	  SCR_LAUNCH the wrong path to reuse: its curtain ends in launch_selected(), and a disc
+	  has no card under the cursor to select.
+	*/
+	check(strstr(harness_last_launch(), ".mgl") != 0, "and hands the disc to that core");
+
+	f = fopen("/tmp/classicui_launch.mgl", "rt");
+	check(f != 0, "with an MGL written for it");
+	if (f)
+	{
+		char buf[1024] = {};
+		size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+		buf[n] = 0;
+		fclose(f);
+		check(strstr(buf, "_Console/PSX") != 0, "naming the PlayStation core");
+		check(strstr(buf, PHYSICAL_DISC_SENTINEL) != 0, "with the sentinel as the file");
+	}
+
+	unlink(rec);
+
+	/* --------------------------- and a disc whose key cannot be derived: hide it --- */
+
+	/*
+	  A PC Engine CD disc. Playable - tg16 is one of the wired cores - so this cannot pass
+	  by accident on "the disc is not launchable": what it lacks is a name. There is no
+	  serial on it, and physical_disc.cpp would fall back to the volume label or to a hash
+	  of a table of contents this side never sees.
+	*/
+	disc_reset_reader();
+	disc_ingest_present(0);
+	(void)disc_take_dirty();
+	chome_leave();
+	press(KEY_MENU, 20);
+	frame(10);
+
+	disc_ingest_present(1);
+	fake_disc dc; memset(&dc, 0, sizeof(dc));
+	fake_put(&dc, 0, 0, "NOTHINGUSEFUL", 13, 0);
+	fake_put(&dc, 1, 0, "xx PC Engine CD-ROM SYSTEM xx", 29, 40);
+	disc_set_reader(fake_read, &dc);
+	disc_ingest_identify(0);
+	frame(6);
+	check(disc_type() == DISC_T_PCECD && !disc_serial()[0],
+		"a PC Engine CD disc in the drive, which carries no serial");
+
+	press(KEY_UP);
+	press(KEY_ENTER);
+	check(chome_screen_id() == S_DISC, "its dialog opens the same way");
+	dump("disc-shelf-2-no-slots");
+
+	harness_clear_launch();
+	press(KEY_DOWN);
+	check(chome_screen_id() == S_DISC,
+		"Down offers nothing for a disc whose save name cannot be worked out");
+	check(harness_last_launch()[0] == 0, "and launches nothing on the way to refusing");
+
+	{
+		FILE *g = fopen(rec, "rb");
+		check(g == 0, "with no resume record armed for a name nobody could look up");
+		if (g) fclose(g);
+	}
+
+	// As the sections around this one leave things: no disc, the flag off, the shelf up.
+	disc_reset_reader();
+	disc_ingest_present(0);
+	(void)disc_take_dirty();
+	cfg.classicui_disc = 0;
+	unlink(ROOT "/savestates/PSX/SLUS-00626_1.ss");
+	chome_leave();
+	press(KEY_MENU, 20);
+	frame(10);
+	check(chome_screen_id() == S_HOME, "and the shelf is back for whatever comes next");
 }
 
 /* --------------------------------------------------------- screenscraper --- */
@@ -7860,11 +8238,17 @@ int main()
 	// see disc_display_name() answer differently. See its own comment.
 	assert_disc_titles();
 	assert_disc_ui();
+	// Directly after it: it leaves the same state that one does - the shelf, an empty drive
+	// and the HD canvas - and it puts the badge back under the same fake disc.
+	assert_disc_breath();
 	assert_partial_repaint();
 	assert_disc_launch();
 	// After it, because it leaves the same state that one does and starts from it: a disc
 	// in the drive, the flag on, and the shelf up.
 	assert_disc_dialog();
+	// And after that one, which leaves the drive empty and the flag off: this needs both
+	// back, and it launches a disc of its own on the way out.
+	assert_disc_shelf_slots();
 	assert_video();
 	assert_index_cache();
 

@@ -492,10 +492,10 @@ void gfx_disc(int cx, int cy, int r, int step,
 	  for twelve or more wedges instead of eight.
 
 	  Cells are r/16 pixels square, so r=16 gives a 32px icon at one pixel per cell and
-	  r=32 gives 64px at 2x2. Callers pass multiples of 16 to keep cells whole.
+	  r=32 gives 64px at 2x2. Multiples of 16 keep the cells whole; a radius between two
+	  of them still comes out exactly the size it asked for, which is what the badge's
+	  breath needs - see the grid-to-pixel mapping below.
 	*/
-	int cell = r / 16;
-	if (cell < 1) cell = 1;
 
 	/*
 	  Radii in half-cells, squared: cell centres land on odd numbers so nothing needs
@@ -530,9 +530,33 @@ void gfx_disc(int cx, int cy, int r, int step,
 	int g = outline ? 18 : 16;
 	const int r2_out = 36 * 36;
 
+	/*
+	  The grid mapped onto the pixel box, rather than multiplied out cell by cell.
+
+	  A cell runs from (grid + 18) * r / 16 to the next one, measured from an origin 18
+	  cells left of - and above - the centre. At a multiple of 16 that is exactly where
+	  multiplying by an integer cell size put it, for both sprite sizes: the origin is
+	  18 * cell and (grid + 18) * cell - 18 * cell is grid * cell, so every size this has
+	  ever drawn at is unchanged to the pixel.
+
+	  What it buys is the sizes in between, and the reason to want them is that r/16 as an
+	  integer division quantises the whole sprite to 32-pixel steps at 240p: growing the
+	  radius by anything short of doubling it rendered identically, so the badge's breath
+	  had no size to grow to. See draw_disc_badge() in chome_ui.cpp.
+
+	  The cost, at a radius that is not a multiple of 16: the cells are not all the same
+	  size - one row or column in every few is a pixel wider - and the odd pixel of the
+	  diameter lands on one side instead of being split. Both are invisible at these sizes
+	  and neither can be avoided, for the same reason the focus ring's thickness is a whole
+	  number of cells: the sprite has no fractional pixels to give.
+	*/
+	int org = 18 * r / 16;
+
 	for (int gy = -g; gy < g; gy++)
 	{
 		int Y = 2 * gy + 1;
+		int py = cy - org + (gy + 18) * r / 16;
+		int ph = cy - org + (gy + 19) * r / 16 - py;
 
 		for (int gx = -g; gx < g; gx++)
 		{
@@ -560,7 +584,8 @@ void gfx_disc(int cx, int cy, int r, int step,
 			else if (d2 > r2_hub)   col = edge;
 			else                    col = hole;
 
-			gfx_fill(cx + gx * cell, cy + gy * cell, cell, cell, col);
+			int px = cx - org + (gx + 18) * r / 16;
+			gfx_fill(px, py, cx - org + (gx + 19) * r / 16 - px, ph, col);
 		}
 	}
 }
