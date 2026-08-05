@@ -674,7 +674,64 @@ uint32_t user_io_status_get(const char *opt, int)
 	uint32_t *slot = opt_slot(opt);
 	return slot ? *slot : 0;
 }
-int user_io_status_bits(const char *, int *st, int *, int, int) { if (st) *st = 1; return 1; }
+/*
+  The real bit-spec parser, copied from user_io.cpp rather than faked.
+
+  It used to answer "bit 1, one bit wide" to everything, which was enough while nothing here
+  cared where an option lived. Handing one option to the whole system does care: it edits
+  <CORE>.CFG in place, and the only thing that says which bits of that file belong to the
+  option is this function. With the old stub every option would have written bit 1 and the
+  test would have proved nothing about the placement - or worse, would have passed while the
+  device wrote the wrong setting.
+
+  Both spec forms are here because the fixture core publishes both, as real cores do:
+  "[54:53]" for Widescreen Hack and the legacy pair "FH" for Palette.
+*/
+int user_io_status_bits(const char *opt, int *s, int *e, int ex, int single)
+{
+	uint32_t start = 0, end = 0;
+	if (opt[0] == '[')
+	{
+		if (!single && sscanf(opt, "[%u:%u]", &end, &start) == 2)
+		{
+			if (start > 127 || end > 127 || end <= start) return 0;
+		}
+		else if (sscanf(opt, "[%u]", &start) == 1)
+		{
+			if (start > 127) return 0;
+			end = start;
+		}
+		else return 0;
+	}
+	else
+	{
+		if ((opt[0] >= '0') && (opt[0] <= '9')) start = opt[0] - '0';
+		else if ((opt[0] >= 'A') && (opt[0] <= 'V')) start = opt[0] - 'A' + 10;
+		else return 0;
+
+		if (!single && (opt[1] >= '0') && (opt[1] <= '9')) end = opt[1] - '0';
+		else if (!single && (opt[1] >= 'A') && (opt[1] <= 'V')) end = opt[1] - 'A' + 10;
+		else
+		{
+			single = 1;
+			end = start;
+		}
+
+		if (ex)
+		{
+			start += 32;
+			end += 32;
+		}
+
+		if (start > 127 || end > 127 || (!single && end <= start)) return 0;
+	}
+
+	if (end - start > 8) return 0;
+
+	if (s) *s = (int)start;
+	if (e) *e = (int)end;
+	return 1 + end - start;
+}
 uint32_t user_io_status_mask(const char *) { return 3; }
 
 void OsdEnable(unsigned char) {}

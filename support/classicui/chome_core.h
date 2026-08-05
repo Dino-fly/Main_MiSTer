@@ -111,6 +111,32 @@ void core_opt_keep_for_game(const core_opt *o, int value, int global);
 int  core_opt_drop_for_game(const core_opt *o);
 
 /*
+  The other direction: make this game's value the one every game on the core gets.
+
+  core_opt_can_promote() is 1 when that is possible at all, which is exactly "a game is
+  bound and it keeps its own value for this option". With no game bound a change already
+  goes straight into the core's config, so there is nothing to promote; on a row this game
+  does not override, the value on screen *is* the shared one and promoting it would write
+  back the bytes that are already there. Either way it would be a press that does nothing,
+  so the screen must not offer one - see the legend in chome_ui.cpp.
+
+  core_opt_promote_to_core() writes that one option's value into the core's shared config
+  and leaves everything else in the file alone, in particular the shared value of every
+  *other* option the running game overrides. That is the part that could not be done
+  before and that README.md carried as unfixed: core_opts_save() persists by handing
+  user_io_status_save() the live status word, and while a game with overrides is running
+  that word is that game's, so writing it would carry all of its private choices out to
+  every game on the core - the one thing per-game settings exist to stop. So this edits
+  the file rather than overwriting it; the implementation says why the file can be edited
+  byte-wise at all.
+
+  The override for that option is then dropped, because it has become a copy of the shared
+  value. Returns 1 when the shared config was written.
+*/
+int  core_opt_can_promote(const core_opt *o);
+int  core_opt_promote_to_core(const core_opt *o);
+
+/*
   Applies everything a game has remembered to the core that has just booted. Rescans,
   so the option table is left describing the core as it now is. Returns how many
   options were moved.
