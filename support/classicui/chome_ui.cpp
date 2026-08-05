@@ -2101,6 +2101,16 @@ static unsigned long anim_ms() { return GetTimer(0); }
 */
 static unsigned long disc_spin_period()
 {
+	/*
+	  Focused is faster than either state rather than equal to one of them. Reusing the
+	  "still identifying" rate for focus would have made a focused known disc and an
+	  unfocused unknown one look the same, and the rate is the only thing distinguishing
+	  those. Three rates, three meanings.
+
+	  Only the badge is ever focused - the prompt's disc turns at the state rate, which is
+	  the slow one once the disc is known.
+	*/
+	if (screen == SCR_DISCBAR) return GFX_DISC_FOCUS_MS;
 	return (disc_state() == DISC_SPINNING) ? GFX_DISC_FAST_MS : GFX_DISC_SLOW_MS;
 }
 
@@ -3834,9 +3844,21 @@ static void draw_disc_badge(const chome_profile *p)
 	  Growing the radius instead would have shown nothing at all: the cell size is r/16
 	  as an integer, so anything short of doubling renders identically.
 	*/
+	int focused = (screen == SCR_DISCBAR);
+
 	gfx_disc(cx, cy, r, anim_ms(), disc_spin_period(),
 		disc_bands, DISC_BANDS_N, COL_WHITE, COL_PANELHI, COL_BGDARK,
-		(screen == SCR_DISCBAR) ? COL_BLUE : 0);
+		focused ? COL_BLUE : 0);
+
+	/*
+	  No word beside it, focused or not.
+
+	  An "Open" label was tried and dropped: at 240p it runs into the shelf title, and the
+	  only way to fit it was to suppress that title - which is a side effect on the shelf
+	  to buy a word the outline and the faster spin already convey. The legend along the
+	  bottom names the action anyway.
+	*/
+	(void)focused;
 }
 
 static void draw_power(const chome_profile *p)

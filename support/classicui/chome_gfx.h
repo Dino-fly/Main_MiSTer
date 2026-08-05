@@ -89,6 +89,7 @@ void gfx_spinner(int cx, int cy, int r, int dot, unsigned long ms, uint32_t hot,
   Repaint at GFX_SPIN_MS like the other animations. 64 positions per turn, so a period
   under ~6 seconds moves at least one position per repaint.
 */
+#define GFX_DISC_FOCUS_MS 400UL
 #define GFX_DISC_FAST_MS  700UL
 #define GFX_DISC_SLOW_MS  4000UL
 
