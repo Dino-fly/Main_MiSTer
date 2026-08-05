@@ -126,10 +126,15 @@ void gfx_spinner(int cx, int cy, int r, int dot, unsigned long ms, uint32_t hot,
   One full turn, per state. These are chosen against the repaint rate, not picked for
   feel alone: there are 64 positions in a turn, and a disc that advances more than about
   four of them between repaints strobes instead of spinning. At GFX_DISC_MS these give
-  roughly 4, 2 and 1 positions per frame.
+  roughly 4, 2 and 1 positions per frame; at GFX_DISC_PART_MS, roughly 1.3, 0.7 and 0.3,
+  which is under one position per frame and as smooth as 64 positions can be.
 
   The first attempt used 400ms for focus, which at a 100ms repaint was sixteen positions
   a frame - a disc that looked like it was juddering rather than turning quickly.
+
+  The periods do not change with the repaint rate, and must not: the angle comes from
+  accumulated phase against the wall clock, so drawing more often samples the same turn
+  more finely instead of turning faster. That is the whole reason for the accumulator.
 */
 #define GFX_DISC_FOCUS_MS 800UL
 #define GFX_DISC_FAST_MS  1500UL
@@ -139,9 +144,22 @@ void gfx_spinner(int cx, int cy, int r, int dot, unsigned long ms, uint32_t hot,
 // with the disc's other periods so the harness can park the clock on its trough.
 #define GFX_DISC_PULSE_MS 1200UL
 
-// Repaint interval while a disc is on screen. Faster than GFX_SPIN_MS because the disc
-// moves further per frame than the activity ring does.
+/*
+  Repaint interval while a disc is on screen. Faster than GFX_SPIN_MS because the disc
+  moves further per frame than the activity ring does.
+
+  Two rates, because the two repaints do not cost remotely the same. Measured on the
+  device: a full frame is 5.1ms and the disc's own rectangle is 0.91ms. At 50ms the full
+  frame was already 10% of the loop; 60fps of it would be 31%, which is why the disc did
+  not animate at 60fps before the partial path existed. 60fps of the rectangle is 5.5%,
+  so when the turning disc is the only thing repainting it can have the smooth rate, and
+  when the frame has to be redrawn whole it keeps the cheap one.
+
+  Which of the two applies is not a guess: it is the same question the dispatch at the
+  bottom of chome_handle() asks before choosing render() or render_region().
+*/
 #define GFX_DISC_MS       50UL
+#define GFX_DISC_PART_MS  16UL
 
 void gfx_disc(int cx, int cy, int r, int step,
 	const uint32_t *bands, int nbands, uint32_t rim, uint32_t ring, uint32_t hole,
