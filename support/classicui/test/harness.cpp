@@ -27,6 +27,7 @@
 #include "../chome_gamelist.h"
 #include "../chome_ss.h"
 #include "../chome_disc.h"
+#include "../chome_titles.h"
 #include "../../physical_disc/physical_disc.h"
 #include "../chome_theme.h"
 #include "../chome_gfx.h"
@@ -2008,6 +2009,280 @@ static void assert_physical_disc()
 	disc_ingest_identify(L);
 	check(disc_state() == DISC_ABSENT, "an identify with no disc present changes nothing");
 
+	disc_reset_reader();
+}
+
+/*
+  The disc title table: chome_titles.cpp, and disc_display_name() on top of it.
+
+  The fixture is built here rather than committed, and it is deliberately *big* -
+  four thousand rows, ~90 KB. A table that fits in one window would be answered by
+  the linear scan at the bottom of tdb_search() and would say nothing at all about
+  the binary search above it, which is the part with the invariant in it. At this
+  size a lookup takes half a dozen probes, so a mistake in how the range narrows
+  shows up as a miss on some keys and not others - which is what the first and last
+  row are checked for.
+
+  What this cannot test, and it is the interesting half:
+
+    - That a *missing* file costs no work per frame. The contract is "opened once,
+      and once the answer is no, never again", and there is no way to count open()
+      calls from in here without instrumenting the module for the test's benefit.
+      What is checked instead is the consequence: with the verdict cached, putting a
+      perfectly good file on the card is *not* noticed until disc_titles_forget().
+      A version that re-opened every call would see the new file and fail that check,
+      so the caching is proved by what it gets wrong on purpose.
+
+    - Mega CD, which is generated for and not yet reachable. The identifier is the
+      product code at 0x180 of the disc header ("GM MK-4407 -00"), and
+      disc_serial_at() only digs out PlayStation serials - so the row for MK4407 is
+      checked through disc_title_for() directly and not through a disc. When
+      identification learns to read that header this becomes a real end-to-end case.
+
+    - Timing on the real thing. This runs off a Docker overlayfs with everything in
+      page cache; the card is exFAT on SD behind a 400 MHz-class ARM. The probe
+      *count* is what was designed against and it is the same in both places, but
+      the milliseconds are not measurable here.
+*/
+static void assert_disc_titles()
+{
+	printf("\n== physical disc: the serial gets a name ==\n");
+
+	const int L = 0;
+	const char *path = ROOT "/classicui/disctitles.txt";
+
+	mkpath(ROOT "/classicui");
+
+	/*
+	  Rows in the order the device compares them - byte order over A-Z0-9 keys, which
+	  puts MK4407 first, the SLES block next and SUPERGAME last. Written by hand here
+	  rather than by tools/disctitles.py, so that a change to the generator cannot make
+	  this pass for the wrong reason.
+	*/
+	{
+		FILE *f = fopen(path, "wb");
+		check(f != 0, "the fixture table can be written");
+		if (f)
+		{
+			fprintf(f, "#classicui-disctitles 1\n");
+			fprintf(f, "MK4407\tSonic the Hedgehog CD\n");
+			for (int i = 0; i < 4000; i++)
+			{
+				if (i == 1506) fprintf(f, "SLES%05d\tMetal Gear Solid\n", i);
+				else fprintf(f, "SLES%05d\tFiller Title %d\n", i, i);
+			}
+			fprintf(f, "SUPERGAME\tSuper Game\n");
+			fclose(f);
+		}
+	}
+
+	disc_titles_forget();
+
+	/* ------------------------------------------------------------- a hit --- */
+
+	{
+		const char *t = disc_title_for("SLES-01506");
+		check(t && !strcmp(t, "Metal Gear Solid"),
+			"a serial in the middle of the table is found");
+	}
+
+	{
+		// The disc says SLES_015.06, Redump says SLES-01506, a Japanese serial has a
+		// space in it. All three normalise to one key, or the table matches nothing.
+		const char *a = disc_title_for("sles 01506");
+		const char *b = disc_title_for("SLES_015.06");
+		check(a && b && !strcmp(a, "Metal Gear Solid") && !strcmp(b, "Metal Gear Solid"),
+			"case, spaces and punctuation in the key are normalised away");
+	}
+
+	// The row immediately after the magic line, and the very last row: the two the
+	// search's boundaries would drop.
+	check(disc_title_for("MK-4407") && !strcmp(disc_title_for("MK-4407"), "Sonic the Hedgehog CD"),
+		"the first row is not shadowed by the magic line above it");
+	check(disc_title_for("Super Game!") && !strcmp(disc_title_for("Super Game!"), "Super Game"),
+		"and the last row is reachable");
+
+	/* ------------------------------------------------------------ a miss --- */
+
+	check(disc_title_for("SLES-09999") == 0, "a serial that is not there returns nothing");
+	check(disc_title_for("SLES-01506X") == 0, "and neither does a near miss");
+	check(disc_title_for("") == 0, "an empty key is not a lookup");
+	check(disc_title_for("-  .") == 0, "nor is one that normalises to nothing");
+
+	/* ------------------------------------------- what the disc prompt shows --- */
+
+	{
+		fake_disc d; memset(&d, 0, sizeof(d));
+		static const char *const none[] = { "" };
+		fake_iso(&d, L, "PLAYSTATION", "PLAYSTATION", none, 0);
+		fake_put(&d, L + 20, 0, "BOOT = cdrom:\\SLES_015.06;1", 27, 100);
+		disc_set_reader(fake_read, &d);
+
+		disc_ingest_present(1);
+		disc_ingest_identify(L);
+		check(!strcmp(disc_serial(), "SLES-01506"), "a disc carrying SLES-01506 is identified");
+		check(!strcmp(disc_display_name(), "Metal Gear Solid"),
+			"and is shown by name instead of by serial");
+
+		disc_ingest_present(0);
+		(void)disc_take_dirty();
+	}
+
+	{
+		// The same disc with a serial nothing knows about must read exactly as it did
+		// before any of this existed.
+		fake_disc d; memset(&d, 0, sizeof(d));
+		static const char *const none[] = { "" };
+		fake_iso(&d, L, "PLAYSTATION", "PLAYSTATION", none, 0);
+		fake_put(&d, L + 20, 0, "BOOT = cdrom:\\SLES_099.99;1", 27, 100);
+		disc_set_reader(fake_read, &d);
+
+		disc_ingest_present(1);
+		disc_ingest_identify(L);
+		check(!strcmp(disc_display_name(), "SLES-09999"),
+			"an unknown serial still falls back to the serial itself");
+
+		disc_ingest_present(0);
+		(void)disc_take_dirty();
+	}
+
+	{
+		// A disc with no serial at all - which is every system here except PlayStation.
+		// Its volume label is the only key it has, so the label is offered too.
+		fake_disc d; memset(&d, 0, sizeof(d));
+		static const char *const none[] = { "" };
+		fake_iso(&d, L, "SUPER_GAME", 0, none, 0);
+		disc_set_reader(fake_read, &d);
+
+		disc_ingest_present(1);
+		disc_ingest_identify(L);
+		check(!disc_serial()[0] && !strcmp(disc_label(), "SUPER GAME"),
+			"a disc with no serial still has a volume label");
+		check(!strcmp(disc_display_name(), "Super Game"),
+			"which is looked up too, so the label's own casing is not what gets drawn");
+
+		disc_ingest_present(0);
+		(void)disc_take_dirty();
+	}
+
+	/* ------------------------------------------------------- the caching --- */
+
+	{
+		// Delete the table without telling anyone. An answer already given must still
+		// come back, which is only possible if it was not re-read.
+		unlink(path);
+		const char *t = disc_title_for("SLES-01506");
+		check(t && !strcmp(t, "Metal Gear Solid"), "an answer already given survives the file going away");
+		check(disc_title_for("SLES-00002") == 0, "while a new question now has no answer");
+	}
+
+	/* ------------------------------------------------- no file at all: silence --- */
+
+	disc_titles_forget();
+	check(disc_title_for("SLES-01506") == 0, "with no table on the card there are no titles");
+
+	{
+		fake_disc d; memset(&d, 0, sizeof(d));
+		static const char *const none[] = { "" };
+		fake_iso(&d, L, "PLAYSTATION", "PLAYSTATION", none, 0);
+		fake_put(&d, L + 20, 0, "BOOT = cdrom:\\SLES_015.06;1", 27, 100);
+		disc_set_reader(fake_read, &d);
+
+		disc_ingest_present(1);
+		disc_ingest_identify(L);
+		check(!strcmp(disc_display_name(), "SLES-01506"),
+			"and the prompt shows precisely what it showed before the table existed");
+
+		disc_ingest_present(0);
+		(void)disc_take_dirty();
+	}
+
+	// See the section's comment: this is how "it does not look again" is observed.
+	// Restoring the file must NOT be noticed until something asks for it to be.
+	put_file(path, "#classicui-disctitles 1\nSLES01506\tMetal Gear Solid\n");
+	check(disc_title_for("SLES-01506") == 0,
+		"a table appearing after the verdict is not re-opened on the next call");
+	disc_titles_forget();
+	check(disc_title_for("SLES-01506") != 0, "and forgetting the verdict is what picks it up");
+
+	// A player who opens the file in a Windows editor gets CRLF back, and the card is
+	// exFAT so nothing on the way in converts it. Stripping it is what keeps a stray
+	// carriage return off the end of every title that gets drawn.
+	put_file(path, "#classicui-disctitles 1\r\nSLES01506\tMetal Gear Solid\r\n");
+	disc_titles_forget();
+	check(disc_title_for("SLES-01506") && !strcmp(disc_title_for("SLES-01506"), "Metal Gear Solid"),
+		"a table saved with CRLF line endings reads the same");
+
+	/* --------------------------------------------------- files that are wrong --- */
+
+	// Somebody else's file under our name. One log line, no titles, and no guessing
+	// at a layout we do not recognise.
+	put_file(path, "<?xml version=\"1.0\"?>\n<datafile>\n<game name=\"x\"/>\n</datafile>\n");
+	disc_titles_forget();
+	check(disc_title_for("SLES-01506") == 0, "a file without our magic line is refused");
+
+	// A version we do not know. Same answer: refuse, rather than read a format that
+	// has changed in some way this build cannot see.
+	put_file(path, "#classicui-disctitles 2\nSLES01506\tMetal Gear Solid\n");
+	disc_titles_forget();
+	check(disc_title_for("SLES-01506") == 0, "and so is a version this build does not know");
+
+	put_file(path, "");
+	disc_titles_forget();
+	check(disc_title_for("SLES-01506") == 0, "an empty file is a table with nothing in it");
+
+	// Truncated mid-row, which is what a card pulled out during a copy leaves.
+	put_file(path,
+		"#classicui-disctitles 1\n"
+		"MK4407\tSonic the Hedgehog CD\n"
+		"SLES01506\tMetal Gear Solid\n"
+		"SLES0299");
+	disc_titles_forget();
+	check(disc_title_for("SLES-01506") && !strcmp(disc_title_for("SLES-01506"), "Metal Gear Solid"),
+		"a torn last row does not cost the rows above it");
+	check(disc_title_for("SLES-0299") == 0, "and the torn row itself matches nothing");
+
+	/*
+	  The one that has to be timed rather than merely returned from: our magic followed
+	  by a quarter of a megabyte with no line breaks in it. The search narrows by
+	  finding line boundaries, so with none to find it degrades from ~6 probes to one
+	  line-buffer at a time - which is not a crash and not an infinite loop, but a
+	  front-end that has stopped, which is the same thing to whoever is holding the
+	  controller. TDB_PROBE_MAX is what bounds it.
+
+	  Five seconds is a very loose bound for what should be microseconds; it is set
+	  loose on purpose so this cannot fail for being run on a busy machine, while still
+	  failing if the bound in the module is ever removed.
+	*/
+	{
+		FILE *f = fopen(path, "wb");
+		if (f)
+		{
+			fprintf(f, "#classicui-disctitles 1\n");
+			for (int i = 0; i < 256 * 1024; i++) fputc('A', f);
+			fclose(f);
+		}
+		disc_titles_forget();
+
+		struct timeval t0, t1;
+		gettimeofday(&t0, 0);
+		const char *t = disc_title_for("SLES-01506");
+		gettimeofday(&t1, 0);
+
+		double secs = (double)(t1.tv_sec - t0.tv_sec) + (t1.tv_usec - t0.tv_usec) / 1e6;
+		check(t == 0, "a file with our magic and no rows in it yields no title");
+		check(secs < 5.0, "and gives up rather than searching it a line-buffer at a time");
+	}
+
+	/*
+	  Restore. Every section after this one draws or logs a disc name, so a table left
+	  on the card would change what they see - and the two disc sections that assert on
+	  disc_display_name() would fail a long way from here.
+	*/
+	unlink(path);
+	disc_titles_forget();
+	disc_ingest_present(0);
+	(void)disc_take_dirty();
 	disc_reset_reader();
 }
 
@@ -6187,6 +6462,11 @@ int main()
 	assert_gamelist();
 	assert_screenscraper();
 	assert_physical_disc();
+	// Directly after it, because it drives the same state machine with the same fake
+	// discs, and before every section that draws or logs a disc name: it puts a title
+	// table on the card and takes it away again, and anything running in between would
+	// see disc_display_name() answer differently. See its own comment.
+	assert_disc_titles();
 	assert_disc_ui();
 	assert_partial_repaint();
 	assert_disc_launch();
