@@ -522,7 +522,6 @@ void disc_reset_reader() { reader = 0; reader_ctx = 0; }
 #define DISC_POLL_SETTLED_S  30
 
 static pid_t helper_pid = -1;
-static time_t state_mtime = 0;
 
 // ------------------------------------------------------------------ the helper
 
@@ -759,7 +758,6 @@ int disc_watch_start()
 	}
 
 	unlink(DISC_STATE_FILE);
-	state_mtime = 0;
 
 	pid_t pid = fork();
 	if (pid < 0) { watching = 1; return 0; }
@@ -788,7 +786,6 @@ void disc_watch_stop()
 	}
 
 	unlink(DISC_STATE_FILE);
-	state_mtime = 0;
 	disc_reset_reader();
 	disc_forget();
 }
@@ -809,10 +806,24 @@ void disc_poll()
 	if (!watching) disc_watch_start();
 	if (helper_pid <= 0) return;
 
-	struct stat sb;
-	if (stat(DISC_STATE_FILE, &sb)) return;
-	if (sb.st_mtime == state_mtime) return;
-	state_mtime = sb.st_mtime;
+	/*
+	  Rate-limited, then compared by content - NOT by mtime.
+
+	  This used to gate on st_mtime, which is **seconds** resolution on this filesystem.
+	  The helper writes SPINNING and then READY, and when the disc is already spun up the
+	  identification finishes inside the same second - so the second write had the same
+	  mtime as the first and the front-end never saw it. The disc sat at SPINNING for
+	  ever, which left the prompt with no Play row and made the disc unlaunchable. It
+	  only ever worked when the drive was slow enough to push the two writes into
+	  different seconds, which is why it looked intermittent.
+
+	  Comparing the line itself cannot miss an update. The file is twenty bytes in tmpfs,
+	  so the read is trivial; the counter is only there because this is called on every
+	  pass of the draw loop and there is no point doing it thousands of times a second.
+	*/
+	static int skip = 0;
+	if (++skip < 32) return;
+	skip = 0;
 
 	FILE *f = fopen(DISC_STATE_FILE, "r");
 	if (!f) return;
@@ -820,6 +831,10 @@ void disc_poll()
 	char line[160] = {};
 	if (!fgets(line, sizeof(line), f)) { fclose(f); return; }
 	fclose(f);
+
+	static char last_line[160] = {};
+	if (!strcmp(line, last_line)) return;
+	snprintf(last_line, sizeof(last_line), "%s", line);
 
 	char *nl = strchr(line, '\n');
 	if (nl) *nl = 0;
