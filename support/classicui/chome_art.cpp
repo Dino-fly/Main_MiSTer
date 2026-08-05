@@ -469,6 +469,31 @@ static uint32_t thumb_clock = 0;
   cover art dropped onto the card while the shelf is up.
 */
 // Drops every decode of this file, whatever size it was asked for.
+/*
+  Where the scan of a physical disc lives, whether or not it has been fetched yet.
+
+  Keyed on the disc's identity rather than on a filename, because a disc has no
+  filename - see PHYSICAL_DISC_IDENT_FILE. The same key names the savestates and the
+  per-game options, so a disc that has art has it under the name everything else
+  already knows it by.
+
+  Deliberately a path rather than a bitmap: the file is fetched and scaled elsewhere,
+  and whoever draws it wants art_thumb(), which already caches decodes by path and
+  size. sanitize() is applied because a key can come from a volume label, which is
+  free text and occasionally contains a slash.
+*/
+int disc_art_path(const char *key, char *out, int len)
+{
+	if (!key || !*key || !out || len <= 0) return 0;
+
+	char safe[128];
+	sanitize(key, safe, sizeof(safe));
+	if (!safe[0]) return 0;
+
+	snprintf(out, len, "%s/classicui/discart/%s.png", getRootDir(), safe);
+	return 1;
+}
+
 void art_forget(const char *fullpath)
 {
 	if (!fullpath || !*fullpath) return;

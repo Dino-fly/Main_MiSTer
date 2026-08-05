@@ -52,4 +52,15 @@ const uint32_t *art_thumb(const char *fullpath, int w, int h);
 // Forget every decode of this file - call it after rewriting one.
 void art_forget(const char *fullpath);
 
+/*
+  Where a physical disc's scan lives, keyed on the disc identity rather than a filename
+  because a disc has not got one. Fills `out` and returns 1 for any usable key, whether
+  or not the file exists yet - the caller decides what an absent file means.
+
+  This is the seam between fetching that picture and drawing it: the fetcher writes this
+  path, and the disc dialog reads it through art_thumb(), which already caches decodes
+  by path and size.
+*/
+int disc_art_path(const char *key, char *out, int len);
+
 #endif
