@@ -8268,6 +8268,15 @@ int chome_handle(uint32_t key)
 			go_screen(SCR_HOME);
 		}
 
+		/*
+		  The remembered core choice is "for this disc" - see disc_chosen_sys - and
+		  this is where that promise is kept. Every disc change passes through ABSENT,
+		  so forgetting here is what stops a choice outliving its disc: play a
+		  PlayStation disc, put a Neo Geo CD in afterwards, and a remembered PSX pick
+		  would caption the new disc's prompt "Play on PlayStation" - and launch it.
+		*/
+		if (disc_state() == DISC_ABSENT) disc_chosen_sys = -1;
+
 		printf("ClassicUI: disc state=%d type=%s name=\"%s\"\n",
 			disc_state(), disc_type_name(disc_type()), disc_display_name());
 	}
