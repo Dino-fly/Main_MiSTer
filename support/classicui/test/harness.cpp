@@ -2610,6 +2610,102 @@ static void assert_disc_launch()
   plainly because a fixture that looks captured but was invented is the worst kind
   of test evidence.
 */
+/*
+  A running disc is a game, not just a mounted sentinel.
+
+  What shipped mounted the disc as PHYSICAL_DISC_SENTINEL and used that string as the
+  running game's identity too, which broke everything keyed on a game's path. The visible
+  half was this: the in-game menu could not park on the disc - no card on the shelf carries
+  that path - so Down landed on whatever the shelf happened to be showing, which for Dinofly
+  was a folder, and folders have no suspend points. It nudged, and the savestate strip was
+  unreachable. The invisible half was that savestates/PSX/*PHYSICAL_DISC*_1.ss is not a
+  filename exFAT can hold, so the slots could never have been found anyway.
+
+  The mount now publishes who the disc is and the front-end reads it. Checked here: Down
+  reaches the strip, and a core that publishes nothing still gets a working menu instead of
+  no identity at all.
+
+  Not checked here: that the name is byte-for-byte the one the core's save files use.
+  Nothing in this harness can see it - screenshot_thumbnail() is a stub and no public call
+  exposes a slot path - and the assertion that matters is whether a state written by the
+  running core turns up in the strip, which is a hardware test.
+*/
+static void assert_disc_identity()
+{
+	printf("\n== physical disc: the running disc has an identity ==\n");
+
+	enum { S_SUSPEND = 2 };
+
+	// A state named the way physical_disc_save_name() names a PlayStation disc.
+	mkpath(ROOT "/savestates/PSX");
+	touch(ROOT "/savestates/PSX", "SLES-01506_1.ss", 256);
+
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "psx\n%s\n", PHYSICAL_DISC_SENTINEL); fclose(f); }
+	}
+	{
+		FILE *f = fopen(PHYSICAL_DISC_IDENT_FILE, "wt");
+		if (f) { fprintf(f, "SLES-01506\nMETAL GEAR SOLID\n"); fclose(f); }
+	}
+
+	harness_set_menu_core(0);
+	harness_set_fb_supported(1);
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+
+	chome_handle(0);
+	if (chome_ingame_active()) press(KEY_MENU, 14);
+	frame(6);
+	check(!chome_ingame_active(), "starting from the game");
+
+	press(KEY_MENU, 14);
+	frame(10);
+	check(chome_ingame_active(), "the in-game menu opens over the disc");
+	dump("disc-identity-1-menu");
+
+	press(KEY_DOWN, 18);
+	frame(8);
+	check(chome_screen_id() == S_SUSPEND,
+		"Down reaches the disc's savestates instead of nudging on a folder");
+	dump("disc-identity-2-slots");
+
+	press(KEY_ESC, 14);
+	frame(6);
+
+	/* --------------- a core that published no name still gets a menu --------- */
+
+	unlink(PHYSICAL_DISC_IDENT_FILE);
+	press(KEY_MENU, 14);                  // close, so reopening reloads the identity
+	frame(8);
+	press(KEY_MENU, 14);
+	frame(10);
+	check(chome_ingame_active(), "the menu still opens with no name published");
+
+	press(KEY_DOWN, 18);
+	frame(8);
+	check(chome_screen_id() == S_SUSPEND, "and the disc is still what Down is about");
+
+	press(KEY_ESC, 14);
+	frame(6);
+	if (chome_ingame_active()) press(KEY_MENU, 14);
+	frame(6);
+
+	unlink("/tmp/classicui_current");
+	unlink(ROOT "/savestates/PSX/SLES-01506_1.ss");
+
+	/*
+	  Put the menu core back. The sections after this one start from the shelf without
+	  declaring so - assert_launch() just calls chome_leave() and presses menu - so a
+	  game core left loaded here makes them launch nothing and fail three sections later,
+	  a long way from the cause.
+	*/
+	harness_set_menu_core(1);
+	chome_leave();
+	frame(6);
+}
+
 static void assert_screenscraper()
 {
 	printf("\n== screenscraper (inert: no devid in this tree) ==\n");
@@ -6109,6 +6205,10 @@ int main()
 	// Before every other in-game section: the session record is read once per process,
 	// and this is the one that cares which process read it. See its own comment.
 	assert_ingame_view();
+	// After it, and not up with the other disc sections, for the same reason: opening the
+	// in-game menu over a disc consumes the once-per-process session read, and the section
+	// above is the one that cares who consumed it.
+	assert_disc_identity();
 	// After the launches above, so there is a recent list to be wrong about, and before
 	// the shelf sections that now see a fourth card on the root shelf.
 	assert_launch_into_state();

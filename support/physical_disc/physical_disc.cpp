@@ -29,6 +29,13 @@
        watch_start/watch_stop to fake drive noise while a CHD plays; it opens the
        drive a second time and drives it with SG_IO, which is a second owner of the
        hardware this tree does not want. Those two calls are dropped.
+
+    5. physical_disc_save_name() publishes its answer to PHYSICAL_DISC_IDENT_FILE.
+       Upstream needs the name only for the save files it is about to open. This tree
+       has a front-end that needs the same name for the same disc - see the comment on
+       that define in physical_disc.h - and this is the only code that computes it.
+       The name itself is unchanged; a wrapper writes it out and the original body is
+       untouched below it.
 */
 
 #include <climits>            // before linux/cdrom.h: CDSL_CURRENT is INT_MAX there
@@ -1572,7 +1579,39 @@ static int derive_toc_uuid(physical_disc_disc_t type, char *out, int outsz)
 	return 36;
 }
 
+/* ---------------------------------------------------------- adaptation 5 ---- */
+
+static int save_name_of(physical_disc_disc_t type, char *out, int outsz);
+
+/*
+  Upstream's save_name, plus a copy left where the front-end can find it.
+
+  Written on every mount rather than once, because a swap replaces the disc without
+  reloading the core, and the identity has to follow the disc that is actually in the
+  drive. The label is a caption only - it is whatever the volume calls itself, which is
+  often nothing and occasionally shouting - so the name stays the key and the label is
+  allowed to be empty.
+*/
 int physical_disc_save_name(physical_disc_disc_t type, char *out, int outsz)
+{
+	int n = save_name_of(type, out, outsz);
+	if (n <= 0) return n;
+
+	FILE *f = fopen(PHYSICAL_DISC_IDENT_FILE, "w");
+	if (f)
+	{
+		char label[64] = {};
+		if (!physical_disc_disc_label(label, sizeof(label))) label[0] = 0;
+		for (char *q = label; *q; q++) if (*q == '\n' || *q == '\r') *q = ' ';
+
+		fprintf(f, "%s\n%s\n", out, label);
+		fclose(f);
+	}
+
+	return n;
+}
+
+static int save_name_of(physical_disc_disc_t type, char *out, int outsz)
 {
 	if (!out || outsz < 2) return 0;
 	out[0] = 0;
