@@ -7414,6 +7414,31 @@ void chome_core_boot()
 
 int chome_screen_id() { return screen; }
 
+/*
+  1 when the machine is not doing anything the firmware's poll loop needs to be prompt
+  about, so main() may sleep a little between passes instead of spinning.
+
+  Two cases, and the distinction matters:
+
+    - the menu core, with our shelf up. No core is fetching anything.
+    - our in-game menu, *and* the game is genuinely held still - either really paused
+      (ig_paused) or frozen with a save state (ig_frozen).
+
+  Deliberately NOT the third case: the in-game menu over a core that is still running.
+  That happens on cores which can neither pause nor save a state - it is what the red
+  "STILL PLAYING" band exists to say - and with classicui_freeze=0, which the SNES core
+  needs because asking it for a state mid-scene kills it. Those games are still fetching
+  data and still making sound, and adding latency to their requests would be heard.
+*/
+int chome_core_idle()
+{
+	if (!cfg.classicui) return 0;
+
+	if (is_menu()) return chome_active();
+
+	return ig_active && (ig_paused || ig_frozen);
+}
+
 int chome_active()
 {
 	return active || ig_active;

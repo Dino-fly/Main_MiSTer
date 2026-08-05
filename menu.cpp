@@ -1120,6 +1120,56 @@ static void *close_pipe_async(void *arg)
 	return NULL;
 }
 
+/*
+  1 while an MGL is still running - loading a core, pushing a ROM across. During that the
+  poll loop must stay tight: the transfer is driven from user_io_poll() and sleeping in the
+  middle of it would slow every chunk.
+
+  Lives here because mgl is this file's state; main() needs it to decide whether it may
+  idle. See chome_core_idle() for the other half of that decision.
+
+  First attempt was plain "!done": wrong, because done is 0 before any MGL has ever run,
+  so it read as "launch in flight" forever on a core that never had one (an arcade .mra, or
+  any boot with no xml at all) - user_io_init() only forces done=1 for that case if count is
+  also 0, and count is what tells the two apart.
+
+  The next-most-obvious fix, "count && !done", is not actually a fix and is why this
+  comment exists. count is filled once, by scan_mgl() in mra_loader.cpp, while the MGL is
+  parsed at the start of user_io_init() - and it is never zeroed again afterwards; only a
+  fresh mgl_parse() (a new process, since a core switch re-execs) resets it. Meanwhile
+  ClassicUI's own launch_write_mgl() (chome_ui.cpp) always writes exactly one <file> entry
+  for every non-arcade game it starts. So for the entire life of a process running a
+  ClassicUI-launched game, count is permanently 1 - "count && !done" degenerates to exactly
+  the same "!done" it was meant to replace, for exactly the case (a paused game, our in-game
+  menu up) this guard has to get right. Checked at the arcade end too: count is permanently
+  0 there, so "count && !done" is permanently 0 regardless of done - also just "!done" in
+  disguise, though harmlessly so since user_io_init() already forces done=1 whenever count
+  is 0.
+
+  So: count is worth checking (it is genuinely 0 at rest, and correctly rules out the no-MGL
+  case), but done is not worth trusting to reach 1 on every path through the thousand-line
+  state machine above - that is the same misplaced trust that produced the original bug, one
+  field over. What actually bounds the busy window is time: a real transfer is short, so once
+  we have been sitting on "count>0 && !done" longer than a generous margin, treat it as
+  finished whether or not done agrees. Re-armed from scratch each time count/done says we are
+  not busy, so a later load in the same process (unusual, but cheap to get right) gets its
+  own window.
+*/
+int menu_mgl_busy(void)
+{
+	const mgl_struct *m = mgl_get();
+	static uint32_t deadline = 0;
+
+	if (!m || !m->count || m->done)
+	{
+		deadline = 0;
+		return 0;
+	}
+
+	if (!deadline) deadline = GetTimer(10000);
+	return !CheckTimer(deadline);
+}
+
 void HandleUI(void)
 {
 	PROFILE_FUNCTION();
