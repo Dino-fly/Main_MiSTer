@@ -43,6 +43,7 @@ g++ -std=gnu++14 -O1 -g -Wall -Wextra -Wno-unused-parameter -Wno-format-truncati
     support/classicui/chome_gamelist.cpp \
     support/classicui/chome_ss.cpp \
     support/classicui/chome_disc.cpp \
+    support/classicui/chome_titles.cpp \
     support/classicui/chome_ui.cpp \
     support/classicui/chome_osk.cpp \
     support/classicui/chome_net.cpp \
