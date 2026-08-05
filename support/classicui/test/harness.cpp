@@ -3021,6 +3021,88 @@ static void assert_save_on_pausing_core()
 	unlink(slot2);
 }
 
+/*
+  chome_core_idle() - the predicate main() ANDs with menu_mgl_busy() to decide whether the
+  poll loop may usleep(1000) instead of spinning. It is pure and does not touch mgl at all,
+  so unlike menu_mgl_busy() (ARM-only, not linked into this harness) it can be driven and
+  checked directly here.
+
+  The one guard that must never weaken: a core that is still running - no usable pause, and
+  classicui_freeze=0 so it is not held with a state either (the SNES/Battletoads case) - is
+  the red "STILL PLAYING" band, and it must keep reporting not-idle even though our menu is
+  drawn on top of it.
+*/
+static void assert_core_idle_predicate()
+{
+	printf("\n== chome_core_idle() ==\n");
+
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "gb\nTetris (World).gb\n"); fclose(f); }
+	}
+
+	harness_set_menu_core(0);
+	harness_set_fb_supported(1);
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+	chome_handle(0);
+	if (chome_ingame_active()) press(KEY_MENU, 14);
+	frame(6);
+	check(!chome_core_idle(), "not idle before the in-game menu ever opens");
+
+	// A core that pauses for real: genuinely held still.
+	harness_set_confstr(4);
+	harness_reset_status();
+	press(KEY_MENU, 20);
+	check(chome_ingame_active(), "menu opens over the paused core");
+	check(chome_core_idle(), "really paused - safe to back off");
+	press(KEY_MENU, 16);
+	frame(8);
+	check(!chome_core_idle(), "and not once the menu closes and the core is live again");
+
+	// Savestates but no usable pause, freeze left on (the default): held by a state instead.
+	harness_set_confstr(2);
+	press(KEY_MENU, 20);
+	check(chome_ingame_active(), "menu opens over the frozen core");
+	check(chome_core_idle(), "frozen with a state - also safe to back off");
+	press(KEY_MENU, 16);
+	frame(8);
+
+	// The escape hatch: freeze turned off. Nothing is holding the core still any more -
+	// this is the exact case the guard exists to exclude.
+	cfg.classicui_freeze = 0;
+	harness_reset_status();
+	press(KEY_MENU, 20);
+	check(chome_ingame_active(), "the menu still opens");
+	check(!chome_core_idle(), "STILL PLAYING: neither paused nor frozen - must not idle");
+	press(KEY_MENU, 16);
+	frame(8);
+	cfg.classicui_freeze = 1;
+	harness_set_confstr(1);
+
+	// cfg.classicui off disables the whole idea, regardless of pause state. The default
+	// confstr (set just above) already has a real "Pause when OSD is open" option.
+	press(KEY_MENU, 20);
+	check(chome_ingame_active(), "menu open over a genuinely paused core, for the next check");
+	cfg.classicui = 0;
+	check(!chome_core_idle(), "the feature is off, so never idle from here");
+	cfg.classicui = 1;
+	press(KEY_MENU, 16);
+	frame(8);
+	harness_set_confstr(1);
+
+	// The shelf, in the menu core: no core to be careful of, so this mirrors chome_active().
+	harness_set_menu_core(1);
+	chome_leave();
+	press(KEY_MENU, 20);
+	frame(6);
+	check(chome_active(), "the shelf is up");
+	check(chome_core_idle(), "shelf up in the menu core - safe to back off");
+	for (int i = 0; i < 4; i++) press(KEY_ESC, 6);
+	harness_set_menu_core(0);
+}
+
 static int fav_count()
 {
 	int n = 0;
@@ -5612,6 +5694,7 @@ int main()
 	assert_ingame();
 	assert_save_on_pausing_core();
 	assert_freeze_off();
+	assert_core_idle_predicate();
 	assert_core_options_screen();
 	assert_per_game_core_options();
 	assert_core_options_are_reachable();

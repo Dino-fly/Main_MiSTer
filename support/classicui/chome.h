@@ -28,6 +28,13 @@ int chome_active();
 */
 int chome_screen_id();
 
+/*
+  1 when nothing needs the poll loop to be prompt: the shelf, or the in-game menu over a
+  game that is genuinely held still. See the comment on the definition for the case this
+  deliberately excludes.
+*/
+int chome_core_idle();
+
 // Called from HandleUI() with the decoded key. Returns 1 when the key was
 // consumed and the classic menu should not run this frame.
 int chome_handle(uint32_t key);

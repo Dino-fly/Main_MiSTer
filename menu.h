@@ -6,6 +6,9 @@
 void SelectFile(const char* path, const char* pFileExt, int Options, unsigned char MenuSelect, unsigned char MenuCancel);
 
 void HandleUI(void);
+
+// 1 while a core or ROM load is in flight; main() must not idle then.
+int menu_mgl_busy(void);
 void menu_key_set(unsigned int c);
 void menu_process_save();
 void PrintDirectory(int expand = 0);
