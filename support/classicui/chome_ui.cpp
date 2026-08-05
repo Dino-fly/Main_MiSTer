@@ -467,6 +467,17 @@ static int look_row = 0;
 static int co_row = 0;                       // the core-options list
 static int co_tier = CO_TIER_PICTURE;
 
+/*
+  The last option handed to the whole system, and how long its footer line stays up.
+
+  Giving a setting to every game writes a file the player cannot see and changes nothing
+  on screen except a star going away - and a star going away is what *undoing* an override
+  looks like too. So the promotion says so in words for a few seconds, the way the Settings
+  screen reports its own write, and names the option so there is no doubt which row it was.
+*/
+static char co_promoted[CO_NAME_LEN] = {};
+static unsigned long co_promoted_until = 0;
+
 static double bar_y = 0, strip_y = 0, curtain = 0;
 
 // The last position an activity indicator was painted at, so a busy screen repaints
@@ -1843,6 +1854,33 @@ static int build_legend(legend_pair *out, int max)
 			if (co && core_opt_per_game(co) && n < max)
 			{
 				out[n++] = lp(LBL_X, "Shared Value", "Shared");
+			}
+
+			/*
+			  And the way out of "this game only" that keeps the value rather than
+			  throwing it away: Y makes it the value every game on the core gets.
+
+			  Y because the shoulders page the shelf and are not read here, Select sorts,
+			  and the other three faces are spoken for on this screen - A turns the page, B
+			  goes back, X hands a setting to every game *by discarding it*. Y is the one
+			  face button this screen had nothing for, and it sits next to the X it is the
+			  mirror of: both act on the row under the cursor, both appear only where that
+			  row is this game's own. Nothing else in the front-end binds Y outside the
+			  suspend strip and the shelf, so no habit is being broken.
+
+			  Offered on exactly the rows X is, and for the same reason: with no game bound
+			  a change already goes to the core's config, and on a row this game does not
+			  override there is nothing to hand over. core_opt_can_promote() is the whole
+			  condition.
+
+			  It does push Back off the legend at 240p, where only three prompts survive.
+			  That is the trade the suspend strip already makes with its four, and it is the
+			  right way round here: B is the press every screen in this front-end answers
+			  to, while a button the player has never seen does not exist until it is shown.
+			*/
+			if (co && core_opt_can_promote(co) && n < max)
+			{
+				out[n++] = lp(LBL_Y, "For All Games", "All");
 			}
 		}
 		else if (n < max) out[n++] = lp(LBL_A, "More", "More");
@@ -4370,6 +4408,18 @@ static int co_rows()
 	return n + 1;
 }
 
+/*
+  The promotion confirmation stops being true the moment anything else touches the store:
+  changing a value puts a per-game override back, X throws one away, and opening the screen
+  again is a new visit. In each of those the last promotion is no longer the news, and a
+  footer still claiming it would describe the state the player just left.
+*/
+static void co_news_clear()
+{
+	co_promoted[0] = 0;
+	co_promoted_until = 0;
+}
+
 static const char *co_tier_name(int t)
 {
 	if (t == CO_TIER_PICTURE) return "Picture";
@@ -4488,6 +4538,33 @@ static void draw_core_opts(const chome_profile *p)
 		else foot = (room >= 34) ? "(U) marked by the core: can crash" : "(U): can crash";
 	}
 	else if (!n) foot = "Nothing here on this core";
+
+	/*
+	  ...and above all of them, for a few seconds, the one thing the screen cannot show any
+	  other way.
+
+	  Handing a setting to every game writes a file nobody can see and moves nothing on the
+	  core - the value was already on it - so the only visible effect is the row's star going
+	  away, and that is exactly what X does too. Two opposite actions with one appearance is
+	  the sort of thing a player learns wrong once and never trusts again, so the promotion
+	  says which it was, in words, and names the row it happened to.
+
+	  Green because that is what this front-end already uses for a write that landed, in the
+	  Settings screen's SAVED line. The name is clipped rather than dropped: on a narrow
+	  panel "ALL GAMES:" is the part that carries the meaning, and the player has just moved
+	  the cursor there.
+	*/
+	char promo[64];
+	if (co_promoted[0] && !CheckTimer(co_promoted_until))
+	{
+		snprintf(promo, sizeof(promo), (room >= 36) ? "ALL GAMES NOW: %s" : "ALL GAMES: %s",
+			co_promoted);
+		for (char *q = promo; *q; q++) *q = (char)toupper((unsigned char)*q);
+		gfx_text(gfx_clip(promo, p->ts_tiny, b.w - 12 * s), b.x + 6 * s, fy, p->ts_tiny,
+			COL_GREEN, 0);
+		return;
+	}
+
 	gfx_text(gfx_clip(foot, p->ts_tiny, b.w - 12 * s), b.x + 6 * s, fy, p->ts_tiny,
 		(co_tier == CO_TIER_RISKY) ? COL_YELLOW : COL_PANELLO, 0);
 }
@@ -5332,6 +5409,8 @@ static void move_h(int dir)
 		if (core_opts_bound_game()) core_opt_keep_for_game(o, core_opt_value(o), shared);
 		else core_opts_save_unpaused();
 
+		co_news_clear();
+
 		// The core recomputes which options apply, so re-read rather than assume.
 		core_opts_scan();
 		if (co_row >= co_rows()) co_row = co_rows() - 1;
@@ -5603,6 +5682,7 @@ static void accept()
 		case MB_ABOUT:    go_screen(SCR_ABOUT); break;
 		case MB_CORE:
 			core_opts_scan();
+			co_news_clear();
 			co_tier = CO_TIER_PICTURE;
 			// Land on a page that has something, so an empty Picture list is not the
 			// first thing a player meets on a core whose options are all elsewhere.
@@ -8045,6 +8125,20 @@ static void animate()
 	if (!CheckTimer(ig_close_until)) mark_dirty();
 
 	/*
+	  A confirmation with a timer on it needs a repaint while it is up and one *more* when it
+	  runs out. The second is the one that is easy to miss: painting only while the timer runs
+	  leaves the last painted frame the one that still says it, so the message stays on screen
+	  until the player happens to press something and stops reading as news at all. Clearing
+	  it here is what makes the next repaint the one without it, and since the clear is the
+	  condition it can only happen once.
+	*/
+	if (co_promoted[0])
+	{
+		if (!CheckTimer(co_promoted_until)) mark_dirty();
+		else { co_news_clear(); mark_dirty(); }
+	}
+
+	/*
 	  Keep the activity indicators turning - and only while something is really turning
 	  them. Everything folded in below is a job that is running right now in a forked
 	  child: a Wi-Fi scan, a join, a pairing conversation. Nothing here spins because a
@@ -8318,6 +8412,45 @@ int chome_handle(uint32_t key)
 				break;
 			}
 
+			/*
+			  Y gives a core setting to the whole system while a game is loaded.
+
+			  This is the half of per-game core options that did not exist: left and right
+			  change a value *for this game*, which is the right default and stays the
+			  default, and Y is the deliberate second act that says "for every game on this
+			  core". It writes only this option's bits into <CORE>.CFG - see
+			  core_opt_promote_to_core(), where the whole difficulty is - so the other
+			  settings this game keeps to itself do not go with it.
+
+			  Nothing changes on the core: the value on screen is already the one being
+			  shared. What changes is where it is stored, and the row losing its star is
+			  ambiguous on its own - X produces the same disappearance - so the footer says
+			  which of the two just happened.
+			*/
+			if (screen == SCR_CORE)
+			{
+				if (co_row >= core_opts_tier_count(co_tier)) { nudge(); break; }
+
+				const core_opt *o = core_opt_tier_at(co_tier, co_row);
+				if (!o) { nudge(); break; }
+
+				// Copied before the call: the option table is rescanned below and o then
+				// points at whatever the rescan put in that slot.
+				char nm[CO_NAME_LEN];
+				snprintf(nm, sizeof(nm), "%s", o->name);
+
+				if (!core_opt_promote_to_core(o)) { nudge(); break; }
+
+				snprintf(co_promoted, sizeof(co_promoted), "%s", nm);
+				co_promoted_until = GetTimer(3000);
+
+				// Same reason as changing a value: the core recomputes its own mask.
+				core_opts_scan();
+				if (co_row >= co_rows()) co_row = co_rows() - 1;
+				mark_dirty();
+				break;
+			}
+
 			if (screen == SCR_PADS)
 			{
 				if (bt_pairing() || bt_pair_state() != BTP_IDLE) { nudge(); break; }
@@ -8392,6 +8525,8 @@ int chome_handle(uint32_t key)
 
 				const core_opt *o = core_opt_tier_at(co_tier, co_row);
 				if (!o || !core_opt_drop_for_game(o)) { nudge(); break; }
+
+				co_news_clear();
 
 				// Same reason as changing a value: the core recomputes its own mask.
 				core_opts_scan();
