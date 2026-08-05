@@ -2026,6 +2026,45 @@ static void assert_physical_disc()
   while the entry led nowhere. What is checked is the thing underneath: the entry
   appears and disappears with the disc, via the same predicate the bar uses.
 */
+/*
+  The badge's focus ring, at the pixel level: two cells thick just outside the disc,
+  and breathing on the millisecond clock. A one-cell ring of one steady colour was too
+  subtle to see on a real TV at 240p, which is what this pins. Callable at any profile,
+  since the cell size scales with it; the caller must already be on the disc tier.
+
+  Sampled on the row through the disc's centre, where the ring is cells 16 and 17 out
+  from it and cell 18 is the shelf again. The clock is parked first: at the trough of
+  the pulse the ring is exactly the selection blue - disc_focus_col() eases through
+  zero there - which is what makes an exact-colour count usable on a colour that
+  animates. The frame() after parking moves the clock 16ms past the trough, where the
+  eased pulse still rounds to zero.
+*/
+static void check_focus_ring()
+{
+	const chome_profile *p = theme_get();
+	int r = (p->ts_ui >= 2) ? 32 : 16;
+	int cell = r / 16;
+	int cy = p->safe_y + p->inset + r;
+	int rx0 = p->safe_x + p->inset + r + 16 * cell;
+	int rx1 = rx0 + 2 * cell;
+
+	harness_advance(GFX_DISC_PULSE_MS - harness_now() % GFX_DISC_PULSE_MS);
+	frame(1);
+
+	check(box_pixels(rx0, cy, rx1, cy + 1, COL_BLUE) == 2 * cell,
+		"the focus ring is two cells thick and selection blue at the pulse's trough");
+	check(box_pixels(rx1, cy, rx1 + cell, cy + 1, COL_BLUE) == 0,
+		"and stops there");
+
+	unsigned long trough = harness_fb_hash_box(rx0, cy, rx1, cy + 1);
+	harness_advance(GFX_DISC_PULSE_MS / 2 - 32);
+	frame(1);
+	check(harness_fb_hash_box(rx0, cy, rx1, cy + 1) != trough,
+		"half a pulse later the ring has changed: it breathes on the clock");
+	check(box_pixels(rx0, cy, rx1, cy + 1, COL_BLUE) == 0,
+		"and at the crest it is no longer the resting blue");
+}
+
 static void assert_disc_ui()
 {
 	printf("\n== physical disc: the badge and the prompt ==\n");
@@ -2130,6 +2169,34 @@ static void assert_disc_ui()
 	press(KEY_UP);
 	check(chome_screen_id() == S_DISCBAR, "up from the shelf focuses the disc, not the menu bar");
 	dump("disc-3-focused");
+	check_focus_ring();
+
+	/*
+	  And the same ring at 240p, which is where the defect lived: a cell is one pixel
+	  there, so this is the profile on which the one-cell ring was invisible on a real
+	  TV. The screen survives the resolution change, so the tier is still focused.
+	*/
+	harness_set_fb(320, 240);
+	gfx_shutdown();
+	theme_update(320, 240, 3);
+	/*
+	  Nothing here marks the UI dirty - on hardware the mode change does - so a bare
+	  switch leaves the new, zeroed framebuffers repainted only where the disc spins.
+	  Bounce to the menu bar and back: two full repaints at the new size, landing on
+	  the tier again.
+	*/
+	press(KEY_UP);
+	press(KEY_DOWN);
+	check(chome_screen_id() == S_DISCBAR, "still on the disc tier at 240p");
+	check_focus_ring();
+	dump("disc-8-focused-240p");
+
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+	press(KEY_UP);
+	press(KEY_DOWN);
+	check(chome_screen_id() == S_DISCBAR, "and back at 720p");
 
 	press(KEY_UP);
 	check(chome_screen_id() == S_MENUBAR, "a second up carries on to the menu bar");
@@ -2203,13 +2270,14 @@ static void assert_partial_repaint()
 	check(chome_screen_id() == 0 && disc_state() == DISC_READY, "on the shelf with a known disc");
 
 	// The badge's box, from the same numbers draw_disc_badge() and disc_note_rect() use:
-	// centre at safe_x+inset+r, 17 cells of r/16 pixels each side.
+	// centre at safe_x+inset+r, 18 cells of r/16 pixels each side (the focus ring is
+	// two cells thick).
 	const chome_profile *p = theme_get();
 	int r = (p->ts_ui >= 2) ? 32 : 16;
 	int cell = r / 16;
-	int bx0 = p->safe_x + p->inset + r - 17 * cell;
-	int by0 = p->safe_y + p->inset + r - 17 * cell;
-	int bx1 = bx0 + 34 * cell, by1 = by0 + 34 * cell;
+	int bx0 = p->safe_x + p->inset + r - 18 * cell;
+	int by0 = p->safe_y + p->inset + r - 18 * cell;
+	int bx1 = bx0 + 36 * cell, by1 = by0 + 36 * cell;
 	int w = gfx_w(), h = gfx_h();
 
 	// Everything outside the box, in four hashes; and the box itself.
@@ -2233,7 +2301,7 @@ static void assert_partial_repaint()
 	check(harness_fb_hash_box(bx0, 0, bx1, by0) == T, "and above it");
 	check(harness_fb_hash_box(bx0, by1, bx1, h) == B, "and below it");
 	check(harness_fb_hash_box(bx0, by0, bx1, by1) != box, "while the disc itself has turned");
-	check(gfx_damage_rows() <= 34 * cell, "a spin frame damages only the disc's rows");
+	check(gfx_damage_rows() <= 36 * cell, "a spin frame damages only the disc's rows");
 
 	/*
 	  The strongest thing that can be said about the partial path: a frame it finishes
@@ -2246,7 +2314,7 @@ static void assert_partial_repaint()
 	*/
 	harness_advance(60);                       // past the spin interval, nothing else due
 	chome_handle(0);
-	check(gfx_damage_rows() <= 34 * cell, "the frame under comparison took the partial path");
+	check(gfx_damage_rows() <= 36 * cell, "the frame under comparison took the partial path");
 	unsigned long partial_frame = harness_fb_hash_box(0, 0, w, h);
 
 	chome_handle(KEY_UP);                      // the disc tier: a structural change
@@ -2273,7 +2341,7 @@ static void assert_partial_repaint()
 
 	harness_advance(60);
 	chome_handle(0);                           // one partial, into the other buffer
-	check(gfx_damage_rows() <= 34 * cell, "and it was partial");
+	check(gfx_damage_rows() <= 36 * cell, "and it was partial");
 	check(harness_fb_hash_box(bx1, 0, w, h) == tier_right,
 		"one partial frame later the other buffer shows the tier, not the stale shelf");
 
@@ -7790,7 +7858,8 @@ int main()
 			{ "psx_square",   COL_BTN_SQUARE   }, { "psx_cross",  COL_BTN_CROSS  },
 			{ "btn_a", COL_SNES_A }, { "btn_b", COL_SNES_B },
 			{ "btn_x", COL_SNES_X }, { "btn_y", COL_SNES_Y },
-			{ "dpad_up", COL_WHITE }, { "dpad_down", COL_WHITE }, { "dpad_lr", COL_WHITE },
+			{ "dpad_up", COL_WHITE }, { "dpad_down", COL_WHITE },
+			{ "dpad_ud", COL_WHITE }, { "dpad_lr", COL_WHITE },
 			{ "btn_start", COL_WHITE }, { "btn_select", COL_WHITE },
 		};
 		int n = (int)(sizeof(tint) / sizeof(tint[0]));
