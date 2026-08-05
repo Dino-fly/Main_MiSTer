@@ -18,6 +18,23 @@ static rect_t dmg_prev;       // damage of the previous frame
 
 static int dmg_rows = 0;
 
+/*
+  The clip region, for partial repaints.
+
+  While one is set, every primitive draws - and records damage - only inside it, so a
+  frame composed under a clip leaves the rest of the compose buffer untouched and
+  unclaimed: gfx_end() then copies only the clipped rectangle (unioned with the previous
+  frame's damage, exactly as it always has). The caller replays its normal drawing;
+  everything that misses the region rejects in a comparison or two, so the cost of a
+  clipped frame is proportional to the region, not to the screen.
+
+  clipr is kept clamped to the canvas by gfx_clip_set(), so the primitives only ever
+  intersect against one rectangle.
+*/
+static rect_t clipr;
+static int clip_on = 0;
+static int stat_was_clipped = 0;   // this frame composed under a clip; read by gfx_end()
+
 static void rect_clear(rect_t *r)
 {
 	r->x0 = r->y0 = 0x7fffffff;
@@ -44,13 +61,45 @@ void gfx_damage(int x, int y, int w, int h)
 	if (y < 0) { h += y; y = 0; }
 	if (x + w > cw) w = cw - x;
 	if (y + h > ch) h = ch - y;
+	if (clip_on)
+	{
+		if (rect_empty(&clipr)) return;
+		if (x < clipr.x0) { w -= clipr.x0 - x; x = clipr.x0; }
+		if (y < clipr.y0) { h -= clipr.y0 - y; y = clipr.y0; }
+		if (x + w > clipr.x1 + 1) w = clipr.x1 + 1 - x;
+		if (y + h > clipr.y1 + 1) h = clipr.y1 + 1 - y;
+	}
 	if (w <= 0 || h <= 0) return;
 	rect_add(&dmg_cur, x, y, x + w - 1, y + h - 1);
 }
 
 void gfx_damage_all()
 {
+	// Under a clip nothing outside the region was drawn, so nothing outside it may be
+	// claimed either - a full-screen claim here would copy stale compose rows.
+	if (clip_on)
+	{
+		if (!rect_empty(&clipr)) rect_add(&dmg_cur, clipr.x0, clipr.y0, clipr.x1, clipr.y1);
+		return;
+	}
 	if (cw > 0 && ch > 0) rect_add(&dmg_cur, 0, 0, cw - 1, ch - 1);
+}
+
+void gfx_clip_set(int x, int y, int w, int h)
+{
+	rect_clear(&clipr);
+	if (x < 0) { w += x; x = 0; }
+	if (y < 0) { h += y; y = 0; }
+	if (x + w > cw) w = cw - x;
+	if (y + h > ch) h = ch - y;
+	if (w > 0 && h > 0) rect_add(&clipr, x, y, x + w - 1, y + h - 1);
+	clip_on = 1;
+	stat_was_clipped = 1;
+}
+
+void gfx_clip_clear()
+{
+	clip_on = 0;
 }
 
 int gfx_damage_rows()
@@ -101,6 +150,10 @@ int gfx_begin()
 
   Reported as a summary every GFX_STAT_EVERY copies so the log stays readable; at a 50ms
   repaint that is roughly every ten seconds.
+
+  Full and partial repaints are accounted separately - averaging them together would
+  bury the number the partial path exists to produce under the occasional full frame,
+  and hide a regression in either.
 */
 #define GFX_STAT_EVERY 200
 
@@ -111,11 +164,26 @@ static unsigned long gfx_us()
 	return (unsigned long)ts.tv_sec * 1000000UL + (unsigned long)(ts.tv_nsec / 1000);
 }
 
-static unsigned long stat_n = 0;
-static unsigned long stat_copy_us = 0, stat_copy_max = 0;
-static unsigned long stat_rows = 0;
+struct gfx_stat_t
+{
+	unsigned long n;
+	unsigned long compose_us, compose_max;
+	unsigned long copy_us, copy_max;
+	unsigned long rows;
+};
+
+static gfx_stat_t stat_full, stat_part;
 static unsigned long compose_t0 = 0;
-static unsigned long stat_compose_us = 0, stat_compose_max = 0;
+
+static void stat_fmt(char *buf, size_t len, const char *tag, const gfx_stat_t *s)
+{
+	if (!s->n) { snprintf(buf, len, "%s none", tag); return; }
+	snprintf(buf, len, "%s %lu: compose avg %lu us (max %lu), copy avg %lu us (max %lu), rows avg %lu",
+		tag, s->n,
+		s->compose_us / s->n, s->compose_max,
+		s->copy_us / s->n, s->copy_max,
+		s->rows / s->n);
+}
 
 // Called by the front-end when it starts composing a frame.
 void gfx_stat_compose_begin()
@@ -125,6 +193,11 @@ void gfx_stat_compose_begin()
 
 void gfx_end()
 {
+	// Which bucket this frame lands in. Reset here rather than in gfx_clip_clear(), so
+	// a frame that set a clip and cleared it before ending still counts as partial.
+	gfx_stat_t *st = stat_was_clipped ? &stat_part : &stat_full;
+	stat_was_clipped = 0;
+
 	/*
 	  Compose time is everything between gfx_stat_compose_begin() and here, which is the
 	  drawing itself - all the fills, text and blits - minus the copy below.
@@ -133,8 +206,8 @@ void gfx_end()
 	{
 		unsigned long c = gfx_us() - compose_t0;
 		compose_t0 = 0;
-		stat_compose_us += c;
-		if (c > stat_compose_max) stat_compose_max = c;
+		st->compose_us += c;
+		if (c > st->compose_max) st->compose_max = c;
 	}
 
 	if (!cb) return;
@@ -162,22 +235,20 @@ void gfx_end()
 			fbn = (fbn == 1) ? 2 : 1;
 
 			unsigned long cp = gfx_us() - t_copy;
-			stat_copy_us += cp;
-			if (cp > stat_copy_max) stat_copy_max = cp;
-			stat_rows += (unsigned long)(u.y1 - u.y0 + 1);
+			st->copy_us += cp;
+			if (cp > st->copy_max) st->copy_max = cp;
+			st->rows += (unsigned long)(u.y1 - u.y0 + 1);
+			st->n++;
 
-			if (++stat_n >= GFX_STAT_EVERY)
+			if (stat_full.n + stat_part.n >= GFX_STAT_EVERY)
 			{
-				printf("ClassicUI: repaint %dx%d over %lu frames: compose avg %lu us (max %lu), "
-					"copy avg %lu us (max %lu), rows avg %lu\n",
-					cw, ch, stat_n,
-					stat_compose_us / stat_n, stat_compose_max,
-					stat_copy_us / stat_n, stat_copy_max,
-					stat_rows / stat_n);
-				stat_n = 0;
-				stat_compose_us = stat_compose_max = 0;
-				stat_copy_us = stat_copy_max = 0;
-				stat_rows = 0;
+				char fs[160], ps[160];
+				stat_fmt(fs, sizeof(fs), "full", &stat_full);
+				stat_fmt(ps, sizeof(ps), "partial", &stat_part);
+				printf("ClassicUI: repaint %dx%d over %lu frames: %s; %s\n",
+					cw, ch, stat_full.n + stat_part.n, fs, ps);
+				memset(&stat_full, 0, sizeof(stat_full));
+				memset(&stat_part, 0, sizeof(stat_part));
 			}
 		}
 	}
@@ -193,9 +264,12 @@ void gfx_shutdown()
 	cw = ch = 0;
 	rect_clear(&dmg_cur);
 	rect_clear(&dmg_prev);
+	clip_on = 0;
+	stat_was_clipped = 0;
 }
 
-// Clip a rect to the canvas. Returns 0 if nothing is left.
+// Clip a rect to the canvas - and to the clip region while one is set. Returns 0 if
+// nothing is left.
 static int clip_rect(int *x, int *y, int *w, int *h)
 {
 	if (!cb) return 0;
@@ -203,6 +277,14 @@ static int clip_rect(int *x, int *y, int *w, int *h)
 	if (*y < 0) { *h += *y; *y = 0; }
 	if (*x + *w > cw) *w = cw - *x;
 	if (*y + *h > ch) *h = ch - *y;
+	if (clip_on)
+	{
+		if (rect_empty(&clipr)) return 0;
+		if (*x < clipr.x0) { *w -= clipr.x0 - *x; *x = clipr.x0; }
+		if (*y < clipr.y0) { *h -= clipr.y0 - *y; *y = clipr.y0; }
+		if (*x + *w > clipr.x1 + 1) *w = clipr.x1 + 1 - *x;
+		if (*y + *h > clipr.y1 + 1) *h = clipr.y1 + 1 - *y;
+	}
 	return (*w > 0 && *h > 0);
 }
 
@@ -265,7 +347,16 @@ void gfx_scrim(int x, int y, int w, int h, uint32_t col, int step)
 	{
 		uint32_t *row = cb + (size_t)yy * cw;
 		int phase = (yy % step);
-		for (int xx = x + phase; xx < x + w; xx += step) row[xx] = col;
+
+		/*
+		  The pattern is anchored to the caller's origin, not to wherever clipping moved
+		  x: a partial repaint replays this call under a clip, and a phase computed from
+		  the clipped edge would draw the checkerboard one pixel out of register with
+		  the full frame around it.
+		*/
+		int x0 = ox + phase;
+		if (x0 < x) x0 += (x - x0 + step - 1) / step * step;
+		for (int xx = x0; xx < x + w; xx += step) row[xx] = col;
 	}
 	gfx_damage(ox, oy, ow, oh);
 }
@@ -606,10 +697,19 @@ void gfx_blit(const uint32_t *src, int sw, int sh, int dx, int dy, int dw, int d
 	uint32_t stepy = ((uint32_t)sh << 16) / (uint32_t)dh;
 	uint32_t srcx0 = 0, srcy0 = 0;
 
-	if (dx < 0) { srcx0 = (uint32_t)(-dx) * stepx; dw += dx; dx = 0; }
-	if (dy < 0) { srcy0 = (uint32_t)(-dy) * stepy; dh += dy; dy = 0; }
-	if (dx + dw > cw) dw = cw - dx;
-	if (dy + dh > ch) dh = ch - dy;
+	// The clip bounds, when set, replace the canvas edges: clipr is kept inside the
+	// canvas, so one intersection covers both.
+	int bx0 = 0, by0 = 0, bx1 = cw - 1, by1 = ch - 1;
+	if (clip_on)
+	{
+		if (rect_empty(&clipr)) return;
+		bx0 = clipr.x0; by0 = clipr.y0; bx1 = clipr.x1; by1 = clipr.y1;
+	}
+
+	if (dx < bx0) { srcx0 = (uint32_t)(bx0 - dx) * stepx; dw -= bx0 - dx; dx = bx0; }
+	if (dy < by0) { srcy0 = (uint32_t)(by0 - dy) * stepy; dh -= by0 - dy; dy = by0; }
+	if (dx + dw > bx1 + 1) dw = bx1 + 1 - dx;
+	if (dy + dh > by1 + 1) dh = by1 + 1 - dy;
 	if (dw <= 0 || dh <= 0 || !cb) return;
 
 	uint32_t sy = srcy0;

@@ -35,6 +35,23 @@ void gfx_damage_all();
 int  gfx_damage_rows();
 
 /*
+  Region clip, for partial repaints.
+
+  Between gfx_clip_set() and gfx_clip_clear() every primitive draws - and records
+  damage - only inside the rectangle, and anything that misses it rejects in a
+  comparison or two. A partial repaint is therefore the caller's *normal* compose,
+  replayed under a clip: the layers underneath the region are reconstructed by the same
+  code in the same order as a full frame, rather than cached or guessed at, and
+  gfx_end() copies only the region (unioned with the previous frame's damage, exactly
+  as always - which is what keeps the two alternating framebuffers coherent).
+
+  Clear the clip before gfx_end(). Frames composed under a clip are accounted
+  separately in the repaint-cost log, tagged "partial".
+*/
+void gfx_clip_set(int x, int y, int w, int h);
+void gfx_clip_clear();
+
+/*
   Repaint cost instrumentation. Call at the start of composing a frame; gfx_end() closes
   the measurement and logs a summary every couple of hundred frames.
 
