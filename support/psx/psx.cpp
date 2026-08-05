@@ -12,6 +12,7 @@
 #include "psx.h"
 #include "mcdheader.h"
 #include "../../cd.h"
+#include "../physical_disc/physical_disc.h"
 #include "../chd/mister_chd.h"
 #include <libchdr/chd.h>
 
@@ -110,6 +111,7 @@ static void unload_chd(toc_t *table)
 		chd_close(table->chd_f);
 	}
 	if (chd_hunkbuf) free(chd_hunkbuf);
+	chd_hunkbuf = NULL; // or the next unload after a non-chd load frees it again
 	memset(table, 0, sizeof(toc_t));
 	chd_hunknum = -1;
 
@@ -330,8 +332,78 @@ static int load_cue(const char* filename, toc_t *table)
 	return 1;
 }
 
+/*
+  The save file for a physical disc, fixed at load time. A disc has no path for the
+  places a path is normally reused - the memory card and the savestates - so they are
+  named after the disc instead: its PlayStation serial, or failing that a label or a
+  uuid derived from its table of contents (see physical_disc_save_name()).
+*/
+static char phys_save_name[64];
+
+static void unload_physical(toc_t *table)
+{
+	if (!table->phys) return;
+	physical_disc_close();
+	memset(table, 0, sizeof(toc_t));
+}
+
+static int load_physical(toc_t *table)
+{
+	unload_physical(table);
+
+	/*
+	  The disc in the drive rather than a file. The table of contents comes off the
+	  disc in place of a cue sheet, and then the drive is spun up and read ahead of
+	  the core before it asks for anything - both of those block, for up to about
+	  eight seconds between them, which is why they are on the load path and nowhere
+	  near the first sector the core wants. The same shape as pcecdd_t::Load().
+	*/
+	if (physical_disc_open(NULL) || physical_disc_load_toc(table))
+	{
+		physical_disc_close();
+		memset(table, 0, sizeof(toc_t));
+		printf("\x1b[32mPSX: no readable physical disc\n\x1b[0m");
+		return 0;
+	}
+
+	strcpy(phys_save_name, "physical_disc");
+	physical_disc_save_name(PHYSICAL_DISC_DISC_PSX, phys_save_name, sizeof(phys_save_name));
+
+	/*
+	  The drive's TOC only says where INDEX 01 is; this core is also told where each
+	  track's pregap starts (indexes[1] is its length, start is INDEX 00). Where the
+	  drive can read the raw Q subchannel this recovers the real pregaps; where it
+	  cannot, the basic TOC stands, which is what a cue sheet without PREGAP lines
+	  would have said. Must run before the reshaping below - it works in drive LBAs.
+	*/
+	physical_disc_psx_enrich_toc(table);
+
+	/*
+	  Two addressing conventions meet here. The drive counts sectors from
+	  0 = MSF 00:02:00. This core's table is in absolute frames, 150 = MSF 00:02:00 -
+	  the cue and chd loaders above build the same "fake 150 sector pregap" - and its
+	  track ends are inclusive, where the drive TOC's end is the next track's first
+	  sector. psx_read_cd() subtracts the 150 back out on every physical read.
+	*/
+	for (int i = 0; i < table->last; i++)
+	{
+		table->tracks[i].start += 150;
+		table->tracks[i].end += 150 - 1;
+	}
+	if (table->tracks[0].type) table->tracks[0].indexes[1] = 150;
+	table->end += 150;
+
+	physical_disc_prewarm_blocking();
+	return 1;
+}
+
 static int load_cd_image(const char *filename, toc_t *table)
 {
+	if (!strcmp(filename, PHYSICAL_DISC_SENTINEL)) return load_physical(table);
+
+	// A file replaces the disc: if the drive was mounted, its reader stops here,
+	// or it would keep prefetching underneath the image.
+	unload_physical(table);
 
 	const char *ext = strrchr(filename, '.');
 	if (!ext) return 0;
@@ -474,6 +546,26 @@ int psx_chd_hunksize()
 void psx_read_cd(uint8_t *buffer, int lba, int cnt)
 {
 	//printf("req lba=%d, cnt=%d\n", lba, cnt);
+
+	if (toc.phys)
+	{
+		/*
+		  The core asks in absolute frames (150 = MSF 00:02:00), the drive counts from
+		  0 there - see load_physical(). No pregap faking either: on a pressed disc the
+		  pregap sectors are real and readable. The reader fills the buffer on every
+		  path - a sector it cannot produce (the lead-in below frame 150, past the
+		  lead-out, a read the drive failed) comes back as zeroes, which is also what
+		  the file path below hands the core for the regions it cannot serve.
+		*/
+		while (cnt > 0)
+		{
+			physical_disc_read_sector(lba - 150, buffer, NULL);
+			buffer += CD_SECTOR_LEN;
+			cnt--;
+			lba++;
+		}
+		return;
+	}
 
 	while (cnt > 0)
 	{
@@ -707,7 +799,22 @@ void psx_mount_cd(int f_index, int s_index, const char *filename)
 
 			int name_len = strlen(filename);
 
-			if (toc.tracks[0].type) // is first track a data?
+			if (toc.phys && toc.tracks[0].type)
+			{
+				/*
+				  A disc has no directory: no last_dir to compare for the multi-disc
+				  "same game" rule, no cd_bios.rom or noreset.txt next to it, and the
+				  memory card is named after the disc itself - see load_physical().
+				  Without a folder nothing can say "this is disc 2 of the game already
+				  running", so every physical mount is a fresh boot. That also means a
+				  multi-disc game gets one memory card per disc, not one per game -
+				  acceptable until disc swapping works at all.
+				*/
+				reset = 1;
+				*last_dir = 0;
+				if (!(user_io_status_get("[63]"))) psx_mount_save(phys_save_name);
+			}
+			else if (toc.tracks[0].type) // is first track a data?
 			{
 				const char *p = strrchr(filename, '/');
 				int cur_len = p ? p - filename : 0;
@@ -768,7 +875,9 @@ void psx_mount_cd(int f_index, int s_index, const char *filename)
 			sprintf(buf, "%s/sbi.zip/%s.sbi", HomeDir(), game_id);
 			has_sbi_file = (FileOpen(&sbi_file, buf, 1));
 
-			if (!has_sbi_file)
+			// The sentinel is not a filename to derive a sidecar from; a physical
+			// disc's only LibCrypt source is the serial-keyed sbi.zip lookup above.
+			if (!has_sbi_file && !toc.phys)
 			{
 				// search for .sbi file base on image name
 				strcpy(buf, filename);
@@ -782,7 +891,9 @@ void psx_mount_cd(int f_index, int s_index, const char *filename)
 				mask = libCryptMask(&sbi_file);
 			}
 
-			process_ss(filename, name_len != 0);
+			// The savestate files also take the disc's name: a '*' from the sentinel
+			// is not even a legal name on the exFAT card.
+			process_ss(toc.phys ? phys_save_name : filename, name_len != 0);
 			send_cue_and_metadata(&toc, mask, region, reset);
 
 			user_io_set_index(f_index);
@@ -795,6 +906,7 @@ void psx_mount_cd(int f_index, int s_index, const char *filename)
 	if (!loaded)
 	{
 		printf("Unmount CD\n");
+		unload_physical(&toc);
 		unload_cue(&toc);
 		unload_chd(&toc);
 		mount_cd(0, s_index);

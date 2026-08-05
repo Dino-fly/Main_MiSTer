@@ -27,6 +27,7 @@
 #include "../chome_gamelist.h"
 #include "../chome_ss.h"
 #include "../chome_disc.h"
+#include "../../physical_disc/physical_disc.h"
 #include "../chome_theme.h"
 #include "../chome_gfx.h"
 #include "../chome_video.h"
@@ -2310,6 +2311,101 @@ static void assert_partial_repaint()
 	disc_ingest_present(0);
 	frame(6);
 	check(harness_fb_hash_box(bx0, by0, bx1, by1) != box, "ejecting repaints the corner");
+}
+
+/*
+  Launching a physical disc, end to end up to the MGL - the part a fake drive can
+  prove. The sentinel and the slot in the written MGL are the two things menu.cpp and
+  psx.cpp key on, so they are checked as text; whether the core then reads sectors is
+  hardware's question, not this file's.
+
+  And the refusal: a disc whose core is not wired (Mega CD here) is named on the
+  prompt but marked "(not yet)", and pressing it must launch nothing - the row that
+  offered and then refused is the bug this pins shut.
+*/
+static void assert_disc_launch()
+{
+	printf("\n== physical disc: launching ==\n");
+
+	enum { S_HOME = 0, S_DISC = 17 };
+
+	cfg.classicui_disc = 1;
+
+	/* ------------------------------------------ the unwired core refuses --- */
+
+	disc_ingest_present(1);
+	fake_disc dm; memset(&dm, 0, sizeof(dm));
+	fake_put(&dm, 0, 0, "SEGADISCSYSTEM", 14, 0);
+	disc_set_reader(fake_read, &dm);
+	disc_ingest_identify(0);
+	frame(6);
+	check(disc_state() == DISC_READY && disc_type() == DISC_T_MEGACD,
+		"a Mega CD disc is identified");
+
+	press(KEY_UP);
+	press(KEY_ENTER);
+	check(chome_screen_id() == S_DISC, "and its prompt is up");
+	dump("disc-5-not-yet");
+
+	harness_clear_launch();
+	press(KEY_ENTER);
+	check(harness_last_launch()[0] == 0, "its \"(not yet)\" row launches nothing");
+	check(chome_screen_id() == S_DISC, "and the prompt stays put rather than pretending");
+	press(KEY_ESC);
+	press(KEY_ESC);
+
+	disc_ingest_present(0);
+	frame(6);
+
+	/* ------------------------------------------------ the wired one plays --- */
+
+	disc_ingest_present(1);
+	fake_disc dp; memset(&dp, 0, sizeof(dp));
+	static const char *const none[] = { "" };
+	fake_iso(&dp, 0, "PLAYSTATION", "PLAYSTATION", none, 0);
+	fake_put(&dp, 20, 0, "BOOT = cdrom:\\SLUS_006.26;1", 27, 100);
+	disc_set_reader(fake_read, &dp);
+	disc_ingest_identify(0);
+	frame(6);
+	check(disc_type() == DISC_T_PSX, "a PlayStation disc is identified");
+
+	press(KEY_UP);
+	press(KEY_ENTER);
+	check(chome_screen_id() == S_DISC, "and its prompt is up");
+	dump("disc-6-play");
+
+	harness_clear_launch();
+	press(KEY_ENTER, 4);
+	frame(80);                         // let the launch curtain elapse
+
+	check(strstr(harness_last_launch(), ".mgl") != 0, "\"Play on PlayStation\" launches");
+
+	FILE *f = fopen("/tmp/classicui_launch.mgl", "rt");
+	check(f != 0, "and wrote the MGL");
+	if (f)
+	{
+		char buf[1024] = {};
+		size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+		buf[n] = 0;
+		fclose(f);
+		printf("---- /tmp/classicui_launch.mgl ----\n%s-----------------------------------\n", buf);
+		check(strstr(buf, "_Console/PSX") != 0, "the MGL names the PSX core");
+		check(strstr(buf, PHYSICAL_DISC_SENTINEL) != 0, "the file is the sentinel, not a path");
+		check(strstr(buf, "type=\"s\" index=\"1\"") != 0,
+			"and it goes into SD slot 1 - \"H7S1,CUECHD,Load CD\" in PSX.sv");
+	}
+
+	// Leave things as the sections after this expect: no disc, the flag back off,
+	// and the UI reopened on the shelf - the launch closed it. Re-entered the way
+	// every other section re-enters, leave then menu key.
+	disc_reset_reader();
+	disc_ingest_present(0);
+	(void)disc_take_dirty();
+	cfg.classicui_disc = 0;
+	chome_leave();
+	press(KEY_MENU, 20);
+	frame(10);
+	check(chome_screen_id() == S_HOME, "the shelf is back for whatever comes next");
 }
 
 /* --------------------------------------------------------- screenscraper --- */
@@ -5725,6 +5821,7 @@ int main()
 	assert_physical_disc();
 	assert_disc_ui();
 	assert_partial_repaint();
+	assert_disc_launch();
 	assert_video();
 	assert_index_cache();
 
