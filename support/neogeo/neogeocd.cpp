@@ -11,6 +11,7 @@
 #include "../../menu.h"
 #include "../../cheats.h"
 #include "../megacd/megacd.h"
+#include "../physical_disc/physical_disc.h"
 #include "neogeocd.h"
 #include "neogeo_loader.h"
 
@@ -110,17 +111,38 @@ void set_poll_timer()
 	poll_timer = GetTimer(interval);
 }
 
-void neocd_set_image(char *filename)
+int neocd_set_image(const char *filename)
 {
+	int bios_ok = 0;
+	int phys = !strcmp(filename, PHYSICAL_DISC_SENTINEL);
+
 	cdd.Unload();
 	cdd.status = CD_STAT_OPEN;
 
 	if (*filename)
 	{
-		neogeo_romset_tx(filename, 1);
+		/*
+		  The loader takes a mutable name (the cart path strips an extension in
+		  place); this path only ever hands it a CD name, which it does not touch,
+		  but it still gets a copy rather than a cast. Whether it is the sentinel or
+		  a cue path changes nothing here: the CD BIOS comes from the NeoGeo-CD home
+		  dir either way, and that is the BIOS a physical disc boots through too.
+		*/
+		char nm[1024];
+		snprintf(nm, sizeof(nm), "%s", filename);
+		bios_ok = neogeo_romset_tx(nm, 1);
 
 		if (cdd.Load(filename) > 0)
 		{
+			/*
+			  An audio-only disc has no track the BIOS could boot; telling the core
+			  it holds data would have it try. Only a physical disc can be in that
+			  state here - a cue/chd was chosen by name, a disc is whatever was in
+			  the drive.
+			*/
+			toc_t disc_toc = {};
+			int audio_only = phys && !physical_disc_current_toc(&disc_toc) && physical_disc_toc_audio_only(&disc_toc);
+			cdd.isData = audio_only ? 0 : 1;
 			cdd.status = cdd.loaded ? CD_STAT_STOP : CD_STAT_NO_DISC;
 			cdd.latency = 10;
 			cdd.SendData = neocd_send_data;
@@ -133,6 +155,10 @@ void neocd_set_image(char *filename)
 	}
 
 	neocd_reset();
+
+	// Loaded *and* booted through a BIOS that exists - a CD without its system ROM
+	// is a black screen, and the caller deserves to know which of the two failed.
+	return bios_ok && cdd.loaded;
 }
 
 void neocd_reset() {
