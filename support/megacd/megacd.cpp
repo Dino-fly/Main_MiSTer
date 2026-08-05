@@ -11,6 +11,7 @@
 #include "../../menu.h"
 #include "../../cheats.h"
 #include "megacd.h"
+#include "../physical_disc/physical_disc.h"
 
 #define SAVE_IO_INDEX 5 // fake download to trigger save loading
 
@@ -25,6 +26,29 @@ void mcd_poll()
 	static uint32_t poll_timer = 0;
 	static uint8_t last_req = 255;
 	static uint8_t adj = 0;
+	static uint32_t swap_close_at = 0;
+
+	/*
+	  Disc swapping, physical drive only. When the reader reports the tray cycled
+	  and a new table of contents is readable, adopt the new disc and act out the
+	  tray for the core: OPEN for a moment, then STOP (or NO_DISC if the new disc
+	  is unreadable), so the BIOS sees a swap rather than the old disc's data
+	  continuing under it. The dwell keeps the "tray open" state visible for long
+	  enough that the CDD state machine on the FPGA side actually samples it.
+	*/
+	if (cdd.is_phys() && physical_disc_swap_consume() && cdd.SwapPhys())
+	{
+		cdd.isData = 1;
+		cdd.status = CD_STAT_OPEN;
+		cdd.latency = 0;
+		swap_close_at = GetTimer(PHYSICAL_DISC_SWAP_DWELL_MS);
+	}
+	if (cdd.is_phys() && swap_close_at && CheckTimer(swap_close_at))
+	{
+		swap_close_at = 0;
+		cdd.status = cdd.loaded ? CD_STAT_STOP : CD_STAT_NO_DISC;
+		cdd.latency = 10;
+	}
 
 	if (!poll_timer || CheckTimer(poll_timer))
 	{
@@ -116,16 +140,44 @@ static int mcd_load_rom(const char *basename, const char *name, int sub_index)
 	return 0;
 }
 
-void mcd_set_image(int num, const char *filename)
+int mcd_set_image(int num, const char *filename)
 {
 	static char last_dir[1024] = {};
 
 	(void)num;
 
 	cdd.Unload();
+	physical_disc_swap_enable(0);
 	cdd.status = CD_STAT_OPEN;
 
+	int phys = !strcmp(filename, PHYSICAL_DISC_SENTINEL);
+	int audio_only = 0;
+	physical_disc_region_t disc_region = PHYSICAL_DISC_REGION_UNKNOWN;
+
+	/*
+	  A physical disc's region has to be known before the BIOS is chosen, and the
+	  BIOS goes to the core before cdd.Load() runs - so open the drive and read the
+	  table of contents (and, for a data disc, the header sector the region lives
+	  in) up front. cdd.Load() will read the TOC again into its own table;
+	  physical_disc_open() is idempotent so the drive is only opened once. This is
+	  also what spins the drive up and arms the read-ahead worker, well before the
+	  BIOS asks for its first sector.
+	*/
+	if (phys && !physical_disc_open(NULL))
+	{
+		toc_t disc_toc = {};
+		if (!physical_disc_load_toc(&disc_toc)) audio_only = physical_disc_toc_audio_only(&disc_toc);
+		if (!audio_only) disc_region = physical_disc_region();
+
+		if (!physical_disc_disc_present()) physical_disc_close();
+	}
+
 	int same_game = *filename && *last_dir && !strncmp(last_dir, filename, strlen(last_dir));
+
+	// The sentinel never names the same game twice: the disc behind it can change
+	// between launches, so a physical mount always reloads BIOS and saves.
+	if (phys) same_game = 0;
+
 	strcpy(last_dir, filename);
 	char *p = strrchr(last_dir, '/');
 	if (p) *p = 0;
@@ -140,38 +192,109 @@ void mcd_set_image(int num, const char *filename)
 		mcd_reset();
 
 		loaded = 0;
-		strcpy(buf, last_dir);
-		char *p = strrchr(buf, '/');
-		if (p)
+		if (phys)
 		{
-			strcpy(p + 1, "cd_bios.rom");
-			loaded = user_io_file_tx(buf);
+			/*
+			  A disc in the drive has no directory to hold a cd_bios.rom next to it,
+			  so the BIOS is looked up by the disc's region in the core's home
+			  folder: boot_jp/us/eu.rom, then bios_jp/us/eu.rom, then the plain
+			  boot.rom every Mega CD install already has.
+			*/
+			const char *rn = physical_disc_region_name(disc_region);
+			if (*rn)
+			{
+				sprintf(buf, "%s/boot_%s.rom", HomeDir(), rn);
+				loaded = user_io_file_tx(buf);
+				if (!loaded)
+				{
+					sprintf(buf, "%s/bios_%s.rom", HomeDir(), rn);
+					loaded = user_io_file_tx(buf);
+				}
+			}
+			printf("\x1b[32mMCD: physical disc region %s%s\n\x1b[0m",
+				*rn ? rn : "unknown",
+				loaded ? ", loaded matching BIOS" : ", falling back to boot.rom");
+		}
+		else
+		{
+			strcpy(buf, last_dir);
+			char *bp = strrchr(buf, '/');
+			if (bp)
+			{
+				strcpy(bp + 1, "cd_bios.rom");
+				loaded = user_io_file_tx(buf);
+			}
 		}
 
 		if (!loaded)
 		{
 			sprintf(buf, "%s/boot.rom", HomeDir());
 			loaded = user_io_file_tx(buf);
+
+			/*
+			  A region-locked disc on the wrong region's BIOS refuses to boot with a
+			  screen that looks like a damaged disc. The mismatch is knowable here -
+			  the disc header named its region and the BIOS header names its own -
+			  so say what is wrong and which file would fix it.
+			*/
+			if (loaded && phys && !audio_only && disc_region != PHYSICAL_DISC_REGION_UNKNOWN)
+			{
+				static uint8_t hdr[0x200];
+				physical_disc_region_t bios_region = PHYSICAL_DISC_REGION_UNKNOWN;
+
+				if (FileLoad(buf, hdr, sizeof(hdr)) >= 0x1F3)
+					bios_region = physical_disc_region_from_md_header(hdr, sizeof(hdr));
+
+				if (bios_region != PHYSICAL_DISC_REGION_UNKNOWN && bios_region != disc_region)
+				{
+					static char msg[128];
+					sprintf(msg, "%s disc on %s BIOS - add boot_%s.rom",
+						physical_disc_region_name(disc_region),
+						physical_disc_region_name(bios_region),
+						physical_disc_region_name(disc_region));
+					printf("\x1b[32mMCD: WARNING: %s\n\x1b[0m", msg);
+					Info(msg, 6000);
+				}
+			}
 		}
 
 		if (!loaded) Info("CD BIOS not found!", 4000);
 	}
 
+	int mounted = 0;
 	if (loaded && *filename)
 	{
 		if (cdd.Load(filename) > 0)
 		{
+			mounted = 1;
+			cdd.isData = audio_only ? 0 : 1;
 			cdd.status = cdd.loaded ? CD_STAT_STOP : CD_STAT_NO_DISC;
 			cdd.latency = 10;
 			cdd.SendData = mcd_send_data;
 			cdd.CanSendData = mcd_can_send_data;
+			if (phys) physical_disc_swap_enable(1);
 
-			if (!same_game)
+			if (!audio_only && !same_game)
 			{
-				mcd_load_rom(filename, "cd_bios.rom", 0);
-				mcd_load_rom(filename, "cart.rom", 1);
-				mcd_mount_save(filename);
-				cheats_init(filename, 0);
+				if (phys)
+				{
+					/*
+					  No path means no sidecar cd_bios.rom/cart.rom and no cheats,
+					  but the save still needs a stable name that follows the disc:
+					  its header id, or failing that a uuid from the table of
+					  contents - see physical_disc_save_name().
+					*/
+					char save_name[64] = "physical_disc";
+					physical_disc_save_name(PHYSICAL_DISC_DISC_MEGACD, save_name, sizeof(save_name));
+					mcd_mount_save(save_name);
+				}
+				else
+				{
+					mcd_load_rom(filename, "cd_bios.rom", 0);
+					mcd_load_rom(filename, "cart.rom", 1);
+					mcd_mount_save(filename);
+					cheats_init(filename, 0);
+				}
 			}
 		}
 		else
@@ -179,6 +302,8 @@ void mcd_set_image(int num, const char *filename)
 			cdd.status = CD_STAT_NO_DISC;
 		}
 	}
+
+	return mounted;
 }
 
 void mcd_reset() {
