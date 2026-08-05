@@ -548,12 +548,16 @@ void gfx_disc(int cx, int cy, int r, int step,
 	edge |= 0xff000000u;
 
 	/*
-	  One cell wider than the disc when there is an outline to draw, which is how focus is
-	  shown: a ring just outside it. A filled plate behind the disc was the alternative
+	  Two cells wider than the disc when there is an outline to draw, which is how focus
+	  is shown: a ring just outside it. A filled plate behind the disc was the alternative
 	  and it covered the shelf title at 240p.
+
+	  Two cells and not one because at 240p a cell is one pixel, and a one-pixel ring on a
+	  real TV was too subtle to read as focus at all. Thickness has to come as whole
+	  cells: the sprite has no fractional pixels to give.
 	*/
-	int g = outline ? 17 : 16;
-	const int r2_out = 34 * 34;
+	int g = outline ? 18 : 16;
+	const int r2_out = 36 * 36;
 
 	for (int gy = -g; gy < g; gy++)
 	{

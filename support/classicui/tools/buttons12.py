@@ -124,9 +124,18 @@ LETTERS = {
 # Not buttons, but they sit in the same legend row, and a light keycap beside a dark
 # button chip was the one thing in that row that looked like it came from another
 # program. Same chip, an arrow instead of a symbol. Left and right are one glyph because
-# the legend always offers them together.
+# the legend always offers them together - and so are up and down, for the same reason:
+# the disc tier's MOVE prompt offers the pair, and until this glyph existed the legend
+# fell through btn12_find() and picto() alike and drew an empty chip.
 UP    = {4: [5, 6], 5: rng(4, 7), 6: rng(3, 8), 7: rng(2, 9)}
 DOWN  = {4: rng(2, 9), 5: rng(3, 8), 6: rng(4, 7), 7: [5, 6]}
+
+# The stacked pair reuses the single arrows' slopes exactly - widths 2, 4, 6, 8 - so an
+# up arrow is the same shape wherever it appears. Two blank rows between the bases keep
+# the pair from fusing into an hourglass; the eight-cell gap dpad_lr enjoys has no
+# vertical equivalent in a twelve-row chip.
+UPDOWN = {1: [5, 6], 2: rng(4, 7), 3: rng(3, 8), 4: rng(2, 9),
+          7: rng(2, 9), 8: rng(3, 8), 9: rng(4, 7), 10: [5, 6]}
 
 
 def dpad_lr():
@@ -200,7 +209,7 @@ for name, art in LETTERS.items():
                 g[3 + dy][3 + dx] = "k"
     GLYPHS.append(("btn_" + name, g))
 
-for name, spans in (("dpad_up", UP), ("dpad_down", DOWN)):
+for name, spans in (("dpad_up", UP), ("dpad_down", DOWN), ("dpad_ud", UPDOWN)):
     GLYPHS.append((name, paint(chip(), spans)))
 GLYPHS.append(("dpad_lr", dpad_lr()))
 
