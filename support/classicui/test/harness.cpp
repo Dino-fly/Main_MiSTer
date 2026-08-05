@@ -177,6 +177,87 @@ static void make_cover(const char *path, int w, int h, uint32_t col)
 }
 
 /*
+  A stand-in for a ScreenScraper support-2D, built to the geometry of a real one.
+
+  Deliberately generated rather than committed. The measured article is somebody's
+  copyrighted scan of a pressed disc, so it cannot go in the tree; what can is its
+  shape, which is what the scaler has to get right. From the real 600x600 RGBA PNG:
+  the disc is a 588 px circle centred with a 6 px margin, the corners are fully
+  transparent, and the hub hole is genuinely transparent out to a radius of 45 px -
+  15% of the disc's own radius.
+
+  The part that matters for the test is what the transparent pixels hold: RGB (0,0,0)
+  under alpha 0, exactly as the real file does. That is the whole reason
+  disc_art_scale() has to premultiply - a plain RGBA box average mixes those zeros
+  into every pixel that straddles the rim or the hub, and the sprite comes out with a
+  grey rim and a smudged hub. A fixture that put the disc colour under the transparent
+  pixels instead would pass either way and prove nothing.
+
+  Flat colour on purpose too: any darkening of an edge pixel is then unambiguous
+  rather than something that has to be told apart from the picture's own shading.
+*/
+#define DISC_FIX_PX   600
+#define DISC_FIX_R    294        // 588 px across, 6 px margin
+#define DISC_FIX_HUB  45         // 15% of DISC_FIX_R, transparent
+#define DISC_FIX_RGB  0x00e04010u
+
+static void make_disc_scan(const char *path)
+{
+	int n = DISC_FIX_PX;
+	Imlib_Image im = imlib_create_image(n, n);
+	if (!im) { printf("  imlib_create_image failed\n"); return; }
+
+	imlib_context_set_image(im);
+	imlib_image_set_has_alpha(1);
+	uint32_t *d = (uint32_t*)imlib_image_get_data();
+
+	double c = (n - 1) / 2.0;
+
+	for (int y = 0; y < n; y++)
+	{
+		for (int x = 0; x < n; x++)
+		{
+			double dx = x - c, dy = y - c;
+			double r = dx * dx + dy * dy;
+
+			int on = (r <= (double)DISC_FIX_R * DISC_FIX_R) &&
+			         (r >= (double)DISC_FIX_HUB * DISC_FIX_HUB);
+
+			// Transparent means transparent *black*, as the real scans store it.
+			d[y * n + x] = on ? (0xff000000u | DISC_FIX_RGB) : 0x00000000u;
+		}
+	}
+
+	imlib_image_put_back_data((DATA32*)d);
+	imlib_image_set_format("png");
+	imlib_save_image(path);
+	imlib_free_image();
+}
+
+// One pixel out of a PNG on disk, as 0xAARRGGBB. 0 and w/h of 0 when it cannot be read.
+static uint32_t png_pixel(const char *path, int x, int y, int *w, int *h)
+{
+	if (w) *w = 0;
+	if (h) *h = 0;
+
+	Imlib_Image im = imlib_load_image(path);
+	if (!im) return 0;
+
+	imlib_context_set_image(im);
+	int iw = imlib_image_get_width();
+	int ih = imlib_image_get_height();
+	if (w) *w = iw;
+	if (h) *h = ih;
+
+	uint32_t v = 0;
+	const uint32_t *p = (const uint32_t*)imlib_image_get_data_for_reading_only();
+	if (p && x >= 0 && y >= 0 && x < iw && y < ih) v = p[(size_t)y * iw + x];
+
+	imlib_free_image_and_decache();
+	return v;
+}
+
+/*
   A real archive, since the point is to exercise the zip reader rather than a
   stand-in for it. `inner` may name several members, comma separated.
 */
@@ -2981,6 +3062,134 @@ static void assert_disc_identity()
 	frame(6);
 }
 
+/*
+  Fixture credentials and a fixture host.
+
+  Every one of these is obviously fake, and that is not decoration. The measured reply
+  this fixture imitates carried our real devid, our real devpassword and Dinofly's own
+  ScreenScraper login inside all 133 of its media URLs, so committing anything resembling
+  the real thing would put the account in the repository permanently.
+
+  The host is under .invalid, which RFC 2606 reserves so that it can never resolve. If a
+  bug ever does let this suite hand a fixture URL to curl, the request fails in the
+  resolver instead of reaching a third party under a credential.
+*/
+#define FIX_HOST    "https://fixture.invalid/media"
+#define FIX_DEVID   "FIXTURE_NOT_A_DEVID"
+#define FIX_DEVPASS "FIXTURE_NOT_A_DEVPASSWORD"
+#define FIX_SSID    "fixture_not_a_user"
+#define FIX_SSPASS  "FIXTURE_NOT_A_PASSWORD"
+
+/*
+  A reply in the shape and the size the real one turned out to have.
+
+  Hand-built from what was measured on 2026-08-05 rather than captured, for the reason
+  above - and the shape is the measured shape, not the one this parser was written
+  against: type, region, format, crc, md5, sha1 and size are attributes, and the URL is
+  the element text. There is no url attribute anywhere in a real reply.
+
+  Two properties of the real reply are reproduced because they are what broke:
+
+    133 media in total, against a store of 64. Everything past the cap was discarded.
+
+    the server groups by type, and the types the pickers want are not all near the
+    front. Measured first occurrences were sstitle 0, ss 1, wheel 6, box-2D 17,
+    box-3D 47, mixrbv1 89, mixrbv2 97 and support-2D past 64 - so the overflow took
+    mixrbv1, mixrbv2 and the disc scan out of every reply, and the mixrbv fallbacks in
+    ss_pick() had literally never been reachable.
+
+  The group sizes below are not the measured ones - only the first indices were recorded
+  - but they preserve the ordering and put support-2D at raw index 128, well past the old
+  cap. wheel is given eleven regions on purpose, two more than SS_MAX_PER_TYPE, so the
+  per-type ceiling is exercised as well as the total.
+
+  support-2D gets exactly the five regions the real reply carried for support media - de,
+  eu, uk, jp, sp - and it matters that "us" is not among them: that is what makes the
+  first-in-reply fallback testable against real data rather than against a case invented
+  to suit it.
+*/
+static void write_measured_reply(const char *path)
+{
+	FILE *f = fopen(path, "wb");
+	if (!f) { printf("  cannot write %s\n", path); return; }
+
+	fprintf(f,
+		"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+		"<Data>\n"
+		"  <ssuser><id>%s</id><maxthreads>1</maxthreads>"
+		"<requeststoday>12</requeststoday><maxrequestsperday>20000</maxrequestsperday></ssuser>\n"
+		"  <jeu id=\"12345\">\n"
+		"    <noms><nom region=\"wor\">Fixture Game</nom></noms>\n"
+		"    <medias>\n", FIX_SSID);
+
+	static const char *const any_region[] =
+		{ "wor", "us", "eu", "jp", "de", "uk", "sp", "fr", "it", "br", "kr", "cn" };
+	static const char *const sup_region[] = { "de", "eu", "uk", "jp", "sp" };
+
+	static const struct { const char *type; int n; } groups[] =
+	{
+		{ "sstitle",         1  },
+		{ "ss",              1  },
+		{ "video",           4  },
+		{ "wheel",           11 },
+		{ "box-2D",          12 },
+		{ "box-texture",     18 },
+		{ "box-3D",          12 },
+		{ "support-texture", 20 },
+		{ "bezel-16-9",      9  },
+		{ "mixrbv1",         4  },
+		{ "mixrbv2",         4  },
+		{ "figurine",        6  },
+		{ "pictomonochrome", 12 },
+		{ "themehs",         14 },
+		{ "support-2D",      5  },
+	};
+
+	int total = 0;
+
+	for (size_t g = 0; g < sizeof(groups) / sizeof(groups[0]); g++)
+	{
+		int is_sup = !strcmp(groups[g].type, "support-2D");
+		const char *const *rl = is_sup ? sup_region : any_region;
+		int nrl = is_sup ? 5 : 12;
+
+		for (int i = 0; i < groups[g].n; i++)
+		{
+			const char *rg = rl[i % nrl];
+
+			/*
+			  The separators are written as &amp;, which is what a well-formed reply has
+			  to write them as. sxmlc decodes entities in attribute values and explicitly
+			  does not decode them in text, so this is also what proves url_unescape()
+			  runs: without it the URL keeps its "&amp;" and curl sees one parameter whose
+			  value swallowed the password.
+			*/
+			fprintf(f,
+				"      <media type=\"%s\" region=\"%s\" format=\"png\""
+				" crc=\"0000dead\" md5=\"00000000000000000000000000000000\""
+				" sha1=\"0000000000000000000000000000000000000000\" size=\"417000\">"
+				"%s/%s-%s.png?devid=%s&amp;devpassword=%s&amp;ssid=%s&amp;sspassword=%s"
+				"</media>\n",
+				groups[g].type, rg, FIX_HOST, groups[g].type, rg,
+				FIX_DEVID, FIX_DEVPASS, FIX_SSID, FIX_SSPASS);
+			total++;
+		}
+	}
+
+	fprintf(f, "    </medias>\n  </jeu>\n</Data>\n");
+	fclose(f);
+
+	printf("  fixture reply: %d media elements\n", total);
+}
+
+// How many stored media carry this type.
+static int media_count_of(const ss_result *r, const char *type)
+{
+	int n = 0;
+	for (int i = 0; i < r->nmedia; i++) if (!strcasecmp(r->media[i].type, type)) n++;
+	return n;
+}
+
 static void assert_screenscraper()
 {
 	printf("\n== screenscraper (inert: no devid in this tree) ==\n");
@@ -3286,8 +3495,446 @@ static void assert_screenscraper()
 	// Nothing of the kind asked for.
 	check(ss_pick(&r, SS_KIND_WHEEL, eu_first) == 0, "no media of that kind is no media");
 
+	/* ------------------------------------------------ the wanted-type filter --- */
+
+	/*
+	  The filter, on its own, in the real element shape. Only the types some kind list
+	  can ask for are stored; the rest are dropped before the cap is even consulted,
+	  which is the whole reason a small store is enough for a 133-media reply.
+	*/
+	check(ss_type_wanted("box-2D") && ss_type_wanted("mixrbv1") && ss_type_wanted("wheel-hd"),
+		"every type the pickers list is wanted");
+	check(ss_type_wanted("support-2D"), "and so is the disc scan, which no picker listed before");
+	check(ss_type_wanted("SUPPORT-2D"), "matched without regard to case, as the rest of this file is");
+	check(!ss_type_wanted("bezel-16-9") && !ss_type_wanted("support-texture") &&
+		!ss_type_wanted("figurine") && !ss_type_wanted("pictomonochrome"),
+		"and the bezels, textures, figurines and pictos are not");
+	check(!ss_type_wanted("") && !ss_type_wanted(0), "an empty or absent type is not wanted either");
+
+	put_file("/tmp/chome_ss_filter.xml",
+		"<Data><jeu id=\"12\"><medias>"
+		"<media type=\"bezel-16-9\" region=\"wor\" format=\"png\" size=\"1\">"
+			FIX_HOST "/bezel.png</media>"
+		"<media type=\"support-2D\" region=\"eu\" format=\"png\" size=\"1\">"
+			FIX_HOST "/disc.png</media>"
+		"<media type=\"figurine\" region=\"jp\" format=\"png\" size=\"1\">"
+			FIX_HOST "/figurine.png</media>"
+		"<media type=\"box-2D\" region=\"eu\" format=\"png\" size=\"1\">"
+			FIX_HOST "/box.png</media>"
+		"<media type=\"support-texture\" region=\"eu\" format=\"png\" size=\"1\">"
+			FIX_HOST "/texture.png</media>"
+		"<media type=\"wheel-hd\" region=\"wor\" format=\"png\" size=\"1\">"
+			FIX_HOST "/wheel.png</media>"
+		"</medias></jeu></Data>\n");
+
+	check(ss_parse_file("/tmp/chome_ss_filter.xml", &r) == SS_OK, "a mixed reply parses");
+	check(r.nmedia == 3, "and only the three wanted types are stored out of six");
+	check(media_count_of(&r, "support-2D") == 1 && media_count_of(&r, "box-2D") == 1 &&
+		media_count_of(&r, "wheel-hd") == 1, "which are the disc scan, the box and the wheel");
+	check(media_count_of(&r, "bezel-16-9") == 0 && media_count_of(&r, "support-texture") == 0,
+		"a bezel and a support texture never reach the store at all");
+
+	/*
+	  A second entry with the same type and region is unreachable: ss_pick() returns the
+	  first match, so storing it would cost 552 bytes to hold something nothing can read.
+	*/
+	put_file("/tmp/chome_ss_dup.xml",
+		"<Data><jeu id=\"13\"><medias>"
+		"<media type=\"support-2D\" region=\"eu\" format=\"png\">" FIX_HOST "/first.png</media>"
+		"<media type=\"support-2D\" region=\"eu\" format=\"png\">" FIX_HOST "/second.png</media>"
+		"<media type=\"support-2D\" region=\"EU\" format=\"png\">" FIX_HOST "/third.png</media>"
+		"<media type=\"support-2D\" region=\"jp\" format=\"png\">" FIX_HOST "/jp.png</media>"
+		"</medias></jeu></Data>\n");
+
+	check(ss_parse_file("/tmp/chome_ss_dup.xml", &r) == SS_OK, "a reply with repeated regions parses");
+	check(r.nmedia == 2, "a repeated type-and-region pair is dropped, whatever its case");
+	check(!strcmp(r.media[0].url, FIX_HOST "/first.png"), "and it is the first of the pair that is kept");
+
+	/* --------------------------------------------- the reply that overflowed --- */
+
+	write_measured_reply("/tmp/chome_ss_big.xml");
+	check(ss_parse_file("/tmp/chome_ss_big.xml", &r) == SS_OK,
+		"the 133-media reply, in the shape a real one has, parses");
+
+	printf("  stored %d of 133 media, cap %d\n", r.nmedia, SS_MAX_MEDIA);
+	check(r.nmedia < SS_MAX_MEDIA, "and fits inside the store with room left, rather than filling it");
+
+	{
+		int unwanted = 0;
+		for (int i = 0; i < r.nmedia; i++) if (!ss_type_wanted(r.media[i].type)) unwanted++;
+		check(unwanted == 0, "nothing the pickers cannot ask for was stored");
+	}
+
+	/*
+	  The headline. support-2D is the 129th media in this reply; under the cap that
+	  shipped it was thrown away with 68 others, so the disc dialog could never have had a
+	  picture however the fetch was written.
+	*/
+	check(media_count_of(&r, "support-2D") == 5,
+		"the disc scan survives, though it arrives past the old cap of 64");
+	check(media_count_of(&r, "mixrbv1") == 4 && media_count_of(&r, "mixrbv2") == 4,
+		"and so do the mixrbv fallbacks, which could never once have fired before");
+
+	// Eleven wheels were sent; no type may take more than its share of the store.
+	check(media_count_of(&r, "wheel") == SS_MAX_PER_TYPE,
+		"a type with more regions than SS_MAX_PER_TYPE keeps that many and no more");
+
+	{
+		int pairs = 0;
+		for (int i = 0; i < r.nmedia; i++)
+		{
+			for (int j = i + 1; j < r.nmedia; j++)
+			{
+				if (!strcasecmp(r.media[i].type, r.media[j].type) &&
+					!strcasecmp(r.media[i].region, r.media[j].region)) pairs++;
+			}
+		}
+		check(pairs == 0, "no two stored media share a type and a region");
+	}
+
+	/*
+	  sxmlc decodes entities in attribute values and deliberately not in text, and the
+	  URL is text. Without url_unescape() this URL keeps its "&amp;" and curl reads the
+	  whole tail as one parameter value - the devpassword and the player's password
+	  silently never sent, and a 401 with nothing in the log to explain it.
+	*/
+	{
+		const ss_media *d = ss_pick(&r, SS_KIND_DISC, 0);
+		check(d != 0, "the disc scan can be picked out of the store");
+		check(d && strstr(d->url, "&devpassword=") != 0,
+			"a URL taken from element text has its entities decoded");
+		check(d && strstr(d->url, "&amp;") == 0, "and carries no &amp; into curl");
+	}
+
+	/* ------------------------------------------------------ region from disc --- */
+
+	const char *rg;
+	rg = ss_region_from_serial("SLES-01506");
+	check(rg && !strcmp(rg, "eu"), "SLES is Europe");
+	rg = ss_region_from_serial("SCES-00001");
+	check(rg && !strcmp(rg, "eu"), "and so is SCES");
+	rg = ss_region_from_serial("SLUS-00594");
+	check(rg && !strcmp(rg, "us"), "SLUS is the US");
+	rg = ss_region_from_serial("SCUS-94900");
+	check(rg && !strcmp(rg, "us"), "and so is SCUS");
+	rg = ss_region_from_serial("SLPS-00123");
+	check(rg && !strcmp(rg, "jp"), "SLPS is Japan");
+	rg = ss_region_from_serial("SLPM-86300");
+	check(rg && !strcmp(rg, "jp"), "and so are SLPM");
+	rg = ss_region_from_serial("SCPS-10001");
+	check(rg && !strcmp(rg, "jp"), "and SCPS");
+
+	// The forms this tree passes the same serial around in.
+	rg = ss_region_from_serial("SLES_015.06");
+	check(rg && !strcmp(rg, "eu"), "the raw on-disc form works too");
+	rg = ss_region_from_serial("SLPS 01204");
+	check(rg && !strcmp(rg, "jp"), "and the spaced form the title lists use");
+	rg = ss_region_from_serial("sles01506");
+	check(rg && !strcmp(rg, "eu"), "and it is case-insensitive");
+
+	// A key that is not a PlayStation serial: a Mega CD header id, a volume label, a
+	// TOC hash. None of them says anything about a region and none is guessed at.
+	check(ss_region_from_serial("MK-4123") == 0, "a Mega CD header id implies no region");
+	check(ss_region_from_serial("SONIC_CD") == 0, "nor does a volume label");
+	check(ss_region_from_serial("") == 0 && ss_region_from_serial(0) == 0,
+		"and an empty or absent key does not crash the lookup");
+
+	{
+		const char *regs[4];
+
+		int nr = ss_regions_for_serial("SLES-01506", regs, 4);
+		check(nr == 1 && !strcmp(regs[0], "eu") && regs[1] == 0,
+			"a European serial yields exactly one preference, terminated");
+
+		const ss_media *d = ss_pick(&r, SS_KIND_DISC, nr ? regs : 0);
+		check(d && !strcmp(d->region, "eu"), "and the disc scan picked for it is the European one");
+
+		/*
+		  The fallback Dinofly asked for, on the data that motivated it. The real reply
+		  carried support media for de, eu, uk, jp and sp - and no us - so an American
+		  disc has no scan of its own pressing, and the answer is the first support-2D in
+		  reply order rather than nothing.
+		*/
+		nr = ss_regions_for_serial("SLUS-00594", regs, 4);
+		check(nr == 1 && !strcmp(regs[0], "us"), "an American serial asks for us");
+		d = ss_pick(&r, SS_KIND_DISC, nr ? regs : 0);
+		check(d && !strcmp(d->region, "de"),
+			"and with no us scan in the reply it falls back to the first one sent, not to nothing");
+
+		// No region derivable at all: the same fallback, reached the other way.
+		nr = ss_regions_for_serial("MK-4123", regs, 4);
+		check(nr == 0, "a key with no region in it yields no preference rather than a house default");
+		check(regs[0] == 0, "and leaves the list empty rather than half-written");
+		d = ss_pick(&r, SS_KIND_DISC, nr ? regs : 0);
+		check(d && !strcmp(d->region, "de"), "so it too takes the first scan in reply order");
+
+		// A preference for a region the per-type ceiling clipped behaves the same way.
+		static const char *const kr_only[] = { "kr", 0 };
+		const ss_media *w = ss_pick(&r, SS_KIND_WHEEL, kr_only);
+		check(w && !strcmp(w->region, "wor"),
+			"a region dropped by the per-type ceiling falls back to the first of its type");
+
+		const char *one[1];
+		check(ss_regions_for_serial("SLES-01506", one, 1) == 0,
+			"a list with no room for a terminator is refused rather than overrun");
+		check(one[0] == 0, "and is left terminated rather than holding a region it did not report");
+	}
+
+	/* --------------------------------------------------- redacting a reply --- */
+
+	/*
+	  The measured discovery that made this necessary: every URL the server hands back
+	  carries devid, devpassword, ssid and sspassword. ss_build_url() has redacted the
+	  request from the start; the reply needed the same discipline, and a media URL in
+	  /tmp/debug.txt or in a cache file is the account published.
+	*/
+	{
+		const ss_media *d = ss_pick(&r, SS_KIND_DISC, 0);
+		char safe[SS_URL_LEN];
+
+		check(d && ss_redact_url(d->url, safe, sizeof(safe)) > 0, "a reply URL redacts");
+		check(strstr(safe, FIX_DEVPASS) == 0, "the dev password is gone");
+		check(strstr(safe, FIX_SSPASS) == 0, "the player's password is gone");
+		check(strstr(safe, FIX_DEVID) == 0, "so is the devid, which identifies the application");
+		check(strstr(safe, FIX_SSID) == 0, "and the player's account name");
+		check(strstr(safe, "devpassword=***") != 0, "each one is replaced rather than dropped");
+		check(strstr(safe, "sspassword=***") != 0, "including the player's");
+		check(strstr(safe, "support-2D-de.png") != 0,
+			"and everything not secret survives, or the log line could not be matched to a reply");
+
+		// ssid is a prefix of nothing here, but a value that contains one of the key
+		// names must not be mistaken for a key.
+		check(ss_redact_url("https://x.invalid/a.png?romnom=my_ssid=notakey&devid=SECRET",
+			safe, sizeof(safe)) > 0, "a URL whose value looks like a key redacts");
+		check(strstr(safe, "my_ssid=notakey") != 0, "the value that only looks like a key is untouched");
+		check(strstr(safe, "SECRET") == 0, "while the real key beside it is not");
+
+		check(ss_redact_url("https://x.invalid/a.png?type=box-2D", safe, sizeof(safe)) > 0,
+			"a URL with no credentials in it redacts to itself");
+		check(!strcmp(safe, "https://x.invalid/a.png?type=box-2D"), "unchanged");
+
+		char snug[24];
+		check(ss_redact_url(d ? d->url : "", snug, sizeof(snug)) == 0,
+			"a buffer too small refuses rather than truncate");
+		check(snug[0] == 0, "and empties itself, since the half that survived could be the secret half");
+		check(ss_redact_url(0, safe, sizeof(safe)) == 0, "a null URL redacts to nothing");
+	}
+
 	cfg.classicui_ss_user[0] = 0;
 	cfg.classicui_ss_pass[0] = 0;
+}
+
+/* ------------------------------------------------------------- disc art --- */
+
+/*
+  What can honestly be tested, and what cannot, for the disc scan.
+
+  Can: where the file goes, that a request refuses in every configuration this tree
+  ships, and - the part that took the longest to get right - that scaling one down does
+  not dirty its edges.
+
+  Cannot: the fetch. Two curls, one for the reply and one for the picture, and this suite
+  makes no network request and must not: the account is limited to one thread and the
+  fixture URLs point at .invalid precisely so that a bug cannot turn into a request. So
+  every call below is made with the fetch disabled and asserted to have started nothing,
+  and disc_art_scale() is driven directly on a generated file instead.
+
+  The darkening check is the interesting one. A plain RGBA box average of one of these
+  scans looks fine in a thumbnail and wrong on a TV: the transparent pixels are RGB
+  (0,0,0), so every pixel straddling the rim or the hub gets those zeros mixed into its
+  colour in proportion to how much of it is transparent. On a flat-coloured fixture that
+  is exactly measurable - a half-covered rim pixel comes out at half the disc's colour -
+  and the assertion below is that it does not.
+*/
+static void assert_disc_art()
+{
+	printf("\n== the disc scan: where it goes, and scaling it without dirtying it ==\n");
+
+	/* ------------------------------------------------------------ the path --- */
+
+	char p[1024];
+	check(disc_art_path("SLES-01506", p, sizeof(p)) == 1, "a disc identity has a path for its scan");
+	check(strstr(p, "/classicui/discart/SLES-01506.png") != 0,
+		"under classicui/discart, named by the identity that names its savestates");
+	check(disc_art_path("", p, sizeof(p)) == 0, "an empty identity has none");
+	check(disc_art_path(0, p, sizeof(p)) == 0, "nor does an absent one");
+
+	// A volume label can be a disc's identity, and a volume label is free text.
+	check(disc_art_path("SONIC/CD", p, sizeof(p)) == 1 && strstr(p, "SONIC_CD.png") != 0,
+		"a slash in an identity is sanitised rather than making a directory");
+
+	/* ----------------------------------------------------- the refusals ----- */
+
+	/*
+	  Every configuration this tree ships, and the one the harness runs in. ss_available()
+	  is compile-time false in a shipped build, so nothing here can reach the network
+	  there; here the devid is a dummy, and cfg.classicui_artfetch is what holds the line.
+	*/
+	cfg.classicui_artfetch = 0;
+	cfg.classicui_screenscraper = 1;
+	strcpy(cfg.classicui_ss_user, "dinofly");
+
+	check(disc_art_request("SLES-01506", "psx", 0) == 0, "with the fetch off, nothing is asked for");
+	check(disc_art_active() == 0, "and no download was started");
+
+	cfg.classicui_artfetch = 1;
+	cfg.classicui_screenscraper = 0;
+	check(disc_art_request("SLES-01506", "psx", 0) == 0,
+		"with ScreenScraper off, nothing is asked for either");
+	check(disc_art_active() == 0, "and still no download");
+
+	cfg.classicui_screenscraper = 1;
+	cfg.classicui_ss_user[0] = 0;
+	check(disc_art_request("SLES-01506", "psx", 0) == 0, "nor with no account to ask under");
+	check(disc_art_active() == 0, "and still none");
+
+	strcpy(cfg.classicui_ss_user, "dinofly");
+	check(disc_art_request("SLES-01506", "c64", 0) == 0,
+		"nor for a system whose systemeid we never verified");
+	check(disc_art_active() == 0, "and still none");
+
+	check(disc_art_request("", "psx", 0) == 0, "an empty identity is refused");
+	check(disc_art_request(0, "psx", 0) == 0, "and an absent one");
+	check(disc_art_active() == 0, "none of the refusals forked anything");
+
+	// Back to the state the rest of the suite expects. Left set, the next section that
+	// scrolls a shelf would start downloading covers.
+	cfg.classicui_artfetch = 0;
+	cfg.classicui_screenscraper = 0;
+	cfg.classicui_ss_user[0] = 0;
+
+	/* -------------------------------------------------------- the scaling --- */
+
+	const char *src = "/tmp/chome_disc_scan.png";
+	make_disc_scan(src);
+
+	int sw = 0, sh = 0;
+	png_pixel(src, 0, 0, &sw, &sh);
+	check(sw == DISC_FIX_PX && sh == DISC_FIX_PX, "the fixture scan is the measured 600x600");
+
+	char dst[1024];
+	check(disc_art_path("SLES-01506", dst, sizeof(dst)) == 1, "and it has somewhere to go");
+	unlink(dst);
+
+	check(disc_art_scale(src, dst) == 1, "a scan scales down and is stored");
+
+	int w = 0, h = 0;
+	png_pixel(dst, 0, 0, &w, &h);
+	printf("  scaled %dx%d -> %dx%d\n", sw, sh, w, h);
+	check(w == DISC_ART_PX && h == DISC_ART_PX,
+		"at DISC_ART_PX, which is where the title round the disc becomes legible");
+
+	// The 417 KB original is what this is for. The sprite has to be a fraction of it.
+	{
+		struct stat a, b;
+		int have = (!stat(src, &a) && !stat(dst, &b));
+		printf("  fixture %lld bytes, sprite %lld bytes\n",
+			have ? (long long)a.st_size : -1, have ? (long long)b.st_size : -1);
+		check(have && b.st_size < a.st_size / 2,
+			"and much smaller than the source, which is the whole point of scaling at fetch time");
+	}
+
+	/*
+	  Transparency has to survive the write. imlib2 will happily save a PNG with the alpha
+	  channel flattened, and the result on the dialog is a black square with a disc printed
+	  on it rather than a disc.
+	*/
+	check((png_pixel(dst, 0, 0, 0, 0) >> 24) == 0, "the corner outside the disc is transparent");
+	check((png_pixel(dst, w - 1, h - 1, 0, 0) >> 24) == 0, "and so is the opposite corner");
+	check((png_pixel(dst, w / 2, h / 2, 0, 0) >> 24) == 0,
+		"and the hub hole in the middle, which is transparent in the source out to 15% of the radius");
+
+	// The disc body itself, well inside the rim, must be exactly the colour it was.
+	{
+		uint32_t body = png_pixel(dst, w / 2, h / 4, 0, 0);
+		check((body >> 24) == 0xff, "the disc body is opaque");
+		check((body & 0xffffffu) == DISC_FIX_RGB, "and exactly the colour it was drawn in");
+	}
+
+	/*
+	  The measurement this section exists for.
+
+	  Along the middle row, every pixel with partial coverage is a rim pixel. Premultiplied,
+	  its colour is the disc's colour whatever its alpha, because the only thing contributing
+	  colour is the disc. Averaged naively, its colour is the disc's scaled by its coverage -
+	  so a pixel at alpha 128 would read (112,32,8) instead of (224,64,16), and the sprite
+	  gets the grey rim Dinofly saw.
+	*/
+	{
+		int partial = 0, darkened = 0, worst = 0, half_covered = 0;
+		unsigned lowest = 255;
+		int mid = h / 2;
+
+		for (int x = 0; x < w; x++)
+		{
+			uint32_t v = png_pixel(dst, x, mid, 0, 0);
+			unsigned a = (v >> 24) & 0xff;
+			if (!a || a == 0xff) continue;
+
+			partial++;
+			if (a < lowest) lowest = a;
+
+			// Substantially partial, so that the check below can discriminate. A row whose
+			// only partial pixels were alpha 254 would pass under a naive average too -
+			// the error there is 1/255 - and would be a test that had quietly stopped
+			// testing anything.
+			if (a >= 32 && a <= 223) half_covered++;
+
+			int dr = (int)((v >> 16) & 0xff) - (int)((DISC_FIX_RGB >> 16) & 0xff);
+			int dg = (int)((v >> 8) & 0xff)  - (int)((DISC_FIX_RGB >> 8) & 0xff);
+			int db = (int)(v & 0xff)         - (int)(DISC_FIX_RGB & 0xff);
+			if (dr < 0) dr = -dr;
+			if (dg < 0) dg = -dg;
+			if (db < 0) db = -db;
+
+			int err = dr > dg ? dr : dg;
+			if (db > err) err = db;
+			if (err > worst) worst = err;
+			if (err > 6) darkened++;
+		}
+
+		printf("  %d partly-covered pixels on the middle row, %d of them substantially so"
+			" (lowest alpha %u), worst colour error %d/255\n",
+			partial, half_covered, lowest, worst);
+		check(partial > 0, "the rim really does produce partly-covered pixels to check");
+		check(half_covered > 0,
+			"at least one of them is covered enough for a naive average to be visibly wrong");
+		check(darkened == 0,
+			"and not one of them was dragged toward black: the average is premultiplied by alpha");
+	}
+
+	/* ---------------------------------------------- and once it is on the card --- */
+
+	/*
+	  A scan already on the card is an answer, not a reason to fetch. Checked with the
+	  fetch turned back on, because this is the branch that has to return before any of
+	  the gates below it are reached.
+	*/
+	cfg.classicui_artfetch = 1;
+	cfg.classicui_screenscraper = 1;
+	strcpy(cfg.classicui_ss_user, "dinofly");
+
+	check(disc_art_request("SLES-01506", "psx", 0) == 1,
+		"a scan already on the card needs no fetch and says so");
+	check(disc_art_active() == 0, "and nothing was downloaded to find that out");
+
+	cfg.classicui_artfetch = 0;
+	cfg.classicui_screenscraper = 0;
+	cfg.classicui_ss_user[0] = 0;
+
+	// The dialog reads it back through art_thumb(), which is the seam that was already
+	// committed. It has to be able to decode what was written.
+	{
+		const uint32_t *px = art_thumb(dst, 96, 96);
+		check(px != 0, "and the dialog can decode it through art_thumb()");
+	}
+
+	check(disc_art_scale("/tmp/chome_no_such_scan.png", dst) == 0,
+		"scaling a file that is not there fails rather than writing a broken sprite");
+	check(disc_art_scale(0, 0) == 0, "and null paths are refused");
+
+	unlink(dst);
+	unlink(src);
 }
 
 static int count_lines(const char *rel, int *bad_sum, int *maxlen)
@@ -6461,6 +7108,10 @@ int main()
 	assert_art();
 	assert_gamelist();
 	assert_screenscraper();
+	// Directly after it: it drives the same module, and it leaves classicui_artfetch and
+	// classicui_screenscraper off again on the way out, which every section that scrolls a
+	// shelf afterwards depends on.
+	assert_disc_art();
 	assert_physical_disc();
 	// Directly after it, because it drives the same state machine with the same fake
 	// discs, and before every section that draws or logs a disc name: it puts a title

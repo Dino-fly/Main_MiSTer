@@ -6,11 +6,13 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <fcntl.h>
 #include <errno.h>
 
 #include "chome_art.h"
 #include "chome_lib.h"
 #include "chome_gamelist.h"
+#include "chome_ss.h"
 #include "../../file_io.h"
 #include "../../cfg.h"
 #include "../../lib/imlib2/Imlib2.h"
@@ -616,9 +618,133 @@ static void mkdirs(const char *path)
 	mkdir(tmp, 0777);
 }
 
+// The trust store. Named explicitly because this rootfs carries a curl built for a
+// default bundle path that does not exist on it, so every https fetch dies with "unable
+// to get local issuer certificate" while a perfectly good trust store sits next to it
+// unused. Pass whichever is really there; if none is, let curl fall back to its own
+// default rather than give up verification, since an unverified download is not worth a
+// cover picture.
+static const char *curl_ca_bundle()
+{
+	static const char *const ca[] =
+	{
+		"/etc/ssl/cert.pem",
+		"/etc/ssl/certs/cacert.pem",
+		"/etc/ssl/certs/ca-certificates.crt",
+	};
+
+	for (size_t i = 0; i < sizeof(ca) / sizeof(ca[0]); i++)
+	{
+		if (file_exists_abs(ca[i])) return ca[i];
+	}
+	return 0;
+}
+
+// A value for a curl config file, which is double-quoted and backslash-escaped. A
+// percent-encoded URL contains neither character, so this never fires in practice - it
+// is here so that it cannot be made to fire by a media URL we did not write.
+static void curl_cfg_quote(const char *in, char *out, int len)
+{
+	int o = 0;
+	for (int i = 0; in && in[i] && o < len - 2; i++)
+	{
+		if (in[i] == '"' || in[i] == '\\') out[o++] = '\\';
+		out[o++] = in[i];
+	}
+	if (len > 0) out[o] = 0;
+}
+
+/*
+  Fork a curl for one URL into one file, or -1.
+
+  Factored out of fetch_start() when the disc scan needed downloading too: two callers
+  wanted the same three things - do not block the draw loop, verify the certificate, give
+  up rather than hang - and the CA bundle problem above is exactly the sort of thing that
+  gets fixed in one copy and not the other.
+
+  `secret` is about where the URL is visible, and it is the reason this is not simply one
+  execlp.
+
+  A URL passed on argv is readable by anything on the box, for as long as the child lives:
+  /proc/<pid>/cmdline, and `ps` reads it for you. That is harmless for cover art, whose
+  URL is a public libretro thumbnail path - so that caller passes 0 and its command line
+  is byte for byte what it always was, on a path that has been validated on hardware and
+  is not worth disturbing.
+
+  It is not harmless for the disc scan. Both of its URLs - the jeuInfos request and the
+  media URL out of the reply - carry devid, devpassword, ssid and sspassword, so that
+  caller passes 1 and the URL goes down a pipe into curl -K - instead, where nothing else
+  can read it. Same discipline as the credentials header rather than a -D: keep the secret
+  out of anything another process can see.
+
+  The URL is never printed here either, whichever way it goes.
+*/
+static pid_t curl_spawn(const char *url, const char *dst, int secret)
+{
+	int pfd[2] = { -1, -1 };
+	if (secret && pipe(pfd)) return -1;
+
+	pid_t pid = fork();
+	if (pid < 0)
+	{
+		if (pfd[0] >= 0) { close(pfd[0]); close(pfd[1]); }
+		return -1;
+	}
+
+	if (pid > 0)
+	{
+		if (secret)
+		{
+			close(pfd[0]);
+
+			char eurl[SS_URL_LEN * 2], edst[1200];
+			curl_cfg_quote(url, eurl, sizeof(eurl));
+			curl_cfg_quote(dst, edst, sizeof(edst));
+
+			char conf[SS_URL_LEN * 2 + 1400];
+			int n = snprintf(conf, sizeof(conf), "url = \"%s\"\noutput = \"%s\"\n", eurl, edst);
+
+			// One write of well under a pipe buffer, so it cannot block the draw loop
+			// waiting for a child that has not got to reading yet.
+			if (n > 0 && n < (int)sizeof(conf))
+			{
+				ssize_t wrote = write(pfd[1], conf, (size_t)n);
+				(void)wrote;
+			}
+			close(pfd[1]);
+		}
+		return pid;
+	}
+
+	// Child: quiet, fail on HTTP errors, follow redirects, hard timeout.
+	const char *bundle = curl_ca_bundle();
+
+	if (secret)
+	{
+		close(pfd[1]);
+		dup2(pfd[0], STDIN_FILENO);
+		close(pfd[0]);
+
+		if (bundle) execlp("curl", "curl", "-sfL", "-m", "20", "--retry", "0",
+			"--cacert", bundle, "-K", "-", (char*)NULL);
+
+		execlp("curl", "curl", "-sfL", "-m", "20", "--retry", "0",
+			"-K", "-", (char*)NULL);
+		_exit(127);
+	}
+
+	if (bundle) execlp("curl", "curl", "-sfL", "-m", "20", "--retry", "0",
+		"--cacert", bundle, "-o", dst, url, (char*)NULL);
+
+	execlp("curl", "curl", "-sfL", "-m", "20", "--retry", "0",
+		"-o", dst, url, (char*)NULL);
+	_exit(127);
+}
+
 static int fetch_start(int item)
 {
 	if (fetch_pid > 0) return 0;
+	if (disc_art_active()) return 0;      // one download at a time, whoever wants it
 	if (!cfg.classicui_artfetch) return 0;
 
 	chome_item *it = lib_item(item);
@@ -646,41 +772,9 @@ static int fetch_start(int item)
 	snprintf(fetch_tmp, sizeof(fetch_tmp), "/tmp/classicui_art_%d.png", item);
 	mkdirs(fetch_dst);
 
-	pid_t pid = fork();
+	// 0: a public libretro thumbnail URL, safe on argv. See curl_spawn().
+	pid_t pid = curl_spawn(url, fetch_tmp, 0);
 	if (pid < 0) return 0;
-
-	if (!pid)
-	{
-		/*
-		  Child: quiet, fail on HTTP errors, follow redirects, hard timeout.
-
-		  The CA bundle is named explicitly. This rootfs carries a curl built for a
-		  default bundle path that does not exist on it, so every https fetch dies
-		  with "unable to get local issuer certificate" while a perfectly good trust
-		  store sits next to it unused. Pass whichever bundle is really there; if
-		  none is, let curl fall back to its own default rather than give up
-		  verification, since an unverified download is not worth a cover picture.
-		*/
-		static const char *const ca[] =
-		{
-			"/etc/ssl/cert.pem",
-			"/etc/ssl/certs/cacert.pem",
-			"/etc/ssl/certs/ca-certificates.crt",
-		};
-
-		const char *bundle = 0;
-		for (size_t i = 0; !bundle && i < sizeof(ca) / sizeof(ca[0]); i++)
-		{
-			if (file_exists_abs(ca[i])) bundle = ca[i];
-		}
-
-		if (bundle) execlp("curl", "curl", "-sfL", "-m", "20", "--retry", "0",
-			"--cacert", bundle, "-o", fetch_tmp, url, (char*)NULL);
-
-		execlp("curl", "curl", "-sfL", "-m", "20", "--retry", "0",
-			"-o", fetch_tmp, url, (char*)NULL);
-		_exit(127);
-	}
 
 	fetch_pid = pid;
 	fetch_item = item;
@@ -740,6 +834,398 @@ static void fetch_poll()
 	fetch_item = -1;
 }
 
+/* ------------------------------------------------------------ disc scan --- */
+
+/*
+  The picture of the disc itself, for the physical-disc dialog.
+
+  Two downloads, one frame apart, because there is no URL to fetch until the database
+  has answered: first the jeuInfos reply, then the support-2D media that ss_pick()
+  chooses out of it. Both go through curl_spawn(), both are reaped from art_step() with
+  waitpid(WNOHANG), and neither ever runs while a cover fetch is in flight - the drive,
+  the network and the one-request-at-a-time rule the API imposes are all shared.
+
+  Where the files go matters more here than anywhere else in this file:
+
+    the reply    lands in /tmp, which is tmpfs, and is unlinked the instant it is
+                 parsed. It contains one URL per media - 133 of them in the reply this
+                 was written against - and every single one carries devid, devpassword,
+                 ssid and sspassword. A reply left on the SD card is the account
+                 published, to anyone who ever borrows the card.
+    the original lands in /tmp too and is unlinked after scaling. 417 KB for a picture
+                 drawn at 144 px is not something to leave on somebody's card.
+    the sprite   is the only thing that survives, at disc_art_path().
+
+  Nothing here is reachable in a build we ship: it needs ss_enabled(), which needs
+  ss_available(), which is compile-time false. It also needs classicui_artfetch, which
+  is what keeps the test harness off the network.
+*/
+#define DA_IDLE   0
+#define DA_QUERY  1      // waiting for the jeuInfos reply
+#define DA_IMAGE  2      // waiting for the picture the reply named
+
+static int   da_state = DA_IDLE;
+static pid_t da_pid = -1;
+static char  da_key[128];
+static char  da_dst[1024];
+static char  da_reply[256];
+static char  da_tmp[256];
+
+// One attempt per disc per session, the same rule cover art follows. A disc the
+// database has never heard of must not be asked for on every frame of the dialog.
+#define DA_TRIED_MAX 8
+static char da_tried[DA_TRIED_MAX][128];
+static int  da_ntried = 0;
+
+int disc_art_active()
+{
+	return da_pid > 0;
+}
+
+static int da_already_tried(const char *key)
+{
+	for (int i = 0; i < da_ntried; i++) if (!strcmp(da_tried[i], key)) return 1;
+	return 0;
+}
+
+static void da_mark_tried(const char *key)
+{
+	if (da_already_tried(key)) return;
+
+	// Full: forget the oldest. A dialog opened over eight different discs in one
+	// session may re-ask for the first of them, which is a request, not a bug.
+	if (da_ntried >= DA_TRIED_MAX)
+	{
+		for (int i = 1; i < DA_TRIED_MAX; i++) memcpy(da_tried[i - 1], da_tried[i], sizeof(da_tried[0]));
+		da_ntried = DA_TRIED_MAX - 1;
+	}
+
+	snprintf(da_tried[da_ntried++], sizeof(da_tried[0]), "%s", key);
+}
+
+static void da_reset()
+{
+	if (da_reply[0]) unlink(da_reply);
+	if (da_tmp[0]) unlink(da_tmp);
+	da_state = DA_IDLE;
+	da_pid = -1;
+	da_key[0] = 0;
+	da_dst[0] = 0;
+	da_reply[0] = 0;
+	da_tmp[0] = 0;
+}
+
+int disc_art_request(const char *key, const char *sysid, const char *romnom)
+{
+	if (!key || !key[0]) return 0;
+
+	/*
+	  A local, not da_dst. da_dst belongs to whatever fetch is in flight, and writing this
+	  disc's path into it while another disc's picture was still downloading would land that
+	  picture under this disc's name - the dialog would then show the wrong disc, which is
+	  the one failure mode nobody would read as a bug in the fetcher.
+	*/
+	char want[1024];
+	if (!disc_art_path(key, want, sizeof(want))) return 0;
+
+	// Already on the card: the dialog can draw it, and nothing else has to happen.
+	if (file_exists_abs(want)) return 1;
+
+	// One in flight. Answer honestly about whose it is, so a dialog that has switched
+	// discs does not sit waiting for a picture of the one before.
+	if (da_pid > 0) return !strcmp(da_key, key);
+
+	if (!cfg.classicui_artfetch) return 0;
+	if (!ss_enabled()) return 0;
+	if (fetch_pid > 0) return 0;
+	if (da_already_tried(key)) return 0;
+
+	const char *systemeid = ss_system_id(sysid, 0);
+	if (!systemeid) return 0;
+
+	/*
+	  What to ask the database for.
+
+	  This is the weak link and it is worth saying so out loud. jeuInfos.php matches on a
+	  rom name, a hash or a game id, and a pressed disc has none of the three: there is no
+	  file, hashing 700 MB off a spinning drive is not something to do while a dialog is
+	  open, and the serial is not a jeuInfos key. So the caller passes a name - the disc
+	  title if the title database knew it, else the serial - and it is matched as if it
+	  were a filename, which will hit for the well-known discs and miss for the rest.
+
+	  The proper answer is jeuRecherche.php, or the serial search the API grew later.
+	  Neither can be tried until there is a credential to try it with, and guessing at a
+	  second endpoint we cannot test would be two unknowns instead of one.
+	*/
+	char name[256];
+	snprintf(name, sizeof(name), "%s", (romnom && romnom[0]) ? romnom : key);
+
+	ss_query q;
+	memset(&q, 0, sizeof(q));
+	q.systemeid = systemeid;
+	q.romnom = name;
+
+	char url[1400];
+	if (!ss_build_url(&q, 0, url, sizeof(url))) return 0;
+
+	snprintf(da_dst, sizeof(da_dst), "%s", want);
+	snprintf(da_reply, sizeof(da_reply), "/tmp/classicui_discart.xml");
+	snprintf(da_key, sizeof(da_key), "%s", key);
+	da_tmp[0] = 0;
+
+	/*
+	  Create the reply 0600 before curl is handed it, and remove anything left there first.
+
+	  curl -o keeps the permissions of a file that already exists and otherwise creates one
+	  at the mercy of the umask, which on this rootfs means 0644. The reply is a list of
+	  URLs with our devid, our devpassword and the player's ScreenScraper password in every
+	  one of them - 133 copies of them in the reply this was written against - so for the
+	  couple of frames it exists it should not be readable by anything else on the box.
+
+	  The unlink matters for the same reason from the other direction: a firmware process
+	  killed mid-fetch leaves one behind, and a core change restarts the firmware without
+	  clearing tmpfs, so the next request would otherwise inherit a stale credential dump
+	  and its permissions.
+	*/
+	unlink(da_reply);
+	{
+		int fd = open(da_reply, O_CREAT | O_WRONLY | O_TRUNC, 0600);
+		if (fd >= 0) close(fd);
+	}
+
+	// 1: this URL carries devid, devpassword, ssid and sspassword. Down a pipe, not argv.
+	da_pid = curl_spawn(url, da_reply, 1);
+	if (da_pid < 0) { da_reset(); return 0; }
+
+	da_state = DA_QUERY;
+	da_mark_tried(key);
+
+	// The key, never the URL: the URL has the passwords in it.
+	printf("ClassicUI: asking for a disc scan for %s\n", da_key);
+	return 1;
+}
+
+/*
+  Box-average a scan down, premultiplying by alpha.
+
+  The naive version of this is a plain RGBA average, and it is wrong in a way that only
+  shows on the thing it is for. These scans store the transparent pixels as RGB (0,0,0) -
+  the corners outside the disc, and the hub hole, which is genuinely transparent out to
+  15% of the disc radius - so averaging the colour channels without regard to alpha mixes
+  those zeros into every pixel that straddles an edge. The result: a muddy grey rim all
+  the way round the disc and a dirty ring round the hub, on a sprite whose whole appeal
+  is that it is a clean circle over the dialog's background.
+
+  So each source colour is weighted by its own alpha, the sums are divided by the sum of
+  the alphas rather than by the pixel count, and alpha itself is the plain mean. A
+  destination pixel with no coverage at all stays fully transparent black.
+*/
+static void da_box_average(const uint32_t *sp, int sw, int sh, uint32_t *dp, int dw, int dh)
+{
+	for (int y = 0; y < dh; y++)
+	{
+		int y0 = (int)((long long)y * sh / dh);
+		int y1 = (int)((long long)(y + 1) * sh / dh);
+		if (y1 <= y0) y1 = y0 + 1;
+		if (y1 > sh) y1 = sh;
+
+		for (int x = 0; x < dw; x++)
+		{
+			int x0 = (int)((long long)x * sw / dw);
+			int x1 = (int)((long long)(x + 1) * sw / dw);
+			if (x1 <= x0) x1 = x0 + 1;
+			if (x1 > sw) x1 = sw;
+
+			unsigned long long sa = 0, sr = 0, sg = 0, sb = 0;
+			int n = 0;
+
+			for (int yy = y0; yy < y1; yy++)
+			{
+				const uint32_t *row = sp + (size_t)yy * sw;
+				for (int xx = x0; xx < x1; xx++)
+				{
+					uint32_t p = row[xx];
+					unsigned long long a = (p >> 24) & 0xff;
+					sa += a;
+					sr += (unsigned long long)((p >> 16) & 0xff) * a;
+					sg += (unsigned long long)((p >> 8) & 0xff) * a;
+					sb += (unsigned long long)(p & 0xff) * a;
+					n++;
+				}
+			}
+
+			uint32_t v = 0;
+			if (n > 0 && sa > 0)
+			{
+				unsigned a = (unsigned)((sa + n / 2) / (unsigned)n);
+				unsigned r = (unsigned)((sr + sa / 2) / sa);
+				unsigned g = (unsigned)((sg + sa / 2) / sa);
+				unsigned b = (unsigned)((sb + sa / 2) / sa);
+				if (a > 255) a = 255;
+				if (r > 255) r = 255;
+				if (g > 255) g = 255;
+				if (b > 255) b = 255;
+				v = (a << 24) | (r << 16) | (g << 8) | b;
+			}
+
+			dp[(size_t)y * dw + x] = v;
+		}
+	}
+}
+
+int disc_art_scale(const char *src_png, const char *dst_png)
+{
+	if (!src_png || !dst_png) return 0;
+
+	Imlib_Load_Error err = IMLIB_LOAD_ERROR_NONE;
+	Imlib_Image img = imlib_load_image_with_error_return(src_png, &err);
+	if (!img)
+	{
+		printf("ClassicUI: disc scan load failed (%d)\n", (int)err);
+		return 0;
+	}
+
+	imlib_context_set_image(img);
+	int sw = imlib_image_get_width();
+	int sh = imlib_image_get_height();
+	const uint32_t *sp = (const uint32_t*)imlib_image_get_data_for_reading_only();
+
+	if (sw < 1 || sh < 1 || !sp)
+	{
+		imlib_free_image_and_decache();
+		return 0;
+	}
+
+	// Long side to DISC_ART_PX, aspect kept. The measured scan is square, but a scan
+	// that is not must not come out as an oval disc.
+	int dw, dh;
+	if (sw >= sh)
+	{
+		dw = DISC_ART_PX;
+		dh = (int)((long long)DISC_ART_PX * sh / sw);
+	}
+	else
+	{
+		dh = DISC_ART_PX;
+		dw = (int)((long long)DISC_ART_PX * sw / sh);
+	}
+	if (dw < 1) dw = 1;
+	if (dh < 1) dh = 1;
+
+	// Never upscale: a scan smaller than the sprite is stored as it is rather than
+	// blown up into a soft one.
+	if (dw > sw) dw = sw;
+	if (dh > sh) dh = sh;
+
+	uint32_t *dp = (uint32_t*)malloc((size_t)dw * dh * 4);
+	if (!dp)
+	{
+		imlib_free_image_and_decache();
+		return 0;
+	}
+
+	da_box_average(sp, sw, sh, dp, dw, dh);
+	imlib_free_image_and_decache();
+
+	Imlib_Image out = imlib_create_image_using_copied_data(dw, dh, (DATA32*)dp);
+	free(dp);
+	if (!out) return 0;
+
+	imlib_context_set_image(out);
+
+	// Without this imlib2 writes the PNG with the alpha channel flattened away, and the
+	// corners and the hub come out black instead of transparent - which on the dialog is
+	// a black square with a disc printed on it.
+	imlib_image_set_has_alpha(1);
+	imlib_image_set_format("png");
+
+	mkdirs(dst_png);
+
+	Imlib_Load_Error serr = IMLIB_LOAD_ERROR_NONE;
+	imlib_save_image_with_error_return(dst_png, &serr);
+	imlib_free_image();
+
+	if (serr != IMLIB_LOAD_ERROR_NONE)
+	{
+		printf("ClassicUI: disc scan save failed (%d) %s\n", (int)serr, dst_png);
+		return 0;
+	}
+
+	// Whoever rewrote a picture says so, rather than leaving the thumbnail cache to
+	// guess from an mtime the card is too coarse to resolve. See art_forget().
+	art_forget(dst_png);
+	return 1;
+}
+
+static void disc_art_poll()
+{
+	if (da_pid <= 0) return;
+
+	int status = 0;
+	pid_t r = waitpid(da_pid, &status, WNOHANG);
+	if (!r) return;
+
+	int ok = (r > 0) && WIFEXITED(status) && !WEXITSTATUS(status);
+	da_pid = -1;
+
+	if (da_state == DA_QUERY)
+	{
+		if (!ok || !file_exists_abs(da_reply)) { da_reset(); return; }
+
+		/*
+		  Static, not a local. ss_result holds SS_MAX_MEDIA url[512] buffers - ~53 KB -
+		  and this runs on the thread that draws, whose stack is not the place for it.
+		*/
+		static ss_result res;
+		int e = ss_parse_file(da_reply, &res);
+
+		// Parsed or not, the reply goes now. It is a list of URLs with our devid and the
+		// player's password in every one of them, sitting in a file.
+		unlink(da_reply);
+		da_reply[0] = 0;
+
+		if (e != SS_OK) { da_reset(); return; }
+
+		/*
+		  Region from the disc, which for a PlayStation disc is in the serial that is also
+		  its identity key. Nothing derivable means no preference at all rather than a
+		  house default, which lands ss_pick() on the first support-2D in reply order.
+		*/
+		const char *regs[4];
+		int nr = ss_regions_for_serial(da_key, regs, 4);
+
+		const ss_media *m = ss_pick(&res, SS_KIND_DISC, nr ? regs : 0);
+		if (!m) { da_reset(); return; }
+
+		snprintf(da_tmp, sizeof(da_tmp), "/tmp/classicui_discart_src");
+
+		// 1 again: the media URL out of the reply carries the same four credentials.
+		da_pid = curl_spawn(m->url, da_tmp, 1);
+		if (da_pid < 0) { da_reset(); return; }
+
+		da_state = DA_IMAGE;
+
+		// Type and region, never the URL - see ss_redact_url() for what is in one.
+		printf("ClassicUI: disc scan for %s is %s/%s\n", da_key, m->type,
+			m->region[0] ? m->region : "no region");
+		return;
+	}
+
+	if (da_state == DA_IMAGE)
+	{
+		if (ok && file_exists_abs(da_tmp) && disc_art_scale(da_tmp, da_dst))
+		{
+			printf("ClassicUI: disc scan stored for %s\n", da_key);
+		}
+
+		// The 417 KB original goes either way. da_reset() unlinks it.
+		da_reset();
+		return;
+	}
+
+	da_reset();
+}
+
 /* ---------------------------------------------------------------- queue --- */
 
 void art_request(int item, int prio)
@@ -795,6 +1281,16 @@ static int queue_pop()
 void art_step()
 {
 	fetch_poll();
+
+	/*
+	  Before the early return below, deliberately. The disc dialog is drawn over a running
+	  core, and the shelf's slots may not exist at all there - art_init() runs off a
+	  library that a disc-only session never builds. Reaping after that check would leave a
+	  started fetch unreaped until the player went back to the shelf, which is a zombie and
+	  a picture that turns up minutes late.
+	*/
+	disc_art_poll();
+
 	if (!slots) return;
 
 	int item = queue_pop();
