@@ -29,6 +29,46 @@ static uint8_t cd_speed = 0;
 void neocd_poll()
 {
 	static uint8_t last_req = 255;
+	static uint32_t swap_close_at = 0;
+
+	/*
+	  Disc swapping, physical drive only. The reader's worker thread watches the tray
+	  while a disc is mounted; once it has seen that disc leave and a new table of
+	  contents read back, adopt the new disc and act out the tray for the core - OPEN
+	  for a moment, then STOP (NO_DISC if the new disc turned out unreadable) - so the
+	  BIOS sees a swap rather than the old disc's geometry continuing underneath it.
+
+	  The dwell is what makes the swap visible at all. Status only reaches the core on
+	  a poll and the CDD state machine on the FPGA side samples it on its own
+	  schedule, so flipping to OPEN and back inside one poll interval is a transition
+	  the fabric can miss entirely - and then the BIOS never learns the disc changed.
+	  latency = 0 is part of the same trick: cdd_t::Update() returns early while a
+	  latency is counting down in the STOP/TRAY/OPEN branch, so a leftover latency
+	  would eat the dwell instead of holding OPEN through it.
+
+	  This is mcd_poll()'s block rather than a paraphrase of it, deliberately: Neo Geo
+	  CD has no daemon of its own, the `cdd` here *is* Mega CD's cdd_t, so the two
+	  cores must drive it the same way or one of them is wrong. In particular isData
+	  = 1 next to CD_STAT_OPEN is that daemon's own convention for a tray event - see
+	  CD_COMM_TRAY_OPEN in megacdd.cpp, which sets exactly this pair. Deriving isData
+	  from the new disc the way neocd_set_image() does for a cold mount was tried and
+	  dropped: a cold mount is a machine powering up with a disc already in it, a swap
+	  is a tray cycle, and Update() puts isData back per track as soon as the BIOS
+	  plays anything anyway.
+	*/
+	if (cdd.is_phys() && physical_disc_swap_consume() && cdd.SwapPhys())
+	{
+		cdd.isData = 1;
+		cdd.status = CD_STAT_OPEN;
+		cdd.latency = 0;
+		swap_close_at = GetTimer(PHYSICAL_DISC_SWAP_DWELL_MS);
+	}
+	if (cdd.is_phys() && swap_close_at && CheckTimer(swap_close_at))
+	{
+		swap_close_at = 0;
+		cdd.status = cdd.loaded ? CD_STAT_STOP : CD_STAT_NO_DISC;
+		cdd.latency = 10;
+	}
 
 	if (!poll_timer || CheckTimer(poll_timer))
 	{
@@ -117,7 +157,26 @@ int neocd_set_image(const char *filename)
 	int phys = !strcmp(filename, PHYSICAL_DISC_SENTINEL);
 
 	cdd.Unload();
+	physical_disc_swap_enable(0);
 	cdd.status = CD_STAT_OPEN;
+
+	/*
+	  Open the drive here, not down in cdd.Load() where the sentinel is normally
+	  recognised, because neogeo_romset_tx() runs first and mounts the CD backup RAM.
+	  For a disc that save's name has to come off the disc itself - see
+	  physical_disc_save_name() - and every route to a name there reads the table of
+	  contents, which needs an open drive. With the drive still closed the lookup
+	  failed silently, and it fails by emptying the caller's buffer rather than by
+	  leaving the "physical_disc" fallback standing, so the save path came out as
+	  saves/NEOGEO/.sav: one hidden file that every disc shared and every disc
+	  overwrote. A core launch re-execs the firmware, so there was never an earlier
+	  open to inherit - this path was reached with the drive shut every single time.
+	  physical_disc_open() is idempotent, so cdd.Load() still owns the TOC and still
+	  re-arms the read-ahead worker on it; all this call changes is that the drive is
+	  already spinning by then, which is what mcd_set_image() gets out of opening
+	  early for the region.
+	*/
+	if (phys) physical_disc_open(NULL);
 
 	if (*filename)
 	{
@@ -147,6 +206,14 @@ int neocd_set_image(const char *filename)
 			cdd.latency = 10;
 			cdd.SendData = neocd_send_data;
 			cdd.CanSendData = neocd_can_send_data;
+
+			/*
+			  Only now: arming the watch before the TOC is loaded would have the
+			  worker thread poll a tray it has no geometry for, and the watch itself
+			  waits for a leadout before it will believe anything. Armed last, so an
+			  image mount or a failed disc leaves it disarmed.
+			*/
+			if (phys) physical_disc_swap_enable(1);
 		}
 		else
 		{

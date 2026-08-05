@@ -197,8 +197,12 @@ int mcd_set_image(int num, const char *filename)
 			/*
 			  A disc in the drive has no directory to hold a cd_bios.rom next to it,
 			  so the BIOS is looked up by the disc's region in the core's home
-			  folder: boot_jp/us/eu.rom, then bios_jp/us/eu.rom, then the plain
-			  boot.rom every Mega CD install already has.
+			  folder: boot_JP/US/EU.rom, then bios_JP/US/EU.rom, then the plain
+			  boot.rom every Mega CD install already has. Upper case because that is
+			  what physical_disc_region_name() returns and what the mismatch warning
+			  below tells the player to create - a FAT card does not care, but the
+			  spelling here has to match the message, or the file it names is the one
+			  file the player will not think to try.
 			*/
 			const char *rn = physical_disc_region_name(disc_region);
 			if (*rn)
