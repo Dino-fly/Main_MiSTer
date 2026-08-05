@@ -2235,6 +2235,46 @@ static const uint32_t disc_bands[12] =
 #define DISC_BANDS_N ((int)(sizeof(disc_bands) / sizeof(disc_bands[0])))
 
 /*
+  The focus ring's pulse: the ring breathes between the selection blue and a lighter
+  blue while the badge has focus, because on a real TV at 240p even a two-pixel ring of
+  one steady colour is easy to miss in the corner - and brightness moving is what the
+  eye is built to catch.
+
+  Off the millisecond clock, like every other animation here (see chome_gfx.h): the UI
+  only draws when something changed, so a frame counter would pulse at a different
+  speed depending on what else was moving. Repaints already come every GFX_DISC_MS
+  while a disc is on screen, so the pulse costs no extra frames - it rides the spin's.
+
+  The bright end stops well short of white: a white ring against the disc's own white
+  rim merged into one thick band that read as decoration, which is why the steady ring
+  is blue in the first place.
+*/
+#define COL_DISC_FOCUS_HI 0xffa3bdddu    // COL_BLUE six-tenths of the way to COL_WHITE
+
+static uint32_t disc_focus_col(void)
+{
+	unsigned long t = anim_ms() % GFX_DISC_PULSE_MS;
+
+	// A triangle wave, 0..255..0 across the period...
+	unsigned long x = t * 512UL / GFX_DISC_PULSE_MS;
+	if (x > 255) x = 511 - x;
+
+	// ...through a smoothstep, so the ends of the breath ease instead of bouncing.
+	// Same 0..256 fixed point as disc_speed_now()'s ramp.
+	unsigned long e = x * x * (768UL - 2UL * x) / (256UL * 256UL);
+	if (e > 256) e = 256;
+
+	uint32_t c = 0xff000000u;
+	for (int sh = 0; sh <= 16; sh += 8)
+	{
+		unsigned long lo = (COL_BLUE >> sh) & 0xff;
+		unsigned long hi = (COL_DISC_FOCUS_HI >> sh) & 0xff;
+		c |= (uint32_t)(lo + (hi - lo) * e / 256UL) << sh;
+	}
+	return c;
+}
+
+/*
   Radius in the units gfx_disc() wants: a multiple of 8, so the cells come out whole
   pixels. 8 gives a 16px icon at 240p; 16 gives a 32px one with 2x2 cells where there
   is room for it.
@@ -2261,9 +2301,11 @@ static int disc_radius(const chome_profile *p)
   remove a disc - a screen change, a disc arriving or leaving, a resolution change -
   marks dirty and takes the full path, which re-records these.
 
-  Sized at 17 cells' radius (the focus-ring variant of gfx_disc's grid) whether or not
-  the ring is on: one cell of slack costs a couple of rows, and the ring appearing is a
-  screen change anyway.
+  Sized at 18 cells' radius (the focus-ring variant of gfx_disc's grid) whether or not
+  the ring is on: two cells of slack cost a few rows, and the ring appearing is a
+  screen change anyway. This must track the ring's thickness in gfx_disc(): a focused
+  disc drawn outside this rectangle is exactly the smear the partial repaint cannot
+  fix, because it will never repaint those pixels.
 */
 static struct { int x, y, w, h, on; } disc_rc[2];   // 0 the badge, 1 the prompt's
 
@@ -2271,10 +2313,10 @@ static void disc_note_rect(int i, int cx, int cy, int r)
 {
 	int cell = r / 16;
 	if (cell < 1) cell = 1;
-	disc_rc[i].x = cx - 17 * cell;
-	disc_rc[i].y = cy - 17 * cell;
-	disc_rc[i].w = 34 * cell;
-	disc_rc[i].h = 34 * cell;
+	disc_rc[i].x = cx - 18 * cell;
+	disc_rc[i].y = cy - 18 * cell;
+	disc_rc[i].w = 36 * cell;
+	disc_rc[i].h = 36 * cell;
 	disc_rc[i].on = 1;
 }
 
@@ -4012,17 +4054,19 @@ static void draw_disc_badge(const chome_profile *p)
 	  What is *on* the disc belongs in the prompt, where there is room to say it
 	  properly.
 
-	  Focus is a ring one cell outside the disc, not a plate behind it, and it is the
-	  same COL_BLUE this front-end uses for a selected row everywhere else - a white ring
-	  merged with the disc's own white rim into one thick band that read as decoration.
-	  Growing the radius instead would have shown nothing at all: the cell size is r/16
-	  as an integer, so anything short of doubling renders identically.
+	  Focus is a ring two cells outside the disc, not a plate behind it, and it breathes
+	  between the COL_BLUE this front-end uses for a selected row everywhere else and a
+	  lighter blue - see disc_focus_col(). Not white: a white ring merged with the disc's
+	  own white rim into one thick band that read as decoration. Growing the radius
+	  instead would have shown nothing at all: the cell size is r/16 as an integer, so
+	  anything short of doubling renders identically. One cell of ring and one steady
+	  colour were both tried and both were too subtle on a real TV at 240p.
 	*/
 	int focused = (screen == SCR_DISCBAR);
 
 	gfx_disc(cx, cy, r, disc_step(),
 		disc_bands, DISC_BANDS_N, COL_WHITE, COL_PANELHI, COL_BGDARK,
-		focused ? COL_BLUE : 0);
+		focused ? disc_focus_col() : 0);
 
 	/*
 	  No word beside it, focused or not.
@@ -5015,7 +5059,7 @@ static void render()
 
   The frame is composed as usual but under a clip, so only the region's pixels are
   drawn or damaged, and gfx_end() copies only that region into the framebuffer. The
-  copy is row-based and the disc spans ~34 rows of 240, so this is the difference
+  copy is row-based and the disc spans ~36 rows of 240, so this is the difference
   between ~5ms a frame and well under 1ms.
 
   The alternating framebuffers need no special handling here, and that is worth
