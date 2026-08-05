@@ -2102,6 +2102,16 @@ static unsigned long anim_ms() { return GetTimer(0); }
 */
 static unsigned long disc_spin_period()
 {
+	/*
+	  Focused is faster than either state rather than equal to one of them. Reusing the
+	  "still identifying" rate for focus would have made a focused known disc and an
+	  unfocused unknown one look the same, and the rate is the only thing distinguishing
+	  those. Three rates, three meanings.
+
+	  Only the badge is ever focused - the prompt's disc turns at the state rate, which is
+	  the slow one once the disc is known.
+	*/
+	if (screen == SCR_DISCBAR) return GFX_DISC_FOCUS_MS;
 	return (disc_state() == DISC_SPINNING) ? GFX_DISC_FAST_MS : GFX_DISC_SLOW_MS;
 }
 
@@ -2113,16 +2123,20 @@ static unsigned long disc_spin_period()
   spectrum would look like a parrot landed on the shelf. One near-white wedge acts as
   the specular streak, which is what the eye actually tracks as it turns.
 */
-static const uint32_t disc_bands[8] =
+static const uint32_t disc_bands[12] =
 {
-	0xffe8f4ff,      // the highlight
+	0xffeef6ff,      // the specular streak, and the one either side of it
+	0xffc8e8fa,
 	0xff8fd8f0,
-	0xff58a8d8,
+	0xff64bce0,
+	0xff4894cc,
 	0xff4878c0,
+	0xff5866c4,
 	0xff6858c0,
-	0xff9058b8,
-	0xff5878c8,
-	0xff3f6098,
+	0xff8058bc,
+	0xff9860b4,
+	0xff7a5cb0,
+	0xff4f6aa8,
 };
 
 #define DISC_BANDS_N ((int)(sizeof(disc_bands) / sizeof(disc_bands[0])))
@@ -2134,6 +2148,8 @@ static const uint32_t disc_bands[8] =
 */
 static int disc_radius(const chome_profile *p)
 {
+	// Multiples of 16: gfx_disc draws a 32-cell sprite, so this is one pixel per cell
+	// at 240p and 2x2 above it.
 	return (p->ts_ui >= 2) ? 32 : 16;
 }
 
@@ -3758,7 +3774,7 @@ static void draw_disc(const chome_profile *p)
 	  arrives it belongs here, masked to the same circle.
 	*/
 	gfx_disc(cx, cy, r, anim_ms(), disc_spin_period(),
-		disc_bands, DISC_BANDS_N, COL_WHITE, COL_PANELHI, COL_BGDARK);
+		disc_bands, DISC_BANDS_N, COL_WHITE, COL_PANELHI, COL_BGDARK, 0);
 
 	int tx = cx + r + 10 * s;
 	int tw = tcol;
@@ -3809,45 +3825,41 @@ static void draw_disc_badge(const chome_profile *p)
 {
 	if (disc_state() == DISC_ABSENT) return;
 
-	int s = p->ts_ui;
 	int r = disc_radius(p);
-	int focused = (screen == SCR_DISCBAR);
-
 	int cx = p->safe_x + p->inset + r;
 	int cy = p->safe_y + p->inset + r;
 
 	/*
-	  Focused, it gets a plate behind it and the game's name beside it. Unfocused it is
-	  the disc alone: an indicator, not a card. Both live in the same corner so pressing
-	  up does not appear to move it anywhere.
+	  The disc and nothing else. No plate behind it and no name beside it, at any
+	  profile, focused or not.
+
+	  It turns, which is already enough to notice, and a disc is self-explanatory in a
+	  way a label is not - so the label was only ever repeating what the picture said,
+	  while costing the room it needed and, at 240p, running across the shelf title.
+	  What is *on* the disc belongs in the prompt, where there is room to say it
+	  properly.
+
+	  Focus is a ring one cell outside the disc, not a plate behind it, and it is the
+	  same COL_BLUE this front-end uses for a selected row everywhere else - a white ring
+	  merged with the disc's own white rim into one thick band that read as decoration.
+	  Growing the radius instead would have shown nothing at all: the cell size is r/16
+	  as an integer, so anything short of doubling renders identically.
 	*/
-	if (focused)
-	{
-		int tw = gfx_text_w(disc_display_name(), s);
-		int pw = 2 * r + 12 * s + tw + 8 * s;
-		gfx_fill(cx - r - 4 * s, cy - r - 4 * s, pw, 2 * r + 8 * s, COL_BLUE);
-	}
+	int focused = (screen == SCR_DISCBAR);
 
 	gfx_disc(cx, cy, r, anim_ms(), disc_spin_period(),
-		disc_bands, DISC_BANDS_N, COL_WHITE, COL_PANELHI, COL_BGDARK);
+		disc_bands, DISC_BANDS_N, COL_WHITE, COL_PANELHI, COL_BGDARK,
+		focused ? COL_BLUE : 0);
 
 	/*
-	  What is on the disc, beside it. Unfocused this is the console name and is dropped
-	  at 240p, where the shelf is tight enough that a word here reaches the title.
-	  Focused it is always drawn and names the game, because naming the thing is the
-	  reason the tier exists.
+	  No word beside it, focused or not.
+
+	  An "Open" label was tried and dropped: at 240p it runs into the shelf title, and the
+	  only way to fit it was to suppress that title - which is a side effect on the shelf
+	  to buy a word the outline and the faster spin already convey. The legend along the
+	  bottom names the action anyway.
 	*/
-	if (!focused && p->id == PROF_LO) return;
-
-	const char *tag;
-	if (disc_state() == DISC_SPINNING) tag = "Reading the disc";
-	else if (disc_state() == DISC_UNKNOWN) tag = "Unrecognised disc";
-	else if (focused) tag = disc_display_name();
-	else tag = disc_type_name(disc_type());
-
-	int tx = cx + r + 6 * s;
-	gfx_text(gfx_clip(tag, s, p->w - tx - p->inset), tx, cy - 4 * s, s,
-		focused ? COL_WHITE : COL_PANELHI, COL_BGDARK);
+	(void)focused;
 }
 
 static void draw_power(const chome_profile *p)
