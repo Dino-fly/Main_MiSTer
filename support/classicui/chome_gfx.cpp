@@ -4,6 +4,7 @@
 #include <time.h>
 
 #include "chome_gfx.h"
+#include "../../cfg.h"
 #include "../../video.h"
 #include "../../charrom.h"
 
@@ -154,41 +155,11 @@ int gfx_begin()
   Full and partial repaints are accounted separately - averaging them together would
   bury the number the partial path exists to produce under the occasional full frame,
   and hide a regression in either.
+
+  All of it is behind cfg.debug, measurement included. The reporting was already throttled,
+  but the clock_gettime() pairs ran on every composed frame to feed it - work nobody asked
+  for on the drawing path of a build that is not being debugged.
 */
-/*
-  SoC temperature in milli-degrees, or -1 when the kernel does not offer one.
-
-  Here because the repaint summary is the only thing this file already logs periodically,
-  and correlating temperature with drawing load is exactly what it is wanted for. Read
-  fresh each time rather than cached: the point is to watch it move.
-
-  Added after Dinofly's machine dropped off the network following a long session with a disc
-  in the drive, and I could not say whether it had overheated - because in hours of shell
-  access I had never once read this. A number nobody recorded is a question nobody can
-  answer later.
-*/
-static int soc_temp_mc()
-{
-	static const char *const paths[] =
-	{
-		"/sys/class/thermal/thermal_zone0/temp",
-		"/sys/devices/virtual/thermal/thermal_zone0/temp",
-	};
-
-	for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); i++)
-	{
-		FILE *f = fopen(paths[i], "r");
-		if (!f) continue;
-
-		int v = -1;
-		if (fscanf(f, "%d", &v) != 1) v = -1;
-		fclose(f);
-		if (v > 0) return v;
-	}
-
-	return -1;
-}
-
 #define GFX_STAT_EVERY 200
 
 static unsigned long gfx_us()
@@ -222,7 +193,7 @@ static void stat_fmt(char *buf, size_t len, const char *tag, const gfx_stat_t *s
 // Called by the front-end when it starts composing a frame.
 void gfx_stat_compose_begin()
 {
-	compose_t0 = gfx_us();
+	compose_t0 = cfg.debug ? gfx_us() : 0;
 }
 
 void gfx_end()
@@ -258,7 +229,7 @@ void gfx_end()
 		uint32_t *fb = video_menu_fb(fbn);
 		if (fb)
 		{
-			unsigned long t_copy = gfx_us();
+			unsigned long t_copy = cfg.debug ? gfx_us() : 0;
 			int x = u.x0;
 			int bytes = (u.x1 - u.x0 + 1) * sizeof(uint32_t);
 			for (int y = u.y0; y <= u.y1; y++)
@@ -268,25 +239,25 @@ void gfx_end()
 			video_menu_fb_present(fbn);
 			fbn = (fbn == 1) ? 2 : 1;
 
-			unsigned long cp = gfx_us() - t_copy;
-			st->copy_us += cp;
-			if (cp > st->copy_max) st->copy_max = cp;
-			st->rows += (unsigned long)(u.y1 - u.y0 + 1);
-			st->n++;
-
-			if (stat_full.n + stat_part.n >= GFX_STAT_EVERY)
+			if (cfg.debug)
 			{
-				char fs[160], ps[160];
-				stat_fmt(fs, sizeof(fs), "full", &stat_full);
-				stat_fmt(ps, sizeof(ps), "partial", &stat_part);
-				int mc = soc_temp_mc();
-				char temp[32] = "";
-				if (mc > 0) snprintf(temp, sizeof(temp), "  soc %d.%01dC", mc / 1000, (mc % 1000) / 100);
+				unsigned long cp = gfx_us() - t_copy;
+				st->copy_us += cp;
+				if (cp > st->copy_max) st->copy_max = cp;
+				st->rows += (unsigned long)(u.y1 - u.y0 + 1);
+				st->n++;
 
-				printf("ClassicUI: repaint %dx%d over %lu frames: %s; %s%s\n",
-					cw, ch, stat_full.n + stat_part.n, fs, ps, temp);
-				memset(&stat_full, 0, sizeof(stat_full));
-				memset(&stat_part, 0, sizeof(stat_part));
+				if (stat_full.n + stat_part.n >= GFX_STAT_EVERY)
+				{
+					char fs[160], ps[160];
+					stat_fmt(fs, sizeof(fs), "full", &stat_full);
+					stat_fmt(ps, sizeof(ps), "partial", &stat_part);
+
+					printf("ClassicUI: repaint %dx%d over %lu frames: %s; %s\n",
+						cw, ch, stat_full.n + stat_part.n, fs, ps);
+					memset(&stat_full, 0, sizeof(stat_full));
+					memset(&stat_part, 0, sizeof(stat_part));
+				}
 			}
 		}
 	}

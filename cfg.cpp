@@ -640,7 +640,9 @@ void cfg_parse()
 	cfg.classicui_screenscraper = 0;
 
 	/*
-	  Physical disc detection, OFF by default. Every ioctl on /dev/sr0 serialises
+	  Physical disc support, OFF by default. It is no longer detection alone: PC Engine
+	  CD, PlayStation, Mega CD and Neo Geo CD read the disc in the drive directly, and
+	  the PlayStation path is verified on hardware. Every ioctl on /dev/sr0 serialises
 	  behind whatever the drive is doing, and getting that wrong froze the front-end
 	  twice during development - so this stays opt-in until it has been proven on a
 	  range of drives and discs.
