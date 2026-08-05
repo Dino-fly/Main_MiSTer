@@ -61,6 +61,24 @@ int main()
 	// gated - so a reply captured by hand can still be examined in this build.
 	check(ss_system_id("psx", "x.cue") != 0, "the system table still answers");
 
+	/*
+	  And the redactor, which is the other half of the same promise.
+
+	  A reply's media URLs carry devid, devpassword, ssid and sspassword; ss_redact_url()
+	  is what stands between one of those and /tmp/debug.txt. It is pure string work with
+	  no credential of its own, so it has to keep working in the configuration we ship -
+	  a build where the safe way to log a URL had been compiled out would be a build that
+	  logged the unsafe one.
+	*/
+	char safe[512];
+	int n = ss_redact_url("https://media.example/x.png?devid=D&devpassword=P&ssid=U&sspassword=Q&type=box-2D",
+		safe, sizeof(safe));
+
+	check(n > 0, "a reply URL still redacts with no devid compiled in");
+	check(!strstr(safe, "devpassword=P") && !strstr(safe, "sspassword=Q"),
+		"and the passwords in it are gone");
+	check(strstr(safe, "type=box-2D") != 0, "while what is not secret survives");
+
 	printf("%s\n", fails ? "GATE FAILED" : "gate holds");
 	return fails ? 1 : 0;
 }

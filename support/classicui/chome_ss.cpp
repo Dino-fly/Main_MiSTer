@@ -12,24 +12,35 @@
 /*
   See chome_ss.h for why none of this is live, and for the credential problem.
 
-  One thing to settle against the first real reply, and it is written here rather
-  than buried in a commit message because it is the one weak spot in this file:
+  The XML shape is now settled, which it was not when this was written.
 
-  The *JSON* shape of a jeuInfos reply is confirmed - response.jeu, a flat medias
-  array whose entries carry type/region/format/url, and response.ssuser carrying
-  the quota counters. The *XML* shape of the same reply is not confirmed. API v1
-  nested media per region and per kind into element names
-  (medias/media_boxs/media_boxs3d/media_box3d_eu); v2 flattened it, but whether
-  the flattened form puts type/region/url in attributes, in child elements, or the
-  URL in the element text is not something to take on trust from second-hand
-  descriptions.
+  What was known then was the *JSON* shape - response.jeu, a flat medias array whose
+  entries carry type/region/format/url, and response.ssuser carrying the quota
+  counters. The XML shape of the same reply was a guess: API v1 nested media per region
+  and per kind into element names (medias/media_boxs/media_boxs3d/media_box3d_eu), v2
+  flattened it, and whether the flattened form put type/region/url in attributes, in
+  child elements, or the URL in the element text was not something to take on trust
+  from second-hand descriptions. So the parser was written to read all three
+  placements, and this comment said the first live reply had to be read by a human.
 
-  So the parser below reads all three placements and does not care about nesting
-  depth: it takes any <media> element anywhere, an attribute if there is one, the
-  element text if there is not. That is deliberately loose, and it means the first
-  live reply must be dumped to a file and read by a human before this is trusted.
-  If it turns out the XML is awkward, only ss_parse_file() changes - the URL
-  builder, the classifier and the picker are independent of the wire format.
+  One was, on 2026-08-05, for a PlayStation game. The answer:
+
+    type, region, format, crc, md5, sha1 and size are ATTRIBUTES, and the URL is the
+    element TEXT. There is no url attribute.
+
+  Which is one of the three placements the parser already handled, so nothing here had
+  to change for it - the loose reading paid for itself. Two things about that reply did
+  matter, and both are dealt with rather than described:
+
+    - it carried 133 <media> elements against a store of 64. See the cap and the filter
+      in chome_ss.h; the short version is that the overflow discarded exactly the types
+      the picker wanted least often and needed most.
+    - every media URL in it embeds devid, devpassword, ssid and sspassword. See
+      ss_redact_url(), and do not save a reply anywhere but tmpfs.
+
+  The remaining soft spot is smaller and different: one reply, one system. The nesting
+  and the placement are confirmed; the region spellings for other consoles, and whether
+  every system's medias block looks the same, are not.
 */
 
 /* --------------------------------------------------------------- the gate --- */
@@ -405,6 +416,52 @@ int ss_body_class(const char *body)
 	return SS_OK;
 }
 
+/* ------------------------------------------------------- what we want ------- */
+
+/*
+  Type before region, which is the opposite of what Skyscraper does.
+
+  Its reason for region-first is that a user wants their own local box. Ours is
+  that the shelf card is a flat rectangle: a box-3D render dropped into it is a
+  photographed box at an angle, and it looks wrong next to flat covers in a way a
+  Japanese cover next to an American one does not. So the best *kind* is chosen
+  first, and region decides between the ones of that kind.
+
+  These live up here, above the parser rather than beside the picker where they used
+  to, because the parser now filters on them. That is the point: the set of types
+  worth storing is *derived* from the set the picker can ask for, so the two cannot
+  drift. The bug that motivated the filter was the other kind of drift - the cap
+  discarding types the picker listed - and a second hand-written list of "wanted"
+  types would have been the same mistake in a new place.
+
+  support-2D is the scan of the disc face. It has no kind list of its own beyond
+  SS_KIND_DISC because there is nothing to fall back to: a disc either has a scan or
+  it does not, and a box cover is not a substitute for a picture of a disc.
+*/
+static const char *const cover_types[]  = { "box-2D", "box-3D", "mixrbv2", "mixrbv1", "ss", 0 };
+static const char *const screen_types[] = { "ss", "sstitle", "mixrbv1", 0 };
+static const char *const wheel_types[]  = { "wheel", "wheel-hd", "screenmarquee", 0 };
+static const char *const disc_types[]   = { "support-2D", 0 };
+
+static const char *const *const all_types[] =
+{
+	cover_types, screen_types, wheel_types, disc_types
+};
+
+int ss_type_wanted(const char *type)
+{
+	if (!type || !type[0]) return 0;
+
+	for (size_t k = 0; k < sizeof(all_types) / sizeof(all_types[0]); k++)
+	{
+		for (int t = 0; all_types[k][t]; t++)
+		{
+			if (!strcasecmp(all_types[k][t], type)) return 1;
+		}
+	}
+	return 0;
+}
+
 /* --------------------------------------------------------------- parsing ---- */
 
 struct ss_ctx
@@ -443,13 +500,130 @@ static const char *attr_of(const XMLNode *node, const char *name)
 	return 0;
 }
 
+/*
+  Whether this media is worth one of the store's entries, and the reason it is asked
+  before the cap rather than after.
+
+  A real reply carried 133 media for one PlayStation game against a store of 64, and
+  media_commit() returned early past the cap - so the last 69 were dropped, and because
+  the server groups by type the drop landed squarely on mixrbv1 (first at index 89),
+  mixrbv2 (97) and support-2D (past 64). Three of the five types the cover picker lists
+  and the only type the disc dialog wants, thrown away to make room for bezels, pictos,
+  figurines and box textures that nothing in this file can ask for. The fallbacks in
+  ss_pick() had never been reachable.
+
+  Three refusals, in the order that matters:
+
+    1. the type is not one ss_type_wanted() recognises. This is the one that does the
+       work - it is what turns 133 media into something a small store holds.
+    2. the same type and region has already been stored. ss_pick() returns the first
+       match, so a second one is unreachable by construction and costs 552 bytes.
+    3. this type already holds SS_MAX_PER_TYPE. Without it a type carrying a dozen
+       regions could still eat the store before a later type was reached, which is the
+       original bug with a smaller blast radius. With it, ten wanted types times nine
+       is 90 in a store of 96 and no type can be starved by the ones before it.
+*/
+static int media_keep(const ss_ctx *c)
+{
+	if (!c->cur.url[0]) return 0;                      // a media with no URL is no use
+	if (strncasecmp(c->cur.url, "http", 4)) return 0;  // and nor is one that is not a URL
+
+	if (!ss_type_wanted(c->cur.type)) return 0;
+
+	int of_type = 0;
+	for (int i = 0; i < c->r->nmedia; i++)
+	{
+		if (strcasecmp(c->r->media[i].type, c->cur.type)) continue;
+		if (!strcasecmp(c->r->media[i].region, c->cur.region)) return 0;
+		of_type++;
+	}
+
+	return of_type < SS_MAX_PER_TYPE;
+}
+
 static void media_commit(ss_ctx *c)
 {
 	if (c->r->nmedia >= SS_MAX_MEDIA) return;
-	if (!c->cur.url[0]) return;                      // a media with no URL is no use
-	if (strncasecmp(c->cur.url, "http", 4)) return;  // and nor is one that is not a URL
+	if (!media_keep(c)) return;
 
 	c->r->media[c->r->nmedia++] = c->cur;
+}
+
+/*
+  Undo XML entity escaping, in place, on a URL taken from element text.
+
+  Needed because sxmlc decodes entities in *attribute values* and deliberately does not
+  decode them in text - "no str_unescape(line)" at the SAX text callback in sxmlc.c - and
+  the real reply puts the URL in the text. So a URL the server wrote as
+
+      ...jeuInfos.php?devid=x&amp;devpassword=y
+
+  arrived here as that literal string, and handing it to curl would have sent one
+  parameter called "devid" whose value was "x&amp;devpassword=y". The credential half of
+  every media URL would silently have gone missing, and the fetch would have come back
+  401 with nothing in the log to say why.
+
+  Only applied to the text placement, and that precision matters: an attribute value has
+  already been through html2str() inside sxmlc, so running this over one as well would
+  decode it twice and turn a legitimate "&amp;amp;" into "&".
+
+  Deliberately short. The five predefined entities plus numeric references is the whole
+  of what a URL can contain, and anything else is left alone rather than guessed at.
+*/
+static void url_unescape(char *s)
+{
+	char *w = s;
+
+	for (char *p = s; *p; )
+	{
+		if (*p != '&') { *w++ = *p++; continue; }
+
+		static const struct { const char *ent; char ch; } named[] =
+		{
+			{ "&amp;",  '&' },
+			{ "&lt;",   '<' },
+			{ "&gt;",   '>' },
+			{ "&quot;", '"' },
+			{ "&apos;", '\'' },
+		};
+
+		const char *hit = 0;
+		char ch = 0;
+		for (size_t i = 0; !hit && i < sizeof(named) / sizeof(named[0]); i++)
+		{
+			if (!strncmp(p, named[i].ent, strlen(named[i].ent))) { hit = named[i].ent; ch = named[i].ch; }
+		}
+
+		if (hit) { *w++ = ch; p += strlen(hit); continue; }
+
+		if (p[1] == '#')
+		{
+			int base = (p[2] == 'x' || p[2] == 'X') ? 16 : 10;
+			char *d = p + ((base == 16) ? 3 : 2);
+			long v = 0;
+			char *q = d;
+			while (*q && *q != ';')
+			{
+				int dig = isdigit((unsigned char)*q) ? *q - '0' :
+					(base == 16 && isxdigit((unsigned char)*q)) ? (tolower((unsigned char)*q) - 'a' + 10) : -1;
+				if (dig < 0 || dig >= base) break;
+				v = v * base + dig;
+				q++;
+			}
+
+			// Only a plain one-byte reference, and only when it really was terminated.
+			if (q > d && *q == ';' && v > 0 && v < 128)
+			{
+				*w++ = (char)v;
+				p = q + 1;
+				continue;
+			}
+		}
+
+		*w++ = *p++;
+	}
+
+	*w = 0;
 }
 
 static int sax(XMLEvent evt, const XMLNode *node, SXML_CHAR *text, const int n, SAX_Data *sd)
@@ -532,9 +706,13 @@ static int sax(XMLEvent evt, const XMLNode *node, SXML_CHAR *text, const int n, 
 			*/
 			if (c->in_media)
 			{
-				// The URL as element text, which is the placement we could not confirm
-				// from the documentation. Only used when there was no url attribute.
-				if (!c->cur.url[0] && c->text_len) snprintf(c->cur.url, sizeof(c->cur.url), "%s", c->text);
+				// The URL as element text, which is the placement the real reply uses.
+				// Only used when there was no url attribute - and there never is one.
+				if (!c->cur.url[0] && c->text_len)
+				{
+					snprintf(c->cur.url, sizeof(c->cur.url), "%s", c->text);
+					url_unescape(c->cur.url);
+				}
 				media_commit(c);
 				c->in_media = 0;
 			}
@@ -548,7 +726,11 @@ static int sax(XMLEvent evt, const XMLNode *node, SXML_CHAR *text, const int n, 
 			if (!c->cur.type[0]   && !strcasecmp(node->tag, "type"))   snprintf(c->cur.type,   sizeof(c->cur.type),   "%s", c->text);
 			if (!c->cur.region[0] && !strcasecmp(node->tag, "region")) snprintf(c->cur.region, sizeof(c->cur.region), "%s", c->text);
 			if (!c->cur.format[0] && !strcasecmp(node->tag, "format")) snprintf(c->cur.format, sizeof(c->cur.format), "%s", c->text);
-			if (!c->cur.url[0]    && !strcasecmp(node->tag, "url"))    snprintf(c->cur.url,    sizeof(c->cur.url),    "%s", c->text);
+			if (!c->cur.url[0]    && !strcasecmp(node->tag, "url"))
+			{
+				snprintf(c->cur.url, sizeof(c->cur.url), "%s", c->text);
+				url_unescape(c->cur.url);      // element text, so sxmlc left the entities alone
+			}
 			c->text_len = 0;
 			c->text[0] = 0;
 			break;
@@ -639,18 +821,7 @@ int ss_parse_file(const char *path, ss_result *out)
 
 /* ---------------------------------------------------------------- picking --- */
 
-/*
-  Type before region, which is the opposite of what Skyscraper does.
-
-  Its reason for region-first is that a user wants their own local box. Ours is
-  that the shelf card is a flat rectangle: a box-3D render dropped into it is a
-  photographed box at an angle, and it looks wrong next to flat covers in a way a
-  Japanese cover next to an American one does not. So the best *kind* is chosen
-  first, and region decides between the ones of that kind.
-*/
-static const char *const cover_types[]  = { "box-2D", "box-3D", "mixrbv2", "mixrbv1", "ss", 0 };
-static const char *const screen_types[] = { "ss", "sstitle", "mixrbv1", 0 };
-static const char *const wheel_types[]  = { "wheel", "wheel-hd", "screenmarquee", 0 };
+// The type lists themselves are up above the parser, which filters on them.
 
 const ss_media *ss_pick(const ss_result *r, int kind, const char *const *regions)
 {
@@ -658,7 +829,8 @@ const ss_media *ss_pick(const ss_result *r, int kind, const char *const *regions
 
 	const char *const *types =
 		(kind == SS_KIND_SCREEN) ? screen_types :
-		(kind == SS_KIND_WHEEL)  ? wheel_types  : cover_types;
+		(kind == SS_KIND_WHEEL)  ? wheel_types  :
+		(kind == SS_KIND_DISC)   ? disc_types   : cover_types;
 
 	for (int t = 0; types[t]; t++)
 	{
@@ -676,9 +848,12 @@ const ss_media *ss_pick(const ss_result *r, int kind, const char *const *regions
 		}
 
 		/*
-		  Then anything of this kind whatever its region, which also covers the
-		  entries that carry no region at all. Taken last rather than dropped: a
-		  cover with no region is still the right cover.
+		  Then the first entry of this kind in reply order, whatever its region - which
+		  also covers the entries that carry no region at all. Taken last rather than
+		  dropped: a cover with no region is still the right cover, and for a disc scan
+		  the wrong pressing is still a picture of the disc while nothing at all is a
+		  hole in the dialog. Derek's rule, and it is deliberately reply order rather
+		  than any preference of ours: the server lists its own best first.
 		*/
 		for (int i = 0; i < r->nmedia; i++)
 		{
@@ -687,4 +862,129 @@ const ss_media *ss_pick(const ss_result *r, int kind, const char *const *regions
 	}
 
 	return 0;
+}
+
+/* ---------------------------------------------------------------- regions --- */
+
+/*
+  Sony wrote the region into the publisher prefix, which is the only reason a pressed
+  disc can be asked for the right art at all: there is no filename to read a "(Europe)"
+  out of, and the identity key for a PlayStation disc is exactly this serial.
+
+  The prefixes are the ones disc_serial_at() already looks for; SCPM is left out here
+  on purpose rather than guessed at, since a wrong region is quietly the wrong picture
+  and no region is honestly no region.
+*/
+const char *ss_region_from_serial(const char *serial)
+{
+	if (!serial) return 0;
+
+	// Only the four-letter prefix carries the region. Everything after it - the dash,
+	// the underscore, the space, the dot, the number - varies by who wrote the string.
+	static const struct { const char *prefix; const char *region; } psx[] =
+	{
+		{ "SLES", "eu" }, { "SCES", "eu" },
+		{ "SLUS", "us" }, { "SCUS", "us" },
+		{ "SLPS", "jp" }, { "SLPM", "jp" }, { "SCPS", "jp" },
+	};
+
+	for (size_t i = 0; i < sizeof(psx) / sizeof(psx[0]); i++)
+	{
+		if (!strncasecmp(serial, psx[i].prefix, 4)) return psx[i].region;
+	}
+
+	return 0;
+}
+
+int ss_regions_for_serial(const char *serial, const char **out, int max)
+{
+	if (!out || max < 1) return 0;
+	out[0] = 0;
+
+	const char *r = ss_region_from_serial(serial);
+	if (!r) return 0;
+	if (max < 2) return 0;                 // no room for the terminator: say nothing
+
+	out[0] = r;
+	out[1] = 0;
+	return 1;
+}
+
+/* -------------------------------------------------------------- redaction --- */
+
+/*
+  The reply's own URLs are credentials, which was not obvious until a real reply was
+  read: every media URL carries devid, devpassword, ssid and sspassword in its query
+  string, because the media endpoint authenticates the same way jeuInfos.php does.
+
+  ss_build_url() has had a redact flag from the start for the request URL. This is the
+  same discipline for the other direction, and it is a separate function rather than a
+  flag because these URLs are not built here - they are read off the wire, in whatever
+  order and spelling the server chose, so they have to be rewritten rather than
+  formatted.
+
+  Rewritten by key, not by position: the four keys are found wherever they appear and
+  their values replaced with "***", and anything else - the media type, the game id,
+  the file name, the size - is copied through, because a log line with those removed
+  could not be read against the reply it came from.
+*/
+int ss_redact_url(const char *in, char *out, int len)
+{
+	if (!out || len <= 0) return 0;
+	out[0] = 0;
+	if (!in) return 0;
+
+	static const char *const secret[] = { "devid", "devpassword", "ssid", "sspassword", 0 };
+
+	int o = 0;
+	const char *p = in;
+
+	while (*p)
+	{
+		/*
+		  A key starts at the beginning of the query or just after a separator. Checked
+		  here rather than with a plain substring search because "ssid" is a substring of
+		  "sspassword" would-be values and of nothing useful: matching mid-token would
+		  redact halfway through somebody's game title.
+		*/
+		int at_key = (p == in) || p[-1] == '?' || p[-1] == '&' || p[-1] == ';';
+
+		const char *hit = 0;
+		int klen = 0;
+
+		if (at_key)
+		{
+			for (int s = 0; secret[s]; s++)
+			{
+				int l = (int)strlen(secret[s]);
+				if (strncasecmp(p, secret[s], l)) continue;
+				if (p[l] != '=') continue;
+				hit = secret[s];
+				klen = l;
+				break;
+			}
+		}
+
+		if (!hit)
+		{
+			if (o >= len - 1) { out[0] = 0; return 0; }
+			out[o++] = *p++;
+			continue;
+		}
+
+		// key=***, then skip the real value up to the next separator.
+		if (o + klen + 4 >= len - 1) { out[0] = 0; return 0; }
+		memcpy(out + o, p, (size_t)klen);
+		o += klen;
+		out[o++] = '=';
+		out[o++] = '*';
+		out[o++] = '*';
+		out[o++] = '*';
+
+		p += klen + 1;
+		while (*p && *p != '&' && *p != ';') p++;
+	}
+
+	out[o] = 0;
+	return o;
 }
