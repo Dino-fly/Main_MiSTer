@@ -2319,7 +2319,7 @@ static void assert_partial_repaint()
   psx.cpp key on, so they are checked as text; whether the core then reads sectors is
   hardware's question, not this file's.
 
-  And the refusal: a disc whose core is not wired (Mega CD here) is named on the
+  And the refusal: a disc whose core is not wired (SNES MSU-1 here) is named on the
   prompt but marked "(not yet)", and pressing it must launch nothing - the row that
   offered and then refused is the bug this pins shut.
 */
@@ -2335,12 +2335,13 @@ static void assert_disc_launch()
 
 	disc_ingest_present(1);
 	fake_disc dm; memset(&dm, 0, sizeof(dm));
-	fake_put(&dm, 0, 0, "SEGADISCSYSTEM", 14, 0);
+	static const char *const sfc[] = { "GAME.SFC;1" };
+	fake_iso(&dm, 0, "MSU1", 0, sfc, 1);
 	disc_set_reader(fake_read, &dm);
 	disc_ingest_identify(0);
 	frame(6);
-	check(disc_state() == DISC_READY && disc_type() == DISC_T_MEGACD,
-		"a Mega CD disc is identified");
+	check(disc_state() == DISC_READY && disc_type() == DISC_T_SNES,
+		"an MSU-1 SNES disc is identified");
 
 	press(KEY_UP);
 	press(KEY_ENTER);
@@ -2393,6 +2394,62 @@ static void assert_disc_launch()
 		check(strstr(buf, PHYSICAL_DISC_SENTINEL) != 0, "the file is the sentinel, not a path");
 		check(strstr(buf, "type=\"s\" index=\"1\"") != 0,
 			"and it goes into SD slot 1 - \"H7S1,CUECHD,Load CD\" in PSX.sv");
+	}
+
+	/* ------------------------------------- and Mega CD, with its own core --- */
+
+	/*
+	  Mega CD is the case where the disc's core is not the shelf system's own: the
+	  "md" shelf launches the Genesis core, whose config string has no disc slot at
+	  all, so the MGL has to name the separate MegaCD core. A wrong rbf here would
+	  look on hardware like a broken disc, which is why the core line is asserted
+	  as text alongside the sentinel and the slot.
+	*/
+
+	// The PSX launch closed the UI; come back the way a player would.
+	disc_reset_reader();
+	disc_ingest_present(0);
+	(void)disc_take_dirty();
+	chome_leave();
+	press(KEY_MENU, 20);
+	frame(10);
+
+	disc_ingest_present(1);
+	fake_disc dmc; memset(&dmc, 0, sizeof(dmc));
+	fake_put(&dmc, 0, 0, "SEGADISCSYSTEM", 14, 0);
+	disc_set_reader(fake_read, &dmc);
+	disc_ingest_identify(0);
+	frame(6);
+	check(disc_state() == DISC_READY && disc_type() == DISC_T_MEGACD,
+		"a Mega CD disc is identified");
+
+	press(KEY_UP);
+	press(KEY_ENTER);
+	check(chome_screen_id() == S_DISC, "and its prompt is up");
+	dump("disc-7-megacd-play");
+
+	harness_clear_launch();
+	press(KEY_ENTER, 4);
+	frame(80);                         // let the launch curtain elapse
+
+	check(strstr(harness_last_launch(), ".mgl") != 0, "\"Play on Mega Drive\" launches");
+
+	FILE *fm = fopen("/tmp/classicui_launch.mgl", "rt");
+	check(fm != 0, "and wrote the MGL");
+	if (fm)
+	{
+		char buf[1024] = {};
+		size_t n = fread(buf, 1, sizeof(buf) - 1, fm);
+		buf[n] = 0;
+		fclose(fm);
+		printf("---- /tmp/classicui_launch.mgl ----\n%s-----------------------------------\n", buf);
+		check(strstr(buf, "_Console/MegaCD") != 0,
+			"the MGL names the MegaCD core - \"S0,CUECHD,Insert Disk\" in MegaCD.sv");
+		check(strstr(buf, "_Console/Genesis") == 0,
+			"and not the shelf's Genesis core, which has no disc slot");
+		check(strstr(buf, PHYSICAL_DISC_SENTINEL) != 0, "the file is the sentinel, not a path");
+		check(strstr(buf, "type=\"s\" index=\"0\"") != 0,
+			"and it goes into SD slot 0, the MegaCD core's only S entry");
 	}
 
 	// Leave things as the sections after this expect: no disc, the flag back off,
