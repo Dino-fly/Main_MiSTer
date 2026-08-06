@@ -127,10 +127,15 @@ Press **up** from the shelf for the menu bar: Display, Options, Power, About.
 ![Best settings](img/best-settings.png)
 
 MiSTer ships with several pop-ups that interrupt a game — the resolution banner,
-the button-map panel, the autofire announcement. This turns them off in one go.
+the button-map panel, the autofire announcement. This turns them off in one go, and
+checks that the front-end itself is switched on in a place that holds for every core
+and every video mode, which on a card that has been in use for a while is not a given.
 
 It shows you exactly which lines of `MiSTer.ini` it will change, keeps a copy of
-your old file, and needs a second press to do anything.
+your old file, and needs a second press to do anything. It is a short list on purpose:
+your own settings — how games are scaled, where your art lives, whether the menu
+pauses a game — are yours, and it does not have an opinion about them. Those live on
+**More Settings**, where a value is offered rather than assumed.
 
 ### More Settings
 
@@ -227,14 +232,39 @@ filenames.
 4. **Turn it on** in `/media/fat/MiSTer.ini`:
 
    ```
+   [MiSTer]
    classicui=1
    ```
+
+   **The section matters as much as the line.** `MiSTer.ini` is divided into sections
+   — `[MiSTer]` for the general settings, then one per core (`[NES]`, `[Minimig]`) and
+   one per video mode (`[video=1280x720]`) — and a setting belongs to whichever section
+   it is written under. On a card that has been in use for a while the file usually
+   *ends* inside one of those, so adding `classicui=1` at the bottom scopes it to that
+   one core or that one video mode, where it does nothing you will notice and looks
+   exactly like a firmware that did not take. Put it near the top, under `[MiSTer]`,
+   with the rest of the general settings.
 
 5. **Reboot.** First boot scans your `games/` folders and builds the library, which
    takes a moment; after that it is cached.
 
 If something goes wrong, `classicui=0` gives you the stock menu back, and
 `MiSTer.prev` is the firmware you were running before.
+
+### Is your ini set up?
+
+Once the shelf is on screen you do not have to read the file to find out.
+**Options ▸ Best Settings** says so on the row itself — `All Set`, or
+`3 To Change >` — and opening it lists the exact lines it would write, keeps a copy of
+your old file, and needs a second press before it touches anything. Everything not on
+that list is left alone, including options it has never heard of and your own comments.
+
+It is worth one look on a card that was set up for something else. Besides MiSTer's
+pop-ups it checks `classicui=1` itself, so the sectioning trap above in its other
+form — the front-end running from `[MiSTer]` while a `classicui=0` sits in some core's
+section, which costs you this menu inside that one game — is something it finds and
+offers to repair. What it cannot help with is a machine where the switch never took at
+all: that one never gets here to be asked.
 
 ### Settings it adds
 
@@ -247,8 +277,36 @@ All optional; the defaults are what most people want.
 | `classicui_overscan` | `6` | Percent kept clear of the screen edge, for a CRT |
 | `classicui_artdir` | `boxart` | Where cover art lives, under the games folder |
 | `classicui_artfetch` | `0` | Download missing cover art over the network |
+| `classicui_arturl` | libretro's thumbnail server | Where `classicui_artfetch` fetches from |
 | `classicui_gamelist` | `1` | Read `gamelist.xml`, so art scraped elsewhere works here |
 | `classicui_freeze` | `1` | Hold the game still while the menu is open |
+| `classicui_screenscraper` | `0` | Ask ScreenScraper for the covers no local file can supply. Needs an account of your own |
+| `classicui_ss_user` | unset | Your ScreenScraper user name |
+| `classicui_ss_pass` | unset | And its password, in clear text |
+| `classicui_disc` | `0` | Recognise a physical CD in a USB drive, and play it |
+
+**`classicui_screenscraper` needs a ScreenScraper account of your own.** Make one — it
+is free, at [screenscraper.fr](https://www.screenscraper.fr) — and put it in
+`classicui_ss_user` and `classicui_ss_pass`. Without an account the option does
+nothing at all: there is no anonymous access, and the guest pool everyone shares is a
+few requests a day for the whole world. Your own login is what earns you your own
+quota. Two more things worth knowing before you fill it in. The password sits in clear
+text in `MiSTer.ini`, on a FAT partition anything on the machine can read, so use one
+you do not use anywhere else. And in the builds published today the option does nothing
+even with an account, because the API also requires a per-application developer
+credential that ScreenScraper's staff issue on request and no public build carries one
+— the code is here and gated off. Local art, a `gamelist.xml` and `classicui_artfetch`
+are the ones that work now.
+
+**`classicui_disc` is for a real CD in a real drive.** Any powered USB optical drive,
+including the SuperDock's slot loader. A disc is recognised when you put it in, and
+four cores play it straight from the drive with no image on the card: PC Engine CD,
+PlayStation, Mega CD and Neo Geo CD. Any other disc is identified and named, with
+nothing to boot it into. It is off by default and that is not caution for its own sake:
+every command sent to the drive queues behind whatever the drive is already doing, and
+a drive that stops answering used to take the whole front-end down with it. See
+[The disc title table](#the-disc-title-table) for where the name on the shelf comes
+from.
 
 **`classicui_freeze` is worth knowing about.** Holding a game still means asking the
 core for a save state, and at least one core cannot survive being asked at a bad
@@ -257,6 +315,60 @@ demanding scene, and only reloading the core recovers it. That is a bug in the c
 not here, and it happens equally from MiSTer's own Alt-F1 hotkey. If you hit it, set
 `classicui_freeze=0`: the game keeps playing behind the menu, which is what already
 happens on cores with no save states at all.
+
+### The disc title table
+
+*Only of interest with `classicui_disc=1`.*
+
+A pressed disc has no filename. Everything else on the shelf is named after the file it
+came from; a disc offers a serial — `SLES-01506` — which is the right identifier and
+recognisable to nobody. So the name you see comes from a table of serials, and the
+firmware carries one: there is nothing to install for this to work.
+
+What you can install is a **better** table. Put one on the card as
+
+```
+/media/fat/classicui/disctitles.txt
+```
+
+and it is used in preference to the built-in one. It is plain text, one disc per line,
+a tab between the serial and the title:
+
+```
+#classicui-disctitles 1
+SLES01506	Metal Gear Solid
+SLUS00594	Final Fantasy VII
+```
+
+Serials are stored upper-case with the punctuation removed — `SLES-01506` becomes
+`SLES01506` — and the file must stay sorted by that key, because it is searched in
+place rather than read into memory. Correcting one disc is therefore editing one line
+on the card, which is half the reason the format is text.
+
+To build a whole table, the script that ships with this front-end fetches the data and
+writes the file:
+
+```
+python3 support/classicui/tools/disctitles.py --fetch -o disctitles.txt
+```
+
+The data is [Redump](https://redump.info)'s, and it is not committed here — their
+position is that their metadata is public domain, which is a clearly stated intent
+rather than a formal grant, so the script asks you to fetch it yourself. Its own header
+lists the other sources it accepts and what each one's licence allows.
+
+**If you fetch the DAT files by hand, the `/serial` on the end of the URL is not
+optional:**
+
+```
+https://redump.info/datfile/psx/serial      yes
+https://redump.info/datfile/psx             silently useless
+```
+
+Without that suffix Redump builds the DAT with no serial fields in it at all. Nothing
+errors: the script reads the file, finds nothing to key on, and writes a table that
+matches no disc ever, so every disc goes on showing its bare serial with no clue as to
+why. Note the domain too — `redump.info`; the old `redump.org` no longer answers.
 
 ---
 
@@ -269,12 +381,21 @@ grep ClassicUI /tmp/debug.txt
 ```
 
 - **Stock menu instead of the shelf** — `classicui=1` missing, or the firmware did
-  not replace. `grep CLASSICUI=1 /tmp/debug.txt` says which.
+  not replace. `grep CLASSICUI=1 /tmp/debug.txt` says which. If the line is in your
+  `MiSTer.ini` and the log still says 0, look at what section it landed in: below a
+  `[NES]` or a `[video=...]` header it belongs to that core or that video mode and
+  nothing else. It wants to be under `[MiSTer]`.
+- **The shelf is there, but the menu button inside one game gives the classic OSD** —
+  the same thing the other way round: a `classicui=0` in that core's section.
+  **Options ▸ Best Settings** lists it and offers to put it right.
 - **"No games found"** — your games are not under `games/<System>/`. The log lists
   every folder it looked at and what it found.
 - **No cover art** — art goes in `boxart/<System Name>/Named_Boxarts/`, named after
   the ROM, and `games/<System>/media/box2d/` works too. If you scraped on a PC, see
   "Art you already scraped" above. `classicui_artfetch=1` downloads what is missing.
+- **A disc shows a serial instead of a name** — that serial is not in the table. Add
+  the one line yourself, or build a fresh table; see
+  [The disc title table](#the-disc-title-table).
 
 ---
 

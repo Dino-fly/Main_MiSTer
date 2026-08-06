@@ -10046,6 +10046,9 @@ int main()
 		  - video_info carries a trailing note, which has to survive the value changing
 		  - controller_info exists only as a comment, so it counts as absent
 		  - disable_autofire is not there at all
+		  - classicui is not there either, so the switch is appended like the rest. The
+		    file that has it in the wrong section, and the eleven sibling keys our key
+		    is a prefix of, get a fixture of their own below
 		  - video_information is not ours, and our key is a prefix of it. It stands in
 		    for the real pairs in ini_vars - video_off / video_off_logo, hdmi_cec /
 		    hdmi_cec_sleep - and doubles as a key the rewriter has never heard of
@@ -10082,7 +10085,7 @@ int main()
 			if (i && out[i - 1] == '\r') crlf++; else bare_lf++;
 		}
 		check(!bare_lf, "CRLF survives the rewrite - not one line ending was changed");
-		check(crlf == 17, "and the file gained only the lines it had to");   // 12 + a 5-line block
+		check(crlf == 18, "and the file gained only the lines it had to");   // 12 + a 6-line block
 
 		check(strstr(out, "video_info=0            ; seconds the mode banner stays up") != 0,
 			"a value changes without disturbing the note beside it");
@@ -10096,9 +10099,11 @@ int main()
 		check(strstr(out, "video_mode=1280x720@60") != 0 && strstr(out, "[NES]\r\n") != 0,
 			"and so is everything else in the file");
 
-		// The two that were absent, in a section of their own - the file ends inside
-		// [video=], where bare keys would have applied to that one video mode.
-		check(strstr(out, "[MiSTer]\r\ncontroller_info=0\r\ndisable_autofire=1\r\n") != 0,
+		// The three that were absent, in a section of their own - the file ends inside
+		// [video=], where bare keys would have applied to that one video mode. The
+		// switch matters most here: classicui=1 scoped to one video mode is a front-end
+		// that appears on the HDMI set and not on the CRT.
+		check(strstr(out, "[MiSTer]\r\nclassicui=1\r\ncontroller_info=0\r\ndisable_autofire=1\r\n") != 0,
 			"keys that appear nowhere are added under a [MiSTer] header");
 
 		check(ini_stray_lines(SRC_CRLF, out) == 0, "no line that is not ours was touched");
@@ -10123,7 +10128,7 @@ int main()
 			int ln = ini_rewrite(lfsrc, j, lfout, sizeof(lfout));
 			lfout[ln] = 0;
 			check(ln > 0 && !strchr(lfout, '\r'), "an LF file stays an LF file");
-			check(strstr(lfout, "[MiSTer]\ncontroller_info=0\n") != 0,
+			check(strstr(lfout, "[MiSTer]\nclassicui=1\ncontroller_info=0\n") != 0,
 				"and the added block follows it");
 		}
 
@@ -10132,7 +10137,7 @@ int main()
 			static char eout[2048];
 			int en = ini_rewrite("", 0, eout, sizeof(eout));
 			eout[en] = 0;
-			check(en > 0 && strstr(eout, "[MiSTer]\r\nvideo_info=0\r\n") != 0,
+			check(en > 0 && strstr(eout, "[MiSTer]\r\nclassicui=1\r\nvideo_info=0\r\n") != 0,
 				"an empty file gets the whole set");
 		}
 
@@ -10154,10 +10159,12 @@ int main()
 
 		ini_change plan[INI_WANT_MAX];
 		int np = ini_plan(path, plan, INI_WANT_MAX);
-		check(np == 3, "all three settings are reported as needing a change");
-		check(!strcmp(plan[0].had, "4") && plan[0].present,
+		check(np == 4, "all four settings are reported as needing a change");
+		check(!strcmp(plan[1].had, "4") && plan[1].present,
 			"the value shown is the last one in the file, which is the one in force");
-		check(!plan[1].present && !plan[1].had[0], "a key that is only a comment reads as absent");
+		check(!plan[2].present && !plan[2].had[0], "a key that is only a comment reads as absent");
+		check(!plan[0].present && !strcmp(plan[0].want->key, "classicui"),
+			"and the front-end's own switch is the first thing the plan offers");
 
 		/*
 		  Whether a restart is needed is read off the set rather than asserted. Every
@@ -10181,7 +10188,7 @@ int main()
 
 		int wrote = ini_apply(path);
 		printf("  ini_apply wrote %d\n", wrote);
-		check(wrote == 3, "writing reports what it changed");
+		check(wrote == 4, "writing reports what it changed");
 
 		static char now[8192], saved[8192];
 		check(slurp_file(path, now, sizeof(now)) > 0, "the ini is still readable afterwards");
@@ -10191,7 +10198,8 @@ int main()
 
 		// The session that is already running parsed the ini before any of this was
 		// true, so it has to be told as well - that is what makes "no restart" honest.
-		check(cfg.video_info == 0 && cfg.controller_info == 0 && cfg.disable_autofire == 1,
+		check(cfg.video_info == 0 && cfg.controller_info == 0 && cfg.disable_autofire == 1
+			&& cfg.classicui == 1,
 			"the running firmware is updated too, not just the file");
 
 		check(ini_plan(path, plan, INI_WANT_MAX) == 0, "nothing is left to change");
@@ -10267,7 +10275,7 @@ int main()
 		frame(8);
 		dump("ini-6-plan-240p");
 		check(gfx_w() == 320, "the panel lays out on a 240p canvas");
-		check(ini_plan(path, plan, INI_WANT_MAX) == 3, "and shows the plan rather than acting");
+		check(ini_plan(path, plan, INI_WANT_MAX) == 4, "and shows the plan rather than acting");
 
 		press(KEY_ESC, 10);
 		press(KEY_ESC, 10);
@@ -10278,6 +10286,99 @@ int main()
 		gfx_shutdown();
 		theme_update(1280, 720, 1);
 		frame(6);
+
+		/* ------------------------------------------------------ the switch itself --- */
+
+		/*
+		  classicui=1 is the newest member of the set and the only one that is the
+		  front-end rather than a pop-up, and it brings two problems the other three do
+		  not.
+
+		  Sections is the first. This fixture is the card that actually generates the
+		  bug report: [MiSTer] enables the front-end, so the shelf is there and looks
+		  right, and [NES] turns it off again - so the menu button inside an NES game
+		  gives the player the classic OSD instead of this. Nothing on the shelf can
+		  hint at it. The rewriter sets every assignment of the key, which is what makes
+		  the answer stop depending on which core is loaded.
+
+		  Its own family is the second. "classicui" is a prefix of eleven keys, all of
+		  which can be in this same file and none of which is this screen's to touch:
+		  the player's television margin, their art folder, their deliberate
+		  classicui_freeze=0, their ScreenScraper login. ini_stray_lines() forgives a
+		  line whose key merely starts with one of ours - that is exactly the hole a
+		  prefix bug would hide in - so they are named here one at a time instead.
+		*/
+		static const char *SRC_SW =
+			"[MiSTer]\r\n"
+			"classicui=1\r\n"
+			"classicui_freeze=0     ; the SNES core dies if asked for a state\r\n"
+			"classicui_overscan=9\r\n"
+			"classicui_artdir=covers\r\n"
+			"classicui_disc=1\r\n"
+			"classicui_screenscraper=1\r\n"
+			"classicui_ss_user=someone\r\n"
+			"video_info=0\r\n"
+			"controller_info=0\r\n"
+			"disable_autofire=1\r\n"
+			"\r\n"
+			"[NES]\r\n"
+			"classicui=0\r\n";
+
+		{
+			static char swout[8192];
+			int swlen = (int)strlen(SRC_SW);
+			int sn = ini_rewrite(SRC_SW, swlen, swout, sizeof(swout));
+			check(sn > 0, "the switch fixture can be rewritten");
+			swout[sn] = 0;
+
+			int sw_lf = 0;
+			for (int i = 0; i < sn; i++)
+				if (swout[i] == '\n' && (!i || swout[i - 1] != '\r')) sw_lf++;
+			check(!sw_lf, "and it is still CRLF afterwards");
+
+			check(strstr(swout, "[NES]\r\nclassicui=0") == 0,
+				"a core section that switches the front-end off is switched back on");
+			check(strstr(swout, "[NES]\r\nclassicui=1\r\n") != 0, "in place, in its own section");
+			check(strstr(swout, "[MiSTer]\r\nclassicui=1\r\n") != 0,
+				"and the one that was already right is left saying the same thing");
+
+			// Nothing was missing, so nothing is appended: a file that only needed a
+			// value changed does not gain a section or a comment from us.
+			check(!strstr(swout, "Written by Classic Home"),
+				"a file with every key present gains no block at the end");
+
+			/*
+			  The nine siblings, one by one and with their spacing, because
+			  ini_stray_lines() cannot see a change to a key that starts with ours. A
+			  1 written over classicui_freeze=0 would be this screen breaking somebody's
+			  SNES core to tidy their ini.
+			*/
+			check(strstr(swout, "classicui_freeze=0     ; the SNES core dies if asked for a state") != 0,
+				"a deliberate classicui_freeze=0 survives untouched, comment and spacing and all");
+			check(strstr(swout, "classicui_overscan=9") != 0, "so does a television margin the player chose");
+			check(strstr(swout, "classicui_artdir=covers") != 0, "and their art folder");
+			check(strstr(swout, "classicui_disc=1") != 0, "and an opt-in they made themselves");
+			check(strstr(swout, "classicui_screenscraper=1") != 0, "and the scraper switch");
+			check(strstr(swout, "classicui_ss_user=someone") != 0, "and their login");
+			check(ini_stray_lines(SRC_SW, swout) == 0, "and no line that is not ours was touched");
+
+			// And the same thing through the plan and the real writer, since that is the
+			// path the screen takes.
+			put_file(path, SRC_SW);
+
+			int nsw = ini_plan(path, plan, INI_WANT_MAX);
+			check(nsw == 1 && !strcmp(plan[0].want->key, "classicui"),
+				"a card with the pop-ups already off has only the switch left to offer");
+			check(plan[0].present && !strcmp(plan[0].had, "0"),
+				"and it is shown as the 0 that is really in the file");
+
+			check(ini_apply(path) == 1, "writing it changes one setting");
+
+			static char swnow[8192];
+			check(slurp_file(path, swnow, sizeof(swnow)) > 0 && !strcmp(swnow, swout),
+				"and the file on the card is what the rewrite said it would be");
+			check(ini_plan(path, plan, INI_WANT_MAX) == 0, "with nothing left over");
+		}
 
 		unlink(path);
 		unlink(bak);
