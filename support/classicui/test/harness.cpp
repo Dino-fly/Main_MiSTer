@@ -822,6 +822,55 @@ static int panel_pixels(uint32_t want)
 	return box_pixels(w / 4, h / 2 - h / 6, (3 * w) / 4, h / 2 + h / 6, want);
 }
 
+/*
+  The disc dialog's diameter, measured off the screen.
+
+  Measured rather than recomputed from the profile, because the layout is the thing being
+  checked: disc_layout_for() gives the disc whatever the panel has spare, and a copy of that
+  arithmetic in this file would agree with itself for ever while both drifted away from what
+  is drawn.
+
+  The panel is a flat COL_PANEL and the disc is the widest thing on it, so the widest run of
+  non-panel pixels across the panel's width is the diameter. Two guards keep the shelf out of
+  it: only rows that start on panel colour are considered at all, and only runs closed by
+  panel colour on both sides are recorded - which also excludes the panel's own title bar,
+  which is COL_INK from edge to edge.
+*/
+static int disc_drawn_dia()
+{
+	const uint32_t *fb = harness_fb_shown();
+	const chome_profile *p = theme_get();
+	int w = gfx_w(), h = gfx_h();
+	if (!fb || w < 1 || h < 1) return 0;
+
+	// Inside draw_panel_at's two-pixel frame, and inside the panel: it is the canvas less
+	// an inset either side, which is what disc_layout_for() gives it.
+	int x0 = p->inset + 4, x1 = w - p->inset - 4;
+	if (x0 < 0) x0 = 0;
+	if (x1 > w) x1 = w;
+	if (x1 - x0 < 8) return 0;
+
+	int best = 0;
+	for (int y = 0; y < h; y++)
+	{
+		const uint32_t *row = fb + (size_t)y * w;
+		if ((row[x0] | 0xff000000u) != COL_PANEL) continue;
+
+		int run = 0;
+		for (int x = x0; x < x1; x++)
+		{
+			if ((row[x] | 0xff000000u) == COL_PANEL)
+			{
+				if (run > best) best = run;
+				run = 0;
+			}
+			else run++;
+		}
+	}
+
+	return best;
+}
+
 static int opt_find(const char *key)
 {
 	for (int i = 0; i < opt_count(); i++)
@@ -1952,6 +2001,11 @@ static void walk_disc_dialog(const char *tag)
 	press(KEY_ENTER, 20);
 	snprintf(name, sizeof(name), "%s-11-disc", tag);
 	dump(name);
+
+	// Not a check - assert_disc_hires() does the checking, on the one canvas it pins. This is
+	// so that the four numbers this dialog actually resolves the disc to are in the log beside
+	// the four pictures, which is what anyone looking at them wants to know.
+	printf("  disc drawn %d px across, face buffer %d\n", disc_drawn_dia(), gfx_disc_face_dia());
 
 	press(KEY_RIGHT, 12);                 // the second button
 	snprintf(name, sizeof(name), "%s-11b-disc-options", tag);
@@ -3459,6 +3513,210 @@ static void assert_disc_dialog()
 	}
 
 	// As assert_disc_launch leaves things: no disc, the flag off, the shelf back up.
+	disc_reset_reader();
+	disc_ingest_present(0);
+	(void)disc_take_dirty();
+	cfg.classicui_disc = 0;
+	chome_leave();
+	press(KEY_MENU, 20);
+	frame(10);
+	check(chome_screen_id() == S_HOME, "the shelf is back for whatever comes next");
+}
+
+/*
+  The dialog's disc is resolved to the display, and the badge's is still a sprite.
+
+  What this is about. gfx_disc() draws 32 cells of r/16 pixels, which is the look at badge
+  size and nothing but blocks at dialog size: the dialog fills the panel, so a cell came out
+  fifteen pixels square at 720p. That mattered because the dialog is also where a scanned
+  disc label goes once something has fetched one, and fifteen-pixel blocks becoming a
+  photograph does not read as one object at two moments. It reads as a fault.
+
+  So the dialog renders the disc once into a buffer at exactly the size it draws at and turns
+  that through the same path the scan goes through. The three things worth pinning are
+  therefore not what it looks like - the PNGs are for the eyes - but that the buffer is the
+  size of the disc on screen, that it is made once per size rather than once per frame, and
+  that none of it reached the badge.
+
+  Left as assert_disc_dialog() leaves things: no disc, the flag off, the shelf up and the
+  canvas back where it was.
+*/
+static void assert_disc_hires()
+{
+	printf("\n== physical disc: the dialog draws it at the screen's resolution ==\n");
+
+	enum { S_HOME = 0, S_DISC = 17 };
+
+	int was_prof = cfg.classicui_profile;
+	int was_w = gfx_w(), was_h = gfx_h();
+
+	cfg.classicui_disc = 1;
+
+	fake_disc dp; memset(&dp, 0, sizeof(dp));
+	static const char *const none[] = { "" };
+	fake_iso(&dp, 0, "PLAYSTATION", "PLAYSTATION", none, 0);
+	fake_put(&dp, 20, 0, "BOOT = cdrom:\\SLUS_006.26;1", 27, 100);
+
+	disc_ingest_present(1);
+	disc_set_reader(fake_read, &dp);
+	disc_ingest_identify(0);
+	frame(6);
+
+	press(KEY_UP);
+	press(KEY_ENTER);
+	check(chome_screen_id() == S_DISC, "the dialog is up over a PlayStation disc");
+
+	/* ------------------------------------ the face is made for the disc on screen --- */
+
+	int dia = disc_drawn_dia();
+	printf("  the disc is %d px across on the %s canvas (%dx%d), face buffer %d\n",
+		dia, theme_get()->name, gfx_w(), gfx_h(), gfx_disc_face_dia());
+
+	/*
+	  Pinned as a number, because this is the answer to the question that started the whole
+	  exercise: how much resolution the dialog actually has to fill.
+
+	  480 is the box, and the disc measures a pixel or two under it. Two reasons, both by
+	  design and neither worth pinning to the pixel: gfx_disc_face() keeps a pixel of
+	  background inside the buffer so that rotating it cannot sample off the end, and the
+	  rotation's 8.8 sine can carry an edge pixel about a pixel back out again, by an amount
+	  that depends on the angle it happens to be caught at. What the tolerance is still tight
+	  enough to catch is the thing worth catching: a face generated at some other size and
+	  stretched by the blit, which is the failure this whole design exists to make impossible.
+	*/
+	check(gfx_disc_face_dia() == 480,
+		"at 720p the panel gives the disc a 480 pixel box, and the face is made at exactly that");
+	check(dia <= 480 && dia >= 476, "and blitted 1:1, so the disc measures the same bar a pixel");
+
+	/* ---------------------------------- once per size, and not once per frame --- */
+
+	/*
+	  The disc is turning throughout this, which is the point: the rotation is recomputed
+	  every time the angle moves - sixteen times a second at the slow rate, sixty at the
+	  smooth one - and the face it is rotating must not be. Sixty frames is several turns
+	  and several dozen angles.
+	*/
+	int gens = gfx_disc_face_gens();
+	check(gens > 0, "the face has been generated");
+
+	frame(60);
+	check(gfx_disc_face_gens() == gens,
+		"sixty frames of it turning generate no new face: the rotation is per angle, the "
+		"face is per size");
+
+	/* --------------------------------------------- and again when the size moves --- */
+
+	/*
+	  The canvas is changed the way walk_profile() changes it, which means leaving and
+	  re-entering - and chome_leave() calls disc_watch_stop(), so the drive has to be told
+	  about the disc again on the way back in. Nothing here is testing the watcher; without
+	  these three lines the dialog simply has no disc to be about.
+	*/
+	cfg.classicui_profile = 2;
+	harness_set_fb(640, 480);
+	gfx_shutdown();
+	theme_update(640, 480, 2);
+	chome_leave();
+	press(KEY_MENU, 20);
+	frame(10);
+
+	disc_ingest_present(1);
+	disc_set_reader(fake_read, &dp);
+	disc_ingest_identify(0);
+	frame(6);
+
+	press(KEY_UP);
+	press(KEY_ENTER);
+	check(chome_screen_id() == S_DISC, "the dialog is up again on a 640x480 canvas");
+
+	int sd_dia = disc_drawn_dia();
+	printf("  the disc is %d px across on the %s canvas (%dx%d), face buffer %d\n",
+		sd_dia, theme_get()->name, gfx_w(), gfx_h(), gfx_disc_face_dia());
+
+	check(gfx_disc_face_dia() == 288, "which gives it a 288 pixel box instead, and the face followed");
+	check(sd_dia <= 288 && sd_dia >= 284, "still blitted 1:1");
+	check(gfx_disc_face_gens() == gens + 1, "regenerated once for the new size, and once only");
+
+	frame(40);
+	check(gfx_disc_face_gens() == gens + 1, "and not again while it sits there turning");
+
+	/* ------------------------------------------- none of which reached the badge --- */
+
+	/*
+	  Read on the shelf and not with the dialog open, which is worth saying because the obvious
+	  thing to do is the wrong one. The dialog was given the whole screen (draw_panel_at from
+	  the inset), so at 720p the panel covers the corner the badge sits in entirely and there
+	  is no badge on screen to read - and every test of it there passes on the panel's flat
+	  grey without noticing. So the badge is checked where it exists.
+
+	  The badge is gfx_disc() still, and that is checked as the sprite's own defining property
+	  rather than by hashing pixels: on the row through its centre the colour may only change
+	  on a cell boundary, cells being r/16 pixels wide. Neither a smooth circle nor a blit of
+	  the resolved face can satisfy that at 2x2 cells.
+
+	  Then a count of the distinct colours on that row, because "changes only on a cell edge"
+	  is also true of flat grey - and flat grey is exactly what a missing badge looks like. The
+	  sprite crosses the panel colour, the outer edge, the rim, the bands, the ring and the
+	  hole, so a handful is the floor.
+
+	  The badge is unfocused here, which is what makes the run exact rather than approximate:
+	  draw_disc_badge only breathes on SCR_DISCBAR, so the radius is the resting one and every
+	  cell is the same width.
+	*/
+	cfg.classicui_profile = was_prof;
+	harness_set_fb(was_w, was_h);
+	gfx_shutdown();
+	theme_update(was_w, was_h, was_prof);
+	chome_leave();
+	press(KEY_MENU, 20);
+	frame(10);
+
+	disc_ingest_present(1);
+	disc_set_reader(fake_read, &dp);
+	disc_ingest_identify(0);
+	frame(6);
+	check(chome_screen_id() == S_HOME, "back on the shelf, on the canvas this section started on");
+
+	const chome_profile *p = theme_get();
+	int br = (p->ts_ui >= 2) ? 32 : 16;          // disc_radius()'s answer, as check_focus_ring has it
+	int cell = br / 16;
+	int bcx = p->safe_x + p->inset + br;
+	int bcy = p->safe_y + p->inset + br;
+
+	const uint32_t *fb = harness_fb_shown();
+	int w = gfx_w();
+	int stepped = 1;
+
+	uint32_t seen[64];
+	int nseen = 0;
+
+	for (int gx = -16; gx < 16; gx++)
+	{
+		int x = bcx + gx * cell;
+		uint32_t c = fb[(size_t)bcy * w + x] | 0xff000000u;
+
+		for (int i = 1; i < cell; i++)
+			if ((fb[(size_t)bcy * w + x + i] | 0xff000000u) != c) stepped = 0;
+
+		int have = 0;
+		for (int i = 0; i < nseen; i++) if (seen[i] == c) have = 1;
+		if (!have && nseen < 64) seen[nseen++] = c;
+	}
+
+	printf("  badge row: %d cells of %d px, %d distinct colours\n", 32, cell, nseen);
+
+	check(cell >= 2, "this canvas draws the badge with cells more than one pixel wide");
+	check(nseen >= 5, "there is a badge on that row and it is not flat panel");
+	check(stepped, "and it is still the sprite: its colour only changes on a cell edge");
+	check(gfx_disc_face_dia() != 2 * br,
+		"the resolved face was never made at badge size, so nothing blitted one there");
+
+	press(KEY_UP);
+	press(KEY_ENTER);
+	check(chome_screen_id() == S_DISC, "and the dialog opens over it as before");
+	dump("disc-9d-dialog-hires");
+
+	// As assert_disc_dialog leaves things, which is what the section after this starts from.
 	disc_reset_reader();
 	disc_ingest_present(0);
 	(void)disc_take_dirty();
@@ -8246,6 +8504,9 @@ int main()
 	// After it, because it leaves the same state that one does and starts from it: a disc
 	// in the drive, the flag on, and the shelf up.
 	assert_disc_dialog();
+	// Directly after it, and before anything moves the canvas: it leaves exactly the state
+	// that one does, and it is about the size the dialog gives the disc at 720p.
+	assert_disc_hires();
 	// And after that one, which leaves the drive empty and the flag off: this needs both
 	// back, and it launches a disc of its own on the way out.
 	assert_disc_shelf_slots();

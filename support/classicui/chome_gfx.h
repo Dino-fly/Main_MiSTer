@@ -180,6 +180,69 @@ void gfx_disc(int cx, int cy, int r, int step,
 	const uint32_t *bands, int nbands, uint32_t rim, uint32_t ring, uint32_t hole,
 	uint32_t outline);
 
+/*
+  The spindle hole, as a percentage of the radius, shared by everything that punches one.
+
+  Not one of gfx_disc()'s 32nds, because it is a measurement rather than a proportion
+  somebody chose: the disc scans this front-end fetches are transparent out to 15% of the
+  radius (see da_box_average() in chome_art.cpp, which has to weight by alpha because of
+  it), and a generated disc and a photographed one have to put their hole in the same place
+  or the dialog visibly shifts when a scan lands. gfx_disc()'s own sprite keeps its 6/32:
+  its output is asserted byte-for-byte and one cell there is one pixel at 240p anyway.
+*/
+#define GFX_DISC_HOLE_PCT 15
+
+/*
+  The same disc, resolved to the display instead of to a 32-cell grid: one dia*dia ARGB
+  buffer, cached, for a caller that means to rotate and blit it.
+
+  gfx_disc() above is a sprite and stays one. At badge size - 32 pixels in a shelf corner -
+  square cells and hard edges are the look, and a smooth circle there would read as a
+  blurred icon rather than as a CD.
+
+  The disc dialog is the opposite problem. It fills the panel, so those same 32 cells come
+  out ~15px blocks at 720p, and the dialog is also where a *scanned* disc label appears once
+  something has fetched one. A photograph next to fifteen-pixel blocks does not read as the
+  same object seen at a different moment; it reads as two objects, and switching between
+  them looks like a fault.
+
+  Which is why this returns a buffer rather than drawing. The dialog rotates and blits it
+  through exactly the path the scan already goes through (disc_rot() in chome_ui.cpp), so
+  the dialog is always turning a bitmap - generated or photographed - and the two cannot
+  differ in kind however they differ in content.
+
+  Proportions and palette are gfx_disc()'s, because this has to be recognisably the same
+  object: a dark outer edge, a bright rim, the data area sweeping with colour, a clear inner
+  ring, a hub ring and the hole. Two things are different, and both are things only a
+  properly resolved disc can have - every ring boundary is anti-aliased by coverage, and the
+  iridescence is interpolated between neighbouring bands instead of stepped between them.
+
+  `back` is what sits behind the disc: the corners are filled with it and the outer rim is
+  blended into it, because gfx_blit() writes every pixel it covers and does not blend. So a
+  face generated for one background cannot be blitted onto another.
+
+  Regenerated only when the size or the palette changes - the dialog asks for the same size
+  every frame - and cached in one buffer that survives leaving the dialog, as the rotation
+  buffer beside it does. dia*dia*4 bytes: 900 KB at 720p, 324 KB at 480p and on a 960x540
+  canvas, 36 KB at 240p.
+
+  Returns 0 if the buffer cannot be had, which is a caller's cue to fall back to the sprite.
+*/
+const uint32_t *gfx_disc_face(int dia, const uint32_t *bands, int nbands,
+	uint32_t rim, uint32_t ring, uint32_t hole, uint32_t back);
+
+/*
+  How many times gfx_disc_face() has actually rendered, as opposed to answering from its
+  cache. Only the harness reads it, and it exists because "generated once per size" is the
+  entire cost argument for this being affordable at all: a test that could only see the
+  pixels could not tell a cached face from one recomputed sixty times a second.
+*/
+int gfx_disc_face_gens();
+
+// The size the cached face is held at, or 0 for none. Also the harness's: it is how a test
+// can say "the face was made for the disc that is on screen" rather than "a face exists".
+int gfx_disc_face_dia();
+
 // Named steps as a row of boxes: `done` behind us, the one being worked on sweeping,
 // the rest empty. See the comment in chome_gfx.cpp for why the active one sweeps
 // rather than creeping forward, and why `live` has to be told rather than assumed.
