@@ -4635,7 +4635,7 @@ static int disc_sin_q8(int q)
 }
 
 /*
-  The rotated, circular-masked scan, cached until something about it changes.
+  A square image, turned, cached until something about it changes.
 
   Rotation is inverse-mapped - for each destination pixel, where in the source it came
   from - which is the only way round that leaves no unwritten pixels. Done into a buffer
@@ -4647,10 +4647,17 @@ static int disc_sin_q8(int q)
   with 1GB shared with the FPGA; recomputing one angle costs 83k samples, and only when
   the angle moves.
 
-  Outside the circle the buffer is filled with the panel colour rather than left alone,
-  because the blit is square and the panel is what is behind it. The spindle hole and hub
-  are punched in afterwards at gfx_disc's own proportions, so that whatever the scan
-  actually is - a disc face, a label, a square crop - the result still reads as a disc.
+  This was written for the scan and is now what draws the disc either way, which is the
+  point of it: the generated face comes through here too (see disc_draw_face), so the dialog
+  is always turning a bitmap and a scan landing cannot change the *kind* of thing on screen.
+
+  `mask` is for a photograph and only for one. Outside the circle the buffer is filled with
+  the panel colour rather than left alone, because the blit is square and the panel is what
+  is behind it; the spindle hole and hub are then punched in at gfx_disc's own proportions,
+  so that whatever the scan actually is - a disc face, a label, a square crop - the result
+  still reads as a disc. A generated face passes 0: it already has all of that in it, drawn
+  by coverage at the display's resolution, and punching hard-edged rings back over it would
+  undo the whole reason it exists.
 */
 static uint32_t *disc_rot_buf = 0;
 static int disc_rot_dia = 0;
@@ -4658,10 +4665,10 @@ static int disc_rot_step = -1;
 static char disc_rot_path[1024] = {};
 static const uint32_t *disc_rot_src = 0;
 
-static const uint32_t *disc_rot(const char *path, int dia, int step)
+static const uint32_t *disc_rot(const uint32_t *src, const char *key, int dia, int step,
+	int mask)
 {
-	const uint32_t *src = art_thumb(path, dia, dia);
-	if (!src) return 0;
+	if (!src || dia < 2) return 0;
 
 	/*
 	  The decode is in the key as well as the path, because art_thumb() hands back a fresh
@@ -4670,7 +4677,7 @@ static const uint32_t *disc_rot(const char *path, int dia, int step)
 	  first angle after that would still be the picture that was there before.
 	*/
 	if (disc_rot_buf && disc_rot_dia == dia && disc_rot_step == step
-		&& disc_rot_src == src && !strcmp(disc_rot_path, path))
+		&& disc_rot_src == src && !strcmp(disc_rot_path, key))
 	{
 		return disc_rot_buf;
 	}
@@ -4683,16 +4690,35 @@ static const uint32_t *disc_rot(const char *path, int dia, int step)
 		if (!disc_rot_buf) return 0;
 	}
 
-	snprintf(disc_rot_path, sizeof(disc_rot_path), "%s", path);
+	snprintf(disc_rot_path, sizeof(disc_rot_path), "%s", key);
 	disc_rot_step = step;
 	disc_rot_src = src;
 
 	int r = dia / 2;
-	int cs = disc_cos_q8(step), sn = disc_sin_q8(step);
+
+	/*
+	  Turned by the negated angle, so that this and gfx_disc turn the same way.
+
+	  An inverse map rotates the picture the opposite way round from the angle it is given,
+	  and gfx_disc's wedges advance with theirs - so with the plain step the dialog's disc
+	  turned backwards against the badge the player had just pressed A on. Nobody could see
+	  it while this path only ever drew photographs, because a scan has no feature whose
+	  direction is known. It became visible the moment the generated face came through here:
+	  the same twelve bands, one after the other, going opposite ways.
+
+	  Verified rather than argued: at step 0 the face and the sprite put the specular band at
+	  the same angle, and stepping both forward moves it the same way round to within the
+	  three degrees the 8.8 sine costs.
+	*/
+	int cs = disc_cos_q8(-step), sn = disc_sin_q8(-step);
 
 	/*
 	  gfx_disc's radii, in the same 32nds of the radius it uses: the clear inner ring at
-	  9/32, the hub at 6/32, the hole inside that.
+	  9/32, the hub ring below it, and the hole inside that at GFX_DISC_HOLE_PCT - which is
+	  where these scans are actually transparent, and therefore exactly what has to be
+	  covered. Punching at the sprite's 6/32 left the dark hole 4% of the radius wider than
+	  the transparency it was there to hide, so a scan and a generated face put their holes
+	  in visibly different places.
 
 	  The outer edge is one 32nd rather than the drawn disc's five. There it is an edge and a
 	  bright rim, which is what makes a flat circle of colour read as a pressed disc; a
@@ -4703,7 +4729,7 @@ static const uint32_t *disc_rot(const char *path, int dia, int step)
 	int r2_edge = r * r;
 	int r2_dark = (r * 31 / 32) * (r * 31 / 32);
 	int r2_ring = (r * 9 / 32) * (r * 9 / 32);
-	int r2_hub  = (r * 6 / 32) * (r * 6 / 32);
+	int r2_hub  = (r * GFX_DISC_HOLE_PCT / 100) * (r * GFX_DISC_HOLE_PCT / 100);
 
 	uint32_t edge = ((COL_WHITE >> 1) & 0x7f7f7f7f) + ((COL_BGDARK >> 1) & 0x7f7f7f7f);
 	edge |= 0xff000000u;
@@ -4718,17 +4744,34 @@ static const uint32_t *disc_rot(const char *path, int dia, int step)
 			int dx = x - r;
 			int d2 = dx * dx + dy * dy;
 
-			if (d2 > r2_edge) { dst[x] = COL_PANEL; continue; }
-			if (d2 > r2_dark) { dst[x] = edge; continue; }
-			if (d2 <= r2_hub) { dst[x] = COL_BGDARK; continue; }
-			if (d2 <= r2_ring) { dst[x] = edge; continue; }
+			if (mask)
+			{
+				if (d2 > r2_edge) { dst[x] = COL_PANEL; continue; }
+				if (d2 > r2_dark) { dst[x] = edge; continue; }
+				if (d2 <= r2_hub) { dst[x] = COL_BGDARK; continue; }
+				if (d2 <= r2_ring) { dst[x] = edge; continue; }
+			}
 
 			int sx = (dx * cs + dy * sn) >> 8;
 			int sy = (dy * cs - dx * sn) >> 8;
 
 			int u = sx + r, v = sy + r;
-			if (u < 0) u = 0; else if (u >= dia) u = dia - 1;
-			if (v < 0) v = 0; else if (v >= dia) v = dia - 1;
+
+			/*
+			  Off the end of the source is the panel, not the nearest edge pixel.
+
+			  A square's corners are further out than its edges, so a destination pixel in a
+			  corner asks for a source pixel that does not exist - and clamping answers with
+			  whatever is at the middle of an edge, which for a disc drawn to the buffer's rim
+			  is the rim itself. Under the mask this could never show, because every pixel that
+			  far out was overwritten before the sampling. Unmasked it flung four grey smears
+			  off the disc at the diagonals, turning with it.
+
+			  gfx_disc_face() keeps a pixel of background inside its own edge for the same
+			  reason. Both, because one is a property of the source and this is a property of
+			  the loop, and either alone leaves the other free to be wrong.
+			*/
+			if (u < 0 || u >= dia || v < 0 || v >= dia) { dst[x] = COL_PANEL; continue; }
 
 			dst[x] = src[(size_t)v * dia + u] | 0xff000000u;
 		}
@@ -4738,29 +4781,59 @@ static const uint32_t *disc_rot(const char *path, int dia, int step)
 }
 
 /*
-  The scan if there is one, the drawn disc if there is not - and the second is the normal
+  The cache key the generated face goes under, in the slot a scan's path goes in. It cannot
+  collide with a real one: disc_art_path() only ever answers with an absolute path under the
+  card root. The buffer pointer is in that key too, so this is belt as well as braces.
+*/
+static const char disc_gen_key[] = "*generated*";
+
+/*
+  The scan if there is one, the generated disc if there is not - and the second is the normal
   case, not a fallback for a broken one: a physical disc has no filename to match on, so a
   picture only exists once something has fetched one against the disc's identity. Both are
   drawn at the same centre and the same radius, so the rectangle disc_note_rect() records
   covers whichever turned up.
 
-  His decision, and it only applies here: the badge on the shelf keeps the drawn disc at
-  every profile. At badge size a photograph is 32 pixels of mud, and the badge's job is to
-  say "there is a disc", which the drawing already does better.
+  Both now go through the same rotate-and-blit, which is the whole design and not a tidying:
+  this dialog is where a photograph of the disc label appears, and it used to draw the 32-cell
+  sprite the rest of the time. At badge size that sprite is the right look; here it fills the
+  panel, so each cell came out fifteen pixels square at 720p, and a scan landing swapped
+  fifteen-pixel blocks for a photograph. Two different objects, not one object twice. So the
+  dialog asks for the disc resolved to the size it is actually drawing at, and turns that
+  exactly as it turns a scan.
+
+  His decision, and it only applies here: the badge on the shelf keeps gfx_disc at every
+  profile. At badge size a photograph is 32 pixels of mud and a smooth circle is a blurred
+  icon, and the badge's job is to say "there is a disc", which the sprite does better.
+
+  gfx_disc stays as the last resort, because both buffers above are a malloc that can fail
+  and a disc dialog with no disc on it is worse than a blocky one.
 */
 static void disc_draw_face(const disc_dlg *d, int cx, int cy, int r)
 {
 	int step = disc_step();
+	int dia = 2 * r;
 	char path[1024];
 
 	if (d->key[0] && disc_art_path(d->key, path, sizeof(path)))
 	{
-		const uint32_t *img = disc_rot(path, 2 * r, step);
+		const uint32_t *scan = art_thumb(path, dia, dia);
+		const uint32_t *img = scan ? disc_rot(scan, path, dia, step, 1) : 0;
 		if (img)
 		{
-			gfx_blit(img, 2 * r, 2 * r, cx - r, cy - r, 2 * r, 2 * r);
+			gfx_blit(img, dia, dia, cx - r, cy - r, dia, dia);
 			return;
 		}
+	}
+
+	const uint32_t *face = gfx_disc_face(dia, disc_bands, DISC_BANDS_N,
+		COL_WHITE, COL_PANELHI, COL_BGDARK, COL_PANEL);
+
+	const uint32_t *img = face ? disc_rot(face, disc_gen_key, dia, step, 0) : 0;
+	if (img)
+	{
+		gfx_blit(img, dia, dia, cx - r, cy - r, dia, dia);
+		return;
 	}
 
 	gfx_disc(cx, cy, r, step,
