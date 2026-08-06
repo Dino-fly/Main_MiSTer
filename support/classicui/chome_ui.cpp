@@ -4304,9 +4304,78 @@ static void disc_dlg_get(disc_dlg *d)
 	  disc_art_path() - one writes that file, the other reads it through art_thumb() - and
 	  both were complete and correct while nobody asked for anything, so the dialog quietly
 	  drew the fallback disc for ever. A seam named by a path does not say who knocks.
+
+	  No longer the *first* thing to ask, though, and it is worth being clear about why it
+	  stays. disc_art_prefetch() below asks the moment the disc is identified, so by the time
+	  this screen is opened the picture is usually already on the card. That ask is one ask at
+	  one instant, and it can be refused for reasons that have nothing to do with this disc -
+	  a cover download in flight, another disc's scan still downloading, or ScreenScraper
+	  switched on in the settings *after* the disc went in. None of those mark the key as
+	  tried, so the dialog asking again is what recovers them. It is also what covers the
+	  running disc, whose key comes from the mount rather than the drive and which the
+	  prefetch never sees at all.
 	*/
 	if (d->key[0]) disc_art_request(d->key, lib_sys(d->sysidx) ? lib_sys(d->sysidx)->id : 0,
 		d->title[0] ? d->title : d->key);
+}
+
+/*
+  Ask for the disc's scan as soon as the disc is known, rather than when the dialog opens.
+
+  His instruction, and the shape of it is his too: the picture should be on its way the
+  moment we know what the disc is, so that opening the dialog finds it there instead of
+  showing the generated face for however long a query, a download and a scale take. If it
+  is not ready in time the dialog still opens on the generated face and swaps to the scan
+  when it lands - see disc_art_take_ready() - so this is about the common case being right,
+  not about the late case being broken.
+
+  Called from exactly one place: the branch in chome_handle() that runs when disc_poll()
+  reports the drive's state has changed. That is the only moment "this disc has become
+  identified" is a fact rather than something to re-derive by comparing against what we
+  saw last frame, and it is the reason this is not in draw_disc() or in the dialog: both
+  of those are per frame, and a request per frame is what da_already_tried() exists to
+  paper over rather than something to rely on.
+
+  It does not touch the drive and cannot block. Everything it reads - the state, the type,
+  the serial, the label - the detection helper already wrote into a file in /tmp and
+  disc_poll() has already read; there is no ioctl anywhere near this. That matters more
+  here than it reads: every ioctl on /dev/sr0 serialises behind whatever the drive is
+  doing, and going to the drive from the front-end is what froze the console twice. See
+  the top of chome_disc.h. What this does start is network and card work in a forked curl,
+  which is why it belongs on the state change and nowhere near the per-frame path.
+
+  Nor while a core owns the drive: the caller is inside `drive_is_ours`, so a disc handed
+  over to a core cannot bring us back here - and over a running disc there is nothing for
+  this to ask about anyway, because the drive's state went with the handover and the
+  running disc's identity comes from the mount instead.
+
+  The key is disc_serial() else disc_label(), which is what disc_dlg_get() will use and
+  what disc_art_path() files the picture under. Not a choice: a key that differs by one
+  character from the dialog's puts the picture somewhere nothing will ever look for it,
+  and it would look exactly like a fetch that had failed.
+*/
+static void disc_art_prefetch()
+{
+	// READY only. SPINNING has no identifiers yet, UNKNOWN has no system to scrape as,
+	// and ABSENT is an eject.
+	if (disc_state() != DISC_READY) return;
+
+	const char *key = disc_serial()[0] ? disc_serial() : disc_label();
+	if (!key[0]) return;
+
+	// The system the disc would load on, exactly as the dialog derives it. No hand-picked
+	// core can be involved: disc_chosen_sys is forgotten on every drive change, which is
+	// the same event that got us here.
+	int sysidx = disc_sys_by_id(disc_system_id(disc_type()));
+	const chome_sys *sc = (sysidx >= 0) ? lib_sys(sysidx) : 0;
+
+	// And the name to match on, which is the title table's answer when it has one - the
+	// same order disc_display_name() and the dialog use. disc_art_request() refuses
+	// everything else that has to hold: the fetch option, an account, a systemeid it
+	// recognises, one attempt per key per session.
+	const char *name = disc_display_name();
+
+	disc_art_request(key, sc ? sc->id : 0, name[0] ? name : key);
 }
 
 /*
@@ -9777,6 +9846,16 @@ int chome_handle(uint32_t key)
 
 		printf("ClassicUI: disc state=%d type=%s name=\"%s\"\n",
 			disc_state(), disc_type_name(disc_type()), disc_display_name());
+
+		/*
+		  And the disc's scan, asked for here because this is where the disc becoming
+		  identified happens - his instruction is that the picture should be fetched and
+		  sized before the player opens the dialog, not when they do. Last in this branch
+		  so that a disc that has just gone leaves the screens it was about first: the
+		  helper reports an eject as a state change too, and disc_art_prefetch() has
+		  nothing to do with one.
+		*/
+		disc_art_prefetch();
 	}
 
 	/*
@@ -9944,6 +10023,29 @@ int chome_handle(uint32_t key)
 	int before = art_cache_count();
 	art_step();
 	if (art_cache_count() != before) mark_dirty();
+
+	/*
+	  A disc scan that has just been written, which the disc on screen has to become.
+
+	  Immediately after art_step(), because art_step() is what reaps the download and
+	  scales it - so the picture that landed this frame is on screen this frame rather
+	  than on the next one.
+
+	  One repaint, and only for a scan that actually landed. Everything else is already in
+	  place: disc_art_scale() drops the thumbnail cache's copy of that path through
+	  art_forget(), art_thumb() then decodes the new file, and disc_rot() keys its rotated
+	  buffer on the path and the source pointer - so a scan appearing is a cache miss in
+	  both and the dialog draws the photograph rather than the generated face. The one
+	  thing missing was anybody asking for a frame at all. Nothing about a download
+	  finishing arrives on a keypress, and this UI paints when it is told to and not
+	  otherwise: the picture was landing correctly and staying invisible until the player
+	  happened to press something. The same omission made the disc badge appear and vanish
+	  without a repaint, and it is why disc_take_dirty() above is followed by mark_dirty().
+
+	  Not a per-frame test of the file, deliberately - that would be a stat of the card
+	  sixty times a second for an event that happens at most once per disc per session.
+	*/
+	if (disc_art_take_ready()) mark_dirty();
 
 	animate();
 
