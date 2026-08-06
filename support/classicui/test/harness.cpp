@@ -2525,9 +2525,22 @@ static void assert_disc_titles()
 		(void)disc_take_dirty();
 	}
 
-	// See the section's comment: this is how "it does not look again" is observed.
-	// Restoring the file must NOT be noticed until something asks for it to be.
+	/*
+	  See the section's comment: this is how "it does not look again" is observed.
+	  Restoring the file must NOT be noticed until something asks for it to be.
+
+	  The four throwaway keys are load-bearing, and the check below said nothing without
+	  them. TDB_CACHE is four, so SLES-01506 was still sitting in the answer cache from
+	  the lookups above with a miss recorded against it - and a version of this module
+	  that re-opened the card on every single call would have passed anyway, by reading
+	  the cache. Asking four other things first is what evicts it and makes the verdict
+	  the only thing that can produce this answer.
+	*/
 	put_file(path, "#classicui-disctitles 1\nSLES01506\tMetal Gear Solid\n");
+	(void)disc_title_for("QQQQ0001");
+	(void)disc_title_for("QQQQ0002");
+	(void)disc_title_for("QQQQ0003");
+	(void)disc_title_for("QQQQ0004");
 	check(disc_title_for("SLES-01506") == 0,
 		"a table appearing after the verdict is not re-opened on the next call");
 	disc_titles_forget();
@@ -2558,6 +2571,14 @@ static void assert_disc_titles()
 	put_file(path, "");
 	disc_titles_forget();
 	check(disc_title_for("SLES-01506") == 0, "an empty file is a table with nothing in it");
+
+	// And so is one with nothing but the magic line, which is the other way to say it and
+	// the one a hand-written file arrives as while somebody is starting it. The search
+	// gets a range containing only the magic line, which is not a row, so it must come
+	// back with no title rather than compare against it.
+	put_file(path, "#classicui-disctitles 1\n");
+	disc_titles_forget();
+	check(disc_title_for("SLES-01506") == 0, "as is one holding only its magic line");
 
 	// Truncated mid-row, which is what a card pulled out during a copy leaves.
 	put_file(path,

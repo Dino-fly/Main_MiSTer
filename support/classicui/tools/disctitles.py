@@ -17,10 +17,16 @@ A disc has no filename. The library names everything else after the file it came
 from; a pressed disc offers a serial - SLES-01506 - and nothing else. This turns the
 serial into the name on the box.
 
-NO DATA IS COMMITTED WITH THIS SCRIPT
--------------------------------------
+THE INPUT IS NOT COMMITTED. THE OUTPUT IS
+-----------------------------------------
 The input is somebody else's several megabytes of metadata and it changes every week,
 so it is not in the repository. Fetch it yourself, with --fetch or by hand.
+
+One built table is committed, at support/classicui/disctitles.generated.txt, because
+that is the file a release copies onto a card and running this script should never be
+a prerequisite for shipping one. Regenerate that path, look at the diff, commit it -
+and read support/classicui/DISCTITLES.md first, which records where that copy came
+from and on what basis it is redistributed.
 
 WHERE TO GET THE INPUT
 ----------------------
@@ -36,9 +42,10 @@ Any of these, mixed freely - later files fill gaps in earlier ones:
 
       Licence: redump.info/about says the data "is considered public domain to be
       used however people see fit". Read that as a clearly stated intent rather
-      than a formal grant - there is no CC0 deed or SPDX identifier behind it. It
-      is why this script asks *you* to fetch the DAT rather than shipping a
-      derivative of it in a git repository.
+      than a formal grant - there is no CC0 deed or SPDX identifier behind it.
+      Taking it at its word is what the committed table rests on; DISCTITLES.md
+      says so in those words rather than claiming more. The DATs themselves are
+      still yours to fetch - they are megabytes, and they change weekly.
 
       Note the domain: Redump moved from redump.org to redump.info in June 2026 and
       the old host no longer answers.
@@ -48,9 +55,10 @@ Any of these, mixed freely - later files fill gaps in earlier ones:
 
       Weaker coverage, and the only source here with an unambiguous licence: each
       file carries "license:CC0-1.0", MAME's COPYING dedicates hash/ to the public
-      domain, and hash/README.md says CC0 1.0 Universal. If a build ever needs to
-      *ship* a table rather than ask the user to build one, this is the source that
-      permits it. (megacd.xml - not segacd.xml, which does not exist.)
+      domain, and hash/README.md says CC0 1.0 Universal. The committed table is
+      built from Redump instead, for the coverage; this is what to rebuild it from
+      if Redump ever withdraws or disputes the statement above, and no code would
+      have to change. (megacd.xml - not segacd.xml, which does not exist.)
 
   libretro-database                     metadat/redump/*.dat in
                                         github.com/libretro/libretro-database
