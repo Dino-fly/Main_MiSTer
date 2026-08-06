@@ -836,11 +836,13 @@ static int panel_pixels(uint32_t want)
   panel colour on both sides are recorded - which also excludes the panel's own title bar,
   which is COL_INK from edge to edge.
 */
-static int disc_drawn_dia()
+static int disc_drawn_box(int *ocx, int *ocy)
 {
 	const uint32_t *fb = harness_fb_shown();
 	const chome_profile *p = theme_get();
 	int w = gfx_w(), h = gfx_h();
+	if (ocx) *ocx = 0;
+	if (ocy) *ocy = 0;
 	if (!fb || w < 1 || h < 1) return 0;
 
 	// Inside draw_panel_at's two-pixel frame, and inside the panel: it is the canvas less
@@ -850,7 +852,7 @@ static int disc_drawn_dia()
 	if (x1 > w) x1 = w;
 	if (x1 - x0 < 8) return 0;
 
-	int best = 0;
+	int best = 0, bestx = 0, besty = 0;
 	for (int y = 0; y < h; y++)
 	{
 		const uint32_t *row = fb + (size_t)y * w;
@@ -861,14 +863,97 @@ static int disc_drawn_dia()
 		{
 			if ((row[x] | 0xff000000u) == COL_PANEL)
 			{
-				if (run > best) best = run;
+				if (run > best) { best = run; bestx = x - run + run / 2; besty = y; }
 				run = 0;
 			}
 			else run++;
 		}
 	}
 
+	/*
+	  Then the centre row, down the column the widest run was centred on.
+
+	  The widest run does NOT identify the centre row, which is the trap this walks into and
+	  out of: a circle 480 pixels across has a dozen rows of equal maximum width, and the first
+	  of them is seven pixels above the middle at 720p. A caller reading a ring two pixels thick
+	  off that centre gets a lens rather than an annulus, and measures a fraction of the edge -
+	  which is exactly how this first reported a properly anti-aliased disc as a hard-edged one.
+
+	  So the vertical extent is measured too, down the one column that is certainly inside the
+	  disc, and the middle of it is the centre. Measured rather than derived for the same reason
+	  the diameter is: draw_disc() places the disc under however tall the lines above it came
+	  out, and a second copy of that sum in this file would drift away from it.
+	*/
+	if (best > 0 && ocy)
+	{
+		int top = besty, bot = besty;
+		while (top > 0 && (fb[(size_t)(top - 1) * w + bestx] | 0xff000000u) != COL_PANEL) top--;
+		while (bot < h - 1 && (fb[(size_t)(bot + 1) * w + bestx] | 0xff000000u) != COL_PANEL) bot++;
+		besty = (top + bot) / 2;
+	}
+
+	if (ocx) *ocx = bestx;
+	if (ocy) *ocy = besty;
+
 	return best;
+}
+
+static int disc_drawn_dia()
+{
+	return disc_drawn_box(0, 0);
+}
+
+/*
+  How many pixels on a ring are blends: within two pixels of radius `rad` from cx,cy and
+  neither of the two colours that boundary lies between.
+
+  This is what "the edge is anti-aliased" means as a number. A hard-edged circle answers zero
+  by construction, whatever it looks like; a boundary drawn by coverage answers a good fraction
+  of its own circumference, because that is how many pixels the arc actually passes through.
+
+  Only usable where both sides of the boundary are flat UI colours. The disc's other two
+  boundaries have a photograph on one side, where a blended pixel and a pixel of the picture
+  are the same thing to a colour test - see the section that calls this.
+*/
+static int ring_blends(int cx, int cy, int rad, uint32_t a, uint32_t b, int *ntotal)
+{
+	const uint32_t *fb = harness_fb_shown();
+	int w = gfx_w(), h = gfx_h();
+	int lo = (rad - 2) * (rad - 2), hi = (rad + 2) * (rad + 2);
+	int n = 0, tot = 0;
+
+	if (ntotal) *ntotal = 0;
+	if (!fb || rad < 3) return 0;
+
+	for (int y = cy - rad - 2; y <= cy + rad + 2; y++)
+	{
+		if (y < 0 || y >= h) continue;
+
+		for (int x = cx - rad - 2; x <= cx + rad + 2; x++)
+		{
+			if (x < 0 || x >= w) continue;
+
+			int dx = x - cx, dy = y - cy;
+			int d2 = dx * dx + dy * dy;
+			if (d2 < lo || d2 > hi) continue;
+
+			tot++;
+			uint32_t c = fb[(size_t)y * w + x] | 0xff000000u;
+			if (c != a && c != b) n++;
+		}
+	}
+
+	if (ntotal) *ntotal = tot;
+	return n;
+}
+
+// The one-cell shadow gfx_disc mixes from its rim and hole colours, which is also what
+// disc_rot lays its outer ring and its hub ring in. Derived the same way rather than written
+// out, so a palette change moves both together.
+static uint32_t disc_edge_col()
+{
+	uint32_t e = ((COL_WHITE >> 1) & 0x7f7f7f7f) + ((COL_BGDARK >> 1) & 0x7f7f7f7f);
+	return e | 0xff000000u;
 }
 
 static int opt_find(const char *key)
@@ -3382,10 +3467,10 @@ static void assert_disc_dialog()
 	/* ---------------------- the scan belongs to the dialog and not to the badge --- */
 
 	/*
-	  His decision, and the reason it is checked from the shelf rather than in a game: both
-	  the badge and the dialog's disc are on screen at once here, so one press can be made to
-	  answer for both. The badge is thirty-two pixels at 240p, where a photograph is mud and
-	  the drawing says "there is a disc" better than any picture could.
+	  His decision, and the reason it is checked from the shelf rather than in a game: the
+	  badge is a press away rather than a whole state away, so one fixture answers for both.
+	  The badge is thirty-two pixels at 240p, where a photograph is mud and the drawing says
+	  "there is a disc" better than any picture could.
 
 	  Counted by an exact colour, not by a hash: everything involved animates, and two hashes
 	  of a turning disc differ with nothing wrong. 0xff20c020 is in no palette this UI draws
@@ -3397,9 +3482,36 @@ static void assert_disc_dialog()
 
 	check(box_pixels(w / 4, h / 2 - h / 6, (3 * w) / 4, h / 2 + h / 6, 0xff20c020u) > 100,
 		"a scan filed under the disc identity is what the dialog draws");
-	check(box_pixels(0, 0, w / 5, h / 5, 0xff20c020u) == 0,
-		"and the badge in the corner keeps the drawn disc");
 	dump("disc-9c-dialog-scan");
+
+	/*
+	  And the badge, read where the badge is.
+
+	  This used to count the fixture colour in the top-left fifth with the dialog still up, and
+	  it had stopped meaning anything: the dialog was given the whole screen, so at 720p the
+	  panel covers the corner the badge sits in and there is no badge in that box to be right or
+	  wrong about. A check that cannot fail is worse than no check, so it steps back to the
+	  badge tier - one press - where the badge is on the shelf and visible.
+
+	  Two halves, because "no fixture colour here" is also what an absent badge looks like: the
+	  scan did not reach it, and there is something there that did.
+	*/
+	press(KEY_ESC);
+	check(chome_screen_id() == S_DISCBAR, "back on the badge, with the scan still on the card");
+
+	{
+		const chome_profile *p = theme_get();
+		int br = (p->ts_ui >= 2) ? 32 : 16;
+		int bx0 = p->safe_x + p->inset, by0 = p->safe_y + p->inset;
+
+		check(box_pixels(bx0, by0, bx0 + 2 * br, by0 + 2 * br, 0xff20c020u) == 0,
+			"and the badge keeps the drawn disc rather than the scan");
+		check(box_pixels(bx0, by0, bx0 + 2 * br, by0 + 2 * br, COL_WHITE) > 0,
+			"having drawn one at all - that box holds a disc, not empty shelf");
+	}
+
+	press(KEY_ENTER);
+	check(chome_screen_id() == S_DISC, "and the dialog comes back for the rest of this");
 
 	unlink(ROOT "/classicui/discart/SLUS-00626.png");
 	frame(12);
@@ -3603,6 +3715,92 @@ static void assert_disc_hires()
 	check(gfx_disc_face_gens() == gens,
 		"sixty frames of it turning generate no new face: the rotation is per angle, the "
 		"face is per size");
+
+	/* ------------------------ the same kind of edge, generated and photographed --- */
+
+	/*
+	  The seam this whole exercise is about, measured on both sides of it.
+
+	  The dialog is where a scanned disc label goes once something has fetched one, so the two
+	  discs that appear here have to be the same class of object - and an edge is most of what
+	  "class of object" means at 480 pixels. A smooth generated disc beside a hard-edged scan is
+	  the same fault as a blocky generated disc beside a smooth scan; it is the fault with the
+	  two sides swapped, and the scan is the side Dinofly sees once his credentials fetch real art.
+
+	  Both are measured the same way and reported side by side: how many pixels within two of a
+	  boundary are neither of the colours it lies between. Zero is a staircase. The scan's mask
+	  answered zero at every boundary before gfx_disc_cover() was shared with it.
+
+	  Only the outer rim and the hub hole can be measured, and that is a property of the picture
+	  rather than of the code: the disc's other two boundaries have the photograph on one side,
+	  where a blended pixel and a pixel of the scan are indistinguishable to a colour test. They
+	  go through the identical gfx_disc_cover() call in the identical loop, one line apart from
+	  the two that are checked.
+	*/
+	{
+		uint32_t edge = disc_edge_col();
+		int cx, cy, tot;
+
+		/*
+		  Judged against the boundary's own circumference, not against the pixels in the band:
+		  a one-pixel ramp puts a blend on roughly every pixel the arc passes through, which is
+		  2*pi*r of them, and a staircase puts one on none. The floor is a sixth of that, which
+		  no hard edge can reach and no drawn ramp can miss.
+		*/
+		int gd = disc_drawn_box(&cx, &cy);
+		int g_rr = gd / 2, g_hr = (gd / 2) * GFX_DISC_HOLE_PCT / 100;
+
+		int g_rim = ring_blends(cx, cy, g_rr, COL_PANEL, edge, &tot);
+		int g_rimtot = tot;
+		int g_hub = ring_blends(cx, cy, g_hr, edge, COL_BGDARK, &tot);
+		int g_hubtot = tot;
+
+		printf("  generated: rim %d/%d blended (%d%% of its circumference), "
+			"hub %d/%d (%d%%)\n",
+			g_rim, g_rimtot, g_rim * 100 / (g_rr * 6), g_hub, g_hubtot, g_hub * 100 / (g_hr * 6));
+
+		check(g_rim > g_rr, "the generated disc fades its outer rim into the panel");
+		check(g_hub > g_hr, "and its spindle hole into the hub ring");
+
+		// The fixture is not flat - make_cover() puts a dark band and two white diagonals in
+		// it - which is exactly why only the two flat boundaries are read.
+		mkpath(ROOT "/classicui/discart");
+		make_cover(ROOT "/classicui/discart/SLUS-00626.png", 400, 400, 0xff20c020);
+		frame(12);
+
+		int sd = disc_drawn_box(&cx, &cy);
+		check(box_pixels(cx - sd / 4, cy - sd / 4, cx + sd / 4, cy + sd / 4, 0xff20c020u) > 100,
+			"the scan is what the dialog is drawing now");
+
+		int s_rr = sd / 2, s_hr = (sd / 2) * GFX_DISC_HOLE_PCT / 100;
+
+		int s_rim = ring_blends(cx, cy, s_rr, COL_PANEL, edge, &tot);
+		int s_rimtot = tot;
+		int s_hub = ring_blends(cx, cy, s_hr, edge, COL_BGDARK, &tot);
+		int s_hubtot = tot;
+
+		printf("  scanned:   rim %d/%d blended (%d%% of its circumference), "
+			"hub %d/%d (%d%%)\n",
+			s_rim, s_rimtot, s_rim * 100 / (s_rr * 6), s_hub, s_hubtot, s_hub * 100 / (s_hr * 6));
+
+		check(s_rim > s_rr, "and the scan fades its outer rim into the panel too");
+		check(s_hub > s_hr, "and its spindle hole into the hub ring");
+
+		/*
+		  Within a third of each other rather than to the pixel. Both are the same radius and
+		  the same ramp, so they are close by construction - but the scan's centre sits half a
+		  pixel off the generated one (disc_rot measures from a pixel, the face from between
+		  two), and the rotation nudges an edge pixel by up to one, so a tight bound would fail
+		  on the angle it was caught at rather than on the drawing.
+		*/
+		check(s_rim * 3 > g_rim && g_rim * 3 > s_rim,
+			"and to the same degree: neither is the smooth one beside a staircase");
+
+		unlink(ROOT "/classicui/discart/SLUS-00626.png");
+		frame(12);
+		check(gfx_disc_face_gens() == gens,
+			"a scan arriving and leaving does not rebuild the face either - it is per size");
+	}
 
 	/* --------------------------------------------- and again when the size moves --- */
 

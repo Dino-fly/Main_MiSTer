@@ -4653,17 +4653,73 @@ static int disc_sin_q8(int q)
 
   `mask` is for a photograph and only for one. Outside the circle the buffer is filled with
   the panel colour rather than left alone, because the blit is square and the panel is what
-  is behind it; the spindle hole and hub are then punched in at gfx_disc's own proportions,
+  is behind it; the spindle hole and hub are then composited in at gfx_disc's own proportions,
   so that whatever the scan actually is - a disc face, a label, a square crop - the result
-  still reads as a disc. A generated face passes 0: it already has all of that in it, drawn
-  by coverage at the display's resolution, and punching hard-edged rings back over it would
-  undo the whole reason it exists.
+  still reads as a disc. Every one of those boundaries is anti-aliased through the same
+  gfx_disc_cover() the generated face uses, which is what stops the two having different kinds
+  of edge.
+
+  A generated face passes 0. Not because the mask would be too coarse for it - it would not
+  be, any more - but because the face already *has* all of this in it and more: its own bright
+  rim and clear inner ring, drawn at the display's resolution. Masking it would paint the
+  photograph's plainer rings over the disc's own.
+
+  Both buffers are kept when the dialog closes, deliberately, and the number is worth stating
+  because it doubled when the generated face arrived: this one and gfx_disc_face()'s together
+  are 1.8 MB at 720p, 648 KB at 480p and on a 960x540 canvas, 72 KB at 240p. Only ever one
+  size at a time - a canvas change frees and reallocates both.
+
+  Why keeping them is right, buffer by buffer rather than as one answer:
+
+    The face costs a quarter of a million pixels with a square root each to build, and it is
+    keyed on nothing but the size. Freeing it would put that whole rebuild on the critical
+    path of every dialog open - the one moment the player is waiting on this screen - to
+    reclaim 900 KB that the very next open asks for again. Opening the disc dialog is not a
+    rare event; it is the disc's only entry point.
+
+    This one costs a malloc and nothing else, since the angle has always moved by the time
+    the dialog is looked at again and the contents are rebuilt regardless. So freeing it
+    would genuinely reclaim 900 KB for the price of one allocation - and buy a 900 KB
+    mmap/munmap pair per visit, which glibc will do at that size, for a board with 1 GB where
+    the compose buffer alone is 3.6 MB at 720p. Not worth the churn or the second code path.
+
+  If that ever stops being true the release to write is one function that drops both, called
+  from chome_leave() rather than from leaving SCR_DISC - the dialog is reopened far more often
+  than the front-end is left.
 */
 static uint32_t *disc_rot_buf = 0;
 static int disc_rot_dia = 0;
 static int disc_rot_step = -1;
 static char disc_rot_path[1024] = {};
 static const uint32_t *disc_rot_src = 0;
+
+/*
+  Where a destination pixel comes from in the source, for a rotation about the centre of a
+  dia-square image. 0 when that is off the end of the buffer.
+
+  Off the end happens, and the caller has to mean something by it rather than clamp. A
+  square's corners are further from the centre than its edges, so a destination pixel out in
+  a corner asks for a source pixel that does not exist - and clamping answers with whatever is
+  at the middle of an edge, which for a disc drawn to the buffer's rim is the rim itself.
+  Under the mask that could never show, because every pixel that far out is background before
+  the sampling. Unmasked it flung four grey smears off the disc at the diagonals, turning with
+  it.
+
+  gfx_disc_face() also keeps a pixel of background inside its own edge, for the same reason.
+  Both, because one is a property of the source and this is a property of the map, and either
+  alone leaves the other free to be wrong.
+*/
+static const uint32_t *disc_rot_pick(const uint32_t *src, int dia, int r, int dx, int dy,
+	int cs, int sn)
+{
+	int sx = (dx * cs + dy * sn) >> 8;
+	int sy = (dy * cs - dx * sn) >> 8;
+
+	int u = sx + r, v = sy + r;
+	if (u < 0 || u >= dia || v < 0 || v >= dia) return 0;
+
+	return src + (size_t)v * dia + u;
+}
 
 static const uint32_t *disc_rot(const uint32_t *src, const char *key, int dia, int step,
 	int mask)
@@ -4726,10 +4782,10 @@ static const uint32_t *disc_rot(const uint32_t *src, const char *key, int dia, i
 	  separating from the panel it sits on - without any ring at all the scan was a circular
 	  crop rather than an object.
 	*/
-	int r2_edge = r * r;
-	int r2_dark = (r * 31 / 32) * (r * 31 / 32);
-	int r2_ring = (r * 9 / 32) * (r * 9 / 32);
-	int r2_hub  = (r * GFX_DISC_HOLE_PCT / 100) * (r * GFX_DISC_HOLE_PCT / 100);
+	int r_edge = r;
+	int r_dark = r * 31 / 32;
+	int r_ring = r * 9 / 32;
+	int r_hub  = r * GFX_DISC_HOLE_PCT / 100;
 
 	uint32_t edge = ((COL_WHITE >> 1) & 0x7f7f7f7f) + ((COL_BGDARK >> 1) & 0x7f7f7f7f);
 	edge |= 0xff000000u;
@@ -4746,34 +4802,49 @@ static const uint32_t *disc_rot(const uint32_t *src, const char *key, int dia, i
 
 			if (mask)
 			{
-				if (d2 > r2_edge) { dst[x] = COL_PANEL; continue; }
-				if (d2 > r2_dark) { dst[x] = edge; continue; }
-				if (d2 <= r2_hub) { dst[x] = COL_BGDARK; continue; }
-				if (d2 <= r2_ring) { dst[x] = edge; continue; }
+				/*
+				  The mask, composited from the outside in with a coverage per boundary, which
+				  is the same shape - and the same ramp, gfx_disc_cover() - that gfx_disc_face()
+				  draws its rings with.
+
+				  It used to be four comparisons and four hard edges, and that was defensible
+				  only for as long as the alternative in this dialog was a 32-cell sprite: a
+				  hard circle is not worth remarking on next to fifteen-pixel blocks. Once the
+				  generated disc was resolved to the screen it stopped being defensible, because
+				  then the *scan* was the one with the staircase - the same seam as before with
+				  the two sides swapped, and this is the side that shows once real art arrives.
+				  Measured before the change: not one blended pixel at any of the four
+				  boundaries.
+
+				  Affordable because gfx_disc_cover() answers 0 or 255 from the squared distance
+				  and only roots the pixels a boundary actually passes through - circumference,
+				  not area. This loop runs per rotation angle, so that distinction is the whole
+				  reason it can be done at all.
+				*/
+				int a_edge  = gfx_disc_cover(r_edge, d2);
+				if (!a_edge) { dst[x] = COL_PANEL; continue; }
+
+				int a_photo = gfx_disc_cover(r_dark, d2);
+				int a_ring  = gfx_disc_cover(r_ring, d2);
+				int a_hole  = gfx_disc_cover(r_hub, d2);
+
+				uint32_t col = gfx_mix(COL_PANEL, edge, a_edge);
+
+				if (a_photo)
+				{
+					const uint32_t *p = disc_rot_pick(src, dia, r, dx, dy, cs, sn);
+					if (p) col = gfx_mix(col, *p, a_photo);
+				}
+
+				col = gfx_mix(col, edge, a_ring);
+				col = gfx_mix(col, COL_BGDARK, a_hole);
+
+				dst[x] = col;
+				continue;
 			}
 
-			int sx = (dx * cs + dy * sn) >> 8;
-			int sy = (dy * cs - dx * sn) >> 8;
-
-			int u = sx + r, v = sy + r;
-
-			/*
-			  Off the end of the source is the panel, not the nearest edge pixel.
-
-			  A square's corners are further out than its edges, so a destination pixel in a
-			  corner asks for a source pixel that does not exist - and clamping answers with
-			  whatever is at the middle of an edge, which for a disc drawn to the buffer's rim
-			  is the rim itself. Under the mask this could never show, because every pixel that
-			  far out was overwritten before the sampling. Unmasked it flung four grey smears
-			  off the disc at the diagonals, turning with it.
-
-			  gfx_disc_face() keeps a pixel of background inside its own edge for the same
-			  reason. Both, because one is a property of the source and this is a property of
-			  the loop, and either alone leaves the other free to be wrong.
-			*/
-			if (u < 0 || u >= dia || v < 0 || v >= dia) { dst[x] = COL_PANEL; continue; }
-
-			dst[x] = src[(size_t)v * dia + u] | 0xff000000u;
+			const uint32_t *p = disc_rot_pick(src, dia, r, dx, dy, cs, sn);
+			dst[x] = p ? (*p | 0xff000000u) : COL_PANEL;
 		}
 	}
 
