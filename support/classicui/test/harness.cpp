@@ -4127,7 +4127,7 @@ static void assert_disc_shelf_slots()
   feature, and the counter is the smallest thing that tells them apart.
 
   How the arrival is observed. disc_art_scale() is called directly, which is exactly what
-  disc_art_poll() does with the file curl brought down - so the fixture lands the way a
+  ss_fetch_poll() does with the file curl brought down - so the fixture lands the way a
   finished download lands, including the signal disc_art_take_ready() hands over. Then the
   frame is driven by hand rather than through frame(): one millisecond at a time, so the
   spin timer is never due and a repaint can only have come from the scan. That is the
@@ -4309,7 +4309,7 @@ static void assert_disc_art_arrives()
 	chome_handle(0);
 	check(harness_present_count() == flips, "a frame with nothing happening on it paints nothing");
 
-	// The fetch finishing, exactly as disc_art_poll() finishes it: the downloaded scan
+	// The fetch finishing, exactly as ss_fetch_poll() finishes it: the downloaded scan
 	// scaled into the sprite the dialog reads.
 	const char *src = "/tmp/chome_disc_scan.png";
 	make_disc_scan(src);
@@ -5413,6 +5413,328 @@ static void assert_disc_art()
 
 	unlink(dst);
 	unlink(src);
+}
+
+/* --------------------------------------------------------- the art ladder --- */
+
+/*
+  ScreenScraper first, the libretro pack second, and the card above both of them - and,
+  above everything else in this section, the two refusals kept apart.
+
+  What cannot be tested here: a request. Not one is made by this suite and not one may be.
+  Dinofly's account allows a single thread, so a stray fetch is not a slow test but a request
+  spent against a real quota under a real devid. cfg.classicui_artfetch is 0 for the rest of
+  the run, the fixture URLs point at .invalid, and the block below that turns the fetch on
+  calls nothing but art_next_source() and art_ss_settle() - both pure, one stats the card
+  and the other reads a file - and draws no frame at all, because art_step() with the fetch
+  enabled and ScreenScraper on is the one combination in this suite that could reach a
+  network. It is off again before anything else runs, and the last checks here are that
+  nothing was forked.
+
+  What can: the order, and the memory.
+
+  The order is art_next_source(), which is the same function art_step() walks rather than a
+  description of it. That matters more than it looks: a ladder reordered by accident leaves
+  no trace in a pixel - a game with a cover on the card looks identical whether we used that
+  cover or fetched a new one over it - so a test that could only see the end state would
+  pass either way.
+
+  The memory is art_ss_settle(), the live reply-handling path driven on a file instead of on
+  a download, exactly as disc_art_scale() is driven on a generated PNG rather than a fetched
+  one.
+
+  The crux is the last three blocks, and they are asserted on different games side by side
+  because either half alone passes under the bug. A client that remembers every refusal
+  passes "a miss is remembered"; a client that remembers none passes "a quota is not". Only
+  both together say the two are told apart - so a game the database has no cover for and a
+  game passed over while the quota was gone are checked against each other, after the hold
+  is lifted, in one pair of assertions.
+
+  The fixtures are hand-written from the documented shape and say so, because a fixture that
+  looks captured but was invented is the worst kind of test evidence. The one exception is
+  the ssuser block, which is copied from the shape of the reply Dinofly read on 2026-08-05.
+*/
+
+// The ssuser block, which rides along with every reply and is where the quota is read from
+// for free. `today` and `limit` are what the two crux blocks below vary.
+static void put_ssuser_reply(const char *path, const char *medias, int today, int limit)
+{
+	char xml[2048];
+	snprintf(xml, sizeof(xml),
+		"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+		"<Data>\n"
+		"  <ssuser><id>" FIX_SSID "</id><maxthreads>1</maxthreads>"
+		"<requeststoday>%d</requeststoday><maxrequestsperday>%d</maxrequestsperday>"
+		"<requestskotoday>3</requestskotoday><maxrequestskoperday>4000</maxrequestskoperday>"
+		"</ssuser>\n"
+		"  <jeu id=\"991\">\n"
+		"    <noms><nom region=\"wor\">Ladder Fixture</nom></noms>\n"
+		"    <medias>\n%s    </medias>\n"
+		"  </jeu>\n"
+		"</Data>\n", today, limit, medias);
+
+	put_file(path, xml);
+}
+
+static void assert_art_ladder()
+{
+	printf("\n== the art ladder: ScreenScraper first, and the two refusals told apart ==\n");
+
+	int metroid = item_by_path("SNES", "Super Metroid (Europe).sfc");
+	int smwjp   = item_by_path("SNES", "Super Mario World (Japan).sfc");
+	int ddragon = item_by_path("Genesis", "Double Dragon (Europe).bin");
+	int bonk    = item_by_path("TGFX16", "Bonk's Adventure (USA).pce");
+	int fusion  = item_by_path("GBA", "Metroid Fusion (Europe).gba");
+	int lynx    = item_by_path("AtariLynx", "Chip's Challenge (USA).lnx");
+
+	check(metroid >= 0 && smwjp >= 0 && ddragon >= 0 && bonk >= 0 && fusion >= 0 && lynx >= 0,
+		"the six games this section needs are all in the index");
+
+	/*
+	  Where they start from, which is what assert_gamelist() left behind: one with a cover
+	  off the card and the rest with none at all. Asserted rather than assumed, because
+	  every ordering check below is only worth as much as this is.
+
+	  "Not READY" rather than "MISSING", deliberately. MISSING means the ladder was walked
+	  for that game and ran out of rungs, and a game may honestly not have got that far: the
+	  decode queue holds QUEUE_MAX entries and art_request() will not displace an equal
+	  priority, so on a card with more games than that the ones nothing has drawn are still
+	  ART_NONE. Either state is the precondition this section wants, which is that no cover
+	  has been found - and the rung checks below prove the stronger thing, that find_local_art()
+	  answers nothing for them.
+	*/
+	check(art_state(metroid) == ART_READY, "Super Metroid has a cover on the card already");
+	check(art_state(smwjp) != ART_READY && art_state(ddragon) != ART_READY &&
+		art_state(bonk) != ART_READY && art_state(fusion) != ART_READY &&
+		art_state(lynx) != ART_READY, "and the other five have no cover anywhere on it");
+
+	ss_forget_state();
+	check(ss_hold_reason() == SS_OK, "and nothing is holding ScreenScraper off yet");
+	check(art_ss_asks() == 0, "nor has anything asked it for a cover in this whole run");
+
+	/* ---------------------------------------------- off, and therefore inert --- */
+
+	cfg.classicui_artfetch = 1;
+	cfg.classicui_screenscraper = 0;
+	cfg.classicui_ss_user[0] = 0;
+
+	check(ss_enabled() == 0, "with the option off, ScreenScraper is not enabled");
+	check(art_next_source(ddragon) == ART_SRC_LIBRETRO,
+		"so a coverless game goes straight to the pack, as it always did");
+
+	cfg.classicui_screenscraper = 1;
+	check(ss_enabled() == 0, "turned on with no account is still off - the API has no anonymous tier");
+	check(art_next_source(ddragon) == ART_SRC_LIBRETRO, "and the pack is still what answers");
+
+	/* --------------------------------------------- on, and therefore first --- */
+
+	strcpy(cfg.classicui_ss_user, FIX_SSID);
+	strcpy(cfg.classicui_ss_pass, FIX_SSPASS);
+	check(ss_enabled() == 1, "on, with an account, is on");
+
+	check(art_next_source(ddragon) == ART_SRC_SS,
+		"and now a coverless game is asked of ScreenScraper before the pack");
+
+	/*
+	  The other half of Dinofly's instruction, and the half his words did not say outright.
+	  "Use it for all arts as first priority" taken literally would re-fetch over a cover
+	  that is already on the card - including one the player scraped themselves and pointed
+	  a gamelist.xml at, which find_local_art() deliberately honours above everything else.
+	  So the card stays above both network sources, and this is the check that says so.
+	*/
+	check(art_next_source(metroid) == ART_SRC_LOCAL,
+		"while a game whose cover is already on the card is not re-fetched over");
+
+	/*
+	  A system whose systemeid we never verified cannot be asked at all, and must fall to
+	  the pack rather than becoming a rung that is offered and then quietly refuses.
+	  Atari Lynx has a libretro name and no ScreenScraper id, so it is exactly that case.
+	*/
+	check(art_next_source(lynx) == ART_SRC_LIBRETRO,
+		"a game on a system with no systemeid skips ScreenScraper and uses the pack");
+
+	/* ------------------------------------------- a reply that names a cover --- */
+
+	put_ssuser_reply("/tmp/chome_ladder_ok.xml",
+		"      <media type=\"box-2D\" region=\"eu\" format=\"png\" size=\"1\">"
+		FIX_HOST "/box-2D-eu.png</media>\n"
+		"      <media type=\"support-2D\" region=\"eu\" format=\"png\" size=\"1\">"
+		FIX_HOST "/support-2D-eu.png</media>\n", 12, 20000);
+
+	check(art_ss_settle(fusion, "/tmp/chome_ladder_ok.xml") == 1,
+		"a reply naming a box-2D yields a cover to fetch");
+	check(art_ss_absent(fusion) == 0, "and nothing is written off about that game");
+
+	/*
+	  The scar, guarded where it can bite again. Every successful reply carries <maxthreads>
+	  in its ssuser block, and classifying replies by searching the body for "threads" once
+	  marked every good game reply as a thread-limit error and threw the game away. A hold
+	  raised here would be that bug returning.
+	*/
+	check(ss_hold_reason() == SS_OK,
+		"and a successful reply does not read as a thread error, though ssuser carries maxthreads");
+	check(ss_may_request() == 1, "so the module is still free to ask about the next game");
+
+	/* --------------------------------------- a genuine absence, both shapes --- */
+
+	/*
+	  Shape one: the database has never heard of the game. A well-formed reply naming no
+	  <jeu> at all, which ss_parse_file() reports as SS_ERR_NOTFOUND rather than as a broken
+	  reply - the distinction exists precisely so this can be remembered.
+	*/
+	put_file("/tmp/chome_ladder_nogame.xml",
+		"<Data><ssuser><id>" FIX_SSID "</id><maxthreads>1</maxthreads>"
+		"<requeststoday>13</requeststoday><maxrequestsperday>20000</maxrequestsperday>"
+		"</ssuser></Data>\n");
+
+	check(art_ss_settle(ddragon, "/tmp/chome_ladder_nogame.xml") == 0,
+		"a reply naming no game at all yields no cover");
+	check(art_ss_absent(ddragon) == 1, "and that game is remembered as having none");
+	check(ss_hold_reason() == SS_OK, "while the module itself is not held off by it");
+	check(art_next_source(ddragon) == ART_SRC_LIBRETRO,
+		"so the ladder drops that game to the pack, which is the fallback working");
+
+	/*
+	  Shape two: the game is in the database with pictures, but no cover among them. No
+	  amount of asking again fills that gap either, so it is the same answer.
+	*/
+	put_ssuser_reply("/tmp/chome_ladder_nocover.xml",
+		"      <media type=\"support-2D\" region=\"eu\" format=\"png\" size=\"1\">"
+		FIX_HOST "/support-2D-eu.png</media>\n"
+		"      <media type=\"wheel\" region=\"wor\" format=\"png\" size=\"1\">"
+		FIX_HOST "/wheel-wor.png</media>\n", 14, 20000);
+
+	check(art_ss_settle(bonk, "/tmp/chome_ladder_nocover.xml") == 0,
+		"a reply with media but no cover type yields no cover either");
+	check(art_ss_absent(bonk) == 1, "and is remembered the same way");
+	check(art_next_source(bonk) == ART_SRC_LIBRETRO, "and falls back the same way");
+
+	/* ------------------------------- THE CRUX: a quota is not an absence --- */
+
+	/*
+	  The refusal that must not be remembered. One bad afternoon at the wrong end of the
+	  allowance would otherwise mark every card the shelf touched as having no art -
+	  permanently, silently, and with no route back that a player would think of.
+
+	  Driven through the real path: the French sentence the API answers with, in a body that
+	  is not XML at all, which is a thing this API does.
+	*/
+	put_file("/tmp/chome_ladder_quota.txt",
+		"Erreur : Votre quota de scrape est ecoule pour aujourd'hui !\n");
+
+	check(art_next_source(smwjp) == ART_SRC_SS, "a game not yet asked about is on the ScreenScraper rung");
+	check(art_ss_settle(smwjp, "/tmp/chome_ladder_quota.txt") == 0, "the quota refusal yields no cover");
+
+	check(art_ss_absent(smwjp) == 0,
+		"and - the crux - the game is NOT remembered as having no art");
+	check(ss_hold_reason() == SS_ERR_QUOTA, "the module is what remembers, and it says quota");
+	check(ss_may_request() == 0, "so nothing asks again while the hold stands");
+	check(ss_verdict(SS_ERR_QUOTA) == 0, "because a quota is not a verdict about any game");
+
+	// For now it uses the pack, which is what "fall back to libretro" means in the moment.
+	check(art_next_source(smwjp) == ART_SRC_LIBRETRO,
+		"so for now that game falls back to the pack rather than waiting");
+
+	/*
+	  And the two halves against each other, which is the only pair of assertions that
+	  actually distinguishes the behaviour. The hold goes - a new session, a core change,
+	  tomorrow - and the game refused over quota is asked again while the game the database
+	  genuinely had nothing for is not.
+	*/
+	ss_forget_state();
+	check(ss_hold_reason() == SS_OK && ss_may_request() == 1, "the hold lifts");
+	check(art_next_source(smwjp) == ART_SRC_SS,
+		"the game refused over quota is asked about again");
+	check(art_next_source(ddragon) == ART_SRC_LIBRETRO,
+		"while the game it genuinely has no cover for is not asked again");
+	check(art_next_source(bonk) == ART_SRC_LIBRETRO, "and nor is the one with no cover among its media");
+
+	/* ------------------------------ THE CRUX: a rate limit is not one either --- */
+
+	/*
+	  HTTP 429, which is the documented rate limit and the one refusal there is no other
+	  evidence for. It has no body match on purpose - see ss_body_class() and the scar above
+	  - so it arrives as a status, and on the device curl_spawn() captures that status
+	  precisely so this classification can happen at all.
+	*/
+	check(ss_http_class(429) == SS_ERR_THREADS, "429 is the thread limit");
+	check(ss_verdict(SS_ERR_THREADS) == 0, "which is not a verdict about a game");
+
+	check(art_next_source(fusion) == ART_SRC_SS, "a game with no verdict against it is on the rung");
+	ss_note_result(SS_ERR_THREADS, 0);
+
+	check(art_ss_absent(fusion) == 0, "a rate limit writes off no game");
+	check(ss_hold_reason() == SS_ERR_THREADS, "it holds the module instead");
+	check(art_next_source(fusion) == ART_SRC_LIBRETRO, "which falls that game back to the pack for now");
+
+	ss_forget_state();
+	check(art_next_source(fusion) == ART_SRC_SS, "and it is asked about again once the limit is not the reason");
+
+	/*
+	  The same for a dropped connection, which is the third way of not answering. Told apart
+	  from the two above in one respect only: it does not hold the module, because a single
+	  failed request is not the account refusing us and holding on it would cost a session
+	  its covers over one lost packet.
+	*/
+	ss_note_result(SS_ERR_TRANSPORT, 0);
+	check(ss_hold_reason() == SS_OK, "a dropped request does not stand the module down");
+	check(ss_verdict(SS_ERR_TRANSPORT) == 0, "and writes off no game either");
+	check(art_next_source(fusion) == ART_SRC_SS, "so that game is still on the rung");
+
+	/* -------------------------------- the quota that costs no extra request --- */
+
+	/*
+	  The counters ride along with the game data, so the last reply the allowance covers
+	  says so itself. Standing down on that means the next request is never made, rather
+	  than being made, refused, and counted against us.
+
+	  This reply is a *success* carrying a spent counter, which is the case that only works
+	  if the counters are read from every reply rather than from refusals.
+	*/
+	put_ssuser_reply("/tmp/chome_ladder_spent.xml",
+		"      <media type=\"box-2D\" region=\"eu\" format=\"png\" size=\"1\">"
+		FIX_HOST "/box-2D-eu.png</media>\n", 20000, 20000);
+
+	check(art_ss_settle(fusion, "/tmp/chome_ladder_spent.xml") == 1,
+		"a successful reply still names its cover");
+	check(art_ss_absent(fusion) == 0, "and writes off nothing");
+	check(ss_hold_reason() == SS_ERR_QUOTA,
+		"but its own counters say the allowance is spent, so the module stands down");
+	check(ss_may_request() == 0, "without a request having been spent to discover it");
+
+	/* ------------------------------------------------------------- and out --- */
+
+	/*
+	  Nothing was fetched, which is the assertion this whole section is written around. Both
+	  predicates, because they answer for different things now: art_fetch_active() is the
+	  libretro pack fetch and disc_art_active() is a ScreenScraper fetch of the disc kind.
+	*/
+	check(art_fetch_active() == 0, "no pack fetch was started anywhere in this section");
+	check(disc_art_active() == 0, "and no ScreenScraper download either");
+	check(art_ss_asks() == 0,
+		"and the ScreenScraper rung was never actually acted on - every reply above was a fixture");
+
+	ss_forget_state();
+	cfg.classicui_artfetch = 0;
+	cfg.classicui_screenscraper = 0;
+	cfg.classicui_ss_user[0] = 0;
+	cfg.classicui_ss_pass[0] = 0;
+
+	unlink("/tmp/chome_ladder_ok.xml");
+	unlink("/tmp/chome_ladder_nogame.xml");
+	unlink("/tmp/chome_ladder_nocover.xml");
+	unlink("/tmp/chome_ladder_quota.txt");
+	unlink("/tmp/chome_ladder_spent.xml");
+
+	/*
+	  And the slots back the way assert_gamelist() left them, absent flags and all. Every
+	  section after this one runs with the fetch off, so none of them could be misled by a
+	  stale flag - but a section that leaves state behind for the next one to trip over is
+	  how this suite would stop being trustworthy.
+	*/
+	art_redo();
+	check(art_state(metroid) == ART_READY, "and the shelf is decoded again for whatever comes next");
+	check(art_ss_absent(ddragon) == 0, "with nothing remembered from the fixtures above");
 }
 
 static int count_lines(const char *rel, int *bad_sum, int *maxlen)
@@ -9201,6 +9523,13 @@ int main()
 	// classicui_screenscraper off again on the way out, which every section that scrolls a
 	// shelf afterwards depends on.
 	assert_disc_art();
+	/*
+	  And then the cover ladder, which needs the art slots exactly as assert_gamelist() left
+	  them - one game with a cover off the card and five with none - and asserts that before
+	  it does anything else. It leaves the same three settings off that the section above
+	  does, and calls art_redo() on the way out so the slots go back untouched.
+	*/
+	assert_art_ladder();
 	assert_physical_disc();
 	// Directly after it, because it drives the same state machine with the same fake
 	// discs, and before every section that draws or logs a disc name: it puts a title

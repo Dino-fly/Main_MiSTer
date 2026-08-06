@@ -283,6 +283,21 @@ worse than the ones in your art pack, `classicui_gamelist=0` turns it off. Only
 pictures are read — names and descriptions are not, since titles here come from
 filenames.
 
+### Where a cover is looked for, in order
+
+1. **Whatever is already on the card** — a `gamelist.xml`, a scraper's media folder, your
+   `classicui_artdir`, or a picture beside the ROM. Nothing is ever downloaded over a
+   picture you already have, so a scrape you did yourself is never overwritten.
+2. **ScreenScraper**, if you have turned it on and given it your account.
+3. **The libretro thumbnail pack**, if `classicui_artfetch` is on.
+4. Nothing: a plain plate in the system's colour.
+
+ScreenScraper goes above the libretro pack on purpose. If you have entered your own
+credentials you have said which database you want your shelf built from, and a downloaded
+cover is written to the card and then never looked for again — so whichever source answers
+first is the one you are stuck with. Anything ScreenScraper has no cover for falls through
+to the pack, and so does everything if your daily quota runs out.
+
 ## Installing
 
 **You need:** a MiSTer with a working SD card, and the ability to copy one file to it.
@@ -366,7 +381,7 @@ All optional; the defaults are what most people want.
 | `classicui_arturl` | libretro's thumbnail server | Where `classicui_artfetch` fetches from |
 | `classicui_gamelist` | `1` | Read `gamelist.xml`, so art scraped elsewhere works here |
 | `classicui_freeze` | `1` | Hold the game still while the menu is open |
-| `classicui_screenscraper` | `0` | Ask ScreenScraper for the covers no local file can supply. Needs an account of your own |
+| `classicui_screenscraper` | `0` | Ask ScreenScraper for the covers no local file can supply, before the libretro pack. Needs an account of your own |
 | `classicui_ss_user` | unset | Your ScreenScraper user name |
 | `classicui_ss_pass` | unset | And its password, in clear text |
 | `classicui_disc` | `0` | Recognise a physical CD in a USB drive, and play it |
