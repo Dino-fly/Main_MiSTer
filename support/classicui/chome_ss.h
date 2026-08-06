@@ -1,9 +1,20 @@
 /*
-  Classic Home - ScreenScraper, for the covers nothing on the card can supply.
+  Classic Home - ScreenScraper, the first place a missing cover is asked for.
 
-  This is the last layer of the art chain, below the pack, gamelist.xml and the
-  scraper folders that chome_art.cpp already looks in: a game whose cover is on
-  none of those has to be asked for, or it stays a plain plate forever.
+  It did not start there. This was written as the *last* layer of the art chain, under
+  the libretro pack, on the reasoning that a free thumbnail repository should be spent
+  before somebody's metered account. Derek's call reverses that: when a player has
+  turned ScreenScraper on and given it their own credentials, they have said which
+  database they want their shelf scraped from, and asking libretro first would fill the
+  card with the answer they did not choose. So ScreenScraper is now consulted first for
+  any art that has to be fetched at all, and the libretro pack is what catches whatever
+  it cannot supply. See the ladder at the top of chome_art.h for the order in full.
+
+  What did *not* move is the card itself. A cover already sitting on the SD - in a
+  gamelist.xml, in a scraper's media folder, in our own artdir - is not re-fetched over,
+  because the player either put it there deliberately or we put it there last time. That
+  is the cache, and it is above every network source in the ladder rather than below
+  them.
 
       https://www.screenscraper.fr/webapi2.php
 
@@ -49,6 +60,40 @@
   reaches maxrequestsperday the module stops asking for the rest of the day - the
   server would refuse anyway, and hammering a refusal is what quotas are counted
   against.
+
+  ---------------------------------------------------------------------------
+
+  The two refusals, which are the thing this module exists to keep apart.
+
+  Once ScreenScraper is the first source rather than the last, the cost of confusing
+  its two kinds of "no" stops being theoretical and starts being somebody's library:
+
+    the database answered, and has no art for this game
+        A verdict. It will say the same thing tomorrow, so the miss is remembered and
+        that game is never asked about again this session. Recording it is what stops
+        a shelf of unknown ROMs costing one request per card per scroll.
+
+    the database did not answer
+        Quota gone, rate limited, API closed under load, no network. Says nothing
+        whatsoever about the game. Recorded as a miss, one bad afternoon would blank a
+        library permanently - every game asked about while the quota was out would be
+        remembered as having no art, and nothing would ever ask again.
+
+  So the two are separated at the only place they can be, which is the outcome itself:
+  ss_verdict() is true for exactly SS_OK and SS_ERR_NOTFOUND, and a caller may only
+  remember a miss when it is. Everything else goes to ss_note_result(), which holds the
+  *module* off - not the game - and leaves that game as unanswered as it was before.
+
+  The counters make this cheap rather than reactive. maxrequestsperday, requeststoday,
+  maxrequestskoperday and requestskotoday come back in the ssuser block of every reply,
+  including successful ones, so the moment the allowance runs out is knowable without
+  spending a request to discover it: the last good reply of the day says so.
+
+  And one warning, from a bug that was in this file. Do not classify a reply by looking
+  for words in its body. "threads" is in *every successful reply*, because ssuser carries
+  <maxthreads> - matching it marked every good game reply as a thread-limit error and
+  threw the game away. Classify on the error element and on the HTTP status, which is why
+  the thread limit is recognised by 429 alone. See the comment in ss_body_class().
 
   Hashing. ScreenScraper matches far better on a hash than a filename, but this
   runs on a 800 MHz ARM reading a FAT card, and md5 of a 700 MB .chd is not
@@ -185,10 +230,23 @@ struct ss_result
 	int nmedia;
 	ss_media media[SS_MAX_MEDIA];
 
-	// From response/ssuser. -1 when the reply did not carry them.
+	/*
+	  From response/ssuser. -1 when the reply did not carry them, which is why every
+	  test against them checks for a positive limit first: 0 would read as "no
+	  allowance at all" and -1 as "already over it".
+
+	  The ko pair is the other quota, and it is here because running it out is worse
+	  than running the ordinary one out. It counts requests the database could not
+	  match to anything; past maxrequestskoperday the server starts answering 431,
+	  which ss_http_class() maps to SS_ERR_BLACKLISTED because the response has to be
+	  the same - stop, and fetch a human. Reading the ko counters means standing down
+	  before provoking that rather than after.
+	*/
 	int requests_today;
 	int max_requests_day;
 	int max_threads;
+	int requests_ko_today;
+	int max_requests_ko_day;
 
 	char gameid[16];
 };
@@ -267,6 +325,68 @@ int ss_parse_file(const char *path, ss_result *out);
 */
 int ss_http_class(int http_code);
 int ss_body_class(const char *body);
+
+/*
+  An SS_* outcome in words, for a log line. A bare number here would send whoever reads
+  the log back to this header to decode it, and these lines are the only account of a
+  fetch that leaves nothing else behind.
+
+  Lives beside the enum on purpose: it used to be a private table in chome_art.cpp, and a
+  second caller would have written a second table that drifted from the first the next
+  time a code was added.
+*/
+const char *ss_why(int err);
+
+/*
+  1 when this outcome is the database's answer *about the game asked for*, and 0 when it
+  is a refusal to answer at all.
+
+  True for exactly two things: SS_OK, and SS_ERR_NOTFOUND. Both are the server having
+  looked and told us what it found, so both are worth remembering. Everything else -
+  quota, rate limit, closed, malformed, no network - is the server or the wire declining
+  to say, and a caller that remembers one of those as "this game has no art" has thrown
+  the game away over a condition that had nothing to do with it.
+
+  This is the whole of the distinction the art ladder turns on, in one predicate, so that
+  no call site has to re-derive it from the enum and get it subtly wrong. Anything about
+  to cache a miss asks this first.
+*/
+int ss_verdict(int err);
+
+/*
+  Fold a finished request's outcome into the module's own state. Call it once for every
+  reply, successful ones included - that is what makes the quota counters free.
+
+  `r` may be 0 when there was no parseable reply to read counters from; `err` is then the
+  only thing folded in.
+
+  What it does with a refusal is hold the module off: ss_may_request() goes false, so
+  nothing asks again until the state is forgotten. What it deliberately does not do is
+  touch anything per-game. The caller owns that, and may only do it when ss_verdict()
+  says the reply was about the game.
+*/
+void ss_note_result(int err, const ss_result *r);
+
+/*
+  0 when no request may be made right now, and ss_hold_reason() says why - SS_OK when
+  nothing is holding it and the answer is simply that ss_enabled() is false.
+
+  Every hold is for the rest of the session rather than for a measured interval, and that
+  is a deliberate simplification rather than an oversight. There is no clock in this
+  module, the quota resets on a day boundary this code cannot see, and the firmware is
+  restarted by every core change - so "until something restarts us" is both the honest
+  granularity and, on this device, a wait measured in minutes rather than hours.
+*/
+int ss_may_request();
+int ss_hold_reason();
+
+/*
+  Drop the hold and the counters. A new process starts clear anyway, so this exists for
+  the harness - which has to be able to prove that a game refused over quota is asked
+  about again once the quota is not the reason any more, and cannot restart the process to
+  do it.
+*/
+void ss_forget_state();
 
 /*
   1 when a media of this type is one some kind list below can ask for. The parser
