@@ -419,6 +419,9 @@ static int view = VIEW_ROOT;
 static int viewsys = -1;
 static int sel = 0;
 static double selF = 0;
+// The selection the chrome is drawn from, which lags sel while the shelf is sliding.
+// Declared with sel because the session restore below places both; see shown_entry().
+static int sel_shown = 0;
 static int sort_mode = SORT_TITLE;
 
 static nav_rec navstack[NAV_DEPTH];
@@ -508,6 +511,7 @@ static int session_restore()
 	if (!sel && r.sel_idx > 0 && r.sel_idx < n) sel = r.sel_idx;
 
 	selF = sel;
+	sel_shown = sel;                  // placed, not moved - see view_rebuild()
 	printf("ClassicUI: back where you were - view %d, entry %d of %d\n", view, sel + 1, n);
 	return 1;
 }
@@ -551,6 +555,36 @@ static int dirty = 1;
 */
 static int disc_spin_due = 0;
 
+/*
+  The carousel's slide, kept apart from `dirty` for exactly the reason the disc's spin is:
+  it means "the only thing that changed is the card row", and the card row is one
+  contiguous band of full-width rows - which is the shape render_region() can clip to.
+
+  A slide is the most expensive thing this front-end does and the least of it actually
+  moves. Moving the cursor changes the cards, the title, the system line, the file line and
+  the button prompts, and the union of those spans most of the height of the screen, so
+  every frame of every slide was a full repaint - twelve of them per tap, and one per key
+  repeat for as long as an arrow is held. A full repaint measures 5.1 ms on the device at
+  240p and is essentially linear in pixels, which puts 1080p somewhere near 60 ms: a shelf
+  that browses at 240p and crawls on the display most people own.
+
+  What the band buys, measured in the harness over a 200-frame held scroll: at 720p the
+  damaged rows fall from 720 to 304 and the compose from 679 to 427 us, and at 240p from 240
+  rows to 96 and 116 to 93 us. The rows are the number that matters most on the device,
+  because the copy goes into an uncached /dev/mem mapping shared with the FPGA and is charged
+  by the row. The compose saves less than the row count suggests, and that is expected: the
+  cards are the expensive part of the frame and the cards are what stays inside the band.
+
+  What makes the band usable is that the two halves are already on different clocks: the
+  cards follow the eased selF, and everything else follows the discrete selection. Freeze
+  the second (see sel_shown) and the moving region is the card row and nothing else.
+
+  Anything that marks dirty in the same pass wins, because a full repaint repaints the
+  cards too. That is the invariant the whole thing rests on: anything that appears,
+  disappears or moves outside the band must mark dirty, not this.
+*/
+static int slide_due = 0;
+
 static uint32_t last_key = 0;
 static int key_run = 0;
 
@@ -589,6 +623,7 @@ static char browse_rel[CH_PATH_LEN] = {};
 
 
 static void mark_dirty() { dirty = 1; }
+static void mark_slide() { slide_due = 1; }
 
 static const uint32_t *ig_live_ref(int w, int h);
 static void ig_close(int restore_video);
@@ -624,6 +659,60 @@ static chome_item *cur_game()
 	const chome_entry *e = cur_entry();
 	if (!e || e->kind != ENT_GAME) return 0;
 	return lib_item(e->game);
+}
+
+/*
+  The selection the chrome is drawn from, which is not always the one the cursor is on.
+
+  This is the other half of the band clip (see slide_due). The cards are interpolated from
+  selF every frame; the title, the system line, the file line and the button prompts read
+  the discrete selection, and they sit above and below the card row - so a frame in which
+  those changed too could not be clipped to the row at all. Under a held arrow the
+  selection changes on every key repeat, which is every 50 ms (REPEATRATE), so that was
+  every frame of a scroll.
+
+  So the chrome follows sel_shown, which *commits* to sel at two moments: when the shelf
+  comes to rest, and when the key that was scrolling it is let go. Between those the chrome
+  is not merely allowed to be stale, it is required to be - nothing outside the card band is
+  being repainted while a slide runs, so anything up there that changed would smear.
+
+  What the player sees. A tap moves the cards and the title follows on the release, which on
+  a real press is a few tens of milliseconds later; there is no timer involved and nothing
+  to tune. Holding the arrow scrolls the shelf with the title left on the item the hold
+  began on, and the whole chrome catches up the moment the arrow is released - or before
+  that, if the shelf runs out of shelf and comes to rest with the key still down. The title
+  therefore never disagrees with a stationary shelf, which is the only state a player reads
+  it in.
+
+  Two commit points rather than one, and either alone would do: a release that never arrives
+  - and swallowed upstrokes are a real thing here, see chome_handle() - still commits when
+  the ease settles, and a hold whose repeats outrun the ease still commits on the release.
+  Nothing can leave the chrome stuck.
+
+  Actions deliberately keep reading the live sel: what A launches is the card under the
+  cursor, not whatever the title happens to be naming. The two can only differ while an
+  arrow is held down, and by the time the shelf has stopped they agree again.
+*/
+static const chome_entry *shown_entry()
+{
+	return lib_view_entry(sel_shown);
+}
+
+static chome_item *shown_game()
+{
+	const chome_entry *e = shown_entry();
+	if (!e || e->kind != ENT_GAME) return 0;
+	return lib_item(e->game);
+}
+
+static void sel_commit()
+{
+	if (sel_shown == sel) return;
+	sel_shown = sel;
+	// The title, the meta line, the file line and the prompts all change with it, and all
+	// of them are outside the band - so this is the one thing in the slide path that has
+	// to ask for the whole frame.
+	mark_dirty();
 }
 
 /*
@@ -814,7 +903,16 @@ static void sync_sel_slots()
 
 	chome_item *it = cur_game();
 	if (it) lib_refresh_slots(it);
-	mark_dirty();
+	/*
+	  The slide, not the world. What the re-stat can change is the row of pips, which is
+	  inside the band a slide repaints; the disarmed delete belongs to the suspend strip,
+	  which is a different screen. This used to be the reason a held scroll repainted every
+	  frame in full even with the title deferred - it runs before animate() on every pass
+	  and marks whatever the selection moving is worth, so it had to learn the difference
+	  too. Off the shelf it is upgraded to a full repaint at the one place that decides,
+	  because there the pips are tiles in the strip instead.
+	*/
+	mark_slide();
 }
 
 static void view_rebuild(int keep_sel)
@@ -826,6 +924,13 @@ static void view_rebuild(int keep_sel)
 	if (sel >= n) sel = n ? n - 1 : 0;
 	if (sel < 0) sel = 0;
 	selF = sel;
+	/*
+	  The shelf is placed here rather than moved, so there is nothing for the chrome to
+	  defer - and sel_shown must not be left pointing into a view that no longer has that
+	  many entries. Every site that assigns selF straight from sel is a site where the
+	  chrome goes with it, for both of those reasons.
+	*/
+	sel_shown = sel;
 	mark_dirty();
 }
 
@@ -853,6 +958,7 @@ static int nav_pop()
 	sel = navstack[navdepth].sel;
 	if (sel >= lib_view_count()) sel = lib_view_count() ? lib_view_count() - 1 : 0;
 	selF = sel;
+	sel_shown = sel;                  // placed, not moved - see view_rebuild()
 	mark_dirty();
 	return 1;
 }
@@ -1027,10 +1133,70 @@ static void draw_fallback_card(const chome_item *it, int x, int y, int w, int h)
 	}
 }
 
+/*
+  The band a slide repaints, recorded as the row is drawn.
+
+  It exists for the reason disc_note_rect() does, and it is worth restating because getting
+  it wrong is silent: the honest source of the rectangle is the drawing itself. draw_shelf()
+  interpolates each card's size from the profile and hands draw_card() a bottom edge and a
+  height, draw_card() derives its shadow and its focus ring from that height - and a second
+  copy of any of that arithmetic up here would drift the first time somebody changed the
+  card ratio, the shadow or the ring. Drift in the direction of "too small" is exactly the
+  smear a partial repaint cannot fix: it only ever repaints what it clips to, so a card that
+  reaches one row above the band leaves that row holding an older frame for as long as the
+  player keeps scrolling, and nothing ever comes back for it.
+
+  Rows rather than a rectangle, because the cards slide the whole width of the canvas -
+  there is no useful horizontal bound, and the copy in gfx_end() is charged by the row in
+  any case.
+
+  Read from the previous composed frame, which is safe for the same reason the disc's
+  rectangle is: a partial slide frame only happens on a pass where nothing marked dirty, and
+  everything that could change this - a resolution change, a view rebuild, a screen opening
+  over the shelf - marks dirty and takes the full path, which re-records it.
+
+  The pips and the position line note themselves into the same band, deliberately: see
+  draw_pips().
+*/
+static struct { int y0, y1, on; } slide_rc;
+
+static void slide_note_rows(int y0, int y1)
+{
+	if (!slide_rc.on) { slide_rc.y0 = y0; slide_rc.y1 = y1; slide_rc.on = 1; return; }
+	if (y0 < slide_rc.y0) slide_rc.y0 = y0;
+	if (y1 > slide_rc.y1) slide_rc.y1 = y1;
+}
+
+/*
+  The band the last composed frame drew the card row into. 0 when it drew no row at all -
+  the browser, which returns out of compose() before the shelf - in which case there is
+  nothing to clip a slide to and the caller has to repaint the world.
+*/
+static int slide_band(int *y0, int *y1)
+{
+	if (!slide_rc.on) return 0;
+	*y0 = slide_rc.y0;
+	*y1 = slide_rc.y1;
+	return 1;
+}
+
+/*
+  A card's two decorations, as functions rather than as literals, because the band is
+  derived from them: the drop shadow, offset down and right by a fortieth of the height,
+  and the focus ring, which sits CARD_RING pixels outside the selected card on every side
+  and is that thick. Change either and the band follows.
+*/
+#define CARD_RING 2
+static int card_shadow(int h) { int sd = h / 40; return sd < 2 ? 2 : sd; }
+
 static void draw_card(const chome_entry *e, int cx, int bottom, int w, int h, int selected)
 {
 	int x = cx - w / 2, y = bottom - h;
-	int sd = h / 40; if (sd < 2) sd = 2;
+	int sd = card_shadow(h);
+
+	// Recorded as it is drawn, and for every card: the row is as tall as its tallest card
+	// and the ring and the shadow are part of it.
+	slide_note_rows(y - CARD_RING, bottom + sd);
 
 	gfx_fill(x + sd, y + sd, w, h, COL_SHADOW);
 
@@ -1126,7 +1292,8 @@ static void draw_card(const chome_entry *e, int cx, int bottom, int w, int h, in
 
 	if (selected)
 	{
-		gfx_frame_rect(x - 2, y - 2, w + 4, h + 4, COL_FOCUS, 2);
+		gfx_frame_rect(x - CARD_RING, y - CARD_RING, w + 2 * CARD_RING, h + 2 * CARD_RING,
+			COL_FOCUS, CARD_RING);
 	}
 	else
 	{
@@ -1157,6 +1324,24 @@ static void request_visible_art(const chome_profile *p)
 static void draw_shelf(const chome_profile *p)
 {
 	gfx_fill(0, p->y_shelf + 1, p->w, 1, COL_GRID);
+
+	/*
+	  And the band at the crest of the growth, whether or not a card is at it this frame.
+
+	  This is the trap the disc badge's breath was built around and it is the same shape
+	  here, so it is worth spelling out twice. The band is read one frame after it is
+	  recorded. A band that only held the cards at the size they were drawn would therefore
+	  be one frame behind the card growing towards the centre - and the row it grows into
+	  would be clipped away by the very frame that wanted to draw it, leaving a line of the
+	  previous, smaller card above the enlarged one that nothing ever repaints, because the
+	  only thing painting that row is this same clipped path.
+
+	  sel_h is the height the interpolation below reaches at t == 1 and the largest a card
+	  can ever be, so the band is recorded at that height on every frame - the badge's
+	  rectangle is recorded at the crest of its breath for exactly this reason. See
+	  disc_note_rect() and DISC_BADGE_CELLS.
+	*/
+	slide_note_rows(p->y_shelf - p->sel_h - CARD_RING, p->y_shelf + card_shadow(p->sel_h));
 
 	int n = lib_view_count();
 	int first = (int)selF - p->visible;
@@ -1232,9 +1417,18 @@ static void draw_background(const chome_profile *p)
 
 }
 
+/*
+  The block above the shelf: the title, the system line and, on the cards that need it, the
+  file name.
+
+  Drawn from the committed selection and not the live one. All three lines sit above the card
+  row, so a slide that redrew them could not be clipped to that row - and there is nothing to
+  read in a title that changes twenty times a second anyway. See shown_entry() for when it
+  commits and what the player sees while it has not.
+*/
 static void draw_title_block(const chome_profile *p)
 {
-	const chome_entry *e = cur_entry();
+	const chome_entry *e = shown_entry();
 	int avail = p->w - p->inset * 2;
 
 	if (!e)
@@ -1310,7 +1504,10 @@ static void draw_title_block(const chome_profile *p)
 		if (y + 8 * p->ts_tiny <= p->y_shelf - p->sel_h)
 		{
 			char line[CH_PATH_LEN + 16];
-			const char *file = lib_view_variant_file(sel, e->vsel);
+			// sel_shown, to match the entry the two lines above were drawn from: asking
+			// the live selection for the file name of a different card's variant is how a
+			// deferred title block would come apart.
+			const char *file = lib_view_variant_file(sel_shown, e->vsel);
 
 			if (e->nvar > 1) snprintf(line, sizeof(line), "%d/%d  %s", e->vsel + 1, e->nvar, file);
 			else snprintf(line, sizeof(line), "%s", file);
@@ -1320,13 +1517,40 @@ static void draw_title_block(const chome_profile *p)
 	}
 }
 
+/*
+  The save-slot pips under the shelf, drawn from the *live* selection - one of the two
+  things below the cards that is not deferred with the title, and the reason both are in the
+  band rather than out of it.
+
+  The position line is the deliberate one. It is the single element on the screen whose
+  entire content is the thing that is changing, so freezing it would not leave it stale but
+  wrong: "12 / 320" under a shelf that is somewhere in the two hundreds says less than
+  nothing, and the two arrows on that line are the end-of-list affordance - frozen, they
+  would keep offering a direction the shelf has already run out of. It is what gives a fast
+  scroll a sense of place once the title has stopped being readable, which is precisely when
+  it earns its keep.
+
+  The pips then come along for almost nothing: they sit between the cards and that line, so
+  a band that reaches the line contains them anyway, and deferring them would put two
+  different clocks inside one clipped region to save about thirty rows. The whole choice
+  costs 71 rows at 720p - a band of 304 rows of 720 rather than 233 - which is the price of
+  a scroll that still says where it is.
+
+  Both note their rows unconditionally, before any early return: the pips appear the moment
+  the cursor lands on a game, and a band that only covered them while they were on screen
+  would clip away the very frame that first drew them. That is the growing-edge trap again,
+  and it is why the note is above the "no game selected" return rather than below it.
+*/
 static void draw_pips(const chome_profile *p)
 {
+	int s = (p->id == PROF_HD) ? 2 : 1;
+	int d = 6 * s, gap = 5 * s, n = user_slots();
+
+	slide_note_rows(p->y_pips, p->y_pips + d);
+
 	chome_item *it = cur_game();
 	if (!it) return;
 
-	int s = (p->id == PROF_HD) ? 2 : 1;
-	int d = 6 * s, gap = 5 * s, n = user_slots();
 	int x0 = p->w / 2 - (n * d + (n - 1) * gap) / 2;
 
 	for (int i = 0; i < n; i++)
@@ -1345,7 +1569,12 @@ static void draw_pips(const chome_profile *p)
 
 static void draw_position(const chome_profile *p)
 {
+	// At 240p this line does not exist at all, so it never needs a row kept clear for it.
 	if (p->id == PROF_LO) return;
+
+	// Before the "no entries" return, and for the same reason the pips are: see draw_pips().
+	slide_note_rows(p->y_pos, p->y_pos + 8 * p->ts_tiny);
+
 	int n = lib_view_count();
 	if (!n) return;
 
@@ -1852,7 +2081,16 @@ static int cov_dirty();
 static int build_legend(legend_pair *out, int max)
 {
 	int n = 0;
-	const chome_entry *e = cur_entry();
+	/*
+	  The committed selection, because the prompts change with the card under the cursor -
+	  "Open" on a folder against "Start" on a game, Version only on a grouped card, Resume
+	  only on a game that is already running - and the legend is drawn below everything the
+	  band covers. Deferred with the title rather than given a rect of its own: it describes
+	  the actions available on an item, so it belongs to whichever item the title is naming.
+	  A legend that offered Version for a card that had scrolled away would also be a legend
+	  that lied about what X would do.
+	*/
+	const chome_entry *e = shown_entry();
 
 	switch (screen)
 	{
@@ -2096,7 +2334,7 @@ static int build_legend(legend_pair *out, int max)
 		}
 		else
 		{
-			int running = ig_is_running(cur_game()) || susp_matches(cur_game());
+			int running = ig_is_running(shown_game()) || susp_matches(shown_game());
 			if (n < max) { out[n++] = lp(LBL_A, running ? "Resume" : "Start", running ? "Play" : "Start"); }
 			/*
 			  X was the one face button the shelf had nothing for, which is what makes it
@@ -6726,6 +6964,11 @@ static void compose()
 	// Re-recorded by whichever discs draw this frame; see disc_note_rect().
 	disc_rc[0].on = disc_rc[1].on = 0;
 
+	// And by the card row, the pips and the position line; see slide_note_rows(). Cleared
+	// here rather than accumulated, so that a screen with no shelf on it leaves no band
+	// behind for a slide to clip to.
+	slide_rc.on = 0;
+
 	if (screen == SCR_BROWSE)
 	{
 		draw_browse(p);
@@ -7053,7 +7296,17 @@ static void move_h(int dir)
 		}
 		sel = next;
 		slot_idx = 0;
-		break;
+
+		/*
+		  The slide and not the world, which is what makes a held scroll cheap: the cards
+		  move, the pips and the position line move with them, and all three are inside the
+		  band. The title block and the prompts do not move at all until the selection
+		  commits - and when it does, sel_commit() marks the full frame itself, so a tap
+		  still gets one. slot_idx is the suspend strip's cursor, and the strip is a
+		  different screen.
+		*/
+		mark_slide();
+		return;
 	}
 
 	/*
@@ -7890,7 +8143,14 @@ static void back()
 		  the menu bar. In a game core it used to close the menu from here; going back to
 		  the game is the menu button's job now, so that no longer competes with this.
 		*/
-		if (sel > 0) { sel = 0; slot_idx = 0; mark_dirty(); }
+		/*
+		  sel_commit() because this is a jump and not a scroll. B is one press with no
+		  repeat behind it, and the shelf can be hundreds of entries from home - the ease is
+		  exponential in the distance, so waiting for it to settle would leave the title
+		  naming the card the player just left for the better part of half a second. Nothing
+		  is being held, so there is nothing to defer.
+		*/
+		if (sel > 0) { sel = 0; slot_idx = 0; sel_commit(); mark_dirty(); }
 		else nudge();
 		break;
 
@@ -9360,6 +9620,7 @@ static void ig_select_running()
 
 	sel = at;
 	selF = at;
+	sel_shown = at;                   // placed, not moved - see view_rebuild()
 	ig_selected_running = 1;
 	mark_dirty();
 }
@@ -9970,9 +10231,48 @@ static void animate()
 	if (d < -0.003 || d > 0.003)
 	{
 		selF += d * (k * 2.2 > 1 ? 1 : k * 2.2);
-		mark_dirty();
+
+		/*
+		  And the snap onto the rest position, in the same pass as the step that earned it
+		  rather than on the next one. Both halves of that matter and the bug they replace was
+		  a real one, found by the byte-identity check below in the harness.
+
+		  It used to sit in an else branch, so the sequence was: step to within a thousandth
+		  of a position and draw *that*, then snap on the following pass with nothing asking
+		  for a repaint. Two consequences. The shelf came to rest with the selected card a
+		  pixel short of its full height and a pixel off centre, because the frame at the rest
+		  position was never drawn - nobody had noticed, since there was nothing to compare it
+		  against until something else asked for a frame. And, worse for what this file now
+		  relies on, it made animate() depend on how many times it had been called rather than
+		  on how much time had passed: composing one instant twice snapped the shelf between
+		  the two composes, so a partial frame and a full repaint of the same moment differed
+		  by that pixel. The poll loop calls this many times per millisecond on the device, so
+		  "how many times" is not a quantity anything should depend on.
+
+		  Done here, selF is only ever at rest or a real distance from it when a pass ends, and
+		  a pass with no time in it changes nothing at all: the step above multiplies by zero
+		  and this leaves a distance that is still too big to snap.
+		*/
+		double r = sel - selF;
+		if (r > -0.003 && r < 0.003) selF = sel;
+
+		/*
+		  The ease is the one animation in this front-end that moves nothing but the cards,
+		  and it was asking for the whole screen because asking for the whole screen is all
+		  that existed. Twelve frames of a tap's slide, of which the first was the only one
+		  that had anything outside the card row to say.
+		*/
+		mark_slide();
 	}
-	else selF = sel;
+
+	/*
+	  And the shelf coming to rest is one of the two moments the chrome commits (the other is
+	  the release, in chome_handle). Placed after the ease so it sees this frame's selF: the
+	  title is then never left disagreeing with a stationary shelf, however the shelf came to
+	  stop - the end of the list under a held arrow, a repeat rate slower than the ease, or a
+	  release that never arrived at all.
+	*/
+	if (selF == sel) sel_commit();
 
 	double bt = (screen == SCR_MENUBAR || screen == SCR_SORT || screen == SCR_DISPLAY ||
 		screen == SCR_OPTIONS || screen == SCR_ABOUT) ? 1 : 0;
@@ -10521,6 +10821,28 @@ int chome_handle(uint32_t key)
 		// Reset the hold counter on release as well as on idle, otherwise a run of
 		// discrete taps looks like a held key and triggers the screenful jump.
 		if (!key || k == last_key) key_run = 0;
+
+		/*
+		  Letting go of a key that scrolls the shelf commits the chrome to wherever it
+		  scrolled to. This is what makes a tap feel instant: a tap is a press and a release
+		  a few tens of milliseconds apart, so the title follows the cards almost at once,
+		  and it is only a key held down long enough to repeat that ever defers anything.
+
+		  The release and not the idle frame, which is the trap. menu_key_get() delivers a
+		  held key as a press every REPEATRATE and *nothing at all* in between, so chome_handle
+		  is called with key == 0 on most frames of a hold - anything keyed off "no key this
+		  frame" would commit between every pair of repeats and defer nothing. (That is also
+		  why key_run cannot answer "is a key held": the line above resets it on those same
+		  idle frames. The screenful jump it feeds is a separate matter, and not this one.)
+
+		  Named keys rather than any release, so that a Y pressed and let go mid-scroll does
+		  not commit a title the player is still scrolling past - and so that the harness can
+		  force a full repaint mid-hold without changing what the frame should contain.
+		*/
+		if ((key & UPSTROKE) && (k == KEY_LEFT || k == KEY_RIGHT || k == KEY_MINUS || k == KEY_EQUAL))
+		{
+			sel_commit();
+		}
 	}
 
 	/*
@@ -10790,9 +11112,23 @@ int chome_handle(uint32_t key)
 	sync_sel_slots();
 	request_visible_art(theme_get());
 
+	/*
+	  A cover that finished decoding this frame.
+
+	  mark_slide(), because on the shelf a decoded cover can only have changed the face of a
+	  card, and cards are the band. This one matters as much as the ease does: art_step()
+	  decodes one image per frame by design, so scrolling into a stretch of the shelf nobody
+	  has visited yet lands a new cover on most frames of the scroll - and asking for the
+	  whole screen each time would have handed most of the saving straight back, on exactly
+	  the pass where it was worth most.
+
+	  The one place that acts on mark_slide() upgrades it to a full repaint off the shelf,
+	  which is what covers the other consumer of the same cache: the suspend strip draws
+	  thumbnails from it, and those are nowhere near the card row.
+	*/
 	int before = art_cache_count();
 	art_step();
-	if (art_cache_count() != before) mark_dirty();
+	if (art_cache_count() != before) mark_slide();
 
 	/*
 	  A disc scan that has just been written, which the disc on screen has to become.
@@ -10822,8 +11158,42 @@ int chome_handle(uint32_t key)
 	if (dirty)
 	{
 		dirty = 0;
+		slide_due = 0;                 // a full repaint repaints the cards too
 		disc_spin_due = 0;             // a full repaint repaints the disc too
 		render();
+	}
+	/*
+	  Before the disc, because a sliding shelf is the more urgent of the two and because the
+	  two regions are nowhere near each other: the badge is in the top corner and the cards
+	  are at the bottom, so a rectangle covering both would be most of the screen and worth
+	  nothing. The spin is left pending instead of being cleared - the badge holds its
+	  rotation for the fifth of a second a slide lasts and picks up the current one on the
+	  first frame after it, which is the same thing a busy screen already does to it.
+	*/
+	else if (slide_due)
+	{
+		slide_due = 0;
+
+		/*
+		  When in doubt, the full repaint - the disc path's rule, and the reasons are the
+		  same two.
+
+		  ui_busy() means a progress track may be sweeping the screen, and gfx_track's sweep
+		  is continuous in milliseconds: it would advance inside the band and not outside it,
+		  and the seam would sit there until something else asked for a full frame.
+
+		  Off the shelf, because the invariant this path needs is "nothing outside the band
+		  changed", and the only screen this front-end can promise that for is the one whose
+		  every other element is either static or committed. With a panel up the shelf is
+		  behind a scrim anyway, and its slide is worth nothing to clip.
+
+		  And no band at all means the last composed frame drew no cards - the browser
+		  returns out of compose() before the shelf - so there is nothing to clip to and the
+		  cards have to be drawn the only other way there is.
+		*/
+		int y0, y1;
+		if (ui_busy() || screen != SCR_HOME || !slide_band(&y0, &y1)) render();
+		else render_region(0, y0, gfx_w(), y1 - y0 + 1);
 	}
 	else if (disc_spin_due)
 	{
