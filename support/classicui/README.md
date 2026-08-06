@@ -196,7 +196,8 @@ remembered choice into a different setting.
 ![Options](docs/img/device/options.png)
 ![Options in a game](docs/img/device/options-ingame.png)
 
-**Best Settings** turns off the pop-ups that interrupt a game, showing exactly which lines
+**Best Settings** turns off the pop-ups that interrupt a game and checks that the front-end
+itself is enabled in a section that holds for every core, showing exactly which lines
 of `MiSTer.ini` it will change and keeping a backup. **More Settings** edits the ini options
 worth editing, in words a person can read, with anything away from its usual value in amber.
 
@@ -457,12 +458,13 @@ depth is moderate (dimming to about 73% at the darkest point).
 ## Best Settings
 
 Options ▸ Best Settings writes the `MiSTer.ini` keys this front-end
-assumes. All three exist for the same reason: without them a classic-OSD panel
-appears over the player's game, which is the one thing the front-end exists to
-prevent.
+assumes. Three of the four exist for the same reason: without them a classic-OSD
+panel appears over the player's game, which is the one thing the front-end exists
+to prevent. The fourth is the front-end itself.
 
 | Key | Set to | Why |
 |---|---|---|
+| `classicui` | `1` | The front-end. `cfg.classicui` is the answer for one core on one display, while the file holds one answer per section - so `[MiSTer]` can enable it while a `[NES]` or `[video=800x600]` section turns it off again, and the player meets the classic OSD in that game or on that television from a shelf that looks entirely correct |
 | `video_info` | `0` | The mode banner. Every core prints its resolution and refresh over the picture when the mode changes - so it is the first thing seen after launching a game |
 | `controller_info` | `0` | The button map. `input.cpp` already suppresses this while the front-end owns the screen, but the front-end is not up in a game core, so plugging a pad mid-session still draws it |
 | `disable_autofire` | `1` | A held face button plus the menu button toggles autofire and announces it in the same panel. Reachable by accident, invisible once on, and with no way back a novice would find |
@@ -475,6 +477,29 @@ off to), `vga_scaler` / `direct_video` (video routing; getting it wrong is a
 black screen), `gamepad_defaults` (silently moves every button in every core)
 and `vscale_mode`. The reasoning is in `chome_ini.cpp` beside the table so it is
 not re-argued.
+
+**And the front-end's own eleven other options are not here either**, which is the
+rule worth stating in its own right: a setting whose *absence* already gives the
+front-end what it wants does not belong in a set that writes lines into somebody's
+file. `cfg_parse()` already defaults `classicui_freeze` to 1, `classicui_gamelist`
+to 1, `classicui_overscan` to 6, `classicui_artdir` to `boxart`, `classicui_arturl`
+to libretro's thumbnail server and `classicui_profile` to auto, so writing them would
+add lines that change nothing and that the player then owns - and a written line
+cannot tell "never set" from "set on purpose". `classicui_freeze=0` is exactly the deliberate choice of somebody whose
+SNES core dies when asked for a state, and putting a 1 back over it would be this
+screen breaking a game to tidy an ini. The three that are off by default -
+`classicui_artfetch`, `classicui_screenscraper`, `classicui_disc` - are off because
+they send ROM names to a third party, need an account we cannot create, or need a
+drive whose failure mode is the console stopping. None of those is consent this
+screen can give on the player's behalf. Overscan and freeze are offered on **More
+Settings** instead, with their recommendation beside them.
+
+**What this cannot repair** is the ini that never enables the front-end, or enables
+it only in a section that is not being read: neither machine is running this code, so
+neither can be shown this screen. That case is documented rather than coded - see the
+install step in [GUIDE.md](GUIDE.md) and the note on first-run help in
+`chome_ini.h`, which argues against a shelf-level prompt on the grounds that the
+Options row already reads `Best Settings  3 To Change >` without being asked.
 
 The screen lists what will change before writing anything, and takes the two
 presses that everything unrecoverable here takes. The left column is an outcome
