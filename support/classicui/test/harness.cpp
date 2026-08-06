@@ -4541,6 +4541,253 @@ static void assert_disc_identity()
 }
 
 /*
+  The dim ig_build_background() applies to the still, repeated here on purpose.
+
+  It is the only way to name a pixel that came out of the still: the value on screen is the
+  captured colour after this arithmetic, so counting it means doing the same arithmetic. If
+  the dim in chome_ui.cpp ever changes, this moves with it and the counts below go to zero
+  loudly rather than drifting quietly.
+*/
+static uint32_t still_dimmed(uint32_t c)
+{
+	uint32_t r = ((c >> 16) & 0xff) * 5 / 16;
+	uint32_t g = ((c >> 8) & 0xff) * 5 / 16;
+	uint32_t b = (c & 0xff) * 5 / 16;
+	return 0xff000000u | (r << 16) | (g << 8) | b;
+}
+
+/*
+  A still colour that appears in no palette, no icon and no font here, so any of it on
+  screen came out of the capture and out of nothing else.
+*/
+#define STILL_FLAT 0xff60c0f0u
+
+// How many pixels of the still survived onto the whole frame.
+static int still_on_screen()
+{
+	return box_pixels(0, 0, gfx_w(), gfx_h(), still_dimmed(STILL_FLAT));
+}
+
+// One pixel of it, in the corner the fit reaches only when the picture spans the width.
+static int still_in_corner()
+{
+	return box_pixels(0, 0, 8, 8, still_dimmed(STILL_FLAT));
+}
+
+/*
+  Which in-game screens show the still of the game, counted rather than looked at.
+
+  Derek reported the in-game menu over a physical disc as a black background where a
+  file-launched game in the same core, same build and same profile showed the still of the
+  game correctly, and the obvious reading of that is that the capture failed on the disc
+  launch path. It is the wrong reading, and this section is what says so: the capture is the
+  same call on both paths, and the still is built and drawn over a running disc here.
+
+  What differs is the screen the menu opens on. Over a disc it opens on the disc's own
+  dialog - deliberately, see ig_open() - and that dialog is the width of the canvas less the
+  inset and reaches from the top margin to the button legend. So the only background it
+  leaves showing is a narrow strip down each side, and on a stretched canvas those strips
+  were entirely inside the black bars the fit left: the still was in the middle half of the
+  width, underneath the dialog, and every pixel the player could see was a bar. A capture
+  that worked perfectly and a capture that returned nothing look exactly the same from the
+  sofa, which is why screenshot_grab_why() now says which it was.
+
+  The bars are the half that was a bug. shot_fit() fitted 4:3 by raw pixel count, and a
+  15 kHz TV canvas arrives as 640x240 whenever the framebuffer takeover is not held, so the
+  picture came out 320 wide in a 640-wide canvas. Checked below on three canvases: the
+  stretched one, where the corner must now be picture; a 4:3 one, where it always was; and a
+  16:9 one, where it must still be a bar, because a 4:3 picture on a wide screen is supposed
+  to be letterboxed and stretching it would be a different bug.
+*/
+static void assert_ingame_still()
+{
+	printf("\n== the still of the game, and which screens show it ==\n");
+
+	enum { S_HOME = 0, S_DISC = 17 };
+
+	harness_set_grab_flat(STILL_FLAT);
+	harness_set_menu_core(0);
+	harness_set_fb_supported(1);
+	harness_set_osd_visible(0);
+
+	/* ----------------------------------------- a file-launched game, on the shelf --- */
+
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "gb\nTetris (World).gb\n"); fclose(f); }
+	}
+
+	struct { const char *name; int w, h; int corner; } canv[] = {
+		// A stretched 15 kHz canvas: px=2, and the whole width is one 4:3 picture.
+		{ "640x240", 640, 240, 1 },
+		// A square-pixelled 240p canvas: px=1, 4:3 already, and always worked.
+		{ "320x240", 320, 240, 1 },
+		// And 16:9, where the corner is meant to be a black bar and not picture.
+		{ "1280x720", 1280, 720, 0 },
+	};
+
+	for (unsigned c = 0; c < sizeof(canv) / sizeof(canv[0]); c++)
+	{
+		harness_set_fb(canv[c].w, canv[c].h);
+		gfx_shutdown();
+		theme_update(canv[c].w, canv[c].h, 0);
+
+		chome_handle(0);
+		if (chome_ingame_active()) press(KEY_MENU, 14);
+		frame(6);
+		press(KEY_MENU, 20);
+		for (int i = 0; i < 40 && lib_scanning(); i++) frame(2);
+		frame(12);
+
+		char what[128];
+		snprintf(what, sizeof(what), "%s: the menu opens over the game on the shelf", canv[c].name);
+		check(chome_ingame_active() && chome_screen_id() == S_HOME, what);
+
+		int on = still_on_screen();
+		int corner = still_in_corner();
+		printf("  %s: %d pixels of the still on screen, %d of 64 in the corner\n",
+			canv[c].name, on, corner);
+
+		snprintf(what, sizeof(what), "%s: the shelf shows the still of the game", canv[c].name);
+		check(on > 0, what);
+
+		if (canv[c].corner)
+		{
+			snprintf(what, sizeof(what),
+				"%s: and the picture reaches the corner, so it spans the width", canv[c].name);
+			check(corner == 64, what);
+		}
+		else
+		{
+			snprintf(what, sizeof(what),
+				"%s: and a 4:3 picture on a wide canvas leaves the corner a black bar", canv[c].name);
+			check(corner == 0, what);
+		}
+
+		press(KEY_MENU, 14);
+		frame(6);
+	}
+
+	/* ------------------------------------------------ and a disc, on its own dialog --- */
+
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "psx\n%s\n", PHYSICAL_DISC_SENTINEL); fclose(f); }
+	}
+	{
+		FILE *f = fopen(PHYSICAL_DISC_IDENT_FILE, "wt");
+		if (f) { fprintf(f, "SLES-01506\nMETAL GEAR SOLID\n"); fclose(f); }
+	}
+
+	/*
+	  Both the canvases a television gives, because the two together are the reported symptom
+	  and the bug behind it. The numbers this prints, of 153600 and 76800 pixels:
+
+	    canvas    dialog   shelf     dialog before shot_fit took px
+	    640x240     3180   89666     640 of the 3180, and 42417 of the 89666
+	    320x240     1431   43796     unchanged - a 4:3 canvas never had bars
+
+	  So on the stretched canvas the dialog left the player 640 pixels of game out of 153600,
+	  four tenths of one per cent, and every one of them was in the sliver of full-width rows
+	  below the panel: the strips down the sides, which are what the dialog leaves, were
+	  inside the black bars the fit had put there. That is a black background by any
+	  reasonable description, and it is the case shot_fit() now gets right.
+	*/
+	int on_disc = 0, on_home = 0;
+	struct { const char *name; int w, h; } dcanv[] = { { "640x240", 640, 240 }, { "320x240", 320, 240 } };
+
+	for (unsigned c = 0; c < sizeof(dcanv) / sizeof(dcanv[0]); c++)
+	{
+		harness_set_fb(dcanv[c].w, dcanv[c].h);
+		gfx_shutdown();
+		theme_update(dcanv[c].w, dcanv[c].h, 0);
+
+		chome_handle(0);
+		if (chome_ingame_active()) press(KEY_MENU, 14);
+		frame(6);
+		press(KEY_MENU, 20);
+		frame(12);
+
+		char what[128];
+		snprintf(what, sizeof(what), "%s: over a disc the menu opens on the disc dialog instead",
+			dcanv[c].name);
+		check(chome_ingame_active() && chome_screen_id() == S_DISC, what);
+
+		on_disc = still_on_screen();
+		dump(c == 0 ? "still-1-disc-dialog-tv640" : "still-2-disc-dialog-240p");
+
+		press(KEY_ESC, 14);
+		frame(10);
+		on_home = still_on_screen();
+		if (c == 1) dump("still-3-disc-shelf");
+
+		printf("  %s: %d pixels of the still behind the disc dialog, %d behind the same menu on the shelf\n",
+			dcanv[c].name, on_disc, on_home);
+
+		/*
+		  The capture is not what is wrong over a disc, and this is the check that says so:
+		  the still is on screen, in the strips the dialog leaves, on the very path that was
+		  reported black. What is wrong is how little of it there is - the dialog is the
+		  canvas less the inset by Derek's own decision, and those strips are then dimmed a
+		  second time by the overlay scrim compose() lays over every panel screen. Both of
+		  those are his calls and neither is changed here.
+		*/
+		snprintf(what, sizeof(what),
+			"%s: the still is drawn over a disc too - the capture is not the fault", dcanv[c].name);
+		check(on_disc > 0, what);
+
+		snprintf(what, sizeof(what),
+			"%s: and the shelf behind the same menu shows far more of it", dcanv[c].name);
+		check(on_home > on_disc * 8, what);
+
+		snprintf(what, sizeof(what), "%s: back from the dialog reaches the shelf", dcanv[c].name);
+		check(chome_screen_id() == S_HOME, what);
+
+		press(KEY_MENU, 14);
+		frame(6);
+	}
+
+	harness_set_fb(320, 240);
+	gfx_shutdown();
+	theme_update(320, 240, 0);
+
+	/* ------------------------------------------------- and when there is no capture --- */
+
+	/*
+	  The other half of the report, so the log line can be trusted: a grab that really does
+	  refuse leaves no still at all and the grid shows through, which is a different picture
+	  from the one above and not one anybody has seen on the device.
+	*/
+	harness_set_grab(0);
+	press(KEY_MENU, 20);
+	frame(12);
+	check(chome_ingame_active(), "a refused capture still opens the menu");
+	check(still_on_screen() == 0, "with no still anywhere on the frame");
+	dump("still-4-no-capture");
+	harness_set_grab(1);
+
+	press(KEY_MENU, 14);
+	frame(6);
+
+	harness_set_grab_flat(0);
+	unlink(PHYSICAL_DISC_IDENT_FILE);
+	unlink("/tmp/classicui_current");
+
+	/*
+	  Exactly as assert_disc_identity() above leaves things, canvas included. The section
+	  after this one reads a box scaled to the canvas and expects the 720p one; walking
+	  three canvases here and leaving the last of them behind failed it two hundred lines
+	  from the cause.
+	*/
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+	harness_set_menu_core(1);
+	chome_leave();
+	frame(6);
+}
+
+/*
   Fixture credentials and a fixture host.
 
   Every one of these is obviously fake, and that is not decoration. The measured reply
@@ -9250,6 +9497,9 @@ int main()
 	// in-game menu over a disc consumes the once-per-process session read, and the section
 	// above is the one that cares who consumed it.
 	assert_disc_identity();
+	// Directly after it: it needs the same running disc and the same consumed session read,
+	// and it is about what that section's own screen does and does not show of the game.
+	assert_ingame_still();
 	// And after that one, for the third time for the same reason: this section opens the
 	// in-game menu too, to reach the one state where "a core owns the drive" can be seen
 	// from a host test. Everything else in it would run anywhere.

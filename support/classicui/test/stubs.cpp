@@ -612,10 +612,36 @@ void user_io_status_set(const char *opt, uint32_t value, int)
 static unsigned grab_seq = 0;
 void harness_reset_grab_seq() { grab_seq = 0; }
 
+// See harness_set_grab() in harness.h for what a refusing grab is for here.
+static int grab_ok = 1;
+void harness_set_grab(int ok) { grab_ok = ok; }
+
+/*
+  A still of one flat colour instead of the drawn scene - see harness_set_grab_flat().
+
+  Deliberately identical between grabs, which is the opposite of what the picture below is
+  for: this one is not asking whether a frame moved, it is asking which pixels on screen
+  came out of the still at all, and that needs a colour nothing else in the front-end draws.
+*/
+static uint32_t grab_flat = 0;
+void harness_set_grab_flat(uint32_t argb) { grab_flat = argb; }
+
+static const char *grab_why = "not attempted";
+const char *screenshot_grab_why(void) { return grab_why; }
+
 int screenshot_grab(uint32_t *dst, int max_px, int *out_w, int *out_h)
 {
 	int w = 320, h = 240;
-	if (w * h > max_px) return 0;
+	if (!grab_ok) { grab_why = "the harness was told to refuse"; return 0; }
+	if (w * h > max_px) { grab_why = "the frame is larger than the buffer offered"; return 0; }
+	grab_why = "ok";
+
+	if (grab_flat)
+	{
+		for (int i = 0; i < w * h; i++) dst[i] = grab_flat;
+		*out_w = w; *out_h = h;
+		return 1;
+	}
 
 	// Colour derived from whatever is "running", so different games look different.
 	uint32_t seed = 0x9e3779b9u;
