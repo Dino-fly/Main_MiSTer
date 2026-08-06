@@ -4,20 +4,51 @@
   The front-end is opinionated by design, and part of that opinion cannot be held in
   our own state file: it lives in MiSTer.ini, which the firmware re-reads on every
   core load. The settings here are the ones whose absence a player would experience
-  as the front-end being broken - a classic-OSD panel appearing over their game.
+  as the front-end being broken - a classic-OSD panel appearing over their game, or
+  the front-end not being the screen they get.
 
-  Two rules decided what is in the set, and they are worth keeping.
+  Three rules decided what is in the set, and they are worth keeping.
 
   Only things that surprise a player are removed. A setting that changes how the
   machine *behaves* outside the front-end is not ours to rewrite, however much this
   UI might prefer it: see the rejected list in chome_ini.cpp for what that ruled out
   and why. The set is deliberately short.
 
+  And a setting whose absence already gives the front-end what it wants does not
+  belong in a set that writes lines into somebody's file. That rule is what keeps
+  eleven of the front-end's own twelve options out of it - every one but the switch
+  already defaults to what this UI wants, so writing them would plant values that
+  change nothing and that the player then owns. The argument, option by option, is in
+  chome_ini.cpp.
+
   And the file is the player's, not ours. Everything not being set is copied through
   byte for byte - line endings, comments, ordering, unknown keys, sections we have
   never heard of - and the old file is kept beside the new one. MiSTer.ini is CRLF
   and hand-edited; a rewrite that reflowed it would turn every later diff into noise
   and would lose the comments people leave themselves.
+
+  ------------------------------------------------------- and no first-run prompt ---
+
+  There is deliberately nothing that notices a fresh installation and offers this
+  screen, and the reason is not that it would be hard.
+
+  The genuinely unconfigured machine cannot be told anything. Until classicui=1 is in
+  the ini in a place the menu core reads, this front-end is not running - the player
+  is looking at the stock OSD browser and there is no surface here to put a prompt on.
+  The one case that most wants first-run help is the one case that structurally cannot
+  receive it, which is why the answer to it is the install step in GUIDE.md and the
+  troubleshooting line under it, not code.
+
+  What is left, once the front-end *is* running, is a card with a pop-up or two still
+  enabled - and that is already reported without being asked: the Options row reads
+  "Best Settings  3 To Change >", or "All Set" when there is nothing to do. That is the
+  whole of a first-run notice, one press deep, in the place a player goes to look for
+  settings, and it keeps working forever rather than only on the first boot.
+
+  A shelf-level notice was considered and is exactly the thing this front-end exists
+  to remove: a panel of technical text about a configuration file, over somebody's
+  cover art, before they have pressed anything. It is the same objection as video_info
+  in chome_ini.cpp, and it would be ours rather than MiSTer's.
 */
 
 #ifndef CHOME_INI_H
