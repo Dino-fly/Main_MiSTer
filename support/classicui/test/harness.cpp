@@ -1267,6 +1267,28 @@ static void walk_profile(const char *tag, int profile, int w, int h)
 	dump(name);
 
 	/*
+	  And the shelf in the middle of a slide, which is a frame drawn by the partial path: the
+	  cards are between two positions and only their band has been repainted. Worth an eye at
+	  every profile rather than only at 720p, because what would go wrong here is geometric -
+	  a band a row short of the focus ring or of the shadow leaves a line of the previous
+	  frame at the edge of the row, and every profile sizes those differently.
+
+	  Three frames in, which is far enough for the cards to have visibly moved and early
+	  enough that the ease is still running. The release is sent first so the title in the
+	  capture is the one under the cursor rather than the one before it - what is being looked
+	  at here is the card row, not the deferral.
+	*/
+	chome_handle(KEY_RIGHT);
+	harness_advance(16);
+	chome_handle(KEY_RIGHT | UPSTROKE);
+	for (int i = 0; i < 3; i++) { harness_advance(16); chome_handle(0); }
+	snprintf(name, sizeof(name), "%s-2b-home-mid-slide", tag);
+	dump(name);
+	frame(20);
+	press(KEY_LEFT);
+	frame(10);
+
+	/*
 	  The strip has to be captured on a game whose core has save states, and the first
 	  game of the shelf is Bonk's - a TurboGrafx, which has none (chome_lib's table). On
 	  that one the strip is the "no save states" message, so these two dumps would show
@@ -3355,6 +3377,322 @@ static void assert_partial_repaint()
 	disc_ingest_present(0);
 	frame(6);
 	check(harness_fb_hash_box(bx0, by0, bx1, by1) != box, "ejecting repaints the corner");
+}
+
+/*
+  The card band a slide clips to, from the same numbers draw_card(), draw_shelf(),
+  draw_pips() and draw_position() note into slide_note_rows(). A copy on purpose, and the
+  two agreeing is the point - the same arrangement BADGE_CELLS above is in. A test that
+  asked the front-end for its own band would assert nothing at all about where the band
+  ought to be, and where it ought to be is the only thing that can go wrong here: too
+  small by a row and the partial path leaves a line of an older frame behind that nothing
+  ever comes back to repaint.
+*/
+#define CARD_RING 2
+static int card_shadow_off(int h) { int sd = h / 40; return sd < 2 ? 2 : sd; }
+
+static void slide_band_expect(const chome_profile *p, int *y0, int *y1)
+{
+	// The tallest card the shelf can draw, its focus ring above it and its drop shadow
+	// below - the crest of the growth, not whatever size a card happens to be right now.
+	*y0 = p->y_shelf - p->sel_h - CARD_RING;
+	*y1 = p->y_shelf + card_shadow_off(p->sel_h);
+
+	// The pips, which stay live during a scroll and are therefore in the band.
+	int pips = p->y_pips + 6 * ((p->id == PROF_HD) ? 2 : 1);
+	if (pips > *y1) *y1 = pips;
+
+	// And the position line, which stays live for the same reason. 240p has none.
+	if (p->id != PROF_LO)
+	{
+		int pos = p->y_pos + 8 * p->ts_tiny;
+		if (pos > *y1) *y1 = pos;
+	}
+}
+
+/*
+  A full repaint of the instant already on screen, with the clock held still.
+
+  The comparison the section below is built on needs two repaints of one moment: the
+  partial frame, and the frame a full repaint would have produced instead. Moving the clock
+  to get the second is not allowed - the ease would advance and the cards would be
+  somewhere else - so the full frame has to be provoked by something that changes what is
+  drawn without changing when it is drawn.
+
+  The menu bar toggle is that: it marks the screen dirty, and with dt == 0 no animation can
+  advance, so bar_y is still 0 and selF is exactly where the partial frame left it. Going
+  there and straight back is two full repaints of one instant, the second of them of the
+  shelf. The legend differs between the two screens, which is what the return value checks:
+  without that, a broken forcing function would make every comparison below pass by
+  comparing a frame with itself.
+
+  The menu button is deliberately not one of the keys whose release commits the chrome (see
+  chome_handle), so this can be used in the middle of a held arrow without committing the
+  very deferral under test.
+*/
+static int force_full_repaint()
+{
+	int w = gfx_w(), h = gfx_h();
+	unsigned long was = harness_fb_hash_box(0, 0, w, h);
+
+	chome_handle(KEY_MENU);                    // the menu bar: dirty, and a different legend
+	chome_handle(KEY_MENU | UPSTROKE);
+	unsigned long other = harness_fb_hash_box(0, 0, w, h);
+
+	chome_handle(KEY_MENU);                    // and back to the shelf, same instant
+	chome_handle(KEY_MENU | UPSTROKE);
+
+	return other != was;
+}
+
+/*
+  Browsing the shelf, which is the thing this front-end is for and was the most expensive
+  frame it drew.
+
+  Moving the cursor changes the cards *and* the title, the system line, the file line, the
+  prompts, the pips and the position line, and the union of all that spans most of the
+  height of the screen - so every frame of every slide was a full repaint, twelve of them
+  per tap and one for every frame of a hold. What this section asserts is the two
+  halves of the way out. The cards follow the eased selF and are one contiguous band of
+  rows, so their frames can be clipped to it; the title and the prompts follow a committed
+  selection that does not move while the shelf does, so there is nothing outside the band
+  for those frames to have to repaint.
+
+  Both claims need proving in the same direction, because the failure mode is silent. A
+  band one row short does not draw anything wrong - it draws nothing at all in that row,
+  and the row keeps whatever it had until something else asks for a full frame. So the
+  strongest check here is not "the damage is small" but "the frame is exactly the frame a
+  full repaint would have produced", asserted on every frame of a slide including the last
+  one - where the selected card is at its full size and its focus ring is on the top row of
+  the band. That check is what found the snap in animate(): see the comment there.
+*/
+static void assert_carousel_slide()
+{
+	printf("\n== the carousel: a slide repaints the card row and nothing else ==\n");
+
+	// No disc, so nothing else on screen has a clock of its own.
+	disc_reset_reader();
+	disc_ingest_present(0);
+	(void)disc_take_dirty();
+	frame(6);
+
+	int w = gfx_w(), h = gfx_h();
+	check(chome_screen_id() == 0 && w == 1280 && h == 720, "on the shelf at 720p");
+
+	/*
+	  Re-entered from scratch, which is the idiom the profile walk uses, rather than trusted
+	  to whichever view the section before this one left up.
+
+	  Worth the four lines. One attempt at this ran on the shelf it inherited, which turned
+	  out to be a twelve-card Systems view that B would not pop out of - so every scroll below
+	  reached the end of the shelf, and a scroll that reaches the end nudges. A nudge is a
+	  full repaint and it stays due for 160 ms, so the section measured nothing but nudges and
+	  every check failed for a reason that had nothing to do with the band. The assertion on
+	  the size of the shelf is there so that can never pass quietly again.
+	*/
+	chome_leave();
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 80 && lib_scanning(); i++) frame(2);
+	frame(40);
+
+	int entries = lib_view_count();
+	printf("  the root shelf has %d entries\n", entries);
+	check(entries > 20, "out on the root shelf, which has room to scroll in");
+
+	// Onto the games, past the folders that lead the shelf, and one further in so that
+	// nothing below runs into either end.
+	select_first_game();
+	press(KEY_RIGHT, 6);
+	frame(30);
+
+	/*
+	  And one tap each way, settled, before anything is measured. art_step() decodes one
+	  cover per call and force_full_repaint() below calls into the front-end four times, so a
+	  cover landing between a partial frame and the full repaint it is compared against would
+	  fail the comparison for a reason that is not a bug: walking the neighbouring cards first
+	  leaves their art already in the cache.
+	*/
+	press(KEY_RIGHT);
+	frame(30);
+	press(KEY_LEFT);
+	frame(30);
+
+	const chome_profile *p = theme_get();
+	int by0, by1;
+	slide_band_expect(p, &by0, &by1);
+	int band_rows = by1 - by0 + 1;
+
+	printf("  the card band is rows %d..%d - %d of %d\n", by0, by1, band_rows, h);
+	check(band_rows > 0 && band_rows < h / 2, "the band is under half the height of the screen");
+
+	/*
+	  A tap: press, release, and let the ease run out on its own.
+
+	  The release is what commits the chrome, so that frame - and only that frame - has the
+	  new title in it and repaints the world for it. Everything after it is cards.
+	*/
+	chome_handle(KEY_RIGHT);
+	harness_advance(16);
+	chome_handle(KEY_RIGHT | UPSTROKE);
+	check(gfx_damage_rows() == h, "the release of a tap repaints the world once, for the title");
+
+	unsigned long above = harness_fb_hash_box(0, 0, w, by0);
+	unsigned long below = harness_fb_hash_box(0, by1 + 1, w, h);
+
+	int painted = 0, worst = 0, outside = 0;
+	for (int i = 0; i < 40; i++)
+	{
+		int flips = harness_present_count();
+		harness_advance(16);
+		chome_handle(0);
+		if (harness_present_count() == flips) break;      // the shelf has come to rest
+		painted++;
+		if (gfx_damage_rows() > worst) worst = gfx_damage_rows();
+		if (harness_fb_hash_box(0, 0, w, by0) != above) outside++;
+		if (harness_fb_hash_box(0, by1 + 1, w, h) != below) outside++;
+	}
+
+	printf("  the slide after a tap: %d frames, worst damage %d rows\n", painted, worst);
+	check(painted >= 8, "a tap slides the shelf over several frames");
+	check(worst <= band_rows, "and every one of them damages only the band");
+	check(worst < h, "which is less than the whole screen");
+	check(!outside, "nothing above or below the band changed while the cards moved");
+
+	/*
+	  The same slide again, this time with every frame of it compared against a full repaint
+	  of its own instant. This is the check that would catch a band that was too small, a
+	  layer that had been cached, or a partial frame drawn out of register with the clip.
+	*/
+	/*
+	  Leftwards, deliberately, and this took a run to work out. art_step() decodes or gives
+	  up on one cover per call, and force_full_repaint() calls into the front-end four times -
+	  so a card that was still waiting for its art when the partial frame was drawn can have
+	  resolved by the time the full frame is, and the comparison fails on a card that changed
+	  for an honest reason. Scrolling back over cards this section has already visited and
+	  settled on asks for nothing new: request_visible_art() covers the same span from the
+	  entry to its left, and every card in it is already decided.
+	*/
+	frame(30);
+	chome_handle(KEY_LEFT);
+	harness_advance(16);
+	chome_handle(KEY_LEFT | UPSTROKE);
+
+	int frames = 0, forced = 0, differed = 0;
+	int art_was = art_cache_count();
+	for (int i = 0; i < 40; i++)
+	{
+		int flips = harness_present_count();
+		harness_advance(16);
+		chome_handle(0);
+		if (harness_present_count() == flips) break;
+		frames++;
+
+		unsigned long partial = harness_fb_hash_box(0, 0, w, h);
+		if (force_full_repaint()) forced++;
+		if (harness_fb_hash_box(0, 0, w, h) != partial) differed++;
+	}
+	check(art_cache_count() == art_was, "no cover landed during the comparison to spoil it");
+
+	check(frames >= 8, "the slide ran long enough to reach the card's full size");
+	check(forced == frames, "a full repaint of the same instant was forced on every frame");
+	check(!differed,
+		"every partial frame of a slide is byte-identical to a full repaint of the same "
+		"instant, the last of them with the card at its largest");
+
+	/*
+	  And now the case the deferral exists for: an arrow held down.
+
+	  Delivered the way menu_key_get() delivers one - the press, then the same keycode again
+	  every REPEATRATE, and *nothing at all* on the frames in between. That shape matters:
+	  the front-end sees key == 0 on most frames of a hold, so anything that treated an idle
+	  frame as the end of the hold would commit between every pair of repeats and defer
+	  nothing.
+	*/
+	press(KEY_LEFT);
+	frame(8);
+
+	unsigned long title_was = harness_fb_hash_box(0, 0, w, by0);
+	unsigned long legend_was = harness_fb_hash_box(0, by1 + 1, w, h);
+	unsigned long pos_was = harness_fb_hash_box(0, p->y_pos, w, p->y_pos + 8 * p->ts_tiny);
+
+	chome_handle(KEY_RIGHT);
+	int held = 0, held_worst = 0;
+	for (int r = 0; r < 4; r++)
+	{
+		// Three frames of nothing at 16 ms each, which is about the 50 ms of REPEATRATE.
+		for (int f = 0; f < 3; f++)
+		{
+			int flips = harness_present_count();
+			harness_advance(16);
+			chome_handle(0);
+			if (harness_present_count() == flips) continue;
+			held++;
+			if (gfx_damage_rows() > held_worst) held_worst = gfx_damage_rows();
+		}
+		chome_handle(KEY_RIGHT);                          // the repeat
+		held++;
+		if (gfx_damage_rows() > held_worst) held_worst = gfx_damage_rows();
+	}
+
+	printf("  the held scroll: %d frames, worst damage %d rows\n", held, held_worst);
+	check(held >= 12, "a held arrow keeps the shelf moving");
+	check(held_worst <= band_rows, "and every frame of the hold stays inside the band");
+	check(harness_fb_hash_box(0, 0, w, by0) == title_was,
+		"the title has not moved once while the arrow was held");
+	check(harness_fb_hash_box(0, by1 + 1, w, h) == legend_was, "nor have the button prompts");
+	check(harness_fb_hash_box(0, p->y_pos, w, p->y_pos + 8 * p->ts_tiny) != pos_was,
+		"while the position line, which is in the band, has been counting all along");
+
+	// The deferred frame has to be honest as well as cheap: a full repaint of this instant
+	// draws the same old title, because the selection has not committed yet.
+	unsigned long mid_hold = harness_fb_hash_box(0, 0, w, h);
+	check(force_full_repaint(), "a full repaint can be forced mid-hold without committing it");
+	check(harness_fb_hash_box(0, 0, w, h) == mid_hold,
+		"a partial frame mid-hold is byte-identical to a full repaint of the same instant");
+
+	chome_handle(KEY_RIGHT | UPSTROKE);
+	check(gfx_damage_rows() == h, "releasing the arrow repaints the world");
+	check(harness_fb_hash_box(0, 0, w, by0) != title_was,
+		"and the title is the one under the cursor again");
+	frame(10);
+
+	/*
+	  The other commit point, which is what keeps a lost release from freezing the title
+	  until the next keypress: a press whose upstroke never arrives at all. The chrome
+	  commits when the shelf comes to rest, and not before.
+	*/
+	unsigned long lost_was = harness_fb_hash_box(0, 0, w, by0);
+	chome_handle(KEY_RIGHT);
+	for (int i = 0; i < 4; i++) { harness_advance(16); chome_handle(0); }
+	check(harness_fb_hash_box(0, 0, w, by0) == lost_was,
+		"mid-slide with no release, the title is still the old one");
+	for (int i = 0; i < 24; i++) { harness_advance(16); chome_handle(0); }
+	check(harness_fb_hash_box(0, 0, w, by0) != lost_was,
+		"and it commits when the shelf comes to rest, with no release at all");
+	chome_handle(KEY_RIGHT | UPSTROKE);
+	frame(6);
+
+	/*
+	  And the invariant from the other side. A structural change must still take the full
+	  path: opening a folder rebuilds the view, which changes the cards, the title, the
+	  prompts and the count all at once, and no band could contain that.
+	*/
+	for (int i = 0; i < 40; i++) press(KEY_LEFT, 2);
+	frame(6);
+
+	int was_n = lib_view_count();
+	check(lib_view_entry(0) && lib_view_entry(0)->kind == ENT_FOLDER,
+		"the leftmost card of the root shelf is a folder");
+
+	chome_handle(KEY_ENTER);
+	check(gfx_damage_rows() == h, "entering a folder repaints every row");
+	chome_handle(KEY_ENTER | UPSTROKE);
+	frame(10);
+	check(lib_view_count() != was_n, "and it really did open one");
+
+	press(KEY_ESC);
+	frame(10);
+	check(lib_view_count() == was_n, "back out of it");
 }
 
 /*
@@ -10409,6 +10747,9 @@ int main()
 	// and the HD canvas - and it puts the badge back under the same fake disc.
 	assert_disc_breath();
 	assert_partial_repaint();
+	// Directly after it, because it is the same mechanism on the other region of the screen
+	// and it starts from the state that one leaves: the shelf at 720p with an empty drive.
+	assert_carousel_slide();
 	assert_disc_launch();
 	// After it, because it leaves the same state that one does and starts from it: a disc
 	// in the drive, the flag on, and the shelf up.
