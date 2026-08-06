@@ -13,10 +13,35 @@
 /* ------------------------------------------------------------- the set ---- */
 
 /*
-  Three settings, and the reason each one is here is that without it a classic-OSD
-  panel appears over the player's game - which is the one thing this front-end
-  exists to prevent. Two of them Dinofly named; the third is the same complaint with
-  a button combo in front of it.
+  Four settings. One is this front-end itself; the other three are here because
+  without them a classic-OSD panel appears over the player's game - which is the one
+  thing this front-end exists to prevent. Two of those Dinofly named; the third is the
+  same complaint with a button combo in front of it.
+
+  classicui       the front-end. It is what the whole screen is for, and a player who
+                  has just moved an existing card onto this firmware reasonably
+                  expects "Best Settings" to mean "set the front-end up", not "tidy
+                  three of MiSTer's pop-ups".
+                  It looks tautological - this panel cannot be reached unless
+                  cfg.classicui is already 1 - and it is not, because cfg.classicui is
+                  the answer for *one core on one display*, while the file holds one
+                  answer per section. The reachable case is a later section that says
+                  0: [MiSTer] enables the front-end, [NES] or [video=800x600] turns it
+                  off again, and the player meets the classic OSD every time they press
+                  the menu button in that game or on that television - from a shelf
+                  where everything looks correct. That is the report this fixes, and it
+                  is the one nobody can diagnose from the front-end itself.
+                  The writer sets every assignment of a key wherever it appears and
+                  appends under a [MiSTer] header of its own, so after a write the
+                  answer no longer depends on which sections happened to match.
+                  For the ordinary card - classicui=1 in [MiSTer], which is what the
+                  install step asks for - the plan finds nothing to change and the
+                  screen is exactly as quiet as it is today.
+                  What it cannot repair is the file that never enables the front-end,
+                  or enables it only in the section that is not being read: neither
+                  machine is running this code, so neither can be shown this screen.
+                  That case belongs to the install step in GUIDE.md, and the note about
+                  first-run help in chome_ini.h says why it has to.
 
   video_info      the mode banner. Every core prints its resolution and refresh over
                   the picture for a few seconds when the mode changes, which for a
@@ -29,6 +54,42 @@
                   in the same panel. It is reachable by accident, invisible once on
                   (the button just starts repeating), and there is no way back that
                   a novice would find. Not a feature this audience has lost.
+
+  The front-end has eleven other options and none of them is here. That is one test
+  applied eleven times, and it is worth writing down because "our own options belong in
+  our own screen" is the obvious answer and the wrong one:
+
+    A setting whose absence already gives the front-end what it wants does not belong
+    in a set that writes lines into somebody's file.
+
+  Every classicui_* option other than the switch passes that test - cfg_parse() already
+  defaults classicui_freeze to 1, classicui_gamelist to 1, classicui_overscan to 6,
+  classicui_artdir to boxart, classicui_arturl to the libretro thumbnail server and
+  classicui_profile to auto - so writing them would add lines that change nothing today
+  and that the player then owns and has to maintain. Worse, a written line cannot tell
+  "I never set this" from "I set this on purpose": classicui_freeze=0 is precisely the
+  deliberate choice of somebody whose SNES core dies when asked for a save state, and
+  this screen putting a 1 back over it would be the front-end breaking a game to tidy
+  an ini. Those six are personal taste or per-television anyway, and two of them
+  (overscan, freeze) already have a row in Options > More Settings, where a value is
+  *offered* with its recommendation beside it rather than assumed.
+
+  The remaining three are off by default for reasons that are not this screen's to
+  overrule:
+
+  classicui_artfetch    sends the names of the player's ROMs to a third-party server.
+                        Consent to that is not something to collect by writing 1 into
+                        a file on their behalf.
+  classicui_screenscraper the same, and it needs the player's own account before it
+                        can do anything at all - see chome_ss.h. Turning it on for
+                        somebody who has no account sets a flag and nothing else.
+  classicui_disc        needs an optical drive most machines do not have, and the
+                        failure mode when it is wrong is the console stopping. See
+                        chome_disc.h for why that default is caution earned rather
+                        than caution for its own sake.
+
+  And classicui_ss_user / classicui_ss_pass are somebody's login. There is no value
+  to write.
 
   What was considered and deliberately left out, so it is not re-argued:
 
@@ -48,6 +109,13 @@
 */
 static const ini_want wants[] =
 {
+	/*
+	  The outcome text is 30 characters and that is a measurement, not a style: at HD
+	  the panel is 46 columns wide, and an outcome long enough that it plus its
+	  key=value no longer fit on one line puts *every* setting on two lines - see the
+	  `stacked` decision in draw_ini(). Room for 32 here, so this has two to spare.
+	*/
+	{ "classicui",        "1", "Make this menu the main screen", &cfg.classicui, 1 },
 	{ "video_info",       "0", "Hide the resolution pop-up", &cfg.video_info,       0 },
 	{ "controller_info",  "0", "Hide the button map pop-up", &cfg.controller_info,  0 },
 	{ "disable_autofire", "1", "Stop accidental autofire",   &cfg.disable_autofire, 1 },
