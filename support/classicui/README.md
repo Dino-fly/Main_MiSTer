@@ -968,12 +968,22 @@ Keys are normalised - upper case, `A-Z0-9` only - so the disc's `SLES_015.06`, R
 **not** collapsed: `SLES-01506` and `SLUS-00594` are different discs and get different
 rows.
 
-Build the table with `python3 support/classicui/tools/disctitles.py --fetch`, which pulls
+A built table is committed, at `support/classicui/disctitles.generated.txt` - 12,761 rows,
+455,267 bytes, cut from Redump on 2026-08-06 - because that is the file a release copies
+onto the card, and cutting a release should not depend on a third-party host being up.
+`support/classicui/DISCTITLES.md` beside it records its provenance and the basis for
+redistributing it, and also why it is *not* linked into the binary: that was built and
+dropped, because ~445 KB in a ~1.3 MB `MiSTer` for every user, plus a table nobody can
+update without a toolchain, is not worth being spared one file copy.
+
+Rebuild it with `python3 support/classicui/tools/disctitles.py --fetch`, which pulls
 the four [Redump](https://redump.info) DATs - note `redump.info`, not the dead
 `redump.org`, and note the mandatory `/serial` suffix on those URLs, without which the DAT
-contains no serials at all. **No third-party data is committed here**: Redump's position
-is that their metadata "is considered public domain", which is a clearly stated intent and
-not a formal grant, so the script asks the user to fetch it. MAME's `hash/*.xml` is
+contains no serials at all. The DATs themselves are **not** committed - they are megabytes
+and they change weekly. Redump's position is that their metadata "is considered public
+domain to be used however people see fit", which is a clearly stated intent and **not** a
+formal licence grant; the committed table takes that statement at its word, and
+`DISCTITLES.md` says so in those terms. MAME's `hash/*.xml` is
 supported as an alternative and is the only source with an unambiguous licence (CC0 1.0,
 stated in `COPYING` and in each file) at the cost of about a quarter of Redump's
 PlayStation coverage; libretro-database works too and is CC-BY-SA-4.0, which is viral.
