@@ -185,7 +185,7 @@ void gfx_disc(int cx, int cy, int r, int step,
 
   Not one of gfx_disc()'s 32nds, because it is a measurement rather than a proportion
   somebody chose: the disc scans this front-end fetches are transparent out to 15% of the
-  radius (see da_box_average() in chome_art.cpp, which has to weight by alpha because of
+  radius (see disc_box_average() in chome_art.cpp, which has to weight by alpha because of
   it), and a generated disc and a photographed one have to put their hole in the same place
   or the dialog visibly shifts when a scan lands. gfx_disc()'s own sprite keeps its 6/32:
   its output is asserted byte-for-byte and one cell there is one pixel at 240p anyway.

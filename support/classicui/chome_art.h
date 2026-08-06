@@ -15,6 +15,37 @@
       <artdir>/<System Name>/Named_Boxarts/<ROM name>.png
   Fetched art is written into that same layout, so a fetch permanently populates
   the local pack and the next boot needs no network.
+
+  ---------------------------------------------------------------------------
+
+  The ladder, in the order it is walked. One rung per pass of art_step(), and
+  art_next_source() is the whole of it as a single answer - the step consults that
+  function rather than repeating the order, so there is one copy of it to be wrong.
+
+    1. a file already on the card, through find_local_art(): whatever gamelist.xml
+       names, then the scraper media folders beside the ROMs, then our own artdir,
+       then next to the ROM. This is the cache and it is the top of the ladder.
+    2. ScreenScraper, when the player has turned it on and given it an account.
+    3. the libretro thumbnail pack.
+    4. nothing: a plate in the system's colour, ART_MISSING.
+
+  Two things about that order are decisions rather than accidents, and both were
+  Dinofly's.
+
+  ScreenScraper above libretro. It used to be the other way round - spend the free
+  repository, keep the metered account for what it could not supply. But a player who
+  has entered their own ScreenScraper credentials has said which database they want
+  their shelf built from, and filling the card from libretro first means they get the
+  answer they did not ask for, permanently, because a fetched cover is written to the
+  card and never looked for again.
+
+  The card above both of them. Taken literally, "use ScreenScraper for all art" would
+  mean re-fetching over covers that are already there - including the ones a player
+  scraped themselves with another tool and pointed a gamelist.xml at, which
+  find_local_art() deliberately honours above everything else. So "first priority"
+  applies to art that has to be *fetched*, and a cover already on the SD is an answer,
+  not a gap. Re-scraping over the card would be a separate feature with a switch of its
+  own, and nobody has asked for one.
 */
 
 #ifndef CHOME_ART_H
@@ -44,6 +75,63 @@ int  art_state(int item);
 int  art_fetch_active();
 int  art_cache_count();
 int  art_cache_bytes();
+
+/*
+  Which rung of the ladder this game is on: what art_step() would do for it next, without
+  doing any of it.
+
+  Exposed because the ordering *is* the feature, and none of it shows in a pixel. A test
+  that could only see the end state would pass just as happily on a ladder walked in the
+  wrong order - a game with a cover on the card looks identical whether we used that cover
+  or fetched a new one over it - so the order is asserted here, against the same function
+  the step itself calls. There is one ladder, and this is it.
+*/
+#define ART_SRC_NONE     0   // nothing left to try: a plate, and ART_MISSING
+#define ART_SRC_LOCAL    1   // a file already on the card
+#define ART_SRC_SS       2   // ask ScreenScraper
+#define ART_SRC_LIBRETRO 3   // the libretro thumbnail pack
+int art_next_source(int item);
+
+/*
+  1 when ScreenScraper has answered about this game and had no cover for it, so it will
+  not be asked again this session.
+
+  The half of the crux that lives per-game. Set only where ss_verdict() is true - the
+  database looked and came back with nothing, or with media but no cover among them. A
+  refusal to answer at all is never this: a quota that ran out while the shelf was being
+  scrolled must leave every game it touched exactly as unasked as it found them, or one
+  afternoon at the wrong end of the allowance blanks a library for good. The other half of
+  the crux is ss_hold_reason(), which holds the module rather than the game.
+*/
+int art_ss_absent(int item);
+
+// How many times the cover ladder has reached its ScreenScraper rung this session,
+// refusals included. The same shape and the same reason as disc_art_asks(): no request is
+// ever made in the harness, and whether the rung is reached at all - and in what order
+// against the libretro one - is precisely the shape of this feature.
+unsigned art_ss_asks();
+
+/*
+  Read a jeuInfos reply that has landed for one shelf item and settle what it means:
+  parse it, fold the outcome and the quota counters into the module's state, remember a
+  miss if and only if the reply was a verdict, and keep the cover URL it named for the
+  download stage. Returns 1 when there is a cover to fetch.
+
+  The reply is unlinked before this returns, whatever it contained. It is a list of URLs
+  with our devid, our devpassword and the player's ScreenScraper password in every one of
+  them, and it lives in tmpfs for exactly as long as it takes to read - see the note on
+  credentials in chome_ss.h.
+
+  Public for the same reason disc_art_scale() is: it is the half of the fetch a host test
+  can reach. The two curls cannot be run there and must not be - the account allows one
+  thread and the fixtures point at .invalid so that a bug cannot become a request - but
+  everything that decides whether a miss is remembered happens in here, on a file. So the
+  harness writes the replies a server would have sent and drives this directly, which is
+  the live path rather than a model of it.
+
+  Makes no request of its own and needs no network: it reads a file that is already there.
+*/
+int art_ss_settle(int item, const char *reply_path);
 
 // Suspend-point thumbnails, written next to the savestate by process_ss().
 // Small ring cache keyed by path; decoded on demand at w x h.
@@ -102,7 +190,15 @@ int disc_art_path(const char *key, char *out, int len);
 */
 int disc_art_request(const char *key, const char *sysid, const char *romnom);
 
-// 1 while a disc scan is being fetched, for a spinner and to keep callers from piling up.
+/*
+  1 while a *disc scan* is being fetched, for a spinner and to keep callers from piling up.
+
+  One fetcher serves both the disc scan and ScreenScraper covers now, and this deliberately
+  answers only for the disc: a cover being fetched for the shelf must not put a "fetching the
+  disc scan" spinner over a dialog that is going to go on drawing the generated disc face.
+  The one-download-at-a-time rule is enforced inside chome_art.cpp against all kinds, which
+  is where it belongs - a caller cannot get that wrong by reading this the obvious way.
+*/
 int disc_art_active();
 
 /*
