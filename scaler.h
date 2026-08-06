@@ -58,4 +58,22 @@ bool write_screenshot(const char *filename, const uint8_t *argb,
 // is unavailable, busy, or the frame does not fit.
 int screenshot_grab(uint32_t *dst, int max_px, int *out_w, int *out_h);
 
+/*
+  Why the last screenshot_grab() answered as it did, as a phrase fit for a log line.
+  "ok" after a successful grab, "not attempted" before the first one.
+
+  This exists because a failed grab and a successful one cannot be told apart from the
+  screen. Classic Home draws its in-game menu over a still of the game, and over a
+  physical disc that still was reported black - which is what a grab returning nothing
+  looks like, and also what a grab working perfectly looks like when the screen it is
+  drawn on has nothing of it showing. Guessing between those two cost a day. The caller
+  prints this instead, and one line from the device says which it was.
+
+  There are five distinct ways screenshot_grab() returns 0 and they need entirely
+  different repairs - a stuck screenshot save, a core with no scaler output, a frame too
+  big for the buffer - so the phrase names the one that happened rather than saying it
+  failed.
+*/
+const char *screenshot_grab_why(void);
+
 #endif

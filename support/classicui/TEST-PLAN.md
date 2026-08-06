@@ -195,6 +195,48 @@ lurches forward after saving, that is what happened.
 
 ---
 
+## A7b. The still behind the in-game menu, and why a disc looked black
+
+You reported the in-game menu over a game launched from a **physical disc** as having a
+black background, where the same core launched from a `.cue` on the card showed the game
+behind the menu. The reading that follows from that is "the capture failed on the disc
+path", and the harness now says it did not: `assert_ingame_still()` opens the menu over a
+running disc and counts the still's own pixels on screen, and they are there.
+
+Two things that are real were found instead, and only the log says which of them this
+device is in. The firmware now names both, once per menu open.
+
+| Line in the log | What it means |
+|---|---|
+| `the still of the game: ok, 352x239` | The capture worked. Anything black on screen after this line is layout, not capture. |
+| `the still of the game: the scaler has no frame - not mapped, or a core that does not write one` | The genuine failure, and nobody has seen it yet: this core puts nothing where the scaler capture is read from. |
+| `the still of the game: a screenshot save is still in flight` | A screenshot the player asked for has not finished writing. Transient — close the menu and open it again. |
+| `the menu background: built, canvas 640x240 px=2, picture 640x240 at 0,0` | The still fills the canvas, which is what it should now do. |
+| `the menu background: ... picture 320x240 at 160,0` on a 640-wide canvas | The bug this section is about, and it means the build you are running predates the fix: the game was drawn into the middle half of the width with a black bar down each side. |
+| `the still is 320x240 and the canvas is now 640x240, so it cannot be drawn` | The canvas changed size *after* the menu opened and nothing rebuilt the background. Never observed; if it ever appears, say so, because there is no fix for it in the tree yet. |
+| `no still to draw the menu over, so the grid is what shows` | The background fell through to the shelf grid. Only ever follows a refused capture. |
+
+| Step | I do | You look at | Report |
+|---|---|---|---|
+| A7b.1 | Launch a game **from a file**, open the menu | The screen | Is the game visible behind the shelf, dimmed? |
+| A7b.2 | `grep "still of the game" /tmp/debug.txt` | The log | Copy the line. `ok` and a size is the expected answer. |
+| A7b.3 | Launch the **same core from a disc**, open the menu | The screen | It opens on the disc's own dialog. Press **B** once, which reaches the shelf. Is the game visible *there*? |
+| A7b.4 | `grep "menu background" /tmp/debug.txt` | The log | Copy the line. `px=2` says this is a stretched TV canvas; `picture` says how wide the game was drawn and where it landed. |
+| A7b.5 | Still over the disc, back on its dialog | The edges of the screen | Is there any of the game down the sides of the dialog at all, or is the surround flat? |
+
+**A7b.3 is the whole test.** The disc's dialog is the canvas less the inset by your own
+decision, so behind it there is almost nothing of the game to see whatever the capture did —
+1431 pixels of 76800 at 320x240, and half of those are then taken by the scrim every panel
+screen lays over the background. If the shelf one press away shows the game, the capture is
+fine and the question is a layout one: whether that dialog should let more of the game
+through, and whether a background that is already dimmed to 5/16 should be scrimmed a second
+time. Both of those are yours to decide and neither is changed.
+
+If the **shelf** is black over a disc and not over a file, that is new and interesting, and
+A7b.2 and A7b.4 together say which half of it broke.
+
+---
+
 ## A8. gamelist.xml — art scraped somewhere else
 
 Also **not verified on hardware at all**. The harness proves the file is read, that a

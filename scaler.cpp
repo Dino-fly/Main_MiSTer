@@ -620,19 +620,55 @@ void do_screenshot(char* imgname)
 	return;
 }
 
+// See screenshot_grab_why() in scaler.h for why the reason is kept at all.
+static const char *grab_why = "not attempted";
+
+const char *screenshot_grab_why(void)
+{
+    return grab_why;
+}
+
 int screenshot_grab(uint32_t *dst, int max_px, int *out_w, int *out_h)
 {
-    if (!dst || max_px < 1 || screenshot_pending_atomic || screenshot_requested) return 0;
+    /*
+      One test per reason, where this used to be one `if` with four terms. The tests and
+      their order are unchanged; only the reporting is new, and it is only worth having
+      if each cause can be named separately - "the grab failed" is what the caller
+      already knew.
+    */
+    if (!dst)                       { grab_why = "no destination buffer";                 return 0; }
+    if (max_px < 1)                 { grab_why = "no room asked for";                     return 0; }
+    if (screenshot_pending_atomic)  { grab_why = "a screenshot save is still in flight";   return 0; }
+    if (screenshot_requested)       { grab_why = "a screenshot has been asked for and not taken yet"; return 0; }
 
+    /*
+      mister_scaler_init() refuses two different things and cannot tell us which: no
+      mapping of MISTER_SCALER_BASEADDR at all, and a mapping whose first two bytes are
+      not the frame header a core with scaler output writes there. Both mean the same to
+      a caller - there is no frame to be had from this core right now - and both already
+      print their own line above this one.
+    */
     mister_scaler *ms = mister_scaler_init();
-    if (!ms) return 0;
+    if (!ms)
+    {
+        grab_why = "the scaler has no frame - not mapped, or a core that does not write one";
+        return 0;
+    }
 
     int w = ms->width;
     int h = ms->height;
 
-    if (w < 1 || h < 1 || w * h > max_px)
+    if (w < 1 || h < 1)
     {
         mister_scaler_free(ms);
+        grab_why = "the scaler reports an empty frame";
+        return 0;
+    }
+
+    if (w * h > max_px)
+    {
+        mister_scaler_free(ms);
+        grab_why = "the frame is larger than the buffer offered";
         return 0;
     }
 
@@ -641,6 +677,7 @@ int screenshot_grab(uint32_t *dst, int max_px, int *out_w, int *out_h)
 
     if (out_w) *out_w = w;
     if (out_h) *out_h = h;
+    grab_why = "ok";
     return 1;
 }
 
