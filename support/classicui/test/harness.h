@@ -33,6 +33,8 @@ void harness_reset_status();
 uint32_t *harness_fb_shown();
 unsigned long harness_fb_hash(int y0, int y1);
 unsigned long harness_fb_hash_box(int x0, int y0, int x1, int y1);
+unsigned long harness_fb_hash_box_except(int x0, int y0, int x1, int y1,
+	int ex0, int ey0, int ex1, int ey1);
 void harness_set_pad_name(const char *n);
 void harness_set_pad_vidpid(uint32_t v);
 void harness_set_osd_visible(int v);

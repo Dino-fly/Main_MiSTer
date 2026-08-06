@@ -1112,9 +1112,18 @@ static void dump(const char *name)
 		imlib_context_set_image(im);
 		imlib_image_set_has_alpha(0);
 		imlib_image_set_format("png");
-		imlib_save_image(path);
+		/*
+		  With the error return, not without it. This printed "wrote" unconditionally and three
+		  PNGs a section was writing never reached test/out - which reads as the section not
+		  having run at all, and cost an hour of looking in the wrong place.
+		*/
+		Imlib_Load_Error err = IMLIB_LOAD_ERROR_NONE;
+		imlib_save_image_with_error_return(path, &err);
 		imlib_free_image();
-		printf("  wrote %s.png (%dx%d)\n", name, w, h);
+		if (err != IMLIB_LOAD_ERROR_NONE)
+			printf("  FAILED to write %s.png (%dx%d): imlib error %d\n", name, w, h, (int)err);
+		else
+			printf("  wrote %s.png (%dx%d)\n", name, w, h);
 	}
 	free(copy);
 }
@@ -4546,7 +4555,8 @@ static void assert_disc_dialog_size()
 		// disc_layout_for() sized. See panel_plate_seen().
 		int pw = ow + 4, ph = oh + hdr + 2;
 		int px = ox - 2, py = oy - hdr;
-		int dia = disc_drawn_dia();
+		int dcx = 0, dcy = 0;
+		int dia = disc_drawn_box(&dcx, &dcy);
 
 		printf("  %-7s %4dx%-4d panel %dx%d at %d,%d - %d%% of the picture, disc %d,"
 			" bottom %d clears the legend at %d\n",
@@ -4633,9 +4643,21 @@ static void assert_disc_dialog_size()
 		*/
 		if (cases[c].w == 320 && cases[c].h == 240)
 		{
-			unsigned long hash = harness_fb_hash_box(ox, oy, ox + ow, oy + oh);
-			printf("  240p dialog plate hash %lu\n", hash);
-			check(hash == 4675382672573572134UL, "240p is pixel for pixel the dialog it was");
+			/*
+			  Everything but the disc, which turns. The disc's box is cut out with two pixels
+			  of margin for the soft rim, and its diameter and centre are asserted above - so
+			  the disc is still pinned, just not the frame of its rotation.
+
+			  The first version of this hashed the disc too and broke when a section was added
+			  elsewhere in the harness: the extra clock advances caught the disc at a different
+			  angle. The pixels that moved were the disc's 96x96 box exactly, measured, which is
+			  how we know the dialog itself had not moved.
+			*/
+			unsigned long hash = harness_fb_hash_box_except(ox, oy, ox + ow, oy + oh,
+				dcx - dia / 2 - 2, dcy - dia / 2 - 2,
+				dcx + dia / 2 + 2, dcy + dia / 2 + 2);
+			printf("  240p dialog plate hash (disc cut out) %lu\n", hash);
+			check(hash == 8834752626955163003UL, "240p is pixel for pixel the dialog it was");
 		}
 
 		disc_reset_reader();
