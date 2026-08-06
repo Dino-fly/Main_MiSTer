@@ -15,6 +15,13 @@
 #include "chome_core.h"
 #include "chome_art.h"
 #include "chome_gamelist.h"
+/*
+  For ss_available() alone - whether this build carries a ScreenScraper application
+  credential, which the Online Covers screen has to say out loud. Note that the ss_*
+  functions defined *in this file* are savestates and have nothing to do with this
+  header; see the comment on SCR_COVERS.
+*/
+#include "chome_ss.h"
 #include "chome_video.h"
 #include "chome_icons32.h"
 #include "chome_icons16.h"
@@ -128,6 +135,39 @@ static int set_wrote = -1;                   // -1 nothing written yet, else how
 static int set_failed = 0;
 static int set_odd = 0;                      // options not at their recommended value
 
+/*
+  Online Covers: the player's own ScreenScraper account.
+
+  Staged rather than written as it is typed, which is the same shape as More Settings and
+  chosen for the same reason - this writes lines into somebody's MiSTer.ini, so there is a
+  Save row, two-press arming, and a way to leave without keeping any of it.
+
+  cov_pass is the reason this file has a comment about a variable rather than only about a
+  screen. It is a password in clear in the firmware's memory, exactly as cfg.classicui_ss_pass
+  already is and as the line in MiSTer.ini already is; what this screen must not do is make
+  that worse by putting it anywhere a person or a log can see it. Nothing below ever draws
+  it, prints it, or hands it to the keyboard as an initial value - see cov_open_pass() and
+  the comment on the row text in draw_covers() for how each of those is avoided.
+*/
+#define COV_ROWS 4
+#define COV_ON   0                           // the rows, which three places step over
+#define COV_USER 1
+#define COV_PASS 2
+#define COV_SAVE 3
+
+static int  cov_row = 0;
+static int  cov_on = 0;                      // staged copies of the three cfg fields
+static char cov_user[64];
+static char cov_pass[64];
+static int  cov_arm = 0;                     // one press from writing
+static unsigned long cov_arm_until = 0;
+static int  cov_quit_arm = 0;                // ...and one from throwing the edits away
+static unsigned long cov_quit_until = 0;
+static int  cov_wrote = -1;                  // -1 nothing written yet, else how many
+static int  cov_failed = 0;
+static char cov_note[96];                    // one refused entry, for a few seconds
+static unsigned long cov_note_until = 0;
+
 static int pads_row = 0;                     // which controller is picked
 static int pads_forget_arm = -1;             // ...and whether forgetting it is armed
 static unsigned long pads_forget_until = 0;
@@ -172,6 +212,8 @@ static unsigned wifi_seen = 0;               // signature of the network state o
 // Which screen is waiting for the text the keyboard is collecting.
 #define OSKD_NONE 0
 #define OSKD_WIFI 1
+#define OSKD_SS_USER 2                       // Online Covers: the account name
+#define OSKD_SS_PASS 3                       // ...and its password
 static int osk_dest = OSKD_NONE;
 
 static int ig_muted = 0;                     // game silenced while the menu is up
@@ -219,6 +261,16 @@ static void ref_shot_path(const char *sysid, const char *rompath, char *out, int
 #define SCR_CORE    16
 #define SCR_DISC    17
 #define SCR_DISCBAR 18
+/*
+  Online Covers, which is where a player sets up their ScreenScraper account.
+
+  Named COVERS and not SS, and the state below is cov_* for the same reason: in this
+  file `ss_` already means *savestate* - ss_can_save(), ss_do_load(), ss_copy_opt() -
+  and a second meaning for the same two letters in the same file is a trap for whoever
+  reads it next. The module this screen configures is chome_ss.cpp; nothing here
+  borrows its prefix.
+*/
+#define SCR_COVERS  19
 
 // Rows on the Options panel. Several places step over them.
 /*
@@ -230,9 +282,9 @@ static void ref_shot_path(const char *sysid, const char *rompath, char *out, int
   PSX, or a core's own video and audio settings, live in the classic OSD and nowhere
   else, and the OSD is only reachable while that core is running.
 */
-#define OPT_ROWS_MENU 9
-#define OPT_ROWS_GAME 10
-#define OPT_ROWS    9
+#define OPT_ROWS_MENU 10
+#define OPT_ROWS_GAME 11
+#define OPT_ROWS    10
 
 /*
   Savestate slots.
@@ -1759,6 +1811,14 @@ static void btn_hint_c(int cx, int y, int s, uint32_t col, const char *pre, int 
 */
 static int disc_dlg_legend(legend_pair *out, int max);
 
+/*
+  Same reason, smaller scale: the Online Covers legend only offers Save while there is
+  something to save, and the answer to that is the staging buffers, which live with the
+  screen. Asking rather than keeping a flag up here is what stops the prompt and the
+  panel from ever disagreeing about whether the file needs writing.
+*/
+static int cov_dirty();
+
 static int build_legend(legend_pair *out, int max)
 {
 	int n = 0;
@@ -1950,6 +2010,27 @@ static int build_legend(legend_pair *out, int max)
 		if (n < max) { out[n++] = lp(LBL_X, "Usual Value", "Usual"); }
 		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
 		break;
+
+	/*
+	  Online Covers. On a build with no application credential nothing but Back is offered:
+	  every other key on the screen is refused there, and a prompt for a press that only
+	  shakes the panel is worse than no prompt - the same rule the Controllers screen
+	  follows for a wired pad it can do nothing with.
+	*/
+	case SCR_COVERS:
+		if (ss_available())
+		{
+			if (cov_row == COV_ON && n < max)
+			{
+				out[n++] = { CH_LEFT CH_RIGHT, "dpad_lr", "Change", "Chg", 0, COL_WHITE };
+			}
+			if (cov_row == COV_USER && n < max) { out[n++] = lp(LBL_A, "Type It", "Type"); }
+			if (cov_row == COV_PASS && n < max) { out[n++] = lp(LBL_A, "Type It", "Type"); }
+			if (cov_row == COV_SAVE && cov_dirty() && n < max) { out[n++] = lp(LBL_A, "Save", "Save"); }
+		}
+		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
+		break;
+
 	case SCR_ABOUT:
 		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
 		break;
@@ -3046,12 +3127,47 @@ static void draw_display_screen(const chome_profile *p)
 	}
 }
 
+/*
+  Online Covers in one phrase, for the Options row and for the screen's own footer.
+
+  There are five states and only one of them means "this works", which is the whole
+  reason it is said in words instead of as On/Off. Taken as arguments rather than read
+  from cfg because the Options row is asking about the machine and the screen is asking
+  about the edits the player has not saved yet, and those are different questions with
+  the same five answers.
+
+  Order matters: the build comes first because nothing a player types can move it, then
+  the switch, then the two ways of being switched on and still inert. ss_enabled() in
+  chome_ss.cpp draws the same line - available, on, and an account - so "On" here is
+  exactly the state in which a cover is really asked for.
+
+  `avail` is a parameter and not a call to ss_available() for one reason, and it is a
+  testing reason stated plainly: the devid is compile-time, so a build that can reach this
+  code at all is a build in which ss_available() is a constant. The harness is compiled
+  with a dummy credential - without one the URL builder would be unreachable dead code -
+  and could therefore never see the one state that matters most. Handed the answer, it can
+  check all five. See chome_covers_state() at the bottom of this file.
+
+  Every phrase is short on purpose. draw_rows_c() right-aligns the value column without
+  clipping it, so at 240p a long one walks left into the label: the panel is 249 px, the
+  label ends at 110 and the widest of these ("Not Available", 13 characters) starts at
+  174. "Not In This Build" was the first wording and it overlapped by three pixels.
+*/
+static const char *cov_state_of(int avail, int on, const char *user, int has_pass)
+{
+	if (!avail) return "Not Available";
+	if (!on) return "Off";
+	if (!user || !user[0]) return "No Account";
+	if (!has_pass) return "No Password";
+	return "On";
+}
+
 static void draw_options_panel(const chome_profile *p)
 {
 	panel_box b = draw_panel(p, "Options");
 
-	static const char *rows_menu[] = { "Cover Art", "Rescan Library", "Reinstall Looks", "Menu Layout", "Controllers", "Wi-Fi", "Best Settings", "More Settings", "Advanced Settings", 0 };
-	static const char *rows_game[] = { "Cover Art", "Rescan Library", "Reinstall Looks", "Menu Layout", "Controllers", "Wi-Fi", "Best Settings", "More Settings", "Core Settings", "Close Game" };
+	static const char *rows_menu[] = { "Cover Art", "Online Covers", "Rescan Library", "Reinstall Looks", "Menu Layout", "Controllers", "Wi-Fi", "Best Settings", "More Settings", "Advanced Settings", 0 };
+	static const char *rows_game[] = { "Cover Art", "Online Covers", "Rescan Library", "Reinstall Looks", "Menu Layout", "Controllers", "Wi-Fi", "Best Settings", "More Settings", "Core Settings", "Close Game" };
 	const char *const *rows = ig_active ? rows_game : rows_menu;
 	char v1[32];
 	if (lib_scanning()) snprintf(v1, sizeof(v1), "%d...", lib_scan_progress());
@@ -3092,8 +3208,18 @@ static void draw_options_panel(const chome_profile *p)
 	if (!set_odd) snprintf(v5, sizeof(v5), "All Default");
 	else snprintf(v5, sizeof(v5), "%d Changed >", set_odd);
 
+	/*
+	  And what the Online Covers row says: whether a cover would really be fetched, which
+	  is not the same question as whether the option is on. Read from cfg, not from the
+	  staging buffers - this row is about the machine, and the screen behind it is where
+	  unsaved edits live.
+	*/
+	const char *v6 = cov_state_of(ss_available(), cfg.classicui_screenscraper,
+		cfg.classicui_ss_user, cfg.classicui_ss_pass[0] != 0);
+
 	const char *vals[] = {
 		cfg.classicui_artfetch ? "Fetch Missing" : "Local Only",
+		v6,
 		v1,
 		"Write Files",
 		cfg.classicui_profile == 0 ? "Auto" : theme_get()->name,
@@ -5718,6 +5844,370 @@ static void draw_settings(const chome_profile *p)
 	}
 }
 
+/* ------------------------------------------------------ online covers ----- */
+
+/*
+  Online Covers: the player's own ScreenScraper account, set up from the console.
+
+  ------------------------------------------------------------- where it lives ---
+
+  Under Options, in the row directly below Cover Art, and that placement is an argument
+  rather than the nearest free slot:
+
+  Cover Art is the row that decides whether a missing cover is looked for on the network
+  at all (classicui_artfetch). This screen is where that lookup gets somewhere to look.
+  The two are one chain - disc_art_request() in chome_art.cpp asks for classicui_artfetch
+  AND ss_enabled() before it asks the database for anything, and a player who turns one on
+  without the other gets nothing and is told nothing - so they are adjacent, and each row
+  says enough about its own state that the pair can be read at a glance.
+
+  It is deliberately not in Options > More Settings. That screen is a table of MiSTer.ini
+  options whose values are numbers picked from a list or stepped within cfg.cpp's declared
+  range, and whose `live` pointer is a uint8_t* - see the comment on opt_def in
+  chome_opt.h, which says a wider cfg field needs that widened rather than silently
+  scribbling on the field after it. A 64-character login is not a number in a range, and
+  bending that table into holding one would cost the property that makes it safe: every
+  value it can write is one cfg.cpp will accept.
+
+  And not in Options > Best Settings either. That screen is the front-end's own opinion
+  about four MiSTer.ini keys, written on the player's behalf; somebody else's account is not
+  a value we have an opinion about. chome_ini.cpp says so already, in the list of keys it
+  refuses to touch: "classicui_ss_user / classicui_ss_pass are somebody's login. There is
+  no value to write."
+
+  --------------------------------------------------------------- the password ---
+
+  It is never drawn. The row says whether one is set, not what it is; there is no
+  confirmation step that echoes it; nothing here prints it, and cov_open_pass() does not
+  hand it to the keyboard as an initial value - the keyboard starts a masked field
+  *visible* by design (see chome_osk.h), so pre-filling it would put a stored password on
+  screen without anybody asking for it.
+
+  What this does not fix, and is not trying to: the value lives in MiSTer.ini in clear,
+  the way every MiSTer option does, and the row for it says so. Making that untrue is a
+  change to the configuration format, not to a settings screen.
+*/
+#define COV_SAVE_NOTE "Writes your account into MiSTer.ini. A copy is kept."
+#define COV_INI_NOTE  "; Written by Classic Home - Options > Online Covers."
+
+// Staged from cfg on the way in, so the screen cannot change under the player and
+// leaving without saving throws the edits away rather than half of them.
+static void cov_refresh()
+{
+	cov_on = cfg.classicui_screenscraper ? 1 : 0;
+	snprintf(cov_user, sizeof(cov_user), "%s", cfg.classicui_ss_user);
+	snprintf(cov_pass, sizeof(cov_pass), "%s", cfg.classicui_ss_pass);
+
+	cov_row = 0;
+	cov_arm = 0;
+	cov_quit_arm = 0;
+	cov_wrote = -1;
+	cov_failed = 0;
+	cov_note[0] = 0;
+	cov_note_until = 0;
+}
+
+static int cov_dirty()
+{
+	int n = 0;
+	if (cov_on != (cfg.classicui_screenscraper ? 1 : 0)) n++;
+	if (strcmp(cov_user, cfg.classicui_ss_user)) n++;
+	if (strcmp(cov_pass, cfg.classicui_ss_pass)) n++;
+	return n;
+}
+
+// A value moved: the last write stops being the news, and an armed save is no longer a
+// save of what the player armed it for. Same rule as More Settings.
+static void cov_edited()
+{
+	cov_wrote = -1;
+	cov_failed = 0;
+	cov_arm = 0;
+	mark_dirty();
+}
+
+// One thing to say about the last press, for long enough to read and then gone.
+static void cov_say(const char *msg)
+{
+	snprintf(cov_note, sizeof(cov_note), "%s", msg);
+	cov_note_until = GetTimer(6000);
+	mark_dirty();
+}
+
+/*
+  Which character MiSTer.ini would not keep, so the refusal can name it instead of
+  listing every character it might have been.
+
+  Probed between two letters rather than on its own: ini_value_ok() also refuses a value
+  that starts or ends with a space, and a bare " " would come back as "the space is the
+  problem" for a password with a space in the middle of it, which is a lie. 0 means every
+  character was fine and it was the ends that failed.
+*/
+static char cov_bad_char(const char *v)
+{
+	for (const char *p = v; *p; p++)
+	{
+		char probe[4] = { 'a', *p, 'a', 0 };
+		if (!ini_value_ok(probe)) return *p;
+	}
+	return 0;
+}
+
+/*
+  A value the player just typed, checked before it is staged.
+
+  This is the bug that made ini_value_ok() exist, and it is worth stating in full because
+  nothing on screen could ever have shown it. MiSTer.ini is read by cfg.cpp's
+  ini_getline(), which keeps a character only if it is alphanumeric or one of a short list
+  of punctuation and silently drops the rest; a ';' does not even get that far, because it
+  ends the line as a comment. The on-screen keyboard offers & % ; ? quotes and backslashes
+  on its symbol page, and & and % in particular are ordinary in a password.
+
+  So the failure was: the player types their real password, the screen says it is set, the
+  correct string is written to MiSTer.ini, and the firmware reads back a *different*
+  string on the next core load. Every request from then on fails on credentials, and there
+  is no screen anywhere that could show the difference, because the difference is between
+  the file and the parser.
+
+  Refusing at entry rather than at save is deliberate: the player is told while they still
+  remember what they typed, and the staged value is left as it was rather than being
+  replaced by something that cannot work.
+*/
+static int cov_accept_text(const char *v, const char *what)
+{
+	if (ini_value_ok(v)) return 1;
+
+	char bad = cov_bad_char(v);
+	char msg[96];
+
+	if (bad) snprintf(msg, sizeof(msg), "MiSTer.ini cannot store %c - change your %s", bad, what);
+	else snprintf(msg, sizeof(msg), "MiSTer.ini trims a space or = from the ends");
+
+	cov_say(msg);
+	return 0;
+}
+
+/*
+  Write the three of them, and only the ones that moved.
+
+  Through ini_apply_set(), which backs the file up, replaces our keys wherever they
+  already appear - including in a core section, where a stale copy would override the one
+  we just fixed - and appends what was missing under a [MiSTer] header of its own rather
+  than at the end of whatever section the file happens to stop inside. None of that is
+  this screen's to reimplement; see chome_ini.h.
+
+  Then cfg, because cfg is what the running firmware reads: ss_enabled() is asked on every
+  cover request and it looks at cfg, not at the file. Writing one without the other is the
+  version of this that appears to work and does nothing until the next core load.
+*/
+static int cov_apply()
+{
+	ini_set set[3];
+	int n = 0;
+
+	const char *onv = cov_on ? "1" : "0";
+
+	if (cov_on != (cfg.classicui_screenscraper ? 1 : 0))
+	{
+		set[n].key = "classicui_screenscraper";
+		set[n].value = onv;
+		n++;
+	}
+	if (strcmp(cov_user, cfg.classicui_ss_user))
+	{
+		set[n].key = "classicui_ss_user";
+		set[n].value = cov_user;
+		n++;
+	}
+	if (strcmp(cov_pass, cfg.classicui_ss_pass))
+	{
+		set[n].key = "classicui_ss_pass";
+		set[n].value = cov_pass;
+		n++;
+	}
+
+	if (!n) return 0;
+
+	if (ini_apply_set(ini_path(), set, n, COV_INI_NOTE) < 0) return -1;
+
+	cfg.classicui_screenscraper = (uint8_t)cov_on;
+	snprintf(cfg.classicui_ss_user, sizeof(cfg.classicui_ss_user), "%s", cov_user);
+	snprintf(cfg.classicui_ss_pass, sizeof(cfg.classicui_ss_pass), "%s", cov_pass);
+
+	// The count, not the values. This is the one line in the front-end that could
+	// casually put somebody's password in /tmp/debug.txt.
+	printf("ClassicUI: online covers - %d setting%s written\n", n, n == 1 ? "" : "s");
+	return n;
+}
+
+static void cov_open_user()
+{
+	osk_dest = OSKD_SS_USER;
+	osk_open("Account name", "Your own account on screenscraper.fr", cov_user, 0);
+}
+
+/*
+  The keyboard for the password, and the argument is about the empty string it is handed.
+
+  osk_open()'s masked mode starts *visible* - chome_osk.h explains why, and it is the right
+  call for somebody spelling a password out one letter at a time on a pad. But it means the
+  initial value is displayed the instant the keyboard opens. Pre-filling this with the
+  stored password would therefore print it on the television for a player who pressed A to
+  see what the row said, which is precisely what "the password is never displayed" rules
+  out. So the field starts empty and a password is re-typed rather than edited.
+*/
+static void cov_open_pass()
+{
+	osk_dest = OSKD_SS_PASS;
+	osk_open("Password", "The password for that account", "", 1);
+}
+
+static void draw_covers(const chome_profile *p)
+{
+	int s = p->ts_ui;
+	int rowh = 12 * s;
+	int avail = ss_available();
+
+	// Three lines at the bottom, as on More Settings: two for the sentence about the
+	// selected row and one for whatever the screen has to say about the whole of it.
+	int foot = 3 * 10 * s + 4 * s;
+
+	int pw = p->w - p->inset * 2;
+	if (pw > 46 * 8 * s) pw = 46 * 8 * s;
+	// A margin under the footer as well as over the first row. Without it the status line
+	// rests on the panel border, which at 240p reads as text falling off the edge.
+	int botpad = 6 * s;
+
+	int ph = (10 * s + 6) + 5 * s + COV_ROWS * rowh + foot + botpad;
+	if (ph > p->h - 2 * p->safe_y) ph = p->h - 2 * p->safe_y;
+
+	panel_box b = draw_panel_ex(p, pw, ph, "Online Covers");
+
+	int dirty = cov_dirty();
+
+	static const char *labels[COV_ROWS] = { "Online Covers", "Account Name", "Password", "Save Changes" };
+	const char *vals[COV_ROWS];
+	uint32_t vcol[COV_ROWS];
+	char vname[40], vsave[24];
+
+	/*
+	  The switch row carries the same five-state phrase the Options row does, rather than a
+	  plain On/Off. It says more where it matters: "On" with no password is the state a
+	  player would otherwise sit in believing they had finished, and the row they switched
+	  it on with is where they will look.
+	*/
+	vals[COV_ON] = cov_state_of(avail, cov_on, cov_user, cov_pass[0] != 0);
+
+	/*
+	  The account name, clipped by us. draw_rows_c() right-aligns the value column and
+	  does not clip it, and a ScreenScraper login can be 64 characters; an unclipped one
+	  would be drawn straight through the label and off the left edge of the panel.
+	*/
+	snprintf(vname, sizeof(vname), "%s",
+		cov_user[0] ? gfx_clip(cov_user, s, b.w / 2 - 12 * s) : "Not Set");
+	vals[COV_USER] = vname;
+
+	// Set, not the password. There is no state of this screen in which the value is text.
+	vals[COV_PASS] = cov_pass[0] ? "Set" : "Not Set";
+
+	if (dirty) snprintf(vsave, sizeof(vsave), "%d To Save", dirty);
+	else if (cov_wrote > 0) snprintf(vsave, sizeof(vsave), "Saved");
+	else snprintf(vsave, sizeof(vsave), "Nothing To Save");
+	vals[COV_SAVE] = vsave;
+
+	/*
+	  Colour says which row is the one to act on. Dim throughout on a build with no
+	  credential - the same "there, and visibly not in effect" the core options screen
+	  uses for an option the core says does not apply - and amber on whichever half of
+	  the account is missing while the switch is on, because that is the row that turns
+	  "On" back into nothing being fetched.
+	*/
+	for (int i = 0; i < COV_ROWS; i++) vcol[i] = avail ? 0 : COL_DIM;
+
+	if (avail && cov_on)
+	{
+		if (!cov_user[0]) vcol[COV_USER] = COL_YELLOW;
+		else if (!cov_pass[0]) vcol[COV_PASS] = COL_YELLOW;
+	}
+	if (!dirty && cov_wrote > 0) vcol[COV_SAVE] = COL_GREEN;
+
+	draw_rows_c(&b, labels, vals, vcol, COV_ROWS, cov_row);
+
+	int fy = b.y + b.h - botpad - foot + 2 * s;
+	int cols = (b.w - 12 * s) / (8 * s);
+
+	/*
+	  What the selected row is for - or, ahead of it, the one thing that outranks every
+	  row: a build with no application credential. Saying it here rather than only in the
+	  status line is the difference between "this is off" and "nothing you type on this
+	  screen can ever work", and a player who does not know which they are looking at will
+	  keep typing.
+	*/
+	static const char *help[COV_ROWS] = {
+		"Asks ScreenScraper for covers no local folder has.",
+		"Your own free account on screenscraper.fr.",
+		"Never shown here. MiSTer.ini keeps it in clear.",
+		COV_SAVE_NOTE
+	};
+
+	int said = (cov_note[0] && !CheckTimer(cov_note_until));
+	const char *body = help[cov_row];
+	if (!avail) body = "This build carries no ScreenScraper credential.";
+	if (cov_failed) body = ini_last_error();
+	if (said) body = cov_note;
+
+	char wrapped[4][64];
+	int nl = wrap_text(body, cols, wrapped, 2);
+	for (int i = 0; i < nl; i++)
+		gfx_text(wrapped[i], b.x + 6 * s, fy + i * 10 * s, s,
+			(said || cov_failed) ? COL_RED : COL_PANELLO, 0);
+
+	/*
+	  And the line that changes, by urgency: an armed press first because the player is one
+	  press from it, then the build, then the result of the last write, then what is still
+	  missing. Every wording here is 29 characters or fewer, which is what the panel holds
+	  at 240p - the same measurement "SAVED - FROM THE NEXT GAME ON" was cut to next door.
+	*/
+	int y3 = fy + 2 * 10 * s;
+
+	if (cov_arm && !CheckTimer(cov_arm_until))
+	{
+		btn_hint_c(b.x + b.w / 2, y3, s, COL_RED, "Press", LBL_A, "again to save");
+		return;
+	}
+	if (cov_quit_arm && !CheckTimer(cov_quit_until))
+	{
+		btn_hint_c(b.x + b.w / 2, y3, s, COL_RED, "Press", LBL_B, "again to lose the changes");
+		return;
+	}
+	if (!avail)
+	{
+		gfx_text_c(gfx_clip("NO CREDENTIAL IN THIS BUILD", s, b.w - 12 * s),
+			b.x + b.w / 2, y3, s, COL_RED, 0);
+		return;
+	}
+	if (cov_row == COV_SAVE && dirty)
+	{
+		btn_hint_c(b.x + b.w / 2, y3, s, COL_INK, "Press", LBL_A, "to save");
+		return;
+	}
+	if (!dirty && cov_wrote > 0)
+	{
+		gfx_text_c(gfx_clip("SAVED - IN EFFECT NOW", s, b.w - 12 * s),
+			b.x + b.w / 2, y3, s, COL_GREEN, 0);
+		return;
+	}
+
+	// "On" with half an account is the state this whole screen exists to stop somebody
+	// sitting in without knowing. Named as what is missing, not as a warning symbol.
+	if (cov_on && !cov_user[0])
+		gfx_text_c(gfx_clip("ON, BUT NO ACCOUNT NAME", s, b.w - 12 * s),
+			b.x + b.w / 2, y3, s, COL_YELLOW, 0);
+	else if (cov_on && !cov_pass[0])
+		gfx_text_c(gfx_clip("ON, BUT NO PASSWORD", s, b.w - 12 * s),
+			b.x + b.w / 2, y3, s, COL_YELLOW, 0);
+}
+
 static void draw_about_panel(const chome_profile *p)
 {
 	panel_box b = draw_panel(p, "About");
@@ -6222,7 +6712,8 @@ static void compose()
 	int overlay = (screen == SCR_SORT || screen == SCR_DISPLAY || screen == SCR_OPTIONS ||
 		screen == SCR_ABOUT || screen == SCR_WIFI || screen == SCR_PADS ||
 		screen == SCR_POWER || screen == SCR_INI || screen == SCR_PADTEST ||
-		screen == SCR_SET || screen == SCR_CORE || screen == SCR_DISC);
+		screen == SCR_SET || screen == SCR_CORE || screen == SCR_DISC ||
+		screen == SCR_COVERS);
 	if (overlay) gfx_scrim(0, 0, p->w, p->h, COL_BGDARK, 2);
 
 	draw_suspend(p);
@@ -6241,6 +6732,7 @@ static void compose()
 	case SCR_DISC:    draw_disc(p); break;
 	case SCR_INI:     draw_ini(p); break;
 	case SCR_SET:     draw_settings(p); break;
+	case SCR_COVERS:  draw_covers(p); break;
 	case SCR_CORE:    draw_core_opts(p); break;
 	case SCR_PADS:    draw_pads(p); break;
 	case SCR_PADTEST: draw_padtest(p); break;
@@ -6293,9 +6785,10 @@ static void render_region(int x, int y, int w, int h)
 /* ---------------------------------------------------------------- input --- */
 
 /*
-  Hands a finished entry back to whoever opened the keyboard. Nothing opens it yet -
-  the Wi-Fi screen is the reason it exists - so for now this only clears the result
-  so a cancelled entry is not seen twice.
+  Hands a finished entry back to whoever opened the keyboard. The Wi-Fi screen is the
+  reason it exists; Online Covers is the second and third caller, and the shape is the
+  same - the destination was recorded before the keyboard was opened, and a cancelled
+  entry is dropped here rather than being seen twice by whoever asked for it.
 */
 static void osk_settle()
 {
@@ -6310,6 +6803,26 @@ static void osk_settle()
 	if (r < 0) return;                    // cancelled: the text is thrown away
 
 	if (dest == OSKD_WIFI) net_join(wifi_pick, osk_text(), wifi_pick_secure);
+
+	/*
+	  The account name, and the password, staged rather than written - the Save row is
+	  what touches the file.
+
+	  An accepted empty entry means "there is none", not "leave it alone": DONE on an
+	  empty field is how a player takes an account back off the machine, and the row
+	  then reads "Not Set" so that it is visible rather than silent. Cancelling is what
+	  leaves the value alone, which is the case above.
+	*/
+	if (dest == OSKD_SS_USER && cov_accept_text(osk_text(), "account name"))
+	{
+		snprintf(cov_user, sizeof(cov_user), "%s", osk_text());
+		cov_edited();
+	}
+	if (dest == OSKD_SS_PASS && cov_accept_text(osk_text(), "password"))
+	{
+		snprintf(cov_pass, sizeof(cov_pass), "%s", osk_text());
+		cov_edited();
+	}
 }
 
 static void go_screen(int s)
@@ -6416,7 +6929,9 @@ static void move_h(int dir)
 	}
 	case SCR_OPTIONS:
 		if (opt_row == 0) cfg.classicui_artfetch = cfg.classicui_artfetch ? 0 : 1;
-		else if (opt_row == 3)
+		// Menu Layout, which is row 4 now that Online Covers sits under Cover Art. The
+		// row indices in this file are the panel's, so inserting a row moves them.
+		else if (opt_row == 4)
 		{
 			int v = cfg.classicui_profile + dir;
 			if (v < 0) v = 3;
@@ -6427,6 +6942,24 @@ static void move_h(int dir)
 			gfx_damage_all();
 		}
 		else { nudge(); return; }
+		break;
+
+	/*
+	  Online Covers: the switch is the only row with anything on this axis, and it refuses
+	  on a build with no application credential.
+
+	  That refusal is the point rather than tidiness. ss_enabled() would hold the line
+	  anyway - it asks ss_available() first, so no request can be made whatever this is set
+	  to - but a screen that let a player switch on something that provably cannot work,
+	  and then said "On", would be the front-end lying about its own state. The row says
+	  "Not Available", the footer says why, and the key does nothing.
+	*/
+	case SCR_COVERS:
+		if (cov_row != COV_ON) { nudge(); return; }
+		if (!ss_available()) { nudge(); return; }
+
+		cov_on = cov_on ? 0 : 1;
+		cov_edited();
 		break;
 	/*
 	  Left and right are how a setting is changed, which is why the value column is on
@@ -6673,6 +7206,16 @@ static void move_v(int dir)
 		break;
 	}
 
+	case SCR_COVERS:
+		cov_row = (cov_row + dir + COV_ROWS) % COV_ROWS;
+		// Disarmed on the way past, for the reason above. The refusal note goes too: it
+		// was about the row the player has just left.
+		cov_arm = 0;
+		cov_quit_arm = 0;
+		cov_note[0] = 0;
+		mark_dirty();
+		break;
+
 	case SCR_PADS:
 	{
 		// Nothing to move through while pairing, or when the list is empty.
@@ -6830,12 +7373,24 @@ static void accept()
 		switch (opt_row)
 		{
 		case 0: cfg.classicui_artfetch = cfg.classicui_artfetch ? 0 : 1; mark_dirty(); break;
+
+		/*
+		  Online Covers, directly under Cover Art because it is where the row above gets
+		  somewhere to fetch from. Opened even on a build with no application credential:
+		  the screen is what explains that state, and a row that refused to open would
+		  leave the player nothing to read.
+		*/
+		case 1:
+			cov_refresh();
+			go_screen(SCR_COVERS);
+			break;
+
 		// gl_forget() as well: a rescan is also how a player says "I have re-scraped",
 		// and the parsed gamelists would otherwise still be the ones from before.
-		case 1: lib_rescan(); gl_forget(); art_shutdown(); art_init(theme_get()->sel_w, theme_get()->sel_h); view_rebuild(0); break;
-		case 2: vp_install(); mark_dirty(); break;
-		case 3: nudge(); break;                       // Layout changes with left/right
-		case 4:
+		case 2: lib_rescan(); gl_forget(); art_shutdown(); art_init(theme_get()->sel_w, theme_get()->sel_h); view_rebuild(0); break;
+		case 3: vp_install(); mark_dirty(); break;
+		case 4: nudge(); break;                       // Layout changes with left/right
+		case 5:
 			/*
 			  This used to hand the player to MiSTer's own joystick setup, which meant
 			  leaving the front-end for a classic-OSD panel that names buttons by
@@ -6847,24 +7402,24 @@ static void accept()
 			go_screen(SCR_PADS);
 			break;
 
-		case 5:
+		case 6:
 			wifi_row = 0;
 			wifi_top = 0;
 			go_screen(SCR_WIFI);
 			if (net_present() && !net_count()) net_scan_start();
 			break;
 
-		case 6:
+		case 7:
 			ini_refresh();
 			go_screen(SCR_INI);
 			break;
 
-		case 7:
+		case 8:
 			set_refresh();
 			go_screen(SCR_SET);
 			break;
 
-		case 8:
+		case 9:
 			if (!ig_active) { chome_leave(); break; }
 
 			/*
@@ -6899,7 +7454,7 @@ static void accept()
 			menu_key_set(KEY_F12 | UPSTROKE);
 			break;
 
-		case 9:
+		case 10:
 			if (!ig_active) break;
 
 			// Closing the game loses unsaved progress, so it takes two presses.
@@ -7072,6 +7627,40 @@ static void accept()
 		mark_dirty();
 		break;
 	}
+
+	/*
+	  Online Covers. Every row is refused on a build with no application credential, and
+	  the account rows are refused first: the point of the screen in that state is to say
+	  so, and letting somebody spell a password out on a pad for a request that provably
+	  cannot be made is the specific unkindness this avoids. The footer says why.
+	*/
+	case SCR_COVERS:
+		if (!ss_available()) { nudge(); break; }
+
+		if (cov_row == COV_ON) { cov_on = cov_on ? 0 : 1; cov_edited(); break; }
+		if (cov_row == COV_USER) { cov_open_user(); mark_dirty(); break; }
+		if (cov_row == COV_PASS) { cov_open_pass(); mark_dirty(); break; }
+
+		if (!cov_dirty()) { nudge(); break; }
+
+		// Two presses, because this rewrites the player's own MiSTer.ini - the same rule
+		// Best Settings and More Settings follow.
+		if (cov_arm && !CheckTimer(cov_arm_until))
+		{
+			cov_arm = 0;
+			int w = cov_apply();
+
+			if (w < 0) { cov_failed = 1; cov_wrote = -1; }
+			else { cov_wrote = w; cov_failed = 0; }
+
+			mark_dirty();
+			break;
+		}
+
+		cov_arm = 1;
+		cov_arm_until = GetTimer(3000);
+		mark_dirty();
+		break;
 
 	case SCR_INI:
 		// Once it has run, A is the way out as well as B - the result panel has nothing
@@ -7310,6 +7899,29 @@ static void back()
 		}
 
 		set_quit_arm = 0;
+		go_screen(SCR_OPTIONS);
+		break;
+
+	case SCR_COVERS:
+		if (cov_arm) { cov_arm = 0; mark_dirty(); break; }          // first B cancels
+
+		// And the same question More Settings asks, for the same reason: a login that was
+		// typed and never saved is worth one press to confirm losing.
+		if (cov_dirty() && !(cov_quit_arm && !CheckTimer(cov_quit_until)))
+		{
+			cov_quit_arm = 1;
+			cov_quit_until = GetTimer(3000);
+			mark_dirty();
+			break;
+		}
+
+		/*
+		  And the staging buffers go, password included. Not tidiness: cov_pass is a copy
+		  of somebody's password in a static, and the screen is the only thing that has any
+		  use for it. cfg keeps the one the firmware needs.
+		*/
+		cov_quit_arm = 0;
+		memset(cov_pass, 0, sizeof(cov_pass));
 		go_screen(SCR_OPTIONS);
 		break;
 
@@ -9070,6 +9682,12 @@ void chome_core_boot()
 }
 
 int chome_screen_id() { return screen; }
+
+// See chome.h, and the comment on cov_state_of() for why the availability is an argument.
+const char *chome_covers_state(int available, int on, const char *user, int has_pass)
+{
+	return cov_state_of(available, on, user, has_pass);
+}
 
 /*
   1 when the machine is not doing anything the scheduler needs to be prompt about, so it

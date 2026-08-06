@@ -216,6 +216,42 @@ static int next_line(const char *src, int srclen, int *i, int *iscrlf)
 	return be;
 }
 
+/*
+  Whether a value survives the round trip. See chome_ini.h for why anything asks.
+
+  The character class is cfg.cpp's CHAR_IS_VALID, written out rather than included:
+  the header those macros live in is not one this file includes, and a copy that is
+  visibly a copy - with the original named - is better here than a dependency on a
+  private macro of the parser. If cfg.cpp ever widens the class, this only refuses
+  values that would in fact have worked, which is the safe direction to be wrong in.
+
+  Deliberately one character stricter: cfg.cpp counts a tab as a space and would keep one
+  in the middle of a value, and this does not. Nothing that reaches here can type a tab,
+  and a value with one in it is a value nobody could read back off their own screen.
+*/
+int ini_value_ok(const char *v)
+{
+	if (!v) return 0;
+
+	for (const char *p = v; *p; p++)
+	{
+		char c = *p;
+
+		if (c >= 'a' && c <= 'z') continue;
+		if (c >= 'A' && c <= 'Z') continue;
+		if (c >= '0' && c <= '9') continue;
+		if (strchr("[]()-+/=#$@_,.!*:~ ", c)) continue;
+
+		return 0;
+	}
+
+	// And the edges, which survive the class and not the trimming.
+	int n = (int)strlen(v);
+	if (n && (v[0] == ' ' || v[0] == '=' || v[n - 1] == ' ')) return 0;
+
+	return 1;
+}
+
 /* ------------------------------------------------------------- the plan --- */
 
 int ini_plan(const char *path, ini_change *out, int max)
@@ -494,13 +530,39 @@ static int ini_write_set(const char *path, const ini_set *set, int n, const char
 	return 1;
 }
 
+/*
+  What a written setting may say about itself in the log.
+
+  Found the moment the ScreenScraper screen became the first caller to write a value that
+  is not a number: the two printf()s below reported every key = value pair, so the first
+  save of somebody's password put it in clear into /tmp/debug.txt, which is world-readable.
+  The screen itself never draws it - and it was still published, by a shared writer three
+  files away that had never had a secret handed to it before.
+
+  A property of the key rather than a flag on the assignment, deliberately. A flag would
+  have to be set by every caller and would default to "not a secret" when a future one
+  forgot, and forgetting is silent; a key that is a credential is a credential no matter
+  who writes it. The list is the keys in MiSTer.ini that hold one, which today is a list
+  of one - and any new caller of this writer is covered by it without knowing it exists.
+
+  chome_ss.cpp does the same thing for a URL - see ss_redact_url() and the "***" in
+  ss_build_url() - and for the same reason, which is why the replacement reads the same.
+*/
+const char *ini_loggable(const char *key, const char *value)
+{
+	if (!key || !value) return "";
+	if (!strcasecmp(key, "classicui_ss_pass")) return "***";
+	return value;
+}
+
 int ini_apply_set(const char *path, const ini_set *set, int n, const char *note)
 {
 	last_error[0] = 0;
 	if (n <= 0) return 0;
 	if (!ini_write_set(path, set, n, note)) return -1;
 
-	for (int i = 0; i < n; i++) printf("ClassicUI: %s = %s\n", set[i].key, set[i].value);
+	for (int i = 0; i < n; i++)
+		printf("ClassicUI: %s = %s\n", set[i].key, ini_loggable(set[i].key, set[i].value));
 	printf("ClassicUI: %d setting(s) written, old file kept as %s\n", n, ini_backup_path());
 	return n;
 }
@@ -537,8 +599,10 @@ int ini_apply(const char *path)
 	for (int i = 0; i < n; i++)
 	{
 		const ini_want *w = plan[i].want;
-		printf("ClassicUI: %s = %s (was %s)\n", w->key, w->value,
-			plan[i].present ? plan[i].had : "unset");
+		// ini_loggable() on both halves: `had` came out of the player file and is a value of
+		// the same key, so whatever makes one of them unloggable makes the other one too.
+		printf("ClassicUI: %s = %s (was %s)\n", w->key, ini_loggable(w->key, w->value),
+			plan[i].present ? ini_loggable(w->key, plan[i].had) : "unset");
 		if (w->live) *w->live = w->lval;
 	}
 	printf("ClassicUI: %d setting(s) written, old file kept as %s\n", n, ini_backup_path());

@@ -744,6 +744,40 @@ static unsigned long panel_hash()
 }
 
 /*
+  The Online Covers panel, mirroring draw_covers()'s own arithmetic - the same bargain
+  panel_rows_pixels() below makes, and for the same reason. That screen sizes its panel to
+  its contents rather than taking the profile default, and what has to be read off it is
+  the value column at the right-hand edge of the rows: a box small enough to be safely
+  inside any panel whatever its size would not contain the one thing being looked at.
+
+  The four constants are draw_covers()'s and have to move with it.
+*/
+static void covers_rect(int *x0, int *y0, int *x1, int *y1)
+{
+	const chome_profile *p = theme_get();
+	int s = p->ts_ui;
+	int foot = 3 * 10 * s + 4 * s;
+
+	int pw = p->w - p->inset * 2;
+	if (pw > 46 * 8 * s) pw = 46 * 8 * s;
+
+	int ph = (10 * s + 6) + 5 * s + 4 * (12 * s) + foot + 6 * s;
+	if (ph > p->h - 2 * p->safe_y) ph = p->h - 2 * p->safe_y;
+
+	*x0 = (p->w - pw) / 2;
+	*y0 = (p->h - ph) / 2;
+	*x1 = *x0 + pw;
+	*y1 = *y0 + ph;
+}
+
+static unsigned long covers_hash()
+{
+	int x0, y0, x1, y1;
+	covers_rect(&x0, &y0, &x1, &y1);
+	return harness_fb_hash_box(x0, y0, x1, y1);
+}
+
+/*
   A count of one exact colour over the settings panel's rows - the rows alone, and
   deliberately so: the footer names the recommended value in the very colour the rows use
   for "not that value", so counting the whole panel would find amber whatever the rows
@@ -6828,8 +6862,15 @@ static void assert_core_options_are_reachable()
 	press(KEY_ENTER, 18);
 	frame(8);
 
-	// Core Settings is the row above Close Game.
-	for (int i = 0; i < 8; i++) press(KEY_DOWN, 8);
+	/*
+	  Core Settings is the row above Close Game. Counted downwards from the top, so a row
+	  added anywhere above it moves this count - which is exactly what happened when Online
+	  Covers was inserted under Cover Art, and the four checks after this walk are what
+	  said so. Left counting downwards on purpose: assert_ingame() reaches the last row by
+	  wrapping upwards instead, so between the two of them an inserted row is certain to
+	  break one rather than sliding quietly past both.
+	*/
+	for (int i = 0; i < 9; i++) press(KEY_DOWN, 8);
 	frame(8);
 	dump("core-options-row");
 
@@ -11006,6 +11047,419 @@ int main()
 		cfg.video_brightness = was_bright;
 		theme_invalidate();
 		theme_update(1280, 720, 1);
+
+		unlink(path);
+		unlink(bak);
+	}
+
+	/*
+	  Online Covers: the ScreenScraper account, set up from the front-end rather than by
+	  editing MiSTer.ini over ssh.
+
+	  Three things are worth failing over here and none of them is the layout.
+
+	  The password must not reach the screen. That is checked by pixels rather than by
+	  looking for a substring, because a substring search can only look where somebody
+	  thought to look: the panel is drawn twice with two different passwords of the same
+	  length, and once more with one of a different length, and all three have to be
+	  identical to the byte. A screen that put any function of the password on the glass -
+	  the text, a run of asterisks, even its length - fails that.
+
+	  The values must survive the trip. cfg is what the running firmware reads and the file
+	  is what the next core load reads, so both are checked, and the file has to come back
+	  CRLF with the new keys under a [MiSTer] header of their own rather than appended into
+	  whatever section it happens to end inside.
+
+	  And a value MiSTer.ini cannot carry must be refused at the keyboard. See
+	  ini_value_ok() in chome_ini.cpp for the bug: cfg.cpp drops characters it does not
+	  recognise and treats a ';' as a comment, so a password with one in it is written
+	  correctly, read back mangled, and fails on credentials for ever with nothing on any
+	  screen able to show the difference.
+	*/
+	printf("\n== online covers ==\n");
+	{
+		uint8_t was_ss = cfg.classicui_screenscraper;
+		char was_user[64], was_pass[64];
+		snprintf(was_user, sizeof(was_user), "%s", cfg.classicui_ss_user);
+		snprintf(was_pass, sizeof(was_pass), "%s", cfg.classicui_ss_pass);
+
+		char path[1024], bak[1024];
+		snprintf(path, sizeof(path), "%s/MiSTer.ini", ROOT);
+		snprintf(bak, sizeof(bak), "%s.bak", path);
+
+		/* ------------------------------------------------ the five states --- */
+
+		/*
+		  The one state a shipped build is always in, and the only one this binary cannot
+		  draw: the dummy devid in run.sh makes ss_available() true for the whole harness.
+		  So it is asked of the predicate instead, which is why the predicate takes the
+		  answer as an argument. The gate binary is what proves a shipped build has no
+		  credential; this is what proves the screen says so when it has not.
+		*/
+		check(!strcmp(chome_covers_state(0, 1, "derek", 1), "Not Available"),
+			"a build with no application credential says so, however set up the account is");
+		check(!strcmp(chome_covers_state(0, 0, "", 0), "Not Available"),
+			"and says the same thing on a machine with nothing configured at all");
+
+		check(!strcmp(chome_covers_state(1, 0, "derek", 1), "Off"),
+			"switched off is off, account or no account");
+		check(!strcmp(chome_covers_state(1, 1, "", 0), "No Account"),
+			"on with no account is reported as incomplete, not as on");
+		check(!strcmp(chome_covers_state(1, 1, "derek", 0), "No Password"),
+			"and so is an account with no password");
+		check(!strcmp(chome_covers_state(1, 1, "derek", 1), "On"),
+			"on, with both halves of an account, is on");
+
+		/*
+		  ...and that last one is the same line ss_enabled() draws, which is what makes the
+		  screen honest rather than merely consistent with itself. Checked against the real
+		  thing rather than asserted in a comment.
+		*/
+		cfg.classicui_screenscraper = 1;
+		strcpy(cfg.classicui_ss_user, "derek");
+		check(ss_enabled() == 1 && !strcmp(chome_covers_state(ss_available(),
+			cfg.classicui_screenscraper, cfg.classicui_ss_user, 1), "On"),
+			"the state the screen calls On is the state a request is really made in");
+		cfg.classicui_ss_user[0] = 0;
+		check(ss_enabled() == 0 && !strcmp(chome_covers_state(ss_available(),
+			cfg.classicui_screenscraper, cfg.classicui_ss_user, 1), "No Account"),
+			"and the state it calls incomplete is one no request is made in");
+		cfg.classicui_screenscraper = 0;
+
+		/* --------------------------------------- what MiSTer.ini can hold --- */
+
+		/*
+		  The character class is cfg.cpp's, copied into chome_ini.cpp because the macros are
+		  private to the parser - so what is checked here is the copy, not the original. The
+		  firmware's own parser is not linked into this harness; if CHAR_IS_SPECIAL ever
+		  gains a character, this passes while refusing something that would have worked,
+		  which is the harmless direction.
+		*/
+		check(ini_value_ok("derek"), "a plain login survives MiSTer.ini");
+		check(ini_value_ok("p4ss-w0rd_!@#$*+=,.:~[]()/"), "so does every punctuation mark it keeps");
+		check(ini_value_ok("two words"), "and a space in the middle");
+		check(ini_value_ok(""), "an empty value is not an unusable one - it means there is none");
+
+		check(!ini_value_ok("hunter&2"), "an ampersand does not, and the keyboard types one");
+		check(!ini_value_ok("50%off"), "nor a percent sign");
+		check(!ini_value_ok("semi;colon"), "nor a semicolon, which would comment out the rest of the line");
+		check(!ini_value_ok("say\"hi\""), "nor a quote");
+		check(!ini_value_ok("it's"), "nor an apostrophe");
+		check(!ini_value_ok("back\\slash"), "nor a backslash");
+		check(!ini_value_ok("what?"), "nor a question mark");
+		check(!ini_value_ok("a`b"), "nor a backtick");
+		check(!ini_value_ok("{}<>|^"), "nor the brackets and bars the symbol page also offers");
+
+		check(!ini_value_ok(" lead"), "a leading space is trimmed off, so it is refused");
+		check(!ini_value_ok("trail "), "and so is a trailing one");
+		check(!ini_value_ok("=eaten"), "and a leading = , which ini_parse_var() skips");
+
+		/* ----------------------------------------------------- the screen --- */
+
+		/*
+		  Reached the way a person reaches it: the menu bar, Options, one row down from
+		  Cover Art. The row it sits under is the argument for where it lives, so the walk
+		  asserts the position rather than counting from the end of the list.
+		*/
+		cfg.classicui_screenscraper = 0;
+		cfg.classicui_ss_user[0] = 0;
+		cfg.classicui_ss_pass[0] = 0;
+
+		harness_set_menu_core(1);
+		chome_leave();
+		press(KEY_MENU, 20);
+		frame(8);
+		press(KEY_UP, 10);                    // the menu bar
+		press(KEY_RIGHT, 10);                 // Options
+		press(KEY_ENTER, 14);
+		frame(6);
+		dump("covers-1-options-row");
+
+		int on_options = chome_screen_id();
+
+		press(KEY_DOWN, 8);                   // Online Covers, under Cover Art
+		press(KEY_ENTER, 14);
+		frame(8);
+		check(chome_screen_id() != on_options, "A on the row opens a screen of its own");
+		dump("covers-2-nothing-set");
+
+		unsigned long h_nothing = covers_hash();
+
+		/* ------------------------------------------- the password stays off --- */
+
+		/*
+		  Three renders of the same screen, differing only in the password the staging
+		  buffer was filled from. The first pair is the same length as each other, so a row
+		  drawing the text would differ; the third is a different length, so a row drawing
+		  asterisks would differ too.
+		*/
+		press(KEY_ESC, 10);
+		strcpy(cfg.classicui_ss_pass, "hunter2");
+		press(KEY_ENTER, 14);
+		frame(8);
+		unsigned long h_pass_a = covers_hash();
+		dump("covers-3-password-set");
+
+		check(h_pass_a != h_nothing, "a password that is set makes the row say something else");
+
+		press(KEY_ESC, 10);
+		strcpy(cfg.classicui_ss_pass, "ZZZZZZZ");
+		press(KEY_ENTER, 14);
+		frame(8);
+		check(covers_hash() == h_pass_a, "and not one pixel of it depends on what the password is");
+
+		press(KEY_ESC, 10);
+		strcpy(cfg.classicui_ss_pass, "q");
+		press(KEY_ENTER, 14);
+		frame(8);
+		check(covers_hash() == h_pass_a, "nor on how long it is");
+
+		press(KEY_ESC, 10);
+
+		/* ------------------------------------------------- typing an account --- */
+
+		/*
+		  A file that ends inside a core section, which is the shape that makes the append
+		  rule matter: bare keys added at the end of this would be scoped to [NES] and would
+		  silently do nothing in the menu core, where this front-end runs.
+		*/
+		static const char *SRC_COV =
+			"[MiSTer]\r\n"
+			"; my own notes, which have to survive this\r\n"
+			"classicui=1\r\n"
+			"classicui_screenscraper=0\r\n"
+			"video_contrast=50\r\n"
+			"\r\n"
+			"[NES]\r\n"
+			"video_info=1\r\n";
+
+		put_file(path, SRC_COV);
+
+		cfg.classicui_screenscraper = 0;
+		cfg.classicui_ss_user[0] = 0;
+		cfg.classicui_ss_pass[0] = 0;
+
+		press(KEY_ENTER, 14);                 // back into Online Covers
+		frame(8);
+
+		press(KEY_RIGHT, 10);                 // the switch, on the first row
+		frame(6);
+		check(cfg.classicui_screenscraper == 0, "turning it on does not touch cfg until it is saved");
+		dump("covers-4-switched-on");
+
+		press(KEY_DOWN, 8);                   // Account Name
+		press(KEY_ENTER, 10);
+		check(osk_active(), "A on the account row asks for the name");
+		dump("covers-5-keyboard");
+
+		// Typed rather than driven around the grid: the grid is the keyboard's own test
+		// further up this file, and what is being checked here is where the text lands.
+		harness_set_input_pad(0);
+		press(KEY_D, 6);
+		press(KEY_E, 6);
+		press(KEY_R, 6);
+		press(KEY_E, 6);
+		press(KEY_K, 6);
+		press(KEY_ENTER, 8);
+		harness_set_input_pad(1);
+		frame(6);
+
+		check(!osk_active(), "and Enter closes it");
+		check(cfg.classicui_ss_user[0] == 0, "the name is staged, not written - there is a Save row");
+
+		press(KEY_DOWN, 8);                   // Password
+		press(KEY_ENTER, 10);
+		check(osk_active(), "A on the password row asks for one too");
+
+		harness_set_input_pad(0);
+		press(KEY_H, 6);
+		press(KEY_U, 6);
+		press(KEY_N, 6);
+		press(KEY_T, 6);
+		press(KEY_3, 6);
+		press(KEY_ENTER, 8);
+		harness_set_input_pad(1);
+		frame(6);
+
+		check(!osk_active(), "and Enter closes that one");
+		dump("covers-6-three-to-save");
+
+		/* -------------------------------------------------------- the write --- */
+
+		press(KEY_DOWN, 8);                   // Save Changes
+		press(KEY_ENTER, 12);
+		frame(6);
+		dump("covers-7-armed");
+
+		static char now[8192];
+		check(slurp_file(path, now, sizeof(now)) > 0 && !strcmp(now, SRC_COV),
+			"one press of A does not touch the file");
+
+		/*
+		  The second press writes - and it is captured, because this is where the password
+		  did once escape. Not from the screen: from ini_apply_set(), a shared writer three
+		  files away that logged every key = value pair it was handed and had never been
+		  handed a secret before. /tmp/debug.txt on the device is this stream and it is
+		  world-readable, so a password in it is a password published.
+
+		  Read back rather than reasoned about. stdout is redirected only around the press
+		  that writes; everything printed by the front-end while it saves lands in the file,
+		  which is exactly the set of lines that would have landed on the card.
+		*/
+		fflush(stdout);
+		int saved_out = dup(fileno(stdout));
+		const char *logpath = "/tmp/chome_covers_log.txt";
+
+		if (!freopen(logpath, "wb", stdout)) printf("  could not capture the log\n");
+		press(KEY_ENTER, 12);
+		frame(8);
+		fflush(stdout);
+
+		dup2(saved_out, fileno(stdout));
+		close(saved_out);
+		clearerr(stdout);
+
+		static char logtext[8192];
+		int loglen = slurp_file(logpath, logtext, sizeof(logtext));
+		check(loglen > 0, "the front-end said something while it wrote");
+		check(strstr(logtext, "hunt3") == 0, "and not one word of it was the password");
+		check(strstr(logtext, "classicui_ss_pass = ***") != 0,
+			"the line for it is there, with the value replaced rather than the line dropped");
+		check(strstr(logtext, "classicui_ss_user = derek") != 0,
+			"while the login, which is not a secret, is logged as itself");
+		unlink(logpath);
+
+		// And the mechanism on its own, since a future caller of the writer inherits it
+		// without knowing it exists.
+		check(!strcmp(ini_loggable("classicui_ss_pass", "hunter2"), "***"),
+			"the password key is unloggable whoever writes it");
+		check(!strcmp(ini_loggable("CLASSICUI_SS_PASS", "hunter2"), "***"),
+			"and however MiSTer.ini happens to spell it");
+		check(!strcmp(ini_loggable("classicui_ss_user", "derek"), "derek"),
+			"and nothing else is redacted, or the log would stop being worth reading");
+		check(!strcmp(ini_loggable("vscale_mode", "1"), "1"), "least of all a number");
+
+		dump("covers-8-saved");
+
+		check(cfg.classicui_screenscraper == 1, "the second press tells the running firmware");
+		check(!strcmp(cfg.classicui_ss_user, "derek"), "the account name reaches cfg");
+		check(!strcmp(cfg.classicui_ss_pass, "hunt3"), "and so does the password");
+		check(ss_enabled() == 1, "which is the whole point: a request would now be made");
+
+		int n_now = slurp_file(path, now, sizeof(now));
+		check(n_now > 0, "and the file was rewritten");
+
+		int lone_lf = 0;
+		for (int i = 0; i < n_now; i++)
+			if (now[i] == '\n' && (!i || now[i - 1] != '\r')) lone_lf++;
+		check(!lone_lf, "still CRLF, every line of it");
+
+		check(strstr(now, "[MiSTer]\r\nclassicui_screenscraper=0") == 0
+			&& strstr(now, "classicui_screenscraper=1\r\n") != 0,
+			"the switch was set in the line that was already there");
+		check(strstr(now, "; Written by Classic Home - Options > Online Covers.") != 0,
+			"the block at the end says which screen added it");
+		check(strstr(now, "[MiSTer]\r\nclassicui_ss_user=derek\r\nclassicui_ss_pass=hunt3\r\n") != 0,
+			"and the two new keys are under a [MiSTer] header, not left in [NES]");
+
+		const char *nes = strstr(now, "[NES]");
+		const char *acct = strstr(now, "classicui_ss_user=derek");
+		const char *hdr = strstr(now, "; Written by Classic Home - Options > Online Covers.");
+		check(nes && acct && hdr && nes < hdr && hdr < acct,
+			"in that order, so nothing lands in the core section the file ended in");
+
+		check(strstr(now, "; my own notes, which have to survive this") != 0,
+			"the player's own comment is still there");
+		check(strstr(now, "video_contrast=50") != 0, "and a setting this screen knows nothing about");
+		check(strstr(now, "[NES]\r\nvideo_info=1") != 0, "and their core section, intact");
+		check(ini_stray_lines(SRC_COV, now) == 0, "and no line that is not ours was touched");
+
+		static char backed[8192];
+		check(slurp_file(bak, backed, sizeof(backed)) > 0 && !strcmp(backed, SRC_COV),
+			"the old file is kept beside it, byte for byte");
+
+		/* ------------------------------------ a password MiSTer.ini cannot keep --- */
+
+		/*
+		  A semicolon, which is the worst of them: the parser treats it as the start of a
+		  comment, so the value written would be correct and the value read back would be
+		  the part before it. Typed on the row, refused at the keyboard, and the proof is
+		  that Save then has nothing to do - if the text had been staged, the two presses
+		  below would have written it.
+		*/
+		press(KEY_UP, 8);                     // Password
+		press(KEY_ENTER, 10);
+		check(osk_active(), "the password row opens again");
+
+		harness_set_input_pad(0);
+		press(KEY_H, 6);
+		press(KEY_SEMICOLON, 6);
+		press(KEY_A, 6);
+		press(KEY_ENTER, 8);
+		harness_set_input_pad(1);
+		frame(6);
+		dump("covers-9-refused");
+
+		press(KEY_DOWN, 8);                   // Save Changes
+		press(KEY_ENTER, 12);
+		press(KEY_ENTER, 12);
+		frame(8);
+
+		check(!strcmp(cfg.classicui_ss_pass, "hunt3"),
+			"a password MiSTer.ini cannot store is refused rather than half-written");
+
+		static char after[8192];
+		check(slurp_file(path, after, sizeof(after)) > 0 && !strcmp(after, now),
+			"and the file is exactly as the good save left it");
+
+		press(KEY_ESC, 10);
+		press(KEY_ESC, 10);
+		press(KEY_ESC, 10);
+
+		/* --------------------------------------------------------- at 240p --- */
+
+		/*
+		  The canvas his CRT actually gets. Four rows, a value column right-aligned against
+		  a label column, and three lines of footer under them - the arrangement most likely
+		  to run into itself at this size, and the reason the phrases in cov_state_of() are
+		  measured rather than chosen.
+		*/
+		strcpy(cfg.classicui_ss_user, "derek");
+		cfg.classicui_ss_pass[0] = 0;
+		cfg.classicui_screenscraper = 1;
+
+		harness_set_fb(320, 240);
+		gfx_shutdown();
+		theme_update(320, 240, 3);
+		frame(12);
+
+		press(KEY_UP, 10);                    // Display is dropped at 240p: Options is first
+		press(KEY_ENTER, 14);
+		frame(8);
+
+		// Options with the extra row on the narrowest canvas: ten rows have to fit inside
+		// the panel, and the value column has to stay clear of the label column - which is
+		// the measurement the phrases in cov_state_of() were cut to.
+		dump("covers-10-240p-options-row");
+
+		press(KEY_DOWN, 8);
+		press(KEY_ENTER, 14);
+		frame(8);
+		check(gfx_w() == 320, "the panel lays out on a 240p canvas");
+		dump("covers-11-240p-no-password");
+
+		press(KEY_ESC, 10);
+		press(KEY_ESC, 10);
+		press(KEY_ESC, 10);
+
+		harness_set_fb(1280, 720);
+		gfx_shutdown();
+		theme_update(1280, 720, 1);
+		frame(6);
+
+		cfg.classicui_screenscraper = was_ss;
+		snprintf(cfg.classicui_ss_user, sizeof(cfg.classicui_ss_user), "%s", was_user);
+		snprintf(cfg.classicui_ss_pass, sizeof(cfg.classicui_ss_pass), "%s", was_pass);
 
 		unlink(path);
 		unlink(bak);

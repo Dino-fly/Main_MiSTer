@@ -29,6 +29,21 @@ int chome_active();
 int chome_screen_id();
 
 /*
+  What Options > Online Covers is in, in one phrase: "Not Available", "Off", "No Account",
+  "No Password" or "On". The Options row and the screen itself are both drawn from this, so
+  they cannot come to disagree about whether a cover would really be fetched.
+
+  Exported for the same two reasons chome_screen_id() is, and the harness one is the
+  sharper of them. `available` is whether this build carries a ScreenScraper application
+  credential, and that is decided at compile time - see chome_ss.h. A build that can run
+  the front-end at all is a build where ss_available() is a constant, and the test build
+  necessarily has a dummy credential, so the state a player on a shipped build would see is
+  the one state no test could otherwise reach. Passing it in is what makes all five
+  checkable from one binary.
+*/
+const char *chome_covers_state(int available, int on, const char *user, int has_pass);
+
+/*
   1 when nothing needs the poll loop to be prompt: the shelf, or the in-game menu over a
   game that is genuinely held still. See the comment on the definition for the case this
   deliberately excludes.
