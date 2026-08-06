@@ -29,3 +29,7 @@ host
 .vs
 MiSTer
 /bin
+
+# Compiled test tools - sources are in support/classicui/tools/
+/fbgrab
+/keyinj
