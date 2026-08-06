@@ -716,7 +716,18 @@ static pid_t curl_spawn(const char *url, const char *dst, int secret)
 		return pid;
 	}
 
-	// Child: quiet, fail on HTTP errors, follow redirects, hard timeout.
+	/*
+	  Child: quiet, fail on HTTP errors, follow redirects, hard timeout.
+
+	  -g, --globoff, because a ScreenScraper media URL contains brackets. The one this
+	  was found with ends `media=support-2D(eu)[1]`, and curl reads [ ] as a range to
+	  expand - it refuses the whole URL with exit 3, "URL malformed", having never made a
+	  request. Measured on the device: the query succeeded and picked support-2D/eu, and
+	  then the download of that very picture failed with exit 3 and nothing to show for
+	  it. Anything that passes a URL from a reply to curl needs this; a URL we composed
+	  ourselves happens not to, which is exactly why it went unnoticed until a real reply
+	  arrived.
+	*/
 	const char *bundle = curl_ca_bundle();
 
 	if (secret)
@@ -725,18 +736,18 @@ static pid_t curl_spawn(const char *url, const char *dst, int secret)
 		dup2(pfd[0], STDIN_FILENO);
 		close(pfd[0]);
 
-		if (bundle) execlp("curl", "curl", "-sfL", "-m", "20", "--retry", "0",
+		if (bundle) execlp("curl", "curl", "-sfLg", "-m", "20", "--retry", "0",
 			"--cacert", bundle, "-K", "-", (char*)NULL);
 
-		execlp("curl", "curl", "-sfL", "-m", "20", "--retry", "0",
+		execlp("curl", "curl", "-sfLg", "-m", "20", "--retry", "0",
 			"-K", "-", (char*)NULL);
 		_exit(127);
 	}
 
-	if (bundle) execlp("curl", "curl", "-sfL", "-m", "20", "--retry", "0",
+	if (bundle) execlp("curl", "curl", "-sfLg", "-m", "20", "--retry", "0",
 		"--cacert", bundle, "-o", dst, url, (char*)NULL);
 
-	execlp("curl", "curl", "-sfL", "-m", "20", "--retry", "0",
+	execlp("curl", "curl", "-sfLg", "-m", "20", "--retry", "0",
 		"-o", dst, url, (char*)NULL);
 	_exit(127);
 }
