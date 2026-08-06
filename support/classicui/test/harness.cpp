@@ -3490,7 +3490,7 @@ static void assert_disc_dialog()
   The fixture state is named SLUS-00626_1.ss, which is what physical_disc_save_name() would
   publish for this disc: sanitize_name() leaves a serial alone. What cannot be checked here
   is that claim itself - no call in this harness reaches the mount - so the front-end
-  refuses to guess whenever sanitising the serial *could* change it. See disc_shelf_bind().
+  refuses to guess whenever sanitising the serial *could* change it. See disc_susp_bind().
 */
 static void assert_disc_shelf_slots()
 {
