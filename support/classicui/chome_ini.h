@@ -132,6 +132,43 @@ int ini_rewrite_set(const char *src, int srclen, char *dst, int dstmax,
 int ini_value_of(const char *path, const char *key, char *out, int max);
 
 /*
+  1 when a string would come back out of MiSTer.ini as the same string it went in as.
+
+  Every writer above this line has only ever written numbers, so nothing needed to ask.
+  The ScreenScraper screen writes somebody's login and their password, and those are
+  the first values here that a person chooses the characters of - which is when this
+  stopped being theoretical.
+
+  cfg.cpp's ini_getline() keeps a character only if it is CHAR_IS_VALID or a space, and
+  silently drops everything else; a ';' does not even get that far, because it ends the
+  line as a comment. So a password with a '&' or a '%' in it - both of which the
+  on-screen keyboard happily types, and both of which are ordinary in a password - is
+  written to the file correctly, read back mangled, and produces a credentials error on
+  every request from then on with nothing anywhere saying why. The value that reaches
+  the server is not the value on the screen and no screen can show the difference.
+
+  Leading and trailing spaces go the same way, from two directions: ini_getline() trims
+  the trailing ones and skips the leading ones, and line_assign() above trims both when
+  we rewrite a line. A leading '=' is eaten too - ini_parse_var() skips '=' and blanks
+  after the key, however many there are.
+
+  So this is the round-trip test stated once, in the file that owns the format, rather
+  than as a character class copied into a settings screen. A caller that gets 0 must
+  refuse the value and say so: writing it would be writing a value that cannot work.
+*/
+int ini_value_ok(const char *v);
+
+/*
+  What a setting's value may say about itself in the log: the value, or "***" when the key
+  is one that holds a credential.
+
+  Public so the harness can check it, and used by both writers below rather than by their
+  callers. See the comment on the definition for the bug - a screen that never draws a
+  password, publishing it anyway through a shared writer three files away.
+*/
+const char *ini_loggable(const char *key, const char *value);
+
+/*
   Back up and write an arbitrary set. Returns n, 0 when n is 0, or -1 with
   ini_last_error() set. The caller owns telling the running firmware: this knows
   nothing about which cfg field is behind a key.
