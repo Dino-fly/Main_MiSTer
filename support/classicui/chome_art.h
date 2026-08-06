@@ -106,6 +106,38 @@ int disc_art_request(const char *key, const char *sysid, const char *romnom);
 int disc_art_active();
 
 /*
+  1 once for every scan that has just been written to the card, and 0 afterwards - the
+  same shape as disc_take_dirty(), and for the same reason.
+
+  Nothing about a picture finishing comes through a keypress. The front-end repaints
+  only when something tells it to, so without this the dialog goes on drawing the
+  generated face until the player presses something or the spin timer happens to come
+  round: the scan would be on the card, correct, decodable, and invisible. That exact
+  omission is what made the disc badge appear and vanish without a repaint.
+
+  The alternative - the drawing code asking whether the file has turned up yet - would
+  be a stat of the card on every frame for an event that happens at most once per disc
+  per session. The scale is where the answer is already known, so the answer is raised
+  there and this hands it over once.
+
+  Not keyed on which disc: it is one repaint at most once per disc, and a repaint of a
+  screen that does not happen to be showing that disc costs a frame nobody sees. A key
+  here would be a second thing to keep in step with disc_art_path() for no gain.
+*/
+int disc_art_take_ready();
+
+/*
+  How many times anything has asked for a disc scan this session, refusals included.
+
+  For the harness, which cannot see the fetch itself: no request is ever made there -
+  classicui_artfetch is off, so disc_art_request() returns before it forks anything -
+  and yet whether the ask happens once, when the disc is identified, or over and over
+  from the dialog's draw is precisely the shape of this feature. Neither shows in a
+  pixel, and a counter of calls is the smallest thing that tells them apart.
+*/
+unsigned disc_art_asks();
+
+/*
   Scale a fetched disc scan down to DISC_ART_PX and write it as the sprite the dialog
   draws. Returns 1 on success.
 

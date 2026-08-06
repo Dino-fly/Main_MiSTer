@@ -4106,6 +4106,241 @@ static void assert_disc_shelf_slots()
 	check(chome_screen_id() == S_HOME, "and the shelf is back for whatever comes next");
 }
 
+/*
+  When the disc's scan is asked for, and what happens when it arrives late.
+
+  His instruction, in his words: the art for the disc should be fetched and sized as soon
+  as we detect the disc, before the user opens the dialog, so the picture is ready when
+  they open it - and if it is not ready, the dialog listens for it and swaps the generated
+  disc for the scan. Two claims, and neither of them shows in a pixel on its own.
+
+  How the asking is observed. No request is made by this suite and none can be:
+  classicui_artfetch is off throughout, so disc_art_request() returns before it forks
+  anything, and assert_disc_art() above pins down every one of those refusals. What is
+  counted here is the *ask* - disc_art_asks() - because "once, when the disc turned up"
+  and "on every frame the dialog draws" are the same picture on screen and a different
+  feature, and the counter is the smallest thing that tells them apart.
+
+  How the arrival is observed. disc_art_scale() is called directly, which is exactly what
+  disc_art_poll() does with the file curl brought down - so the fixture lands the way a
+  finished download lands, including the signal disc_art_take_ready() hands over. Then the
+  frame is driven by hand rather than through frame(): one millisecond at a time, so the
+  spin timer is never due and a repaint can only have come from the scan. That is the
+  whole hazard - nothing about a download finishing arrives on a keypress, and this UI
+  paints when it is told to. A picture that landed correctly and stayed invisible until
+  the player pressed something is the bug this pair of checks is here to catch, and it is
+  the same one that made the disc badge appear and vanish without a repaint.
+
+  What cannot be reached from a host test: core_holds_disc(), the half of "the drive is
+  the core's" that survives a re-exec. It caches on the first frame of the process by
+  design, so it answers 0 for this whole run. The other half - the latch this process sets
+  when it hands the drive over - is reachable, and it is the same gate: with it set, the
+  loop does not even take the drive's dirty flag, so the disc in there is not asked about.
+*/
+static void assert_disc_art_arrives()
+{
+	printf("\n== the disc scan: asked for on detection, and picked up when it lands late ==\n");
+
+	enum { S_HOME = 0, S_DISC = 17 };
+
+	cfg.classicui_disc = 1;
+	harness_set_menu_core(1);
+	chome_leave();
+	press(KEY_MENU, 20);
+	frame(10);
+	check(chome_screen_id() == S_HOME && disc_state() == DISC_ABSENT,
+		"on the shelf with an empty drive");
+
+	// The same PlayStation disc the sections around this one use: SLUS-00626 off the boot
+	// configuration, which is the key its scan and its savestates are both filed under.
+	fake_disc dp; memset(&dp, 0, sizeof(dp));
+	static const char *const none[] = { "" };
+	fake_iso(&dp, 0, "PLAYSTATION", "PLAYSTATION", none, 0);
+	fake_put(&dp, 20, 0, "BOOT = cdrom:\\SLUS_006.26;1", 27, 100);
+
+	/* --------------------------------- asked for on the detection transition ----- */
+
+	unsigned asked = disc_art_asks();
+
+	disc_ingest_present(1);
+	frame(6);
+	check(disc_state() == DISC_SPINNING, "a disc has arrived and is still being read");
+	check(disc_art_asks() == asked,
+		"nothing is asked for while it is still being read: there is no key to file it under");
+
+	disc_set_reader(fake_read, &dp);
+	disc_ingest_identify(0);
+	frame(1);
+	check(disc_type() == DISC_T_PSX && !strcmp(disc_serial(), "SLUS-00626"),
+		"and now it is a PlayStation disc with a serial");
+	check(disc_art_asks() == asked + 1,
+		"its scan is asked for on the very frame it is identified, with no dialog open");
+
+	/*
+	  And once. The dialog's own call is per draw and is meant to be - it is what recovers
+	  an ask refused for a passing reason - but the shelf must not ask on every pass of a
+	  loop that runs sixty times a second, because the whole point of doing this on the
+	  transition is that it is one piece of work at one moment.
+	*/
+	frame(90);
+	check(disc_art_asks() == asked + 1, "and once only, not again on every frame after it");
+
+	/* ---------------------------- and not while a core owns the drive ------------- */
+
+	/*
+	  Which is done from inside the in-game menu, and the reason is worth writing down
+	  because the obvious way round does not work.
+
+	  The latch that says "this process handed the drive over" is cleared at the top of the
+	  loop whenever we are in the menu core, and that is right: a launch that did not happen
+	  must not leave the drive disowned for ever. But the core has not changed yet in the
+	  frame the launch goes out - a disc played from the shelf sets the latch and clears it
+	  in the same pass - so from the menu core this state cannot be observed at all. From the
+	  in-game menu it can: is_menu() is false, so the latch stands, and the loop keeps
+	  running because the menu is open over the game. That is the state the device is in
+	  behind a playing disc, and it is where a request for a disc scan would be reaching past
+	  a core for a drive that is not ours.
+
+	  The other half of that decision - core_holds_disc(), which is what the re-exec'd
+	  process reads - cannot be reached from here at all: it caches on the first frame of the
+	  process by design, so it answers 0 for this whole run.
+	*/
+	chome_leave();
+	harness_set_menu_core(0);
+	press(KEY_MENU, 14);
+	frame(8);
+	check(chome_ingame_active(), "the in-game menu is up in a game core");
+	check(chome_screen_id() == S_HOME, "on its shelf");
+
+	// The disc goes back in: leaving the front-end stops the detection helper, which
+	// forgets what was in the drive - see chome_leave() - and the helper is what the
+	// harness stands in for.
+	disc_ingest_present(1);
+	disc_set_reader(fake_read, &dp);
+	disc_ingest_identify(0);
+	frame(6);
+	check(disc_state() == DISC_READY, "and there is a disc in the drive again");
+
+	press(KEY_UP);
+	press(KEY_ENTER);
+	check(chome_screen_id() == S_DISC, "whose dialog opens here as it does on the shelf");
+
+	/*
+	  A, delivered without a settle frame between the press and its release. The disc's Play
+	  hands over immediately rather than through the launch curtain - see the SCR_SUSPEND
+	  case for why a disc cannot use that curtain - so the launch is inside this one call.
+	*/
+	harness_clear_launch();
+	chome_handle(KEY_ENTER);
+	chome_handle(KEY_ENTER | UPSTROKE);
+	check(strstr(harness_last_launch(), ".mgl") != 0, "A hands the disc to a core");
+
+	// Off the dialog: its own per-draw ask is the fallback, and it is not what this part is
+	// about. The dirty flag the hand-over raised is left standing, because nothing consumes
+	// it while the drive is not ours - which is exactly the point.
+	press(KEY_ESC);
+	press(KEY_ESC);
+	check(chome_screen_id() == S_HOME, "and the shelf is back, with the drive the core's");
+
+	disc_ingest_present(1);
+	disc_set_reader(fake_read, &dp);
+	disc_ingest_identify(0);
+
+	asked = disc_art_asks();
+	frame(20);
+	check(disc_state() == DISC_READY, "a disc reads as identified again");
+	check(disc_art_asks() == asked,
+		"but with the drive handed to a core, nothing asks about what is in it");
+
+	// And that gate is the only thing that was stopping it: the menu core takes the drive
+	// back, and the change that was left standing is picked up.
+	harness_set_menu_core(1);
+	frame(4);
+	check(disc_art_asks() == asked + 1, "and it is asked for as soon as the drive is ours again");
+
+	/* ------------------------- a scan that lands while the dialog is open --------- */
+
+	if (chome_ingame_active()) press(KEY_MENU, 14);
+	disc_reset_reader();
+	disc_ingest_present(0);
+	(void)disc_take_dirty();
+	chome_leave();
+	press(KEY_MENU, 20);
+	frame(10);
+
+	disc_ingest_present(1);
+	disc_set_reader(fake_read, &dp);
+	disc_ingest_identify(0);
+	frame(6);
+	check(disc_state() == DISC_READY, "the same disc is back in the drive");
+
+	char dst[1024];
+	check(disc_art_path("SLUS-00626", dst, sizeof(dst)) == 1, "and its scan has a path to land at");
+	unlink(dst);
+
+	press(KEY_UP);
+	press(KEY_ENTER);
+	check(chome_screen_id() == S_DISC, "its dialog is up with no scan on the card");
+
+	int w = gfx_w(), h = gfx_h();
+	int bx0 = w / 4, by0 = h / 2 - h / 6, bx1 = (3 * w) / 4, by1 = h / 2 + h / 6;
+
+	// The fixture's own colour, which is in no palette this UI draws with - so any of it
+	// on screen came out of the scan and nothing else. Same licence as the sections above.
+	const uint32_t fixcol = 0xff000000u | DISC_FIX_RGB;
+	check(box_pixels(bx0, by0, bx1, by1, fixcol) == 0,
+		"and nothing of the fixture colour is on screen yet");
+
+	/*
+	  A quiet frame first, so that the repaint below cannot be something else's. One
+	  millisecond after the last one: the disc's spin timer is not due at GFX_DISC_MS, the
+	  selection has settled, and nothing on this screen animates - so this frame paints
+	  nothing at all and never reaches the framebuffer.
+	*/
+	harness_advance(1);
+	chome_handle(0);
+	int flips = harness_present_count();
+	harness_advance(1);
+	chome_handle(0);
+	check(harness_present_count() == flips, "a frame with nothing happening on it paints nothing");
+
+	// The fetch finishing, exactly as disc_art_poll() finishes it: the downloaded scan
+	// scaled into the sprite the dialog reads.
+	const char *src = "/tmp/chome_disc_scan.png";
+	make_disc_scan(src);
+	check(disc_art_scale(src, dst) == 1, "the fetch lands: the sprite is written to the card");
+
+	harness_advance(1);
+	chome_handle(0);
+	check(harness_present_count() == flips + 1,
+		"the scan arriving repaints the screen by itself, with no key pressed");
+	check(gfx_damage_rows() == h, "and it is the full repaint a changed screen asks for");
+	check(box_pixels(bx0, by0, bx1, by1, fixcol) > 100,
+		"the dialog is now drawing the scan instead of the generated disc");
+	dump("disc-scan-arrives-late");
+
+	/*
+	  And exactly one. The signal is handed over once - see disc_art_take_ready() - so the
+	  frame after it is quiet again. A per-frame check of the card would repaint here too,
+	  which is the cost this is written to avoid.
+	*/
+	harness_advance(1);
+	chome_handle(0);
+	check(harness_present_count() == flips + 1, "and that cost one repaint, not one per frame");
+
+	// As the sections around this one leave things: no disc, the flag off, the shelf up.
+	unlink(dst);
+	unlink(src);
+	disc_reset_reader();
+	disc_ingest_present(0);
+	(void)disc_take_dirty();
+	cfg.classicui_disc = 0;
+	chome_leave();
+	press(KEY_MENU, 20);
+	frame(10);
+	check(chome_screen_id() == S_HOME, "and the shelf is back for whatever comes next");
+}
+
 /* --------------------------------------------------------- screenscraper --- */
 
 /*
@@ -8748,6 +8983,10 @@ int main()
 	// in-game menu over a disc consumes the once-per-process session read, and the section
 	// above is the one that cares who consumed it.
 	assert_disc_identity();
+	// And after that one, for the third time for the same reason: this section opens the
+	// in-game menu too, to reach the one state where "a core owns the drive" can be seen
+	// from a host test. Everything else in it would run anywhere.
+	assert_disc_art_arrives();
 	// After the launches above, so there is a recent list to be wrong about, and before
 	// the shelf sections that now see a fourth card on the root shelf.
 	assert_launch_into_state();
