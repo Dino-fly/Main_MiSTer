@@ -882,6 +882,82 @@ int disc_art_active()
 	return da_pid > 0;
 }
 
+// Raised where the picture is finished and handed over once. See disc_art_take_ready().
+static int da_ready = 0;
+
+int disc_art_take_ready()
+{
+	int r = da_ready;
+	da_ready = 0;
+	return r;
+}
+
+static unsigned da_asks = 0;
+
+unsigned disc_art_asks()
+{
+	return da_asks;
+}
+
+/*
+  What became of a curl, in words.
+
+  The whole reason this exists: on the device the request went out - the log said so - and
+  then nothing else was ever printed, because every failure below this point returned
+  silently. "It asked and no picture appeared" describes six different faults, and the one
+  thing that tells the first two apart is the exit status of a child nobody was reporting.
+
+  The codes named are the ones this fetch can actually produce; curl's own manual page has
+  the rest. 127 is not curl's at all - it is curl_spawn()'s child failing to exec one.
+*/
+static const char *da_curl_why(pid_t r, int status, char *buf, int len)
+{
+	if (r < 0) snprintf(buf, len, "could not be reaped: %s", strerror(errno));
+	else if (WIFSIGNALED(status)) snprintf(buf, len, "killed by signal %d", WTERMSIG(status));
+	else if (!WIFEXITED(status)) snprintf(buf, len, "did not exit normally");
+	else
+	{
+		int e = WEXITSTATUS(status);
+		const char *what =
+			(e == 6)   ? " (host would not resolve: no DNS, or no network at all)" :
+			(e == 7)   ? " (could not connect)" :
+			(e == 22)  ? " (HTTP error: -f threw the body away, so the reason is in the status)" :
+			(e == 28)  ? " (timed out: -m 20)" :
+			(e == 35)  ? " (TLS handshake failed)" :
+			(e == 60)  ? " (certificate not verified: the CA bundle - see curl_ca_bundle())" :
+			(e == 127) ? " (no curl on this box: the exec failed)" : "";
+		snprintf(buf, len, "exit %d%s", e, what);
+	}
+	return buf;
+}
+
+// Which refusal the database gave, in the words chome_ss.h uses for them - a number here
+// would send whoever reads the log back to the header to decode it.
+static const char *da_ss_why(int e)
+{
+	switch (e)
+	{
+	case SS_OK:              return "ok";
+	case SS_ERR_NOTFOUND:    return "the database has no such game";
+	case SS_ERR_CREDENTIALS: return "our devid pair or the account was refused";
+	case SS_ERR_CLOSED:      return "the API is closed under load";
+	case SS_ERR_BLACKLISTED: return "our softname is banned";
+	case SS_ERR_QUOTA:       return "the account is out of requests for today";
+	case SS_ERR_THREADS:     return "too many requests at once for this account";
+	case SS_ERR_MALFORMED:   return "the reply did not parse";
+	case SS_ERR_TRANSPORT:   return "the request never completed";
+	}
+	return "an answer this build does not know";
+}
+
+// Bytes on disk, or -1. Only ever for a log line, so a missing file is not an error.
+static long long da_file_size(const char *path)
+{
+	struct stat st;
+	if (!path || !path[0] || stat(path, &st)) return -1;
+	return (long long)st.st_size;
+}
+
 static int da_already_tried(const char *key)
 {
 	for (int i = 0; i < da_ntried; i++) if (!strcmp(da_tried[i], key)) return 1;
@@ -918,6 +994,15 @@ static void da_reset()
 int disc_art_request(const char *key, const char *sysid, const char *romnom)
 {
 	if (!key || !key[0]) return 0;
+
+	/*
+	  Counted here, above every refusal below, because "was this asked for at all" is a
+	  different question from "did it get anywhere" - and the first one is the one that
+	  says whether the disc turning up set this in motion or whether the dialog is still
+	  the only thing that ever does. Deliberately not printed: the dialog calls this on
+	  every pass of its draw, so a line here would be a line per frame.
+	*/
+	da_asks++;
 
 	/*
 	  A local, not da_dst. da_dst belongs to whatever fetch is in flight, and writing this
@@ -1000,8 +1085,15 @@ int disc_art_request(const char *key, const char *sysid, const char *romnom)
 	da_state = DA_QUERY;
 	da_mark_tried(key);
 
-	// The key, never the URL: the URL has the passwords in it.
-	printf("ClassicUI: asking for a disc scan for %s\n", da_key);
+	/*
+	  The key and the systemeid, never the URL: the URL has devid, devpassword, ssid and
+	  sspassword in it. The systemeid is in here because it is the other half of what was
+	  asked - a scan that never arrives for a disc the database certainly holds is a
+	  different fault if we asked the wrong platform for it, and it is the only part of
+	  the query that is guessed from a table rather than read off the disc.
+	*/
+	printf("ClassicUI: asking for a disc scan for %s (system %s, as \"%s\")\n",
+		da_key, systemeid, name);
 	return 1;
 }
 
@@ -1141,6 +1233,30 @@ int disc_art_scale(const char *src_png, const char *dst_png)
 
 	mkdirs(dst_png);
 
+	/*
+	  Whether that worked, said out loud.
+
+	  mkdirs() returns nothing and complains about nothing, so a card mounted read-only, a
+	  full one, or a plain file sitting where classicui/discart should be all end here as an
+	  imlib save error with no hint of which - and the discart directory not existing on the
+	  card afterwards is exactly the symptom being diagnosed. So the directory is checked
+	  before the write and named if it is not there.
+	*/
+	{
+		char dir[1024];
+		snprintf(dir, sizeof(dir), "%s", dst_png);
+		char *slash = strrchr(dir, '/');
+		if (slash) *slash = 0;
+
+		struct stat st;
+		if (slash && dir[0] && (stat(dir, &st) || !S_ISDIR(st.st_mode)))
+		{
+			printf("ClassicUI: no directory for the disc scan at %s (%s)\n", dir, strerror(errno));
+			imlib_free_image();
+			return 0;
+		}
+	}
+
 	Imlib_Load_Error serr = IMLIB_LOAD_ERROR_NONE;
 	imlib_save_image_with_error_return(dst_png, &serr);
 	imlib_free_image();
@@ -1154,9 +1270,40 @@ int disc_art_scale(const char *src_png, const char *dst_png)
 	// Whoever rewrote a picture says so, rather than leaving the thumbnail cache to
 	// guess from an mtime the card is too coarse to resolve. See art_forget().
 	art_forget(dst_png);
+
+	/*
+	  And whoever is drawing has to be told to draw again, which is the other half of the
+	  same thought. Here rather than in the poll below because this is the moment the
+	  picture becomes a picture - anything that writes one of these sprites, now or later,
+	  wants the screen repainted, and a signal raised in the caller would be a signal the
+	  next caller forgets. See disc_art_take_ready().
+	*/
+	da_ready = 1;
 	return 1;
 }
 
+/*
+  The reply, then the picture, and every way either of them can go wrong said out loud.
+
+  This path used to be silent from end to end. On the device with real credentials the
+  request went out - "asking for a disc scan for SLES-01506" is in the log - and then
+  nothing: no classicui/discart directory, no sprite, and not one further line. Six
+  distinct faults look identical from outside, and none of them was reported:
+
+    curl never ran, or ran and failed          the exit status says which
+    the reply parsed to a refusal              the database says which refusal
+    the reply named no media at all            the game is not in there
+    it named media but no support-2D           the game is in there without a disc scan
+    the picture downloaded and would not scale disc_art_scale() says why
+    there was nowhere to write it              also disc_art_scale()
+
+  So each of them prints, and each print distinguishes itself from the others rather than
+  saying "the disc scan failed" six times. The key is in every line, because two discs in
+  one session otherwise leave a log nobody can attribute; the URL is in none of them,
+  because every media URL in that reply carries devid, devpassword, ssid and sspassword -
+  ss_redact_url() is there for the case where one genuinely has to be shown, and this is
+  not one of those cases.
+*/
 static void disc_art_poll()
 {
 	if (da_pid <= 0) return;
@@ -1168,9 +1315,28 @@ static void disc_art_poll()
 	int ok = (r > 0) && WIFEXITED(status) && !WEXITSTATUS(status);
 	da_pid = -1;
 
+	char why[128];
+
 	if (da_state == DA_QUERY)
 	{
-		if (!ok || !file_exists_abs(da_reply)) { da_reset(); return; }
+		if (!ok)
+		{
+			printf("ClassicUI: the disc scan query for %s failed, curl %s\n",
+				da_key, da_curl_why(r, status, why, sizeof(why)));
+			da_reset();
+			return;
+		}
+
+		long long got = da_file_size(da_reply);
+		if (got <= 0)
+		{
+			// curl -f discards the body of an HTTP error, so a zero-byte reply and a
+			// missing one are the same fault from here: it answered, with nothing.
+			printf("ClassicUI: the disc scan query for %s came back with no reply (%lld bytes)\n",
+				da_key, got);
+			da_reset();
+			return;
+		}
 
 		/*
 		  Static, not a local. ss_result holds SS_MAX_MEDIA url[512] buffers - ~53 KB -
@@ -1184,7 +1350,20 @@ static void disc_art_poll()
 		unlink(da_reply);
 		da_reply[0] = 0;
 
-		if (e != SS_OK) { da_reset(); return; }
+		if (e != SS_OK)
+		{
+			printf("ClassicUI: the disc scan reply for %s (%lld bytes) says: %s\n",
+				da_key, got, da_ss_why(e));
+			da_reset();
+			return;
+		}
+
+		if (!res.nmedia)
+		{
+			printf("ClassicUI: the disc scan reply for %s names no media at all\n", da_key);
+			da_reset();
+			return;
+		}
 
 		/*
 		  Region from the disc, which for a PlayStation disc is in the serial that is also
@@ -1195,13 +1374,35 @@ static void disc_art_poll()
 		int nr = ss_regions_for_serial(da_key, regs, 4);
 
 		const ss_media *m = ss_pick(&res, SS_KIND_DISC, nr ? regs : 0);
-		if (!m) { da_reset(); return; }
+		if (!m)
+		{
+			/*
+			  The game is in the database and has pictures, just not this kind. Worth
+			  distinguishing from "no media at all": that one is a bad match on the name
+			  and would be fixed by asking differently, this one is a gap in the database
+			  and no amount of asking will fill it. The types that were there are listed
+			  because it is also how a change in what the API calls a disc scan would
+			  show - see the top of chome_ss.cpp on that being the soft spot.
+			*/
+			printf("ClassicUI: the disc scan reply for %s has %d media but no support-2D:",
+				da_key, res.nmedia);
+			for (int i = 0; i < res.nmedia && i < 12; i++) printf(" %s", res.media[i].type);
+			printf("%s\n", res.nmedia > 12 ? " ..." : "");
+			da_reset();
+			return;
+		}
 
 		snprintf(da_tmp, sizeof(da_tmp), "/tmp/classicui_discart_src");
 
 		// 1 again: the media URL out of the reply carries the same four credentials.
 		da_pid = curl_spawn(m->url, da_tmp, 1);
-		if (da_pid < 0) { da_reset(); return; }
+		if (da_pid < 0)
+		{
+			printf("ClassicUI: could not fork a curl for the disc scan for %s (%s)\n",
+				da_key, strerror(errno));
+			da_reset();
+			return;
+		}
 
 		da_state = DA_IMAGE;
 
@@ -1213,9 +1414,30 @@ static void disc_art_poll()
 
 	if (da_state == DA_IMAGE)
 	{
-		if (ok && file_exists_abs(da_tmp) && disc_art_scale(da_tmp, da_dst))
+		long long got = da_file_size(da_tmp);
+
+		if (!ok)
 		{
-			printf("ClassicUI: disc scan stored for %s\n", da_key);
+			printf("ClassicUI: the disc scan download for %s failed, curl %s\n",
+				da_key, da_curl_why(r, status, why, sizeof(why)));
+		}
+		else if (got <= 0)
+		{
+			printf("ClassicUI: the disc scan for %s downloaded nothing (%lld bytes)\n",
+				da_key, got);
+		}
+		else if (!disc_art_scale(da_tmp, da_dst))
+		{
+			// disc_art_scale() has already said which of load, directory or save it was.
+			printf("ClassicUI: the disc scan for %s downloaded (%lld bytes) but would not"
+				" scale into %s\n", da_key, got, da_dst);
+		}
+		else
+		{
+			// The file, named: it is the one thing on the card afterwards, and "it is not
+			// there" was half of what there was to go on when this was silent.
+			printf("ClassicUI: disc scan stored for %s: %s (%lld bytes from %lld)\n",
+				da_key, da_dst, da_file_size(da_dst), got);
 		}
 
 		// The 417 KB original goes either way. da_reset() unlinks it.
