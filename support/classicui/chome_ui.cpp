@@ -1140,6 +1140,36 @@ static void draw_background(const chome_profile *p)
 		return;
 	}
 
+	/*
+	  In a game and falling through to the grid instead, which is a fault every time: the
+	  still is what this background is for. Named once per change rather than per frame,
+	  because it is drawn sixty times a second and a log that scrolls is a log nobody reads.
+
+	  The size test is the interesting half and the reason it is reported separately from
+	  "no still at all". ig_bg is allocated at the canvas size, so a mismatch is not a
+	  build that went wrong - it is the canvas having changed *since* the build, which the
+	  resize path in chome_handle() does without rebuilding it. That is a real hole and this
+	  is what would show it: a menu that came up over the game and lost the still when
+	  something resized the framebuffer under it.
+	*/
+	if (ig_active)
+	{
+		static const uint32_t *said_bg = 0;
+		static int said_w = -1, said_h = -1, said_cw = -1, said_ch = -1;
+
+		if (ig_bg != said_bg || ig_bg_w != said_w || ig_bg_h != said_h
+			|| p->w != said_cw || p->h != said_ch)
+		{
+			said_bg = ig_bg;
+			said_w = ig_bg_w; said_h = ig_bg_h;
+			said_cw = p->w;   said_ch = p->h;
+
+			if (!ig_bg) printf("ClassicUI: no still to draw the menu over, so the grid is what shows\n");
+			else printf("ClassicUI: the still is %dx%d and the canvas is now %dx%d, so it cannot be drawn\n",
+				ig_bg_w, ig_bg_h, p->w, p->h);
+		}
+	}
+
 	gfx_fill(0, 0, p->w, p->h, COL_BG);
 
 	int step = p->w / 40; if (step < 8) step = 8;
@@ -8540,15 +8570,39 @@ static const char *mb_text(int i)
   are the known exception - a GBA panel is 3:2 and a Game Boy 10:9 - and if one of those
   looks wrong on a real screen this is the line to revisit; it is a deliberate assumption,
   not an oversight.
+
+  And the *canvas* pixels are not square either, which is the half of this that was missed.
+  A 15 kHz TV canvas arrives as 640x240 (640x288 with menu_pal=1) whenever the framebuffer
+  takeover is not held - vga_scaler=1 or direct_video - and the scaler stretches it over the
+  same screen a 320x240 canvas fills, so those pixels are twice as tall as they are wide.
+  The sweep that gave chome_profile its px did the profile, the text scales, the card, the
+  slot tiles and the bottom margin, and did not do this: fitting 4:3 into 640x240 by raw
+  pixel count gave a 320-pixel-wide picture in a 640-pixel-wide canvas, so the still of the
+  game occupied the middle half of the screen with 160 black columns down each side.
+
+  Which is exactly where a full-width panel leaves the background showing. Over a physical
+  disc the in-game menu opens on the disc's own dialog, and that dialog is the width of the
+  canvas less the inset - so the strips it leaves were both inside those black bars, and the
+  game the player was left looking at came to 640 pixels of 153600, all of them in the sliver
+  of rows below the panel. The menu was reported as having a black background instead of a
+  still of the game, and the capture had worked perfectly every time: the still was there the
+  whole while, in the middle, under the dialog. Measured in assert_ingame_still().
 */
-// Fits SHOT_AR_W:SHOT_AR_H inside w x h, centred, and reports where it landed.
-static void shot_fit(int w, int h, int *fw, int *fh, int *ox, int *oy)
+/*
+  Fits SHOT_AR_W:SHOT_AR_H inside w x h, centred, and reports where it landed. px is the
+  canvas pixels in one square unit - chome_profile::px - because the ratio is a ratio of
+  what the screen shows, not of what the framebuffer counts.
+*/
+static void shot_fit(int w, int h, int px, int *fw, int *fh, int *ox, int *oy)
 {
+	if (px < 1) px = 1;
+	int ew = w / px;                  // the width in square units
+
 	int aw, ah;
-	if ((long long)SHOT_AR_W * h > (long long)SHOT_AR_H * w)
+	if ((long long)SHOT_AR_W * h > (long long)SHOT_AR_H * ew)
 	{
-		aw = w;
-		ah = (int)((long long)w * SHOT_AR_H / SHOT_AR_W);
+		aw = ew;
+		ah = (int)((long long)ew * SHOT_AR_H / SHOT_AR_W);
 	}
 	else
 	{
@@ -8557,6 +8611,11 @@ static void shot_fit(int w, int h, int *fw, int *fh, int *ox, int *oy)
 	}
 	if (aw < 1) aw = 1;
 	if (ah < 1) ah = 1;
+
+	// Back into canvas pixels, and clamped: a rounding down in ew above must not come
+	// back as a rectangle one pixel wider than the canvas it is drawn into.
+	aw *= px;
+	if (aw > w) aw = w;
 
 	*fw = aw;
 	*fh = ah;
@@ -8616,7 +8675,7 @@ static void ig_build_background(const chome_profile *p)
 	  surround left black. Then dim, so panel text stays readable over anything.
 	*/
 	int fw, fh;
-	shot_fit(p->w, p->h, &fw, &fh, 0, 0);
+	shot_fit(p->w, p->h, p->px, &fw, &fh, 0, 0);
 
 	int ox = (p->w - fw) / 2, oy = (p->h - fh) / 2;
 
@@ -8706,12 +8765,32 @@ static int ig_open()
 	int max_px = 2048 * 1024;
 	free(ig_shot);
 	ig_shot = (uint32_t*)malloc((size_t)max_px * 4);
-	if (ig_shot && !screenshot_grab(ig_shot, max_px, &ig_shot_w, &ig_shot_h))
+
+	/*
+	  The buffer is eight megabytes, so a refusal here is a real answer and not a formality -
+	  and it has to be kept separately, because screenshot_grab_why() is not asked when the
+	  grab is never reached and would then be answering about a previous open.
+	*/
+	const char *why = "no room for a frame of that size";
+	if (ig_shot)
 	{
-		free(ig_shot);
-		ig_shot = 0;
-		ig_shot_w = ig_shot_h = 0;
+		if (!screenshot_grab(ig_shot, max_px, &ig_shot_w, &ig_shot_h))
+		{
+			free(ig_shot);
+			ig_shot = 0;
+			ig_shot_w = ig_shot_h = 0;
+		}
+		why = screenshot_grab_why();
 	}
+
+	/*
+	  Said out loud, once per open, because the two ways this ends up wrong are the same
+	  picture on a television: no still because the grab came back with nothing, and no
+	  still because the grab worked and the screen the menu opened on has none of it
+	  showing. That ambiguity is the whole reason this line exists - a black background over
+	  a physical disc was chased as a failed capture for a day, and the capture was fine.
+	*/
+	printf("ClassicUI: the still of the game: %s, %dx%d\n", why, ig_shot_w, ig_shot_h);
 
 	/*
 	  Opaque, once, here. The scaler hands back ARGB with nothing meaningful in the alpha
@@ -8790,6 +8869,29 @@ static int ig_open()
 	core_opts_bind_game(ig_have_item ? core_opts_game_key(ig_item.sysidx, ig_item.path) : 0);
 
 	ig_build_background(p);
+
+	/*
+	  And what came of it, against the canvas it has to match to be drawn at all -
+	  draw_background() blits it only while ig_bg_w/h are the profile's w/h.
+
+	  The rectangle is the second half of the same question the grab line above asks. A
+	  still that is there, is canvas-sized, and is still not on screen is being covered by
+	  what is drawn on top of it, and that is a layout question rather than a capture one:
+	  the disc's dialog is the width of the canvas less the inset, so over a disc there is
+	  almost nothing of it left to see whatever the numbers here say.
+
+	  px is here because the picture inside that rectangle is fitted to the display aspect
+	  and not to the pixel count - see shot_fit(). On a 640x240 canvas (px=2, which is
+	  vga_scaler=1 or direct_video) the fit used to land in the middle half of the width with
+	  black columns down each side, and those columns were the only background a full-width
+	  dialog left showing.
+	*/
+	{
+		int fw = 0, fh = 0, ox = 0, oy = 0;
+		if (ig_bg) shot_fit(ig_bg_w, ig_bg_h, p->px, &fw, &fh, &ox, &oy);
+		printf("ClassicUI: the menu background: %s, canvas %dx%d px=%d, picture %dx%d at %d,%d\n",
+			ig_bg ? "built" : "none", p->w, p->h, p->px, fw, fh, ox, oy);
+	}
 
 	/*
 	  The whole front-end runs here, not a cut-down pause panel: the library, art
