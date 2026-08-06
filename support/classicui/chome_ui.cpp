@@ -2113,10 +2113,18 @@ static void draw_menubar(const chome_profile *p, int focused)
 
 struct panel_box { int x, y, w, h, s; };
 
-static panel_box draw_panel_ex(const chome_profile *p, int w, int h, const char *title)
+/*
+  A panel where the caller says where it goes.
+
+  Centring is right for a dialog that is smaller than the screen, and wrong for one that
+  is nearly all of it: the disc dialog is asked to keep a small margin at the top and to
+  stop clear of the button legend at the bottom, and those two are not the same distance,
+  so no centred rectangle expresses it. Centring a panel tall enough to reach the legend
+  puts its bottom back over the legend, which is the thing being fixed.
+*/
+static panel_box draw_panel_at(const chome_profile *p, int x, int y, int w, int h, const char *title)
 {
 	panel_box b;
-	int x = (p->w - w) / 2, y = (p->h - h) / 2;
 	int s = p->ts_ui;
 	int hdr = 10 * s + 6;
 
@@ -2132,6 +2140,11 @@ static panel_box draw_panel_ex(const chome_profile *p, int w, int h, const char 
 
 	b.x = x; b.y = y + hdr; b.w = w; b.h = h - hdr; b.s = s;
 	return b;
+}
+
+static panel_box draw_panel_ex(const chome_profile *p, int w, int h, const char *title)
+{
+	return draw_panel_at(p, (p->w - w) / 2, (p->h - h) / 2, w, h, title);
 }
 
 static panel_box draw_panel(const chome_profile *p, const char *title)
@@ -4442,6 +4455,7 @@ static void disc_open_screen()
 */
 struct disc_layout
 {
+	int px, py;              // where the panel goes; see draw_panel_at()
 	int pw, ph;              // the panel
 	int r;                   // in gfx_disc's units: the disc is 2r pixels across
 	int ts;                  // the title's text scale
@@ -4478,8 +4492,31 @@ static void disc_layout_for(const chome_profile *p, const disc_dlg *d, disc_layo
 		+ 8 * s + L->bh                       // air, then the row of buttons
 		+ 8 * s;                              // and the panel's bottom margin
 
-	int maxw = p->w - 2 * p->inset;
-	int maxh = p->h - 2 * (p->safe_y + 4);
+	/*
+	  The panel is given the screen, less a margin, and the disc is given what is left of
+	  it - which is the opposite way round from how this started.
+
+	  It used to be as wide as its widest line, on the grounds that stretching it to the
+	  inset left half of it empty. That was true of a panel whose disc was two fifths of
+	  the canvas high and whose text was one short line. It is not true now: Dinofly asked
+	  for nearly the full width, and the disc grows to fill whatever that gives, so there
+	  is no empty half left to look like a mistake.
+
+	  The bottom is the point of the exercise. It stops clear of the button legend rather
+	  than reaching for the centre of the screen, because the two used to end up a single
+	  row apart at 240p - measured on the device: plate to row 209, legend from row 211 -
+	  and a dialog touching the prompts reads as one crowded thing instead of two.
+
+	  Top and bottom margins are therefore NOT equal, which is why this cannot be centred
+	  and why draw_panel_at() exists.
+	*/
+	int left = p->inset;
+	int top = p->safe_y + 4 * s;
+	int bot = p->y_legend - 6 * s;          // the air between the panel and the prompts
+
+	int maxw = p->w - 2 * left;
+	int maxh = bot - top;
+	if (maxh < 32) maxh = 32;               // a canvas too short for this is still drawn
 
 	/*
 	  Sized in whole cells rather than in pixels, because a radius that is not a multiple
@@ -4499,7 +4536,12 @@ static void disc_layout_for(const chome_profile *p, const disc_dlg *d, disc_layo
 	*/
 	int side = 12 * s;                        // the margin either side of the widest line
 
-	int cell = (p->h * 2 / 5 + 16) / 32;
+	/*
+	  Start from the height the panel is actually being given rather than from a fraction
+	  of the canvas, then walk down until it fits both ways. Rounded to the nearest whole
+	  cell for the reason above: 960x540 lost a sixth of its disc to truncation.
+	*/
+	int cell = ((maxh - chrome) + 16) / 32;
 	if (cell < 1) cell = 1;
 
 	while (cell > 1 && (chrome + 32 * cell > maxh || 32 * cell + 2 * side > maxw)) cell--;
@@ -4508,14 +4550,13 @@ static void disc_layout_for(const chome_profile *p, const disc_dlg *d, disc_layo
 	L->ph = chrome + 32 * cell;
 
 	/*
-	  As wide as its widest line, not as wide as the screen: stretching the panel to the
-	  inset left half of it empty, which looks like a mistake rather than a decision.
-
-	  Both text lines are measured, not just the title. Sizing to the title alone was
-	  enough to make "Super Nintendo (not yet)" come out as "Super Nintendo (n>" on the one
-	  disc whose whole point is that line - the panel was as wide as "MSU1" plus the
-	  buttons, and the sentence that explains the refusal was the thing that got cut.
-	  gfx_clip() still cuts either of them when even the full width will not hold it.
+	  The full width it was given, and never less. The content is still measured, but only
+	  to refuse a width that could not hold it - which cannot happen once the panel is the
+	  screen less a margin, and is kept because it is what stops a long line being clipped
+	  silently if the margins are ever widened. Sizing to the title alone once made
+	  "Super Nintendo (not yet)" come out as "Super Nintendo (n>" on the one disc whose
+	  whole point is that line; gfx_clip() still cuts either line when even this will not
+	  hold it.
 	*/
 	int content = 32 * cell;
 	if (btnrow > content) content = btnrow;
@@ -4527,7 +4568,11 @@ static void disc_layout_for(const chome_profile *p, const disc_dlg *d, disc_layo
 	if (tw > content) content = tw;
 
 	L->pw = content + 2 * side;
+	if (L->pw < maxw) L->pw = maxw;         // fill the width Dinofly asked for
 	if (L->pw > maxw) L->pw = maxw;
+
+	L->px = (p->w - L->pw) / 2;             // centred horizontally, which the margins are
+	L->py = top;                            // but pinned at the top, so the bottom clears
 }
 
 /* -------------------------------------------------------------- the scan --- */
@@ -4753,7 +4798,7 @@ static void draw_disc(const chome_profile *p)
 	disc_layout_for(p, &d, &L);
 
 	int s = p->ts_ui;
-	panel_box b = draw_panel_ex(p, L.pw, L.ph, "Disc");
+	panel_box b = draw_panel_at(p, L.px, L.py, L.pw, L.ph, "Disc");
 	int cx = b.x + b.w / 2;
 	int y = b.y + 6 * s;
 
