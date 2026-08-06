@@ -1078,7 +1078,9 @@ whether a core accepts the MGL.
   streaming reader under it (`support/physical_disc/`) is taken **whole** from
   [Anime0t4ku/Main_MiSTer_Physical_Disc](https://github.com/Anime0t4ku/Main_MiSTer_Physical_Disc)
   (GPLv3, as are we) rather than paraphrased - the one time that lifecycle was rewritten
-  smaller it cost two frozen consoles.
+  smaller it cost two frozen consoles. **Playing a real CD on a MiSTer at all is
+  Anime0t4ku's work**; keep the credit wherever this feature is described to users. See
+  `../physical_disc/CREDITS.md` for which part is whose.
 
   Four cores are wired: PC Engine CD, PlayStation, Mega CD, Neo Geo CD. Only PlayStation is
   hardware-tested. Upstream reports Mega CD and PC Engine CD at full speed and PSX "nearly

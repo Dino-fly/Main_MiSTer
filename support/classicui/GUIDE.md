@@ -393,11 +393,13 @@ nothing at all: there is no anonymous access, and the guest pool everyone shares
 few requests a day for the whole world. Your own login is what earns you your own
 quota. Two more things worth knowing before you fill it in. The password sits in clear
 text in `MiSTer.ini`, on a FAT partition anything on the machine can read, so use one
-you do not use anywhere else. And in the builds published today the option does nothing
-even with an account, because the API also requires a per-application developer
-credential that ScreenScraper's staff issue on request and no public build carries one
-— the code is here and gated off. Local art, a `gamelist.xml` and `classicui_artfetch`
-are the ones that work now.
+you do not use anywhere else. And the front-end asks for one thing at a time, so art
+fills in gradually rather than all at once — it never holds the menu up waiting.
+
+If you build the firmware yourself the option is inert unless you supply your own
+per-application developer credential, which ScreenScraper's staff issue on request; see
+`support/classicui/tools/ss_creds.sh`. The published builds carry one, so an account of
+your own is all you need.
 
 **`classicui_disc` is for a real CD in a real drive.** Any powered USB optical drive,
 including the SuperDock's slot loader. A disc is recognised when you put it in, and
@@ -408,6 +410,16 @@ every command sent to the drive queues behind whatever the drive is already doin
 a drive that stops answering used to take the whole front-end down with it. See
 [The disc title table](#the-disc-title-table) for where the name on the shelf comes
 from.
+
+**Reading the disc is [Anime0t4ku](https://github.com/Anime0t4ku)'s work, not ours.**
+Everything above rests on
+[Main_MiSTer_Physical_Disc](https://github.com/Anime0t4ku/Main_MiSTer_Physical_Disc), a
+fork of MiSTer's firmware by that author, which is what made a real CD playable on this
+hardware in the first place. That code is used here as it was written rather than
+rewritten, under the same GPLv3 this tree carries. What this front-end adds is the shelf
+around it: recognising the disc without stalling the menu, naming it, its artwork, and
+giving it save states of its own. `support/physical_disc/CREDITS.md` says exactly which
+part is whose.
 
 **`classicui_freeze` is worth knowing about.** Holding a game still means asking the
 core for a save state, and at least one core cannot survive being asked at a bad
@@ -423,16 +435,17 @@ happens on cores with no save states at all.
 
 A pressed disc has no filename. Everything else on the shelf is named after the file it
 came from; a disc offers a serial — `SLES-01506` — which is the right identifier and
-recognisable to nobody. So the name you see comes from a table of serials, and the
-firmware carries one: there is nothing to install for this to work.
+recognisable to nobody. So the name you see comes from a table of serials, and that table
+is a file on the card. **Without it a disc still works — you just see `SLES-01506` on the
+shelf where a name would be.**
 
-What you can install is a **better** table. Put one on the card as
+Copy the `disctitles.txt` that ships beside the firmware to
 
 ```
 /media/fat/classicui/disctitles.txt
 ```
 
-and it is used in preference to the built-in one. It is plain text, one disc per line,
+and discs get their real names. It is plain text, one disc per line,
 a tab between the serial and the title:
 
 ```
@@ -446,17 +459,18 @@ Serials are stored upper-case with the punctuation removed — `SLES-01506` beco
 place rather than read into memory. Correcting one disc is therefore editing one line
 on the card, which is half the reason the format is text.
 
-To build a whole table, the script that ships with this front-end fetches the data and
-writes the file:
+The table shipped here covers 12,761 releases across the four systems. To build a fresher
+one yourself, the script that ships with this front-end fetches the data and writes the
+file:
 
 ```
 python3 support/classicui/tools/disctitles.py --fetch -o disctitles.txt
 ```
 
-The data is [Redump](https://redump.info)'s, and it is not committed here — their
-position is that their metadata is public domain, which is a clearly stated intent
-rather than a formal grant, so the script asks you to fetch it yourself. Its own header
-lists the other sources it accepts and what each one's licence allows.
+The data is [Redump](https://redump.info)'s. Their position is that their metadata is
+public domain, which is a clearly stated intent rather than a formal grant, so where the
+shipped table came from is written down in `DISCTITLES.md` beside it. The script's own
+header lists the other sources it accepts and what each one's licence allows.
 
 **If you fetch the DAT files by hand, the `/serial` on the end of the URL is not
 optional:**

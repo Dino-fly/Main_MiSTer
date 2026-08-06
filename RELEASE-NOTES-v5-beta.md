@@ -14,6 +14,16 @@ one optional second file this time — see *Disc titles* below.
 
 ## Physical CDs
 
+**This is built on [Anime0t4ku](https://github.com/Anime0t4ku)'s work.** Reading a real CD
+on a MiSTer at all comes from
+**[Anime0t4ku/Main_MiSTer_Physical_Disc](https://github.com/Anime0t4ku/Main_MiSTer_Physical_Disc)**
+— the streaming sector reader, the read-ahead worker, the drive-speed cap, the recovery
+when a USB drive drops out, the disc swapping. That code is used here whole rather than
+rewritten, GPLv3 as this tree is, because every part of it is subtle: the one time it was
+paraphrased smaller during this work it cost two frozen consoles. What follows is a
+front-end built on top of it, and none of it would exist without that author. Credit and
+the full division of labour are in `support/physical_disc/CREDITS.md`.
+
 Put a game CD in a USB optical drive and the shelf notices it. The disc gets its own
 screen — press up from the shelf — with the game's name, its artwork, and two buttons:
 **Play**, and **Options** to send it to a different core.
