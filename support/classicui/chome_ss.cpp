@@ -416,6 +416,167 @@ int ss_body_class(const char *body)
 	return SS_OK;
 }
 
+const char *ss_why(int err)
+{
+	switch (err)
+	{
+	case SS_OK:              return "ok";
+	case SS_ERR_NOTFOUND:    return "the database has no such game";
+	case SS_ERR_CREDENTIALS: return "our devid pair or the account was refused";
+	case SS_ERR_CLOSED:      return "the API is closed under load";
+	case SS_ERR_BLACKLISTED: return "our softname is banned";
+	case SS_ERR_QUOTA:       return "the account is out of requests for today";
+	case SS_ERR_THREADS:     return "too many requests at once for this account";
+	case SS_ERR_MALFORMED:   return "the reply did not parse";
+	case SS_ERR_TRANSPORT:   return "the request never completed";
+	}
+	return "an answer this build does not know";
+}
+
+/* ------------------------------------------------- holding the module off --- */
+
+/*
+  Whether the module is allowed to ask, and the reason it is not.
+
+  This is small, and it is the piece that decides whether a bad afternoon costs a player
+  their covers for one session or for good. The rule it enforces is the one at the top of
+  the header: a refusal holds the *module*, a verdict is remembered against the *game*,
+  and the two states never touch. Nothing here knows what a game is, which is the point -
+  it cannot record a miss even by accident.
+*/
+static int ss_hold = SS_OK;
+
+int ss_hold_reason()
+{
+	return ss_hold;
+}
+
+int ss_may_request()
+{
+	if (!ss_enabled()) return 0;
+	if (ss_hold != SS_OK) return 0;
+	return 1;
+}
+
+void ss_forget_state()
+{
+	ss_hold = SS_OK;
+}
+
+int ss_verdict(int err)
+{
+	return (err == SS_OK || err == SS_ERR_NOTFOUND) ? 1 : 0;
+}
+
+// One place to raise the hold, so that every reason for it prints in the same shape and
+// the first reason wins. First rather than last because the reasons are not equal: a
+// blacklisting arriving after a quota must not read as though the quota were the story.
+static void ss_hold_off(int why, const char *detail)
+{
+	if (ss_hold != SS_OK) return;
+
+	ss_hold = why;
+	printf("ClassicUI: ScreenScraper stands down for this session - %s%s%s\n",
+		ss_why(why), detail ? ": " : "", detail ? detail : "");
+}
+
+void ss_note_result(int err, const ss_result *r)
+{
+	/*
+	  The counters first, and from every reply rather than only from a refusal.
+
+	  This is the half that costs nothing. ssuser rides along with the game data, so a
+	  successful reply that happens to be the last one the allowance covers says so
+	  itself - and standing down on it means the next request is never made, rather than
+	  being made, refused, and counted against us. Reacting only to the refusal would
+	  spend a request to learn something the previous reply already contained.
+
+	  Both limits are checked for being positive before being compared against. They
+	  initialise to -1 for "the reply did not carry them", and a reply from a server that
+	  had stopped sending them would otherwise read as an allowance of -1 already
+	  exceeded, and hold the module off over nothing.
+	*/
+	if (r)
+	{
+		if (r->max_requests_day > 0 && r->requests_today >= r->max_requests_day)
+		{
+			char d[96];
+			snprintf(d, sizeof(d), "%d of %d requests used today",
+				r->requests_today, r->max_requests_day);
+			ss_hold_off(SS_ERR_QUOTA, d);
+		}
+
+		/*
+		  And the ko allowance, which is the one worth standing down on early. Every
+		  request for a game the database cannot match counts against it, a shelf of
+		  homebrew and hacks can spend it without a single successful scrape, and the
+		  server's answer past it is 431 - which this client is obliged to treat as a
+		  ban needing a human. Stopping here is stopping one step before that.
+		*/
+		if (r->max_requests_ko_day > 0 && r->requests_ko_today >= r->max_requests_ko_day)
+		{
+			char d[96];
+			snprintf(d, sizeof(d), "%d of %d unmatched requests used today",
+				r->requests_ko_today, r->max_requests_ko_day);
+			ss_hold_off(SS_ERR_QUOTA, d);
+		}
+	}
+
+	switch (err)
+	{
+	/*
+	  A verdict about the game. Nothing to hold: the account is in good standing and the
+	  next game is worth asking about. Whoever called this owns the game side of it.
+	*/
+	case SS_OK:
+	case SS_ERR_NOTFOUND:
+		break;
+
+	/*
+	  Out of allowance, or asking too fast. Both temporary, and both stop the asking.
+
+	  SS_ERR_THREADS says the same account is being scraped from somewhere else - a PC
+	  running Skyscraper against it, most likely - and chome_ss.h's note on it says to
+	  back off rather than stop. With no clock here, backing off for the session is what
+	  that amounts to, and it is the right side to err on: the other client is the one
+	  the player is watching, and a front-end quietly losing the race for their one
+	  thread is better than two clients fighting over it.
+	*/
+	case SS_ERR_QUOTA:
+	case SS_ERR_THREADS:
+	case SS_ERR_CLOSED:
+		ss_hold_off(err, 0);
+		break;
+
+	/*
+	  Nothing further can succeed. Held for the same reason as the temporary ones rather
+	  than a different one, because the effect wanted is identical - stop asking - and a
+	  second mechanism for "stop harder" would be a second thing to get wrong.
+	*/
+	case SS_ERR_CREDENTIALS:
+	case SS_ERR_BLACKLISTED:
+		ss_hold_off(err, 0);
+		break;
+
+	/*
+	  And these two are deliberately not a hold.
+
+	  A reply that did not arrive or did not parse is one attempt failing, not the account
+	  refusing us. Holding on it would let a single dropped packet cost every remaining
+	  cover in the session; not holding costs at worst one failed curl per game, which is
+	  a DNS lookup that fails in milliseconds when there is no network at all. The game
+	  side is still left unmarked either way - ss_verdict() is false for both - so nothing
+	  is remembered as missing over a wire fault.
+	*/
+	case SS_ERR_TRANSPORT:
+	case SS_ERR_MALFORMED:
+		break;
+
+	default:
+		break;
+	}
+}
+
 /* ------------------------------------------------------- what we want ------- */
 
 /*
@@ -480,12 +641,21 @@ struct ss_ctx
 #define SSF_REQTODAY   0
 #define SSF_MAXDAY     1
 #define SSF_MAXTHREADS 2
+#define SSF_KOTODAY    3
+#define SSF_MAXKODAY   4
 
 static int ssuser_field(const char *tag)
 {
-	if (!strcasecmp(tag, "requeststoday"))     return SSF_REQTODAY;
-	if (!strcasecmp(tag, "maxrequestsperday")) return SSF_MAXDAY;
-	if (!strcasecmp(tag, "maxthreads"))        return SSF_MAXTHREADS;
+	if (!strcasecmp(tag, "requeststoday"))       return SSF_REQTODAY;
+	if (!strcasecmp(tag, "maxrequestsperday"))   return SSF_MAXDAY;
+	if (!strcasecmp(tag, "maxthreads"))          return SSF_MAXTHREADS;
+
+	// The other quota. Compared before "requeststoday" would be, since neither name is
+	// a prefix of the other - but they are one letter apart in the middle and it is
+	// worth being explicit that these are two different allowances.
+	if (!strcasecmp(tag, "requestskotoday"))     return SSF_KOTODAY;
+	if (!strcasecmp(tag, "maxrequestskoperday")) return SSF_MAXKODAY;
+
 	return SSF_NONE;
 }
 
@@ -742,6 +912,8 @@ static int sax(XMLEvent evt, const XMLNode *node, SXML_CHAR *text, const int n, 
 			if (c->field == SSF_REQTODAY)   c->r->requests_today = v;
 			if (c->field == SSF_MAXDAY)     c->r->max_requests_day = v;
 			if (c->field == SSF_MAXTHREADS) c->r->max_threads = v;
+			if (c->field == SSF_KOTODAY)    c->r->requests_ko_today = v;
+			if (c->field == SSF_MAXKODAY)   c->r->max_requests_ko_day = v;
 			c->field = SSF_NONE;
 		}
 
@@ -764,6 +936,8 @@ int ss_parse_file(const char *path, ss_result *out)
 	out->requests_today = -1;
 	out->max_requests_day = -1;
 	out->max_threads = -1;
+	out->requests_ko_today = -1;
+	out->max_requests_ko_day = -1;
 	out->err = SS_ERR_MALFORMED;
 
 	if (!path) return out->err;

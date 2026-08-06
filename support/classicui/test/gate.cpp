@@ -44,6 +44,17 @@ int main()
 
 	check(ss_enabled() == 0, "and no amount of configuration enables it");
 
+	/*
+	  And the gate the cover ladder consults, which is the one every rung above the libretro
+	  pack now goes through. art_source_for() offers the ScreenScraper rung only when this is
+	  true, so a shipped build cannot reach that rung however the ini is written - which is
+	  the same promise as the two below, made about the path that did not exist when this
+	  binary was written.
+	*/
+	check(ss_may_request() == 0, "and the ladder's own gate refuses too");
+	check(ss_hold_reason() == SS_OK,
+		"for the plain reason that it is not enabled, rather than because something held it off");
+
 	ss_query q;
 	memset(&q, 0, sizeof(q));
 	q.systemeid = "57";
@@ -78,6 +89,20 @@ int main()
 	check(!strstr(safe, "devpassword=P") && !strstr(safe, "sspassword=Q"),
 		"and the passwords in it are gone");
 	check(strstr(safe, "type=box-2D") != 0, "while what is not secret survives");
+
+	/*
+	  And the predicate the two refusals are told apart by, which is pure and has to keep
+	  working here for the same reason the redactor does: it is what stands between a spent
+	  quota and a library remembered as having no art. A build where it had been compiled out
+	  along with the network side would be a build that got the distinction wrong silently.
+	*/
+	check(ss_verdict(SS_OK) == 1 && ss_verdict(SS_ERR_NOTFOUND) == 1,
+		"a reply about the game is a verdict");
+	check(ss_verdict(SS_ERR_QUOTA) == 0 && ss_verdict(SS_ERR_THREADS) == 0 &&
+		ss_verdict(SS_ERR_TRANSPORT) == 0 && ss_verdict(SS_ERR_CREDENTIALS) == 0,
+		"and a refusal to answer is never one");
+	check(ss_why(SS_ERR_QUOTA) != 0 && strstr(ss_why(SS_ERR_QUOTA), "requests") != 0,
+		"and every outcome still has words to be logged with");
 
 	printf("%s\n", fails ? "GATE FAILED" : "gate holds");
 	return fails ? 1 : 0;
