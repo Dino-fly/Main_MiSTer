@@ -865,40 +865,40 @@ static int panel_pixels(uint32_t want)
   is drawn.
 
   The panel is a flat COL_PANEL and the disc is the widest thing on it, so the widest run of
-  non-panel pixels across the panel's width is the diameter. Two guards keep the shelf out of
-  it: only rows that start on panel colour are considered at all, and only runs closed by
-  panel colour on both sides are recorded - which also excludes the panel's own title bar,
-  which is COL_INK from edge to edge.
+  non-panel pixels *enclosed by* panel colour is the diameter. Enclosed on both sides is the
+  whole guard, and it is what keeps the shelf out: a row that never touches the panel encloses
+  nothing, and the shelf either side of a panel narrower than the canvas is only ever closed
+  on one side, by the panel it runs into.
+
+  It used to scan from the inset and require the row to *start* on panel colour, which was the
+  same guard while the dialog was the canvas less that inset. It is not any more - the panel is
+  sized to its contents on a canvas that can afford it - and read that way this answered zero
+  at 720p, because the row began on scrimmed shelf and every row was skipped.
+
+  The panel's own title bar is excluded either way: it is COL_INK from edge to edge of the
+  panel, with the frame's COL_PANELLO outside it and no COL_PANEL on that row at all.
 */
 static int disc_drawn_box(int *ocx, int *ocy)
 {
 	const uint32_t *fb = harness_fb_shown();
-	const chome_profile *p = theme_get();
 	int w = gfx_w(), h = gfx_h();
 	if (ocx) *ocx = 0;
 	if (ocy) *ocy = 0;
 	if (!fb || w < 1 || h < 1) return 0;
 
-	// Inside draw_panel_at's two-pixel frame, and inside the panel: it is the canvas less
-	// an inset either side, which is what disc_layout_for() gives it.
-	int x0 = p->inset + 4, x1 = w - p->inset - 4;
-	if (x0 < 0) x0 = 0;
-	if (x1 > w) x1 = w;
-	if (x1 - x0 < 8) return 0;
-
 	int best = 0, bestx = 0, besty = 0;
 	for (int y = 0; y < h; y++)
 	{
 		const uint32_t *row = fb + (size_t)y * w;
-		if ((row[x0] | 0xff000000u) != COL_PANEL) continue;
+		int run = 0, opened = 0;
 
-		int run = 0;
-		for (int x = x0; x < x1; x++)
+		for (int x = 0; x < w; x++)
 		{
 			if ((row[x] | 0xff000000u) == COL_PANEL)
 			{
-				if (run > best) { best = run; bestx = x - run + run / 2; besty = y; }
+				if (opened && run > best) { best = run; bestx = x - run + run / 2; besty = y; }
 				run = 0;
+				opened = 1;
 			}
 			else run++;
 		}
@@ -935,6 +935,101 @@ static int disc_drawn_box(int *ocx, int *ocy)
 static int disc_drawn_dia()
 {
 	return disc_drawn_box(0, 0);
+}
+
+/*
+  The panel's plate, measured off the screen: where a dialog actually is and how big.
+
+  Measured rather than asked of disc_layout_for(), for the same reason the diameter above is.
+  The whole question this answers - is the dialog still eating the screen at 720p - is a
+  question about pixels, and a test that recomputed the layout would agree with the layout for
+  ever while both drifted away from the picture.
+
+  The widest run of COL_PANEL in the frame is the plate's inner width: draw_panel_at() fills
+  the rectangle with COL_PANEL and then draws its two-pixel COL_PANELLO frame inside it, so a
+  panel `pw` wide leaves a run of pw-4. The rows are then walked up and down one column inside
+  that left edge, which is flat plate for the whole body of the panel and stops at the COL_INK
+  title bar above and the frame below. So the rectangle handed back is the plate, and the panel
+  as disc_layout_for() sized it is two pixels wider each way plus its title bar.
+
+  Only usable on a screen with one panel on it, which is every screen that calls this.
+
+  Runs the full width of the canvas are not it, and that is the menu bar: draw_menubar() fills
+  0..p->w in the same COL_PANEL, and compose() slides it in on exactly the screens that have a
+  panel open, so on a 320x240 canvas this answered with the bar's 320 rather than the panel's
+  250 and put the panel thirty rows too high. No panel is ever wider than the canvas less its
+  inset either side, so anything within a few pixels of the full width is the bar.
+*/
+static int panel_plate_seen(int *ox, int *oy, int *ow, int *oh)
+{
+	const uint32_t *fb = harness_fb_shown();
+	int w = gfx_w(), h = gfx_h();
+	int best = 0, bx = 0, by = 0;
+
+	if (ox) *ox = 0;
+	if (oy) *oy = 0;
+	if (ow) *ow = 0;
+	if (oh) *oh = 0;
+	if (!fb || w < 1 || h < 1) return 0;
+
+	for (int y = 0; y < h; y++)
+	{
+		const uint32_t *row = fb + (size_t)y * w;
+		int run = 0;
+
+		for (int x = 0; x <= w; x++)
+		{
+			int on = (x < w) && ((row[x] | 0xff000000u) == COL_PANEL);
+			if (on) { run++; continue; }
+			if (run > best && run < w - 8) { best = run; bx = x - run; by = y; }
+			run = 0;
+		}
+	}
+
+	if (best < 8) return 0;
+
+	// One pixel inside the plate's left edge: flat COL_PANEL down the whole body, whatever
+	// is centred on the rows in between.
+	int probe = bx + 1;
+	int y0 = by, y1 = by;
+	while (y0 > 0 && (fb[(size_t)(y0 - 1) * w + probe] | 0xff000000u) == COL_PANEL) y0--;
+	while (y1 < h - 1 && (fb[(size_t)(y1 + 1) * w + probe] | 0xff000000u) == COL_PANEL) y1++;
+
+	if (ox) *ox = bx;
+	if (oy) *oy = y0;
+	if (ow) *ow = best;
+	if (oh) *oh = y1 - y0 + 1;
+	return 1;
+}
+
+// The mean of the three channels over a box, times 100 so a fraction of a level is visible.
+// Both halves of the in-game dim are a mean rather than a colour: the scrim leaves two values
+// in alternate pixels and what the eye reads is the average of them.
+static int box_mean_x100(int x0, int y0, int x1, int y1)
+{
+	const uint32_t *fb = harness_fb_shown();
+	int w = gfx_w(), h = gfx_h();
+	if (!fb || w < 1 || h < 1) return 0;
+
+	if (x0 < 0) x0 = 0;
+	if (y0 < 0) y0 = 0;
+	if (x1 > w) x1 = w;
+	if (y1 > h) y1 = h;
+	if (x1 <= x0 || y1 <= y0) return 0;
+
+	unsigned long sum = 0;
+	unsigned long n = 0;
+	for (int y = y0; y < y1; y++)
+	{
+		for (int x = x0; x < x1; x++)
+		{
+			uint32_t c = fb[(size_t)y * w + x];
+			sum += ((c >> 16) & 0xff) + ((c >> 8) & 0xff) + (c & 0xff);
+			n += 3;
+		}
+	}
+
+	return n ? (int)((sum * 100) / n) : 0;
 }
 
 /*
@@ -3553,6 +3648,11 @@ static void assert_disc_dialog()
 	  wrong about. A check that cannot fail is worse than no check, so it steps back to the
 	  badge tier - one press - where the badge is on the shelf and visible.
 
+	  The panel no longer covers that corner at 720p, being sized to its contents now, so the
+	  original reading would work again on this canvas. It stays on the badge tier anyway: that
+	  is where the badge belongs, and it is the one place the check is right at every profile
+	  rather than at whichever ones the dialog happens not to reach.
+
 	  Two halves, because "no fixture colour here" is also what an absent badge looks like: the
 	  scan did not reach it, and there is something there that did.
 	*/
@@ -3748,17 +3848,22 @@ static void assert_disc_hires()
 	  Pinned as a number, because this is the answer to the question that started the whole
 	  exercise: how much resolution the dialog actually has to fill.
 
-	  480 is the box, and the disc measures a pixel or two under it. Two reasons, both by
+	  288 is the box, and the disc measures a pixel or two under it. Two reasons, both by
 	  design and neither worth pinning to the pixel: gfx_disc_face() keeps a pixel of
 	  background inside the buffer so that rotating it cannot sample off the end, and the
 	  rotation's 8.8 sine can carry an edge pixel about a pixel back out again, by an amount
 	  that depends on the angle it happens to be caught at. What the tolerance is still tight
 	  enough to catch is the thing worth catching: a face generated at some other size and
 	  stretched by the blit, which is the failure this whole design exists to make impossible.
+
+	  It was 480 while the disc took whatever height the panel had been handed, which is what
+	  made the panel 1216x644 of a 1280x720 screen. It is two fifths of the canvas height
+	  again, capped at DISC_DLG_MAX_CELLS, and 720p is the canvas the cap first bites on - see
+	  disc_layout_for() and assert_disc_dialog_size(), which measures every profile.
 	*/
-	check(gfx_disc_face_dia() == 480,
-		"at 720p the panel gives the disc a 480 pixel box, and the face is made at exactly that");
-	check(dia <= 480 && dia >= 476, "and blitted 1:1, so the disc measures the same bar a pixel");
+	check(gfx_disc_face_dia() == 288,
+		"at 720p the panel gives the disc a 288 pixel box, and the face is made at exactly that");
+	check(dia <= 288 && dia >= 284, "and blitted 1:1, so the disc measures the same bar a pixel");
 
 	/* ---------------------------------- once per size, and not once per frame --- */
 
@@ -3891,8 +3996,8 @@ static void assert_disc_hires()
 	printf("  the disc is %d px across on the %s canvas (%dx%d), face buffer %d\n",
 		sd_dia, theme_get()->name, gfx_w(), gfx_h(), gfx_disc_face_dia());
 
-	check(gfx_disc_face_dia() == 288, "which gives it a 288 pixel box instead, and the face followed");
-	check(sd_dia <= 288 && sd_dia >= 284, "still blitted 1:1");
+	check(gfx_disc_face_dia() == 192, "which gives it a 192 pixel box instead, and the face followed");
+	check(sd_dia <= 192 && sd_dia >= 188, "still blitted 1:1");
 	check(gfx_disc_face_gens() == gens + 1, "regenerated once for the new size, and once only");
 
 	frame(40);
@@ -3902,10 +4007,12 @@ static void assert_disc_hires()
 
 	/*
 	  Read on the shelf and not with the dialog open, which is worth saying because the obvious
-	  thing to do is the wrong one. The dialog was given the whole screen (draw_panel_at from
-	  the inset), so at 720p the panel covers the corner the badge sits in entirely and there
-	  is no badge on screen to read - and every test of it there passes on the panel's flat
-	  grey without noticing. So the badge is checked where it exists.
+	  thing to do was the wrong one. The dialog was given the whole screen (draw_panel_at from
+	  the inset), so at 720p the panel covered the corner the badge sits in entirely and there
+	  was no badge on screen to read - and every test of it there passed on the panel's flat
+	  grey without noticing. The panel is sized to its contents now and leaves that corner
+	  alone, but the badge is still checked where it exists on every canvas rather than where
+	  one canvas happens to allow it.
 
 	  The badge is gfx_disc() still, and that is checked as the sprite's own defining property
 	  rather than by hashing pixels: on the row through its centre the colour may only change
@@ -3979,6 +4086,235 @@ static void assert_disc_hires()
 	disc_ingest_present(0);
 	(void)disc_take_dirty();
 	cfg.classicui_disc = 0;
+	chome_leave();
+	press(KEY_MENU, 20);
+	frame(10);
+	check(chome_screen_id() == S_HOME, "the shelf is back for whatever comes next");
+}
+
+/*
+  The dialog is sized for the canvas, at every canvas, measured off the screen.
+
+  Dinofly: "we might still need to fix it for higher resolutions if they show more of the
+  background behind the dialog (they probably should not have an immense dialog covering most
+  of the screen at high res)". It was 1216x644 of a 1280x720 display - 85% of the picture -
+  and 912x452 of 960x540, because the disc was taking whatever height the band above the
+  legend had and the panel was taking the whole width whatever it held.
+
+  Three things are pinned here and the third is the reason the other two are safe to change:
+
+    - the width and the disc at each of the five canvases the walk covers, as numbers, with
+      what each is made of written beside it;
+    - the rule those numbers come from, so a canvas nobody tested is covered too: a panel
+      whose disc has reached DISC_DLG_READABLE is sized to its own longest line and must not
+      fill the width, and one whose disc has not is the full width by design;
+    - 240p, which must be what it was to the pixel. It is Dinofly's own screen, he likes the
+      dialog as it is there, and nothing above was worth breaking it for.
+
+  The fixture is walk_disc_dialog's, deliberately: the panel is as wide as its longest line
+  and on this disc that line is the title, so the pictures in test/out and the numbers here
+  are about the same dialog. "SLES-01506" is ten characters and "Metal Gear Solid" is sixteen.
+*/
+static void assert_disc_dialog_size()
+{
+	printf("\n== the disc dialog is sized for the canvas, not for the screen ==\n");
+
+	enum { S_HOME = 0, S_DISC = 17 };
+
+	int was_prof = cfg.classicui_profile;
+	int was_w = gfx_w(), was_h = gfx_h();
+
+	const char *tdb = ROOT "/classicui/disctitles.txt";
+	mkpath(ROOT "/classicui");
+	{
+		FILE *f = fopen(tdb, "wb");
+		if (f)
+		{
+			fprintf(f, "#classicui-disctitles 1\n");
+			fprintf(f, "SLES01506\tMetal Gear Solid\n");
+			fclose(f);
+		}
+	}
+	disc_titles_forget();
+
+	cfg.classicui_disc = 1;
+
+	fake_disc d; memset(&d, 0, sizeof(d));
+	static const char *const none[] = { "" };
+	fake_iso(&d, 0, "PLAYSTATION", "PLAYSTATION", none, 0);
+	fake_put(&d, 20, 0, "BOOT = cdrom:\\SLES_015.06;1", 27, 100);
+
+	/*
+	  What each expected width is made of, at 12*ts_ui of margin either side:
+
+	    hd      1280x720  432 = a 16-character title at 3x (384) + 48. Disc 288: two fifths
+	                            of 720 is 288 and the cap is 288, so this canvas is where the
+	                            two meet. Was 1216 wide with a 480 disc.
+	    sd       640x480  280 = the same title at 2x (256) + 24. Disc 192, two fifths of 480.
+	                            Was 564 wide with a 288 disc.
+	    lo       320x240  282 = the canvas less its inset either side, unchanged. Disc 96,
+	                            below DISC_DLG_READABLE, which is why it fills the width.
+	    auto960  960x540  432 = the title at 3x again, the text scales being HD's. Disc 224,
+	                            two fifths of 540 rounded to the nearest whole cell. Was 912.
+	    tv640    640x240  564 = the canvas less its inset, which on this canvas is 38 rather
+	                            than 19 because the inset is a fraction of the width. Disc 96:
+	                            240 lines is 240 lines however wide the canvas says it is, so
+	                            a stretched TV canvas keeps the 240p dialog. Unchanged.
+	*/
+	struct { const char *tag; int prof, w, h, pw, dia; } cases[] =
+	{
+		{ "hd",      1, 1280, 720, 432, 288 },
+		{ "sd",      2,  640, 480, 280, 192 },
+		{ "lo",      3,  320, 240, 282,  96 },
+		{ "auto960", 0,  960, 540, 432, 224 },
+		{ "tv640",   0,  640, 240, 564,  96 },
+	};
+
+	for (unsigned c = 0; c < sizeof(cases) / sizeof(cases[0]); c++)
+	{
+		char what[192];
+
+		cfg.classicui_profile = (uint8_t)cases[c].prof;
+		harness_set_fb(cases[c].w, cases[c].h);
+		gfx_shutdown();
+		theme_update(cases[c].w, cases[c].h, cases[c].prof);
+		chome_leave();
+		press(KEY_MENU, 20);
+		frame(10);
+
+		disc_ingest_present(1);
+		disc_set_reader(fake_read, &d);
+		disc_ingest_identify(0);
+		frame(6);
+
+		press(KEY_UP);
+		press(KEY_ENTER);
+		snprintf(what, sizeof(what), "%s: the dialog is up over a PlayStation disc", cases[c].tag);
+		check(chome_screen_id() == S_DISC, what);
+
+		const chome_profile *p = theme_get();
+		int hdr = 10 * p->ts_ui + 6;                 // draw_panel_at's title bar
+		int maxw = p->w - 2 * p->inset;              // all the width the dialog may have
+		int legend_top = p->y_legend - 6 * p->ts_ui; // where draw_legend starts filling
+
+		int ox = 0, oy = 0, ow = 0, oh = 0;
+		int got = panel_plate_seen(&ox, &oy, &ow, &oh);
+
+		snprintf(what, sizeof(what), "%s: there is a plate on screen to measure", cases[c].tag);
+		check(got, what);
+		if (!got) continue;
+
+		// The plate is inside a two-pixel frame and below the title bar; the panel is what
+		// disc_layout_for() sized. See panel_plate_seen().
+		int pw = ow + 4, ph = oh + hdr + 2;
+		int px = ox - 2, py = oy - hdr;
+		int dia = disc_drawn_dia();
+
+		printf("  %-7s %4dx%-4d panel %dx%d at %d,%d - %d%% of the picture, disc %d,"
+			" bottom %d clears the legend at %d\n",
+			cases[c].tag, p->w, p->h, pw, ph, px, py,
+			(pw * ph * 100) / (p->w * p->h), dia, py + ph, legend_top);
+
+		snprintf(what, sizeof(what), "%s: the panel is %d wide", cases[c].tag, cases[c].pw);
+		check(pw == cases[c].pw, what);
+
+		snprintf(what, sizeof(what), "%s: and its disc is %d across", cases[c].tag, cases[c].dia);
+		check(dia >= cases[c].dia - 4 && dia <= cases[c].dia, what);
+
+		/*
+		  The rule, which is what covers the canvases nobody listed. A disc that has reached
+		  the readable diameter is doing the job the width was ever for, so the panel is its
+		  own longest line and nothing more - and half the canvas is a generous bound on that,
+		  which the full width fails by construction.
+		*/
+		if (dia >= 144)
+		{
+			snprintf(what, sizeof(what),
+				"%s: its disc reads on its own, so the panel is its contents and not the width",
+				cases[c].tag);
+			check(pw < maxw, what);
+
+			/*
+			  Half the canvas is a bound on this disc and not on every disc: the panel is as
+			  wide as its longest line, and a forty-character title would be wider than this.
+			  It is worth checking anyway, on the name it is checked with - sixteen characters
+			  is a perfectly ordinary game title, and a panel that spent half the screen on one
+			  would mean the width had stopped following the content again.
+			*/
+			snprintf(what, sizeof(what),
+				"%s: which leaves the background either side - a title this long fits in half",
+				cases[c].tag);
+			check(pw * 2 <= p->w, what);
+		}
+		else
+		{
+			snprintf(what, sizeof(what),
+				"%s: too small a disc to carry the dialog, so it keeps the full width",
+				cases[c].tag);
+			check(pw == maxw, what);
+		}
+
+		snprintf(what, sizeof(what), "%s: the disc is never past the cap", cases[c].tag);
+		check(dia <= 288, what);
+
+		if (p->h >= 360)
+		{
+			snprintf(what, sizeof(what),
+				"%s: and on a canvas this tall it is big enough to read a label on",
+				cases[c].tag);
+			check(dia >= 144, what);
+		}
+
+		/*
+		  The bottom, at every profile including the stretched one. This is the whole reason
+		  draw_panel_at() exists: the plate and the legend used to end up a single row apart
+		  at 240p - plate to row 209, legend from row 211, measured on the device - and two
+		  things a row apart read as one crowded thing.
+		*/
+		snprintf(what, sizeof(what), "%s: and the bottom of it stays clear of the legend",
+			cases[c].tag);
+		check(py + ph < legend_top, what);
+
+		snprintf(what, sizeof(what), "%s: and the top of it inside the overscan margin",
+			cases[c].tag);
+		check(py >= p->safe_y, what);
+
+		/*
+		  240p to the pixel, hashed rather than described.
+
+		  The number is this dialog on the build before it was resized, and it is here because
+		  everything else in this section is a licence to move the dialog about: the one canvas
+		  that must not move is the one he looks at. If a deliberate change to the 240p dialog
+		  ever lands, this moves with it - and the PNGs in test/out are the record of what it
+		  used to be.
+
+		  The plate rather than the frame: the shelf either side of it is still easing cards
+		  about, which is not what this is about. The disc inside it is turning, so this leans
+		  on the harness clock being stepped in fixed increments - it is the reason this is
+		  taken here, in a section whose presses are fixed, rather than in the walk.
+		*/
+		if (cases[c].w == 320 && cases[c].h == 240)
+		{
+			unsigned long hash = harness_fb_hash_box(ox, oy, ox + ow, oy + oh);
+			printf("  240p dialog plate hash %lu\n", hash);
+			check(hash == 4675382672573572134UL, "240p is pixel for pixel the dialog it was");
+		}
+
+		disc_reset_reader();
+		disc_ingest_present(0);
+		(void)disc_take_dirty();
+		frame(6);
+	}
+
+	// As assert_disc_hires leaves things, canvas included.
+	unlink(tdb);
+	disc_titles_forget();
+	cfg.classicui_disc = 0;
+
+	cfg.classicui_profile = (uint8_t)was_prof;
+	harness_set_fb(was_w, was_h);
+	gfx_shutdown();
+	theme_update(was_w, was_h, was_prof);
 	chome_leave();
 	press(KEY_MENU, 20);
 	frame(10);
@@ -4584,9 +4920,9 @@ static void assert_disc_identity()
 */
 static uint32_t still_dimmed(uint32_t c)
 {
-	uint32_t r = ((c >> 16) & 0xff) * 5 / 16;
-	uint32_t g = ((c >> 8) & 0xff) * 5 / 16;
-	uint32_t b = (c & 0xff) * 5 / 16;
+	uint32_t r = ((c >> 16) & 0xff) * 6 / 16;
+	uint32_t g = ((c >> 8) & 0xff) * 6 / 16;
+	uint32_t b = (c & 0xff) * 6 / 16;
 	return 0xff000000u | (r << 16) | (g << 8) | b;
 }
 
@@ -4813,6 +5149,250 @@ static void assert_ingame_still()
 	  three canvases here and leaving the last of them behind failed it two hundred lines
 	  from the cause.
 	*/
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+	harness_set_menu_core(1);
+	chome_leave();
+	frame(6);
+}
+
+/*
+  Close the in-game menu, put a different flat colour in the capture, and open it again.
+
+  The dim is applied once, when the menu opens - ig_build_background() - so a colour changed
+  under an open menu would be measured through the previous one's arithmetic.
+*/
+static void ig_menu_reopen(uint32_t flat)
+{
+	if (chome_ingame_active()) press(KEY_MENU, 14);
+	frame(6);
+	harness_set_grab_flat(flat);
+	press(KEY_MENU, 20);
+	frame(12);
+}
+
+/*
+  How much of the paused game shows behind a menu, in pixel values.
+
+  The question, and it is not the same one as "is the still there at all" that the section
+  above answers. The still is dimmed to 6/16 when the menu opens, and then compose() lays
+  gfx_scrim()'s 50% checkerboard over the whole canvas on every panel screen. A checkerboard
+  replaces half the pixels outright, so with COL_BGDARK it is a floor and not a dim: anything
+  in the game darker than COL_BGDARK came out as COL_BGDARK. Measured on the device over a
+  paused PlayStation core, the framebuffer outside the dialog held exactly two luma values, 0
+  and 31 - the game was mid-fade, every pixel of it was under the floor, and the result was a
+  flat grey-black rectangle. A bright game survived the same treatment and merely dimmed.
+
+  So the scrim over a still is COL_BLACK, which multiplies rather than floors, and the dim
+  moved 5/16 -> 6/16 to keep the brightest case from getting dimmer than it already was. Both
+  are single numbers in chome_ui.cpp and both are worth exactly nothing unasserted, because
+  "the dark scene reads better now" is the kind of claim an eye on a television invents.
+
+  Measured on a *file-launched* game, deliberately: this is not about discs. Every panel screen
+  over every paused game got the same double treatment.
+
+  What the four rows below come to, as the mean of the three channels over one box of
+  background - which is what the eye reads off a checkerboard, the two values alternating:
+
+    capture   screen           before (5/16, COL_BGDARK)   now (6/16, COL_BLACK)
+    white     shelf, no scrim  79        mean 79.0         95       mean 95.0
+    white     panel, scrim     79 and 33 mean 55.8         95 and 0 mean 47.5
+    grey 32   panel, scrim     10 and 33 mean 21.3         12 and 0 mean  6.0
+    black     panel, scrim      0 and 33 mean 16.3          0 and 0 mean  0.0
+
+  The middle two are the point. Nothing behind a panel is brighter than it was - 47.5 against
+  55.8 - so no text over it reads worse; but the range the picture has to work in is 0..47.5
+  instead of 16.3..47.5, and a dark scene is dark instead of being lifted into the same flat
+  grey a black one was.
+*/
+static void assert_ingame_dim()
+{
+	printf("\n== the dim and the scrim over a paused game ==\n");
+
+	enum { S_HOME = 0, S_SORT = 3 };
+
+	int was_prof = cfg.classicui_profile;
+
+	/*
+	  A 4:3 canvas, so shot_fit() gives the picture the whole of it and every pixel in the box
+	  below is game rather than letterbox. See assert_ingame_still().
+
+	  The forced profile goes back to `auto` for the duration, which the sections around this
+	  one do not bother with because nothing in them depends on it. Here it decides where the
+	  Sort panel lands, and the box below is chosen to sit above it: left forced to HD on a
+	  320x240 canvas the panel is a different size on a canvas the log then calls "hd", which
+	  is a confusing thing to leave in a section that is about pixel values.
+	*/
+	cfg.classicui_profile = 0;
+	harness_set_fb(320, 240);
+	gfx_shutdown();
+	theme_update(320, 240, 0);
+
+	harness_set_menu_core(0);
+	harness_set_fb_supported(1);
+	harness_set_osd_visible(0);
+	harness_set_grab(1);
+
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "gb\nTetris (World).gb\n"); fclose(f); }
+	}
+	chome_handle(0);
+
+	/*
+	  The box every mean below is taken over: the rows between the menu bar and the panel.
+
+	  Both of those edges are drawn things and both had to be found the hard way. The bar slides
+	  in whenever a panel is open - compose() hands draw_menubar() the same `overlay` flag it
+	  scrims on - so the rows just under the top margin are COL_PANEL rather than game, and a
+	  box that started at a fixed row 30 read three rows of bar at 240p and a mean half again
+	  too bright. Below, the panel is centred on the canvas. What is left in between is
+	  background on every screen this reads, which is the only kind of box worth a mean.
+
+	  Above the bar would do as well on paper and is worse in practice: draw_running_warning()
+	  puts a red band there on a core that cannot pause, and that is a property of the fixture
+	  rather than of this question.
+
+	  An even width, because half of a 50% checkerboard is only exactly half of an even number
+	  of pixels.
+	*/
+	const chome_profile *pr = theme_get();
+	int panel_top = (pr->h - pr->panel_h) / 2;       // draw_panel_ex() centres it; checked below
+	const int bx0 = pr->inset + 4, bx1 = pr->w - pr->inset - 4;
+	const int by0 = pr->safe_y + pr->bar_h + 2, by1 = panel_top - 2;
+	const int area = (bx1 - bx0) * (by1 - by0);
+
+	printf("  reading %dx%d at %d,%d - between the bar at %d and the panel at %d\n",
+		bx1 - bx0, by1 - by0, bx0, by0, pr->safe_y + pr->bar_h, panel_top);
+
+	check((bx1 - bx0) % 2 == 0 && by1 - by0 >= 4, "there is a box of background to measure in");
+
+	/* ------------------------------------------- white: the brightest case there is --- */
+
+	ig_menu_reopen(0xffffffffu);
+	check(chome_ingame_active() && chome_screen_id() == S_HOME,
+		"the menu is open over the game, on the shelf");
+
+	uint32_t lit = still_dimmed(0xffffffffu);
+	int mean_shelf = box_mean_x100(bx0, by0, bx1, by1);
+
+	printf("  white capture: shelf mean %d.%02d, every pixel %06x\n",
+		mean_shelf / 100, mean_shelf % 100, lit & 0xffffffu);
+
+	check(box_pixels(bx0, by0, bx1, by1, lit) == area,
+		"with no panel open the still is dimmed once and nothing else touches it");
+	check(mean_shelf == 9500, "which is 6/16 of white: a mean of 95");
+
+	press(KEY_GRAVE, 20);
+	check(chome_screen_id() == S_SORT, "a panel screen over the same still");
+	dump("dim-1-panel-over-white");
+
+	// The one copied piece of arithmetic in this section, checked rather than trusted: if the
+	// panel is not where the box was measured against, every mean below is over the wrong
+	// pixels and would fail in a way that named the dim instead.
+	{
+		int ox = 0, oy = 0, ow = 0, oh = 0;
+		int got = panel_plate_seen(&ox, &oy, &ow, &oh);
+		check(got && oy - (10 * pr->ts_ui + 6) == panel_top,
+			"the panel is where the box was measured against");
+	}
+
+	int mean_lit = box_mean_x100(bx0, by0, bx1, by1);
+	int n_lit = box_pixels(bx0, by0, bx1, by1, lit);
+	int n_black = box_pixels(bx0, by0, bx1, by1, COL_BLACK);
+	int n_bgdark = box_pixels(bx0, by0, bx1, by1, COL_BGDARK);
+
+	printf("  white capture: panel mean %d.%02d, %d lit + %d black of %d, %d COL_BGDARK\n",
+		mean_lit / 100, mean_lit % 100, n_lit, n_black, area, n_bgdark);
+
+	check(n_lit + n_black == area,
+		"the scrim over a still leaves two values and no third one: the game, and black");
+	check(n_lit == area / 2, "half of each, which is what a 50% checkerboard is");
+	check(n_bgdark == 0, "and no COL_BGDARK anywhere in it - that colour was the floor");
+	check(mean_lit == 4750, "so the mean is half of 95");
+
+	/*
+	  Legibility, which is the half of this that wins if the two ever disagree: whatever the
+	  game is doing, the background behind a panel is no brighter than it was before this
+	  change. 5583 is the pair it replaces - 79 of dimmed white alternating with COL_BGDARK,
+	  whose own three channels mean 32.67.
+	*/
+	check(mean_lit < 5583, "and no brighter than the pair it replaces, so no text reads worse");
+
+	/* ----------------------------------------------- black: the reported symptom --- */
+
+	ig_menu_reopen(0xff000000u);
+	press(KEY_GRAVE, 20);
+	check(chome_screen_id() == S_SORT, "a panel screen over a game that is drawing black");
+	dump("dim-2-panel-over-black");
+
+	int mean_dark = box_mean_x100(bx0, by0, bx1, by1);
+	n_bgdark = box_pixels(bx0, by0, bx1, by1, COL_BGDARK);
+
+	printf("  black capture: panel mean %d.%02d, %d COL_BGDARK, %d black of %d\n",
+		mean_dark / 100, mean_dark % 100, n_bgdark,
+		box_pixels(bx0, by0, bx1, by1, COL_BLACK), area);
+
+	check(box_pixels(bx0, by0, bx1, by1, COL_BLACK) == area,
+		"a black scene reads as black rather than as a lift to flat grey");
+	check(n_bgdark == 0, "which is the two luma values, 0 and 31, gone from the frame");
+	check(mean_dark == 0, "a mean of nothing, where the pair before it meant 16.3");
+
+	/* -------------------------------- and a dark scene that is not actually black --- */
+
+	/*
+	  The difference between a floor and a dim, as one number. 32 through 6/16 is 12, halved
+	  by the checkerboard is 6; the same 32 used to come out at 10 alternating with the floor's
+	  33, a mean of 21.3 that sat a third of the way up the whole range the picture had. What
+	  is on screen now is proportional to what the game drew, which is what makes a dark scene
+	  a dark scene instead of the same grey a black one gave.
+	*/
+	ig_menu_reopen(0xff202020u);
+	press(KEY_GRAVE, 20);
+	check(chome_screen_id() == S_SORT, "and over a dark scene that is not black");
+
+	int mean_dim = box_mean_x100(bx0, by0, bx1, by1);
+	printf("  grey 32 capture: panel mean %d.%02d\n", mean_dim / 100, mean_dim % 100);
+
+	check(mean_dim == 600, "a dark scene is dimmed in proportion, not raised to a floor");
+	check(mean_dim > 0 && mean_dim < mean_lit,
+		"so it is between black and bright rather than indistinguishable from black");
+
+	/* ------------------------------------- and the scrim is unchanged without a still --- */
+
+	/*
+	  The other side of the condition, which is most of the front-end: with no still under it
+	  the scrim is COL_BGDARK exactly as it always was. That colour is the shelf's own bottom
+	  band, and dimming the grid towards it is what it is for - there is nothing under
+	  COL_BGDARK there to be floored.
+	*/
+	if (chome_ingame_active()) press(KEY_MENU, 14);
+	frame(6);
+	harness_set_grab_flat(0);
+	unlink("/tmp/classicui_current");
+	harness_set_menu_core(1);
+	chome_leave();
+	press(KEY_MENU, 20);
+	frame(12);
+	check(!chome_ingame_active(), "out of the game, on the shelf");
+
+	press(KEY_GRAVE, 20);
+	check(chome_screen_id() == S_SORT, "with the same panel open over the grid instead");
+	dump("dim-3-panel-no-still");
+
+	int grid_bgdark = box_pixels(bx0, by0, bx1, by1, COL_BGDARK);
+	printf("  no still: %d COL_BGDARK of %d in the same box\n", grid_bgdark, area);
+	check(grid_bgdark == area / 2,
+		"the scrim over the front-end's own background is COL_BGDARK, unchanged");
+
+	press(KEY_ESC, 12);
+
+	/*
+	  Exactly as assert_ingame_still() leaves things, canvas included: the section after it
+	  reads a box scaled to the canvas and expects the 720p one.
+	*/
+	cfg.classicui_profile = (uint8_t)was_prof;
 	harness_set_fb(1280, 720);
 	gfx_shutdown();
 	theme_update(1280, 720, 1);
@@ -9836,6 +10416,10 @@ int main()
 	// Directly after it, and before anything moves the canvas: it leaves exactly the state
 	// that one does, and it is about the size the dialog gives the disc at 720p.
 	assert_disc_hires();
+	// Directly after it, because it walks the canvas about and puts it back the way that one
+	// does: the same dialog measured at every profile, which is where the panel's own size is
+	// pinned rather than the disc's.
+	assert_disc_dialog_size();
 	// And after that one, which leaves the drive empty and the flag off: this needs both
 	// back, and it launches a disc of its own on the way out.
 	assert_disc_shelf_slots();
@@ -9870,6 +10454,10 @@ int main()
 	// Directly after it: it needs the same running disc and the same consumed session read,
 	// and it is about what that section's own screen does and does not show of the game.
 	assert_ingame_still();
+	// And directly after that one, because it is the other half of the same question: that
+	// section asks whether the still is on screen at all, this one asks how much of it the two
+	// dims leave. It leaves the canvas exactly as that one does.
+	assert_ingame_dim();
 	// And after that one, for the third time for the same reason: this section opens the
 	// in-game menu too, to reach the one state where "a core owns the drive" can be seen
 	// from a host test. Everything else in it would run anywhere.
