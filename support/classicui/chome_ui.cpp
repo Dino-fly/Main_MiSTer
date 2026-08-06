@@ -1182,10 +1182,27 @@ static void draw_shelf(const chome_profile *p)
 
 /* ------------------------------------------------------------ the chrome -- */
 
+/*
+  Is this frame drawn over a still of the paused game?
+
+  Asked in two places and therefore written once. draw_background() blits the still, and
+  compose() has to dim what is on top of it - and the second is only right when the first
+  actually happened, because the two want different scrims. A scrim chosen for a photograph,
+  laid over the front-end's own grid instead, would be the wrong dim on the wrong thing.
+
+  The size test is part of the question and not paranoia: ig_bg is allocated at the canvas
+  size and chome_handle() can resize the canvas under an open menu without rebuilding it, in
+  which case there is no still on this frame at all. draw_background() says so out loud.
+*/
+static int ig_still_shown(const chome_profile *p)
+{
+	return ig_active && ig_bg && ig_bg_w == p->w && ig_bg_h == p->h;
+}
+
 static void draw_background(const chome_profile *p)
 {
 	// Paused inside a game, the menu sits over a still of it.
-	if (ig_active && ig_bg && ig_bg_w == p->w && ig_bg_h == p->h)
+	if (ig_still_shown(p))
 	{
 		gfx_blit(ig_bg, p->w, p->h, 0, 0, p->w, p->h);
 		gfx_fill(0, p->h - p->h * 24 / 100, p->w, p->h * 24 / 100, COL_BGDARK);
@@ -4701,6 +4718,22 @@ static void disc_open_screen()
 /* ------------------------------------------------------------- the layout --- */
 
 /*
+  What the disc is for, as two numbers, because the whole layout hangs off them.
+
+  Measured on Dinofly's own set with a real scanned label in the dialog: at 32 px across the
+  label is a featureless blob, at 64 it reads as artwork but the title on it is illegible,
+  and at about 144 the title becomes readable. So 144 is the size at which the disc is doing
+  the job the dialog exists for, and below it the dialog has nothing better to spend the
+  canvas on than making the disc as large as the canvas allows.
+
+  288 - twice that, and 9 of gfx_disc's cells - is the ceiling. Past it a bigger disc buys
+  no legibility at all and costs real work: cells are what a rotated scan is cached against
+  (see disc_rot), so every extra cell is resampling on every angle the disc turns through.
+*/
+#define DISC_DLG_READABLE  144
+#define DISC_DLG_MAX_CELLS 9
+
+/*
   The dialog's geometry, computed in one place because the drawing and the rectangle the
   spin repaint replays under a clip both depend on it, and a second copy of this
   arithmetic would drift the first time the panel was resized. See disc_note_rect().
@@ -4745,14 +4778,8 @@ static void disc_layout_for(const chome_profile *p, const disc_dlg *d, disc_layo
 		+ 8 * s;                              // and the panel's bottom margin
 
 	/*
-	  The panel is given the screen, less a margin, and the disc is given what is left of
-	  it - which is the opposite way round from how this started.
-
-	  It used to be as wide as its widest line, on the grounds that stretching it to the
-	  inset left half of it empty. That was true of a panel whose disc was two fifths of
-	  the canvas high and whose text was one short line. It is not true now: Dinofly asked
-	  for nearly the full width, and the disc grows to fill whatever that gives, so there
-	  is no empty half left to look like a mistake.
+	  The room the dialog has: the canvas less a margin either side, from the top margin
+	  down to the button legend.
 
 	  The bottom is the point of the exercise. It stops clear of the button legend rather
 	  than reaching for the centre of the screen, because the two used to end up a single
@@ -4760,7 +4787,9 @@ static void disc_layout_for(const chome_profile *p, const disc_dlg *d, disc_layo
 	  and a dialog touching the prompts reads as one crowded thing instead of two.
 
 	  Top and bottom margins are therefore NOT equal, which is why this cannot be centred
-	  and why draw_panel_at() exists.
+	  on the canvas and why draw_panel_at() exists. What the panel does with the room is
+	  two decisions further down: how big the disc is, and whether the panel fills the
+	  width or is only as wide as its own longest line.
 	*/
 	int left = p->inset;
 	int top = p->safe_y + 4 * s;
@@ -4776,40 +4805,80 @@ static void disc_layout_for(const chome_profile *p, const disc_dlg *d, disc_layo
 	  cell size is an integer division and anything between two multiples renders as the
 	  lower one with a fractional grid. Cells are also what a rotated scan is cached
 	  against, so this is the number that decides how much work a turn costs.
+	*/
+	int side = 12 * s;                        // the margin either side of the widest line
 
-	  Two fifths of the canvas height to start with - 288px at 720p, 224 at 960x540, 192 at
-	  480p and 96 at 240p, against 224, 160, 160 and 64 for the column layout this replaced -
-	  then walked down until the panel fits both ways. A clipped button is worse than a
-	  smaller disc, which is the same order the old layout gave way in.
+	/*
+	  Two fifths of the canvas height - 288 px at 720p, 224 at 960x540, 192 at 480p and 96
+	  at 240p, against 224, 160, 160 and 64 for the column layout this replaced.
+
+	  That is the figure this dialog was designed at, and it drifted: the disc was changed
+	  to start from the height the *panel* had been handed instead, which on a big canvas is
+	  most of the screen. At 720p the band above the legend is 652 lines, so the disc took
+	  480 of them and the panel came out 1216x644 of a 1280x720 display - and at 1920x1080
+	  the same sum gives a disc of 800. Nothing needs a 480 px disc, let alone an 800 px one.
+	  Dinofly: "they probably should not have an immense dialog covering most of the screen at
+	  high res". So the fraction of the canvas is what decides again, and the panel is sized
+	  from the disc rather than the other way round.
+
+	  DISC_DLG_MAX_CELLS is what stops the same drift arriving from above instead: two fifths
+	  of 1080 lines is 432 px, which is past the point where a scan is fully readable and is
+	  only more resampling per turn. It bites at 720 lines and higher, so 720p lands exactly
+	  on the cap.
 
 	  Rounded to the nearest whole cell rather than truncated, and 960x540 is the reason:
 	  two fifths of 540 is 6.75 cells, truncating took it to 6, and the disc came out a
 	  sixth smaller than the canvas had room for.
 	*/
-	int side = 12 * s;                        // the margin either side of the widest line
-
-	/*
-	  Start from the height the panel is actually being given rather than from a fraction
-	  of the canvas, then walk down until it fits both ways. Rounded to the nearest whole
-	  cell for the reason above: 960x540 lost a sixth of its disc to truncation.
-	*/
-	int cell = ((maxh - chrome) + 16) / 32;
+	int cell = (2 * p->h / 5 + 16) / 32;
+	if (cell > DISC_DLG_MAX_CELLS) cell = DISC_DLG_MAX_CELLS;
 	if (cell < 1) cell = 1;
 
+	// Then walked down until the panel fits both ways, on a canvas that cannot afford even
+	// that. A clipped button is worse than a smaller disc, which is the same order the old
+	// layout gave way in.
 	while (cell > 1 && (chrome + 32 * cell > maxh || 32 * cell + 2 * side > maxw)) cell--;
 
 	L->r = 16 * cell;
 	L->ph = chrome + 32 * cell;
 
 	/*
-	  The full width it was given, and never less. The content is still measured, but only
-	  to refuse a width that could not hold it - which cannot happen once the panel is the
-	  screen less a margin, and is kept because it is what stops a long line being clipped
-	  silently if the margins are ever widened. Sizing to the title alone once made
-	  "Super Nintendo (not yet)" come out as "Super Nintendo (n>" on the one disc whose
-	  whole point is that line; gfx_clip() still cuts either line when even this will not
-	  hold it.
+	  And now the width, which is one decision: does the panel fill what it was given, or is
+	  it only as wide as its own longest line?
+
+	  Both answers have been right. It started as the widest line plus a margin, on the
+	  grounds that stretching it to the inset left half of it empty. Then Dinofly asked for
+	  nearly the full width, because at 240p there is no room for a disc big enough to show a
+	  real scanned label and a large plate is the best that canvas can do. Neither is a
+	  principle; the 240p compromise simply stopped being a compromise and became the rule at
+	  every resolution, which is what made the panel immense.
+
+	  So the disc decides, since the disc is what the width was ever for. Below
+	  DISC_DLG_READABLE it is not yet doing its job - 96 px at 240p, a label there is a blob -
+	  and the panel spends everything it has, which is what that canvas gets today and what it
+	  keeps. At or past it the disc reads on its own, and a panel stretched to the inset is
+	  1216 px of flat grey with a 288 px disc floating in the middle of it. The switch falls at
+	  a canvas of 360 lines, two fifths of which is the readable diameter.
+
+	  Read off the canvas rather than off the profile deliberately. `lo` forced onto a 720p
+	  screen from the Display panel is a large canvas with large text, and it should get the
+	  large-canvas dialog; a 15 kHz TV canvas arriving unhalved as 640x240 is the opposite
+	  case and has to keep the 240p layout, which it does because its height is 240 whatever
+	  its width says - see theme_update() on square units.
+
+	  The lines are measured either way, and that is what stops a long name being clipped
+	  silently: sizing to the disc alone once made "Super Nintendo (not yet)" come out as
+	  "Super Nintendo (n>" on the one disc whose whole point is that line. gfx_clip() still
+	  cuts either line when even the full width will not hold it.
+
+	  Which does mean a disc with a very long name gets a wide dialog - a forty-character title
+	  at 720p comes to 1008 of the 1216 it may have. That is deliberate and it is not what was
+	  wrong before: the width is being *used* by the longest thing the screen has to say, rather
+	  than spent on grey either side of a title that needed a third of it. The height, which is
+	  most of what made the old panel immense, is bounded by the disc whatever the name is.
 	*/
+	int fill = (32 * cell < DISC_DLG_READABLE);
+
 	int content = 32 * cell;
 	if (btnrow > content) content = btnrow;
 
@@ -4820,11 +4889,25 @@ static void disc_layout_for(const chome_profile *p, const disc_dlg *d, disc_layo
 	if (tw > content) content = tw;
 
 	L->pw = content + 2 * side;
-	if (L->pw < maxw) L->pw = maxw;         // fill the width Dinofly asked for
+	if (fill && L->pw < maxw) L->pw = maxw;
 	if (L->pw > maxw) L->pw = maxw;
 
 	L->px = (p->w - L->pw) / 2;             // centred horizontally, which the margins are
-	L->py = top;                            // but pinned at the top, so the bottom clears
+
+	/*
+	  Vertically it sits in the middle of the band it was given - between the top margin and
+	  the legend - and not in the middle of the canvas, which is the same reason the width
+	  cannot be centred: the legend owns the bottom and the two margins are different
+	  distances.
+
+	  A panel that fills the band is pinned at the top instead. That is the 240p case, where
+	  the panel is nine rows short of the band and centring it would move it four rows down
+	  for no reason; pinning it is what keeps that canvas pixel for pixel what it was. The
+	  clamp is for a canvas so short that even one cell of disc does not fit, where the
+	  centring arithmetic would otherwise push the panel up into the overscan margin.
+	*/
+	L->py = fill ? top : top + (maxh - L->ph) / 2;
+	if (L->py < top) L->py = top;
 }
 
 /* -------------------------------------------------------------- the scan --- */
@@ -6744,7 +6827,10 @@ static void compose()
 		screen == SCR_POWER || screen == SCR_INI || screen == SCR_PADTEST ||
 		screen == SCR_SET || screen == SCR_CORE || screen == SCR_DISC ||
 		screen == SCR_COVERS);
-	if (overlay) gfx_scrim(0, 0, p->w, p->h, COL_BGDARK, 2);
+	// Black over a still of the game and COL_BGDARK over the front-end's own background, for
+	// the reason spelled out at ig_build_background(): over a photograph this colour is a
+	// floor and not a dim, and it was flattening every dark scene to grey.
+	if (overlay) gfx_scrim(0, 0, p->w, p->h, ig_still_shown(p) ? COL_BLACK : COL_BGDARK, 2);
 
 	draw_suspend(p);
 	draw_legend(p);
@@ -9268,7 +9354,42 @@ static const uint32_t *ig_live_ref(int w, int h)
 	return buf;
 }
 
-// Capture scaled to the canvas and dimmed, built once when the menu opens.
+/*
+  Capture scaled to the canvas and dimmed, built once when the menu opens.
+
+  How much of the paused game shows behind a menu, settled here because this is where the
+  arithmetic that decides it lives.
+
+  There are two treatments and there always were: this dim, and the checkerboard scrim
+  compose() lays over the whole canvas on every panel screen. They do not compose the way
+  two dims should. A checkerboard replaces half the pixels with its colour outright, so with
+  COL_BGDARK it is a *floor* rather than a dim - luma 31 where the game was darker than
+  that, luma 31 averaged in where it was brighter. Measured over a paused PlayStation core on
+  the device: outside the dialog the framebuffer held exactly two values, 0 and 31, because
+  the game was mid-fade and every pixel of it was below the floor. A dark scene came out flat
+  grey-black and a bright one - Destruction Derby's title screen, which did show - merely
+  dimmed. That is not the capture failing; it is the two treatments fighting.
+
+  So the scrim over a still is black, which multiplies instead of flooring: half the pixels
+  to zero keeps every ratio in the picture and leaves black black. It stays COL_BGDARK over
+  the front-end's own grid background, where nothing is darker than COL_BGDARK anyway and the
+  colour is the point - the shelf's bottom band is the same one.
+
+  And the dim moves 5/16 -> 6/16 to pay for the difference, measured on white:
+
+      treatment                     panel screen (scrim)     shelf (no scrim)
+      5/16 then COL_BGDARK          79 and 29, mean 54       79
+      6/16 then black               95 and 0,  mean 48       95
+
+  Nothing behind a panel is therefore brighter than it was - 48 against 54, so no text over it
+  reads worse than it does today - while the range the picture has to work in goes from 15..54
+  to 0..48 and a dark scene is dark rather than lifted. The shelf-over-a-game screen, which
+  has no scrim, is the one thing that gets brighter: 95 against 79 on white, and the text over
+  it there is drawn with COL_SHADOW behind it.
+
+  A pixel value is not a brightness the eye judges, so both halves of that table are asserted
+  in assert_ingame_dim() rather than looked at.
+*/
 static void ig_build_background(const chome_profile *p)
 {
 	free(ig_bg);
@@ -9302,10 +9423,12 @@ static void ig_build_background(const chome_profile *p)
 		for (int x = 0; x < fw; x++)
 		{
 			uint32_t c = srow[(x * ig_shot_w) / fw];
-			// Dim to about a third: the game stays recognisable, the menu readable.
-			uint32_t r = ((c >> 16) & 0xff) * 5 / 16;
-			uint32_t g = ((c >> 8) & 0xff) * 5 / 16;
-			uint32_t b = (c & 0xff) * 5 / 16;
+			// Dim to three eighths: the game stays recognisable, the menu readable. Kept in
+			// sixteenths because the scrim halves this again on a panel screen, and the pair
+			// of numbers in the table above is what was actually chosen.
+			uint32_t r = ((c >> 16) & 0xff) * 6 / 16;
+			uint32_t g = ((c >> 8) & 0xff) * 6 / 16;
+			uint32_t b = (c & 0xff) * 6 / 16;
 			drow[x] = 0xff000000u | (r << 16) | (g << 8) | b;
 		}
 	}
