@@ -4280,6 +4280,25 @@ static void disc_dlg_get(disc_dlg *d)
 		disc_shelf_bind(d);
 		d->susp = disc_shelf_susp();
 	}
+
+	/*
+	  And ask for the disc's own artwork, which is the one thing on this screen nothing else
+	  would ever set in motion.
+
+	  Here rather than in draw_disc() because a draw should not start a network request, and
+	  here rather than at the launch because the dialog is where the picture is wanted. It is
+	  safe to call on every pass: disc_art_request() answers from the file when it already
+	  has one, refuses outright unless ss_enabled() and classicui_artfetch are both on, and
+	  tries at most once per key per session so a disc the database has never heard of is not
+	  asked for again on the next frame.
+
+	  This call is why it exists. The fetch and the drawing were written either side of
+	  disc_art_path() - one writes that file, the other reads it through art_thumb() - and
+	  both were complete and correct while nobody asked for anything, so the dialog quietly
+	  drew the fallback disc for ever. A seam named by a path does not say who knocks.
+	*/
+	if (d->key[0]) disc_art_request(d->key, lib_sys(d->sysidx) ? lib_sys(d->sysidx)->id : 0,
+		d->title[0] ? d->title : d->key);
 }
 
 /*
