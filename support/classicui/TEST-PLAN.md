@@ -50,6 +50,43 @@ from the front-end, absent with `classicui=0`.
 | A3.1 | Launch a game **through the shelf**, not by loading a core | The game | Does it roll, tear, or lose sync at any point? |
 | A3.2 | Same game, `classicui=0`, launched from the stock menu | The game | Does it roll? |
 
+### A3b. The second report of that class, on S-Video
+
+A different user, same class, and this one adds colour loss:
+
+> scrambled b/w mess with rolling image on my crt with svideo output, looks perfectly
+> fine on hdmi, tried changing to hd, sd, lo modes but it was still messed up
+
+Read `README.md`, "Analog video", before running this: the colour loss is settled from
+the FPGA source and needs no test, and two of the four things below are settled from the
+firmware. What is *not* settled is which of them this user is actually in, and whether
+the sync is right once the 31 kHz trap is out of the way. **The order matters — A3b.1
+answers the question the whole report turns on.**
+
+You need the CRT on S-Video for this one, and `vga_mode=svideo`, `composite_sync=1`.
+
+| Step | I do | You look at | Report |
+|---|---|---|---|
+| A3b.1 | Nothing. **You** unplug HDMI entirely, cold boot, open the front-end | The CRT | Is there a picture at all — steady, rolling, or blank? This is the whole question: with HDMI in, the front-end refuses the analog output by design and the CRT shows the core. |
+| A3b.2 | Same, HDMI plugged back in | The CRT | Confirm it goes back to showing the *core* rather than this menu, and that `classicui_profile` 1/2/3 changes nothing on it. Expected, not a fault. |
+| A3b.3 | HDMI out again. `forced_scandoubler=1`, reboot | The CRT | With this firmware the front-end should still be a 15 kHz picture — the takeover now ignores that setting on an encoded output. **Does the menu hold sync?** The games will be scandoubled and unwatchable; that part is upstream and expected. |
+| A3b.4 | HDMI out, `forced_scandoubler=0`, `menu_pal=0` then `1` | The CRT | Which one holds sync on your set? If `0` rolls and `1` does not, that is the first report's rolling explained. |
+| A3b.5 | HDMI out, front-end open | The CRT | **Is it black and white?** Expected — say so plainly so it is on record from a pair of eyes and not only from the Verilog. Then start a game: does the *game* have colour? |
+| A3b.6 | Open **Options ▸ Best Settings** | The panel | Under **Analog video**, which lines are there? Should be `Black and white on S-Video/CVBS` and, with `menu_pal=0`, `60Hz out: try menu_pal=1 for PAL`. Are they legible at 240p, and does the panel still fit? |
+
+### A3c. The canvas shape, on the two paths that stretch it
+
+The overlapping-buttons half of the same report. The harness proves the arithmetic at
+640x240 and renders it (`test/out/tv640-*.png`), but only a television shows whether the
+result is the right *shape* once the mode stretches it back over a 4:3 screen.
+
+| Step | I do | You look at | Report |
+|---|---|---|---|
+| A3c.1 | `vga_scaler=1` with a 15 kHz `video_mode`, reboot, open the front-end | The CRT | Are the cards roughly square-ish rather than tall and thin? Does anything overlap the button legend at the bottom? |
+| A3c.2 | Same, open the suspend strip on a game with save states | The strip | Do the three tiles fit inside the panel and clear the legend? |
+| A3c.3 | `direct_video=1`, reboot, open the front-end | The CRT | Same two questions. This path stretches the canvas the same way and was never tested. |
+| A3c.4 | Either path, read the log | `grep "ClassicUI: profile" /tmp/debug.txt` | It should say `canvas 640x240 (half-width pixels)`. If it says 640x240 with no note, the shape test did not fire and the rest of this is meaningless. |
+
 ### A4. PSX: a state saves but will not load
 
 Still unresolved. The log says the load is issued and the freeze release is correctly

@@ -28,17 +28,49 @@ void theme_update(int w, int h, int force)
 	if (w == P.w && h == P.h && P.name && force == last_force) return;
 	last_force = force;
 
+	/*
+	  Are the canvas pixels square?
+
+	  Nothing MiSTer outputs is wider than 16:9, so a canvas at least twice as wide as
+	  it is tall is not a wide screen - it is a 15 kHz TV canvas that arrived unhalved.
+	  video_fb_config() hands the front-end 320x240 while it holds the analog output
+	  itself, because a 15 kHz mode has pixels twice as tall as they are wide; but that
+	  halving is conditional on the takeover, and with vga_scaler=1 or direct_video
+	  there is no takeover, so the full 640x240 (or 640x288, with menu_pal=1) canvas
+	  comes through instead.
+
+	  That is the bug behind "the interface was smushed together with the buttons
+	  overlapping" on a CRT with vga_scaler=1. At 640x240 the width alone put the
+	  layout on the SD profile, and SD sizes a card at a quarter of the width - 160 px,
+	  which through the 228x167 ratio is 117 lines, enlarged to 152 for the selected
+	  one. On a 240-line canvas that is more than the whole shelf band, so both clamps
+	  below saturated and the position line ended up two pixels *below* the button
+	  legend, drawn over it.
+
+	  So the shape of the surface is worked out first, and everything derived from a
+	  ratio - the profile itself, the text scales, the card, the slot tiles, the margin
+	  spent on lines - is measured in square units rather than in canvas pixels. At
+	  640x240 that reproduces the 240p layout exactly, twice as wide, which is what the
+	  screen shows anyway. The one thing it cannot fix is the 8x8 ROM font: the scale is
+	  a single integer, so on a stretched canvas the glyphs come out half as wide as
+	  they are tall. Thin text that fits beats correctly-shaped text drawn off the
+	  bottom of the picture, and this canvas is not one the front-end ever asks for.
+	*/
+	int px = (w >= h * 2) ? 2 : 1;
+	int ew = w / px;                  // the width in square units
+
 	int id;
 	if (force == 1) id = PROF_HD;
 	else if (force == 2) id = PROF_SD;
 	else if (force == 3) id = PROF_LO;
-	else if (w >= 900) id = PROF_HD;
-	else if (w >= 480) id = PROF_SD;
+	else if (ew >= 900) id = PROF_HD;
+	else if (ew >= 480) id = PROF_SD;
 	else id = PROF_LO;
 
 	P.id = id;
 	P.w = w;
 	P.h = h;
+	P.px = px;
 
 	switch (id)
 	{
@@ -48,9 +80,9 @@ void theme_update(int w, int h, int force)
 	}
 
 	// Text scales. Integer only: the ROM font is never resampled.
-	if (w >= 900)      { P.ts_title = 3; P.ts_ui = 2; P.ts_tiny = 2; }
-	else if (w >= 480) { P.ts_title = 2; P.ts_ui = 1; P.ts_tiny = 1; }
-	else               { P.ts_title = 1; P.ts_ui = 1; P.ts_tiny = 1; }
+	if (ew >= 900)      { P.ts_title = 3; P.ts_ui = 2; P.ts_tiny = 2; }
+	else if (ew >= 480) { P.ts_title = 2; P.ts_ui = 1; P.ts_tiny = 1; }
+	else                { P.ts_title = 1; P.ts_ui = 1; P.ts_tiny = 1; }
 
 	/*
 	  Overscan. An analog canvas means a TV, and a TV keeps a few percent of every
@@ -77,7 +109,7 @@ void theme_update(int w, int h, int force)
 	*/
 	double cf = (id == PROF_HD) ? 0.178 : (id == PROF_SD) ? 0.250 : 0.2625;
 	P.card_w = pct(w, cf);
-	P.card_h = (P.card_w * 167) / 228;
+	P.card_h = (P.card_w * 167) / (228 * px);
 	P.gap = pct(w, (id == PROF_HD) ? 0.019 : 0.022);
 
 	double sel = (id == PROF_HD) ? 1.35 : (id == PROF_SD) ? 1.30 : 1.25;
@@ -95,7 +127,17 @@ void theme_update(int w, int h, int force)
 	P.y_shelf  = pct(h, 0.722);
 	P.y_pips   = pct(h, 0.753);
 	P.y_pos    = pct(h, 0.808);
-	P.y_legend = h - (P.inset > P.safe_y ? P.inset : P.safe_y) - 8 * P.ts_ui;
+
+	/*
+	  The margin under whatever hangs off the bottom edge. The inset is a fraction of
+	  the width, so on a stretched canvas spending it on lines spends twice as many as
+	  the same fraction of the height would - which at 640x240 took 24 lines out of a
+	  240-line picture. Converted back to square units first. At px == 1 this is
+	  exactly the max() that has always been here.
+	*/
+	int vmargin = P.inset / px;
+	if (vmargin < P.safe_y) vmargin = P.safe_y;
+	P.y_legend = h - vmargin - 8 * P.ts_ui;
 
 	/*
 	  Keep the shelf clear of the title block on short canvases.
@@ -151,11 +193,11 @@ void theme_update(int w, int h, int force)
 	int room_h = (P.y_legend - 8 * P.ts_ui) - (strip_top + P.thumb_y) - (5 + 8 * P.ts_tiny);
 
 	P.thumb_w = room_w / CHOME_STRIP_SLOTS;
-	P.thumb_h = (P.thumb_w * 3) / 4;
+	P.thumb_h = (P.thumb_w * 3) / (4 * px);
 	if (P.thumb_h > room_h)
 	{
 		P.thumb_h = room_h;
-		P.thumb_w = (P.thumb_h * 4) / 3;
+		P.thumb_w = (P.thumb_h * 4 * px) / 3;
 	}
 
 	// No profile is this cramped, but the metrics have to stay drawable on any
@@ -167,8 +209,9 @@ void theme_update(int w, int h, int force)
 	P.panel_h = pct(h, (id == PROF_LO) ? 0.62 : 0.56);
 	P.row_h = 12 * P.ts_ui;
 
-	printf("ClassicUI: profile %s, canvas %dx%d, card %dx%d, pitch %d, text %dx/%dx\n",
-		P.name, P.w, P.h, P.card_w, P.card_h, P.pitch, P.ts_title, P.ts_ui);
+	printf("ClassicUI: profile %s, canvas %dx%d%s, card %dx%d, pitch %d, text %dx/%dx\n",
+		P.name, P.w, P.h, (px > 1) ? " (half-width pixels)" : "",
+		P.card_w, P.card_h, P.pitch, P.ts_title, P.ts_ui);
 	printf("ClassicUI: strip %d tall at y=%d, slot tile %dx%d, margin %dx%d\n",
 		P.strip_h, P.h - P.safe_y - P.strip_h, P.thumb_w, P.thumb_h, P.safe_x, P.safe_y);
 }

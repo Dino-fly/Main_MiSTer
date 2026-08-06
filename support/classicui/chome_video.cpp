@@ -8,6 +8,7 @@
 
 #include "chome_video.h"
 #include "chome_lib.h"
+#include "../../cfg.h"
 #include "../../file_io.h"
 #include "../../video.h"
 
@@ -668,6 +669,103 @@ void vp_apply_pending()
 
 	printf("ClassicUI: applying video look %s\n", path);
 	video_loadPreset(path, true);
+}
+
+/* -------------------------------------------------- the analog output ----- */
+
+/*
+  Where the front-end's framebuffer actually comes out, and what that costs. All of it
+  is settled by three ini keys and by whether an HDMI sink is attached; none of it is
+  measurable from here, so this is written from what the firmware and sys_top.v do.
+
+  The framebuffer is composited into the *scaler* output. Four ways it reaches a
+  television, and they are not equivalent:
+
+    vga_scaler=1      the analog port carries the scaler output permanently.
+    direct_video=1    video_fb_enable() calls set_vga_fb() when the framebuffer goes
+                      up (video.cpp), so the analog port carries it in the TV mode
+                      direct_video already runs.
+    neither, no HDMI  video_menu_fb_analog() takes the port for as long as the
+                      front-end holds the screen, in a 240p or 288p TV mode.
+    neither, HDMI on  it does not reach the analog port at all. That is deliberate -
+                      taking the port would drag the HDMI display down to 240p with
+                      it - and it is why one reporter saw the stock menu correctly on
+                      a CRT and this front-end not at all, with hd/sd/lo making no
+                      difference: the layout was never on that wire.
+
+  In the first three the colour goes. sys_top.v instantiates yc_out - the S-Video and
+  composite encoder - on the direct core-video path only, and the analog pins select
+  the scaler path whenever vga_fb or vga_scaler is set:
+
+    wire vgas_en = vga_fb | vga_scaler;
+    assign VGA_R = ... vgas_en ? vgas_o[23:18] : vga_o[23:18];
+
+  where vga_o is the leg carrying `yc_en ? yc_o : vga_o_t` and vgas_o is not. The
+  external-encoder subcarrier is gated with `& ~vgas_en` in the same file, so
+  vga_mode=subcarrier is dead there too. It is worse than a missing burst: yc_out
+  packs chroma into R and luma into G (`dout = {C, Y, 8'd0}`), so on the scaler path
+  the set's chroma input is fed a plain red channel and its luma input a plain green
+  one. Black and white at best. Nothing on the HPS side can change it - the wire is
+  not there - and set_yc_mode() is unreachable during the takeover anyway, because
+  video_mode_adjust() returns early while it is held.
+
+  This is why the report says which of the four is happening rather than offering to
+  change it. See README.md, "Analog video", for the whole chain.
+*/
+int vp_analog_facts(int hdmi)
+{
+	int enc = (cfg.vga_mode_int >= 2);         // svideo, cvbs, or an external encoder
+	int dv  = cfg.direct_video ? 1 : 0;
+	int vs  = cfg.vga_scaler ? 1 : 0;
+	int seen = (hdmi != 0);                    // unknown counts as attached
+
+	/*
+	  Does anything suggest a television is connected? vga_mode=rgb with a display on
+	  HDMI is the shipped default and the commonest machine there is, and telling that
+	  player about composite encoders would be noise on every screen. A vga_mode the
+	  player chose, either routing key set, or no HDMI sink at all are each a reason to
+	  speak; nothing else is.
+	*/
+	if (cfg.vga_mode_int == 0 && !dv && !vs && seen) return 0;
+
+	int takeover = (!dv && !vs && !seen);
+	int on_analog = (dv || vs || takeover);
+
+	int f = 0;
+
+	/*
+	  tv_fb_mode() no longer scandoubles the takeover on an encoded output, but
+	  video_mode_load() still does for direct_video - and there it sets the mode every
+	  core runs in, which is not the front-end's to overrule. So it is named instead.
+	*/
+	if (enc && dv && cfg.forced_scandoubler) f |= VP_AN_31K;
+
+	if (!dv && !vs && seen) f |= VP_AN_NOTUS;
+
+	/*
+	  60 Hz whatever the set is: tv_fb_mode() chooses between the NTSC and PAL members
+	  of tvmodes[] on cfg.menu_pal alone, and menu_pal defaults to 0. A 50 Hz-only
+	  television rolls - which is exactly the earlier report, on component, where there
+	  was no colour to lose and the rolling was all that was left. Only for the
+	  takeover: under vga_scaler or direct_video the mode is the player's own.
+	*/
+	if (takeover && !cfg.menu_pal) f |= VP_AN_60HZ;
+
+	if (enc && on_analog) f |= VP_AN_MONO;
+
+	return f;
+}
+
+const char *vp_analog_text(int fact)
+{
+	switch (fact)
+	{
+	case VP_AN_31K:   return "forced_scandoubler=1: 31kHz out";
+	case VP_AN_NOTUS: return "HDMI on: the CRT shows the core";
+	case VP_AN_MONO:  return "Black and white on S-Video/CVBS";
+	case VP_AN_60HZ:  return "60Hz out: try menu_pal=1 for PAL";
+	}
+	return 0;
 }
 
 /* ------------------------------------------------------------- previews --- */

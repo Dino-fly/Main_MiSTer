@@ -153,6 +153,92 @@ Options that could leave you with no picture at all are deliberately not here.
 
 ---
 
+## On a CRT or a television
+
+This front-end draws into MiSTer's *framebuffer*, and the framebuffer is composited
+into the **scaler** output — the same output HDMI carries. Every other MiSTer screen
+you know, including the stock menu, is drawn by the core into the video signal itself.
+That difference is invisible on HDMI and it decides everything on an analog output, so
+this section is about where your picture goes and what survives the trip.
+
+**Options ▸ Best Settings** reads your setup and names whichever of these applies,
+under the heading **Analog video**. It never changes any of them: getting video
+routing wrong is a black screen with no way back except taking the card out, so these
+are yours to set with the file in front of you.
+
+### Which cable, and what it costs
+
+| `vga_mode` | Cable | Colour on this menu | Notes |
+|---|---|---|---|
+| `rgb` (default) | SCART RGB, VGA | **Yes** | RGB carries no subcarrier, so there is nothing to lose |
+| `ypbpr` | Component | **Yes** | Same: colour rides on separate wires |
+| `svideo` | S-Video | **No — black and white** | Confirmed from the FPGA source, see below |
+| `cvbs` | Composite | **No — black and white** | Same |
+| `subcarrier` | External encoder (CXA2075 and friends) | **No** | The subcarrier is switched off on this path |
+
+**Your games are not affected.** A running core sends its video down the direct path,
+where the colour encoder is, and it keeps its colour on every one of these. It is only
+this menu — and MiSTer's framebuffer terminal, and anything else drawn into the
+framebuffer — that comes out grey on S-Video and composite.
+
+This is not a setting anyone can change. MiSTer's S-Video/composite encoder
+(`yc_out` in a core's `sys/sys_top.v`) is wired onto the *core's* video path only; the
+analog output switches to the scaler path whenever the framebuffer needs to be shown
+there, and the encoder is not on that leg. Fixing it means changing the shared core
+framework and rebuilding every core, not the firmware. See
+[README.md](README.md#analog-video) for the exact lines.
+
+### Getting the menu onto the CRT at all
+
+| Your setup | Where this menu appears |
+|---|---|
+| HDMI only | HDMI. Nothing to think about. |
+| Analog only (`vga_scaler=0`, `direct_video=0`), **no HDMI lead** | The front-end takes the analog output for as long as it is open, in a 240p TV mode, and hands it back to the game. This is the intended path. |
+| Analog **and** HDMI at once, `vga_scaler=0` | **HDMI only.** The CRT keeps showing the core. |
+| `vga_scaler=1` | The analog output carries the scaler permanently, so this menu is on it — in whatever `video_mode` you configured, which is usually not a TV mode. |
+| `direct_video=1` | On it, in the TV mode `direct_video` already runs. |
+
+The third row is the one that surprises people. With a display on HDMI the front-end
+deliberately leaves the analog output alone: taking it would drag the HDMI display down
+to a 240p television mode as well, and a CRT beside an HDMI screen is an ordinary
+setup that must not lose its picture because a menu wanted the other socket. So on that
+setup the CRT shows the running core and nothing else, and changing
+`classicui_profile` cannot alter that — the layout is not on that wire. **Unplug the
+HDMI lead** if you want this menu on the television.
+
+### The settings that decide it
+
+None of these are written by this front-end. Set them yourself, in `[MiSTer]`.
+
+| Key | For a CRT / television |
+|---|---|
+| `vga_mode` | `rgb` for SCART or VGA, `ypbpr` for component, `svideo` or `cvbs` for a TV's own inputs. Colour on this menu only on the first two. |
+| `composite_sync` | `1` for anything that is not a VGA monitor. |
+| `forced_scandoubler` | **`0`.** `1` asks for a 31 kHz signal, which a television cannot lock to at all — a scrambled, rolling picture. |
+| `vga_scaler` | `0` normally. `1` puts the scaler on the analog socket permanently; it makes this menu visible even with HDMI attached, at the cost of the colour and of needing a `video_mode` a CRT can accept. |
+| `direct_video` | `1` only for a VGA-to-HDMI converter or a DAC. It sends raw core timing out and turns the scaler off, so filters, shadow masks and the Display screen all stop applying. |
+| `menu_pal` | `1` if your set is 50 Hz only. This chooses between the 240p60 and 288p50 modes the front-end takes the analog output in, and it defaults to `0`, so a PAL-only television gets 60 Hz and rolls. |
+| `vsync_adjust` | `0` or `1` is safe. It has nothing to do with this menu — the mode is pinned while the front-end holds the screen — but `2` retimes the output on every mode change, which some sets dislike. |
+| `video_mode`, `video_mode_pal`, `video_mode_ntsc` | Only read when `direct_video=0`. They set the **scaler's** output mode, which is what `vga_scaler=1` puts on the analog socket, so with `vga_scaler=1` this has to be a mode a CRT accepts. With `vga_scaler=0` they do not affect this menu, because the front-end sets its own TV mode while it is open. |
+
+### Known good and known bad
+
+Marked **confirmed** where it has been run on hardware, **from the source** where it
+follows from the firmware and the FPGA framework but nobody has photographed it.
+
+| Combination | Result |
+|---|---|
+| SCART RGB, `vga_mode=rgb`, `composite_sync=1`, no HDMI | **Good, confirmed.** This is what the photographs in this guide were taken on. |
+| HDMI only | **Good, confirmed.** |
+| Component, `vga_mode=ypbpr`, no HDMI, `menu_pal=0`, 50 Hz set | **Bad, reported:** rolling picture. Colour is fine. Try `menu_pal=1`. *(From the source: the front-end's TV mode is chosen on `menu_pal` alone.)* |
+| S-Video or composite, no HDMI | **Colour is gone, from the source.** Sync should be correct; if it also rolls, see the `menu_pal` row above. |
+| S-Video or composite **with** `forced_scandoubler=1` | **Bad:** a 31 kHz signal on a 15 kHz input. Set it to `0`. *(The front-end now ignores `forced_scandoubler` when it takes the analog output itself, so this only still bites under `direct_video=1`.)* |
+| Anything analog **plus** an HDMI lead, `vga_scaler=0` | **This menu is not on the CRT at all.** By design; unplug HDMI. |
+| `vga_scaler=1` with a 15 kHz `video_mode` | **Picture yes, colour no, from the source.** The layout is correct as of this version; earlier ones drew it for the wrong canvas shape. |
+| `vga_scaler=1` with an HDMI `video_mode` (720p, 1080p) | **Bad:** nothing a television can display. |
+
+---
+
 ## Controllers
 
 ![Controllers](img/controllers.png)
@@ -396,6 +482,29 @@ grep ClassicUI /tmp/debug.txt
 - **A disc shows a serial instead of a name** — that serial is not in the table. Add
   the one line yourself, or build a fresh table; see
   [The disc title table](#the-disc-title-table).
+- **Scrambled black and white with a rolling image on a CRT, and fine on HDMI** —
+  four different faults look like this, and [On a CRT or a
+  television](#on-a-crt-or-a-television) has the whole picture. In order of how often
+  they are it:
+  1. **`forced_scandoubler=1`.** That asks for a 31 kHz signal. A television is a
+     15 kHz device and cannot lock to one, so what you get is a rolling mess whatever
+     else is right. Set it to `0`. (This firmware now ignores it while the front-end
+     has the analog output, so if you are still seeing it, `direct_video=1` is on.)
+  2. **An HDMI lead plugged in at the same time.** Then this menu is on HDMI only and
+     your CRT is showing the *core*, which is why changing `classicui_profile` between
+     HD, SD and 240p makes no difference at all — the layout was never on that wire.
+     Unplug HDMI.
+  3. **`menu_pal=0` on a 50 Hz-only set.** The front-end takes the analog output at
+     60 Hz unless told otherwise. Set `menu_pal=1`.
+  4. **`vsync_adjust=2`.** Not this menu's doing — the mode is pinned while it is open
+     — but worth ruling out with `0`.
+- **The colours vanish when the menu opens, and come back in the game** — expected on
+  `vga_mode=svideo`, `cvbs` or `subcarrier`, and not fixable in the firmware. See
+  [Which cable, and what it costs](#which-cable-and-what-it-costs).
+- **Buttons and text overlapping each other on a CRT** — fixed in this version. It was
+  the layout being computed for a 640x240 canvas as though its pixels were square,
+  which happened with `vga_scaler=1` or `direct_video=1`. If you still see it, the log
+  line `ClassicUI: profile ... canvas ...` says which canvas arrived.
 
 ---
 
