@@ -3,8 +3,9 @@
 
   Metrics are derived proportionally from the canvas so that any framebuffer size
   works, not just the three nominal ones. The canvas is output resolution divided
-  by cfg.fb_size (video.cpp:3481), so a 1080p output with fb_size=2 lands on a
-  960x540 canvas and must still lay out correctly.
+  by cfg.fb_size (video_fb_config() in video.cpp), so a 1080p output with fb_size=2
+  lands on a 960x540 canvas and must still lay out correctly. A 15 kHz TV canvas is
+  not square-pixelled at all - see px below.
 
   The four accent colours are the PAL pad's face buttons and are only ever used
   to encode state: green saved, yellow locked, blue focus, red destructive.
@@ -36,6 +37,20 @@ struct chome_profile
 
 	int w, h;
 	int inset;
+
+	/*
+	  How many canvas pixels wide one square unit is: 1 on a canvas whose pixels are
+	  square, 2 on a 15 kHz TV canvas whose pixels are twice as tall as they are wide.
+
+	  The scaler stretches the framebuffer across the mode's whole active area, so a
+	  640x240 canvas and a 320x240 one fill exactly the same screen - the 640 one just
+	  has half-width pixels. video_fb_config() normally hands the front-end the 320 form,
+	  but only while it holds the analog output itself; with vga_scaler=1 or
+	  direct_video the halving does not happen and a 640x240 (or 640x288) canvas
+	  arrives instead. Every shape that has to keep a ratio divides by this, and the
+	  profile is chosen from w / px rather than from w - see theme_update().
+	*/
+	int px;
 
 	/*
 	  Overscan margin. A TV does not show the whole picture - a few percent of every

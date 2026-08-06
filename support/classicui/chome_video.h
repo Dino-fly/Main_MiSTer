@@ -99,4 +99,50 @@ int  vp_preset_path(int i, char *out, int len);
 */
 const uint32_t *vp_preview(int i, int w, int h, const uint32_t *ref);
 
+/* --------------------------------------------------- the analog output ----- */
+
+/*
+  What the analog output is doing to this front-end, as facts rather than as settings.
+
+  Two users have now reported the same class of fault: a rolling picture on a CRT over
+  component, and "scrambled b/w mess with rolling image on my crt with svideo output,
+  looks perfectly fine on hdmi". In both, the front-end's own layout profiles changed
+  nothing, because the fault is upstream of layout - it is where the framebuffer is
+  routed and in what mode, and none of that is visible anywhere in the UI. A player on
+  a television gets a broken picture and no hint that video routing exists.
+
+  So this reports, and only reports. The three settings that decide it - vga_scaler,
+  direct_video, vga_mode - are deliberately absent from Best Settings (chome_ini.cpp)
+  and from the editable options (chome_opt.h) because getting one wrong is a black set
+  with no way back, and that judgement stands: the audience for this front-end cannot
+  edit an ini from a shell. Naming what is happening costs nothing and can black out
+  nothing. Where the fix is a one-word ini change the line says which word, and the
+  player makes it on a machine they can still see.
+
+  Every predicate is read from cfg and from whether an HDMI sink is attached, so the
+  whole thing is a pure function of the configuration - see vp_analog_facts().
+*/
+#define VP_AN_31K    0x01   // an encoded analog output driven at 31 kHz: no lock on a TV
+#define VP_AN_NOTUS  0x02   // the front-end is not on the analog output at all
+#define VP_AN_MONO   0x04   // it is, but through the scaler, where there is no encoder
+#define VP_AN_60HZ   0x08   // and at 60 Hz, whatever the set expects
+
+#define VP_AN_LAST   VP_AN_60HZ
+#define VP_AN_MAX    3      // how many can hold at once, with one to spare
+
+/*
+  The set that holds, worst first by bit order. 0 when there is nothing to say, which
+  is the answer for the ordinary HDMI machine: the report only speaks when MiSTer.ini
+  says the analog port is in use for something, or when no HDMI sink is attached at
+  all - a default vga_mode with a display on HDMI tells us nothing about a television.
+
+  hdmi is video_hdmi_connected(): 1 attached, 0 not, -1 unknown. Unknown counts as
+  attached, the same cautious answer video.cpp gives it.
+*/
+int vp_analog_facts(int hdmi);
+
+// One line for one fact, 32 characters at most - that is what the panel fits at 240p.
+// 0 for anything that is not a single VP_AN_* bit.
+const char *vp_analog_text(int fact);
+
 #endif

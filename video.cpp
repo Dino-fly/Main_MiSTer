@@ -3351,11 +3351,38 @@ static void fb_write_module_params()
 	});
 }
 
-// same mode selection as the direct_video path in video_mode_load()
-static void tv_fb_mode(vmode_custom_t *v)
+/*
+  same mode selection as the direct_video path in video_mode_load(), with one
+  exception.
+
+  forced_scandoubler picks the 31 kHz member of each pair - 480p or 576p - which is
+  right for a VGA monitor and impossible for a television. S-Video and composite are
+  15 kHz standards by definition: there is no such thing as a 480p composite signal,
+  so on those outputs a scandoubled mode is not a worse picture, it is no picture at
+  all. That is the "scrambled black and white mess with a rolling image" a user
+  reported on a CRT over S-Video, where the same firmware was fine on HDMI - the mode
+  itself was outside anything the set could lock to, which is also why the front-end's
+  own hd/sd/lo layouts changed nothing about it.
+
+  cfg.cpp already draws this line for vga_mode=subcarrier, where it clears
+  forced_scandoubler outright. It cannot do the same for svideo and cvbs without
+  changing what every *core* puts out on that port, which is not this bug's to
+  decide - so the rule is applied here, to the mode the framebuffer is shown in, and
+  only there.
+
+  Both callers want the same thing: fb_terminal_vga wants the Linux console readable
+  on the same television, and a 31 kHz console on a composite input is just as blank.
+*/
+static int tv_fb_mode_index()
 {
 	int mode = cfg.menu_pal ? 2 : 0;
-	if (cfg.forced_scandoubler) mode++;
+	if (cfg.forced_scandoubler && cfg.vga_mode_int < 2) mode++;
+	return mode;
+}
+
+static void tv_fb_mode(vmode_custom_t *v)
+{
+	int mode = tv_fb_mode_index();
 
 	memset(v, 0, sizeof(*v));
 	v->item[0] = mode;
@@ -3706,8 +3733,14 @@ static void video_fb_config()
 
 	  The Linux console on buffer 0 keeps the full width: it sizes its own character
 	  cells and is already right at 640.
+
+	  Asked of the same helper the mode came from rather than of forced_scandoubler
+	  directly. The two answers used to be the same thing; they stopped being when
+	  tv_fb_mode() started ignoring forced_scandoubler on an S-Video or composite
+	  output, and a halved width on a 480p mode - or a full one on a 240p mode - hands
+	  the front-end a canvas of the wrong shape either way.
 	*/
-	if (vga_fb_takeover && fb_num && !cfg.forced_scandoubler) fb_width /= 2;
+	if (vga_fb_takeover && fb_num && !(tv_fb_mode_index() & 1)) fb_width /= 2;
 
 	brd_x = cfg.vscale_border / fb_scale_x;
 	brd_y = cfg.vscale_border / fb_scale_y;

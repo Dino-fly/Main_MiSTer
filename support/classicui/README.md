@@ -315,6 +315,162 @@ HDMI setup. Showing a CRT-filter picker to somebody already looking at a real CR
 would be daft. The menu bar re-spaces itself over the remaining entries, and
 **Menu Layout moved to Options** so it stays reachable.
 
+## Analog video
+
+Two reports of the same class, a month apart, and neither reproducible here:
+
+> rolling picture on a 240p CRT via component after launching a core from the
+> front-end, absent with `classicui=0`
+
+> how i can change output resolution? i have scrambled b/w mess with rolling image on
+> my crt with svideo output?, looks perfectly fine on hdmi tried changing to hd, sd, lo
+> modes but it was still messed up, i've managed to get some correct ish output when
+> enabled vga_scaler to 1 but colors disappeared and interface was smushed together
+> with buttons overlaping etc... maybe my mister ini is causing some problems, it works
+> and outputs correctly in standard mister menu or zaparoo frontend
+
+The first was chased as a `vsync_adjust` problem and that theory was wrong, or at
+least incomplete: `vsync_adjust` cannot make a picture lose its colour. The second
+report is more informative than it looks, because **`classicui_profile` changing
+nothing is the diagnostic**. That option only chooses a layout, so if hd, sd and 240p
+all look identical, whatever is wrong is upstream of layout — in the routing or the
+mode — and possibly on a wire the layout never reached.
+
+### Where the framebuffer actually goes
+
+Everything downstream begins with one asymmetry. The stock menu, and every core, is
+drawn **into the video signal**: the `osd` module composites the OSD onto the core's
+own video on both output paths. This front-end is drawn **into the HPS framebuffer**,
+which the FPGA *scaler* composites — and the scaler output is what HDMI carries.
+
+So on an analog output there are four states, and they are not equivalent:
+
+| Configuration | Where this front-end appears |
+|---|---|
+| `vga_scaler=1` | On the analog port permanently, through the scaler leg. |
+| `direct_video=1` | On it: `video_fb_enable()` calls `set_vga_fb(enable)` when the framebuffer goes up (`video.cpp`), in the TV mode `direct_video` already runs. |
+| neither, no HDMI sink | On it, for as long as the front-end holds the screen: `video_menu_fb_analog()` → `vga_fb_takeover_update()`, in a 240p or 288p mode from `tvmodes[]`. |
+| neither, HDMI attached | **Not on it at all.** `want_ui` in `vga_fb_takeover_update()` is `&& !hdmi_present()`. |
+
+That last row is deliberate — taking the port would drag the HDMI display down to a
+240p television mode with it, and HDMI beside a CRT on `vga_scaler=0` is an ordinary
+setup. It is also the complete explanation for "changing to hd, sd, lo modes but it was
+still messed up": on a machine with both leads in, the CRT is showing the *core*, and
+no layout of ours was ever on that signal.
+
+### Why the colour cannot come back
+
+In the three states where the front-end *is* on the analog port, it is there through
+the scaler leg — and the S-Video/composite encoder is not on that leg. From a core's
+`sys/sys_top.v`:
+
+```verilog
+yc_out yc_out (.clk(clk_vid), ..., .din(vga_data_osd), .dout(yc_o));   // core path only
+
+assign {vga_o, ...} = ~yc_en ? {vga_o_t, ...} : {yc_o, ...};           // encoder lives here
+wire vgas_en = vga_fb | vga_scaler;
+assign VGA_R = av_dis ? 6'bZZZZZZ : vgas_en ? vgas_o[23:18] : ... vga_o[23:18];
+assign VGA_G = ...                            vgas_o[15:10] : ... vga_o[15:10];
+```
+
+`vgas_o` comes from a bare `vga_out` on the scaler clock. There is no `yc_out` in front
+of it and the external-encoder subcarrier is gated off in the same file
+(`~(subcarrier & csync_en & ... & ~vgas_en)`), so `vga_mode=subcarrier` is dead there
+too. It is worse than a missing colour burst: `yc_out` packs chroma into R and luma
+into G (`assign dout = {C, Y, 8'd0}`), so with `vgas_en` the set's chroma input is fed
+a plain red channel and its luma input a plain green one. **Black and white at best.**
+
+Two further nails, either of which would be enough on its own:
+
+- `set_yc_mode()` is reached only from `video_mode_adjust()`, which returns early while
+  `vga_fb_takeover` is held (`video.cpp`). The encoder's `PHASE_INC` is therefore never
+  recomputed for the TV mode — it still holds whatever the last core needed.
+- `PHASE_INC` is derived from the *core's* measured video clock, and the takeover runs
+  the analog port on the scaler clock at 12.587 MHz instead.
+
+**This is not fixable from the HPS side.** The wire is not there. It needs `yc_out`
+moved onto — or duplicated on — the `vgas` leg in `sys/sys_top.v`, with a `PHASE_INC`
+computed for the takeover's own mode; that is a shared-framework change, so **every
+core would have to be rebuilt against it** before the colour appeared in any of them.
+Recorded here rather than attempted.
+
+### What was fixed
+
+**The takeover no longer scandoubles an encoded output.** `tv_fb_mode()` used to add
+`cfg.forced_scandoubler` to the `tvmodes[]` index unconditionally, which selects the
+31 kHz member of the pair — 480p or 576p. S-Video and composite are 15 kHz standards;
+there is no such thing as a 480p composite signal, so on those outputs that is not a
+worse picture but no picture, which is the best single candidate for "scrambled b/w
+mess with rolling image". `cfg.cpp` already draws exactly this line for
+`vga_mode=subcarrier`, where it clears `forced_scandoubler` outright; it cannot do the
+same for `svideo`/`cvbs` without changing what every *core* puts out, so the rule is
+applied to the framebuffer's mode only. `video_fb_config()`'s width halving now asks
+the same helper (`tv_fb_mode_index()`) rather than asking `forced_scandoubler` a second
+time, because the two answers have stopped being the same thing.
+
+`video_mode_load()` still scandoubles under `direct_video`, and that is left alone: it
+sets the mode every core runs in, which is not this front-end's to overrule. It is
+reported instead.
+
+**The canvas shape.** A 15 kHz TV mode is 640x240 (or 640x288 with `menu_pal=1`) and
+the scaler stretches the framebuffer across the whole of its active area, so those
+pixels are twice as tall as they are wide. `video_fb_config()` halves the width before
+handing it over — but only `if (vga_fb_takeover && fb_num && ...)`, and there is no
+takeover under `vga_scaler=1` or `direct_video`, so the full 640-wide canvas arrives.
+
+`theme_update()` was choosing the profile from the raw width, so 640 picked **SD**. SD
+makes a card a quarter of the width — 160 px — which through the 228:167 ratio is 117
+lines, 152 for the selected one, on a canvas 240 lines tall. Both vertical clamps
+saturated and `y_pos` came out at 198 against a `y_legend` of 194: the position line
+drawn *over* the button legend. That is "interface was smushed together with buttons
+overlaping".
+
+`chome_profile` now carries `px`, the number of canvas pixels in one square unit: 1
+normally, 2 when the canvas is at least twice as wide as it is tall (nothing MiSTer
+outputs is wider than 16:9, so that test cannot fire on a real wide canvas). The
+profile and the text scales are chosen from `w / px`, and every shape that has to keep
+a ratio — the card, the slot tiles, the bottom margin, which was a fraction of the
+*width* being spent on lines — divides by it. At 640x240 the result is the 240p layout
+exactly, twice as wide, which is what the screen shows anyway; the harness asserts that
+metric by metric against the 320x240 one. The single thing it cannot fix is the 8x8 ROM
+font, whose scale is one integer, so on a stretched canvas the glyphs come out half as
+wide as they are tall. Thin text that fits beats correctly-shaped text drawn off the
+bottom of the picture.
+
+### What the setup screen says
+
+`vp_analog_facts()` in `chome_video.cpp` is a pure function of `cfg` and of
+`video_hdmi_connected()`, and **Options ▸ Best Settings** draws whatever it returns
+under an **Analog video** heading. Report only, no write:
+
+| Fact | Line | Fires when |
+|---|---|---|
+| `VP_AN_31K` | `forced_scandoubler=1: 31kHz out` | an encoded output under `direct_video` with `forced_scandoubler` — the one case the firmware fix does not cover. Drawn red; it means no picture. |
+| `VP_AN_NOTUS` | `HDMI on: the CRT shows the core` | `vga_scaler=0`, `direct_video=0`, HDMI attached. |
+| `VP_AN_MONO` | `Black and white on S-Video/CVBS` | `vga_mode` ≥ `svideo` and the front-end is on the analog port. |
+| `VP_AN_60HZ` | `60Hz out: try menu_pal=1 for PAL` | the takeover is what shows us and `menu_pal=0`. |
+
+Ordered worst first by bit value, at most three drawn, each line 33 characters or fewer
+because that is what the panel fits at 240p — measured in the harness, not assumed.
+
+It says nothing at all on the ordinary machine: an unset `vga_mode` with a display on
+HDMI tells us nothing about a television, so the report speaks only when `vga_mode` was
+chosen, or `vga_scaler`/`direct_video` is set, or no HDMI sink is attached.
+
+**Why nothing is offered to write.** `chome_ini.cpp` keeps `vga_scaler` and
+`direct_video` out of the Best Settings set, and `chome_opt.h` keeps that whole family
+out of the editable options, both because a wrong value there is a black set and a card
+that has to come out and go into a PC — and this audience cannot ssh in to undo it.
+That judgement is not overturned here. Detecting and explaining costs nothing and can
+black out nothing; writing a routing key can, and no amount of labelling makes a
+television that has gone dark navigable. Where the repair is one word the line names
+the word, and the player makes the edit on a machine they can still see.
+
+`menu_pal` was the one that argued for itself and was still refused: on
+`direct_video=0` it changes only the takeover's mode, so a wrong value costs the menu
+and not the games. But the way it goes wrong is a rolling menu — and the control for
+putting it back is inside the rolling menu. That is the no-way-back shape in miniature.
+
 ## Video looks
 
 Eighteen presets exist, but **the list is never shown in full**: the Display screen
@@ -1109,6 +1265,13 @@ no new table.
 
 ## Known rough edges
 
+- **No colour on S-Video or composite**, and none possible from the firmware: the
+  encoder is not on the output leg the framebuffer takes. Games keep theirs. See
+  [Analog video](#analog-video) for the RTL and for what an FPGA fix would cost.
+- **On a stretched 15 kHz canvas the text is half as wide as it is tall.** The ROM font
+  scales by one integer, so a canvas with non-square pixels has to choose between thin
+  glyphs and glyphs drawn off the bottom of the picture. Only arises under
+  `vga_scaler=1` or `direct_video`; the takeover hands over a square-pixel canvas.
 - During the first scan the shelf re-sorts each time a system finishes, so the
   selection can jump for a second or two.
 - The index caps at 6000 games and the browser at 512 entries per directory; both

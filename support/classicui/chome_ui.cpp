@@ -5230,6 +5230,38 @@ static void draw_power(const chome_profile *p)
 */
 #define INI_NOTE "A copy of the old file is kept, so this can be undone."
 
+/*
+  The analog block under the plan: what the video routing is doing to this front-end,
+  reported and never written. draw_ini() draws it on all three of its states - the
+  plan, the "nothing to change" one and the result - because the machine it is about
+  is most often the one with nothing to change, and that is the state where the player
+  who came here looking for an explanation would otherwise be told only that
+  everything is already set.
+
+  Returns the y below the block, or y unchanged when there is nothing to say.
+*/
+static int draw_ini_analog(panel_box b, int s, int avail, int y, const int *an, int nan)
+{
+	if (!nan) return y;
+
+	gfx_text(gfx_clip("Analog video", s, avail), b.x + 6 * s, y, s, COL_PANELLO, 0);
+	y += 9 * s;
+
+	for (int i = 0; i < nan; i++)
+	{
+		const char *t = vp_analog_text(an[i]);
+		if (!t) continue;
+
+		// Red only for the one that means no picture at all. The others describe a
+		// picture that is limited rather than broken, and a panel of red lines would
+		// make a working television look like a fault.
+		gfx_text(gfx_clip(t, s, avail), b.x + 14 * s, y + i * 11 * s, s,
+			(an[i] == VP_AN_31K) ? COL_RED : COL_INK, 0);
+	}
+
+	return y + nan * 11 * s;
+}
+
 static void draw_ini(const chome_profile *p)
 {
 	int s = p->ts_ui;
@@ -5255,12 +5287,26 @@ static void draw_ini(const chome_profile *p)
 		if (gfx_text_w(ini_list[i].want->outcome, s) + gfx_text_w(kv, s) + 8 * s > avail) stacked = 1;
 	}
 
+	/*
+	  What the analog output is doing, worst first. Read here rather than cached: HDMI
+	  can be unplugged while a panel is up, and the answer is three ini reads and one
+	  i2c byte behind video_hdmi_connected(), which caches for a second of its own.
+	*/
+	int an[VP_AN_MAX];
+	int nan = 0;
+	{
+		int facts = vp_analog_facts(video_hdmi_connected());
+		for (int bit = 1; bit <= VP_AN_LAST && nan < VP_AN_MAX; bit <<= 1)
+			if (facts & bit) an[nan++] = bit;
+	}
+
 	// Sized for its content, like Power, rather than taking the default panel.
 	int lines = done ? 3 : (ini_n ? ini_n * (stacked ? 2 : 1) : 1);
 	char note[4][64];
 	int nnote = done ? 0 : (ini_n ? wrap_text(INI_NOTE, avail / (8 * s), note, 3) : 0);
 
 	int h = (10 * s + 6) + 5 * s + lines * rowh + 6 * s + nnote * 9 * s + 6 * s + 12 * s;
+	if (nan) h += 6 * s + 9 * s + nan * rowh;
 	if (h > p->h - 2 * p->safe_y) h = p->h - 2 * p->safe_y;
 
 	panel_box b = draw_panel_ex(p, w, h, "Best Settings");
@@ -5293,6 +5339,7 @@ static void draw_ini(const chome_profile *p)
 				b.x + 6 * s, y + 2 * rowh, s, COL_PANELLO, 0);
 		}
 
+		draw_ini_analog(b, s, avail, y + 3 * rowh + 6 * s, an, nan);
 		btn_hint_c(b.x + b.w / 2, b.y + b.h - 11 * s, s, COL_INK, "Press", LBL_B, "to close");
 		return;
 	}
@@ -5301,6 +5348,7 @@ static void draw_ini(const chome_profile *p)
 	{
 		gfx_text_c(gfx_clip("Everything this menu wants is already set.", s, avail),
 			b.x + b.w / 2, y, s, COL_INK, 0);
+		draw_ini_analog(b, s, avail, y + rowh + 6 * s, an, nan);
 		btn_hint_c(b.x + b.w / 2, b.y + b.h - 11 * s, s, COL_INK, "Press", LBL_B, "to close");
 		return;
 	}
@@ -5328,6 +5376,8 @@ static void draw_ini(const chome_profile *p)
 	int ny = y + lines * rowh + 6 * s;
 	for (int i = 0; i < nnote; i++)
 		gfx_text_c(note[i], b.x + b.w / 2, ny + i * 9 * s, s, COL_PANELHI, 0);
+
+	draw_ini_analog(b, s, avail, ny + nnote * 9 * s + 6 * s, an, nan);
 
 	// The note stays put while arming so the panel does not resize under the player;
 	// only the line they are about to act on changes.

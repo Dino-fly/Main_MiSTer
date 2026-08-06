@@ -1187,9 +1187,14 @@ static void walk_profile(const char *tag, int profile, int w, int h)
 	snprintf(name, sizeof(name), "%s-6-menubar", tag);
 	dump(name);
 
-	// Display is not offered at 240p (tiles too small to judge a filter by), so
-	// capture the shortened bar there instead of a screen that does not exist.
-	if (profile == 3)
+	/*
+	  Display is not offered at 240p (tiles too small to judge a filter by), so capture
+	  the shortened bar there instead of a screen that does not exist. Asked of the
+	  resolved profile rather than of the forced value: a stretched 15 kHz canvas lands
+	  on 240p from `auto`, and pressing Enter on a bar that has no Display entry opens
+	  Options and files it under the wrong name.
+	*/
+	if (theme_get()->id == PROF_LO)
 	{
 		snprintf(name, sizeof(name), "%s-7-menubar-no-display", tag);
 		dump(name);
@@ -8872,6 +8877,259 @@ static void assert_overscan()
 	theme_update(1280, 720, 0);
 }
 
+/*
+  The canvas whose pixels are not square.
+
+  A 15 kHz TV mode is 640x240 (or 640x288 with menu_pal=1) and the scaler stretches the
+  framebuffer across the whole of it, so those pixels are twice as tall as they are
+  wide. video.cpp halves the width before handing it over - but only while the front-end
+  holds the analog output itself. With vga_scaler=1, or with direct_video, there is no
+  takeover and the full width arrives.
+
+  That is the second half of a user's report: "i managed to get some correct ish output
+  when enabled vga_scaler to 1 but colours disappeared and interface was smushed
+  together with buttons overlaping". The colour is not ours to fix (see
+  assert_analog_report()); the smushing was. At 640x240 the width alone chose the SD
+  profile, SD makes a card a quarter of the width, the 228x167 ratio turned 160 px into
+  117 lines, and the selected card's 152 lines did not fit in a 240-line canvas at all -
+  so both clamps in theme_update() saturated and the position line landed *below* the
+  button legend and was drawn over it.
+
+  Measured against the 240p layout rather than against constants: 320x240 is the shape
+  that has been on Dinofly's CRT since the beginning, and what the stretched canvas has to
+  produce is that same layout, twice as wide. Every vertical metric must match it
+  exactly; every horizontal one must be double, within the rounding two integer
+  divisions can differ by.
+*/
+static void assert_stretched_canvas()
+{
+	printf("\n== a stretched 15 kHz canvas ==\n");
+
+	cfg.classicui_profile = 0;
+	theme_invalidate();
+	theme_update(320, 240, 0);
+	const chome_profile lo = *theme_get();
+
+	theme_invalidate();
+	theme_update(640, 240, 0);
+	const chome_profile *p = theme_get();
+
+	printf("  320x240: px %d, %s, card %dx%d, y_pos %d, y_legend %d\n",
+		lo.px, lo.name, lo.card_w, lo.card_h, lo.y_pos, lo.y_legend);
+	printf("  640x240: px %d, %s, card %dx%d, y_pos %d, y_legend %d\n",
+		p->px, p->name, p->card_w, p->card_h, p->y_pos, p->y_legend);
+
+	check(lo.px == 1, "a 320x240 canvas has square pixels");
+	check(p->px == 2, "a 640x240 canvas is recognised as half-width pixels");
+	check(p->id == PROF_LO, "and takes the 240p profile, not the one its width suggests");
+
+	// The bug itself. Before the fix this was y_pos 198 against y_legend 194.
+	check(p->y_pos < p->y_legend, "the position line stays above the button legend");
+	check(p->y_pos + 8 * p->ts_ui <= p->y_legend - 6 * p->ts_ui,
+		"clear of the legend's own band, not merely above its text");
+
+	check(p->ts_title == lo.ts_title && p->ts_ui == lo.ts_ui && p->ts_tiny == lo.ts_tiny,
+		"the text scales are the 240p ones");
+	check(p->visible == lo.visible, "and the shelf shows the same number of cards");
+
+	check(p->card_h == lo.card_h && p->sel_h == lo.sel_h,
+		"a card is exactly as tall as it is at 240p");
+	check(p->card_w == lo.card_w * 2 && p->sel_w == lo.sel_w * 2,
+		"and exactly twice as wide, which is the same picture");
+
+	check(p->y_title == lo.y_title && p->y_meta == lo.y_meta && p->y_shelf == lo.y_shelf &&
+		p->y_pips == lo.y_pips && p->y_pos == lo.y_pos && p->y_legend == lo.y_legend,
+		"every band sits on the same line as it does at 240p");
+	check(p->bar_h == lo.bar_h && p->strip_h == lo.strip_h && p->row_h == lo.row_h &&
+		p->panel_h == lo.panel_h, "and every height that is not derived from a width");
+	check(p->thumb_h == lo.thumb_h, "the suspend tiles keep their 240p height");
+
+	// Two integer divisions can disagree by a pixel about half of an odd number.
+	check(abs(p->pitch - 2 * lo.pitch) <= 2, "the shelf pitch is doubled");
+	check(abs(p->inset - 2 * lo.inset) <= 2 && abs(p->gap - 2 * lo.gap) <= 2,
+		"so are the inset and the gap");
+	check(abs(p->thumb_w - 2 * lo.thumb_w) <= 2 && abs(p->panel_w - 2 * lo.panel_w) <= 2,
+		"and the tile and panel widths");
+
+	/*
+	  The PAL member of the pair, which is what menu_pal=1 gives, and which is wider
+	  relative to its height by less - so it is the one that would fall the wrong side of
+	  the test if the test were a fixed ratio.
+	*/
+	theme_invalidate();
+	theme_update(640, 288, 0);
+	check(theme_get()->px == 2 && theme_get()->id == PROF_LO,
+		"a 640x288 PAL canvas is stretched too");
+	check(theme_get()->y_pos < theme_get()->y_legend, "and lays out without a collision");
+
+	/*
+	  And the canvases that are not stretched, because the shape test must not fire on
+	  16:9. This is the regression guard for every layout that already worked: the four
+	  the profile walk uses, plus the two 15 kHz modes seen through the takeover, which
+	  arrive halved.
+	*/
+	{
+		static const struct { int w, h; const char *what; } square[] =
+		{
+			{ 1280, 720, "1280x720" },
+			{  960, 540, "960x540 (1080p at fb_size=2)" },
+			{  640, 480, "640x480" },
+			{  720, 480, "720x480" },
+			{  320, 240, "320x240 (a halved NTSC TV mode)" },
+			{  320, 288, "320x288 (a halved PAL TV mode)" },
+		};
+
+		int all = 1;
+		for (size_t i = 0; i < sizeof(square) / sizeof(square[0]); i++)
+		{
+			theme_invalidate();
+			theme_update(square[i].w, square[i].h, 0);
+			if (theme_get()->px != 1)
+			{
+				printf("  %s came out stretched\n", square[i].what);
+				all = 0;
+			}
+		}
+		check(all, "no canvas up to 16:9 is treated as stretched");
+	}
+
+	/*
+	  A forced profile still outranks the canvas - classicui_profile is there to be
+	  believed - but the surface is not a matter of opinion, so the shapes are corrected
+	  under it as well. This is the case the reporter was in when they tried hd, sd and
+	  lo and none of them changed anything.
+	*/
+	theme_invalidate();
+	theme_update(640, 240, 2);
+	check(theme_get()->id == PROF_SD, "classicui_profile=2 still forces SD on a TV canvas");
+	check(theme_get()->px == 2 && theme_get()->y_pos < theme_get()->y_legend,
+		"and the forced layout fits, where before it overlapped");
+
+	theme_invalidate();
+	theme_update(1280, 720, 0);
+}
+
+/*
+  What the front-end tells somebody on a television, and what it refuses to tell
+  everybody else.
+
+  vp_analog_facts() is a pure function of cfg and of whether an HDMI sink is attached,
+  so it is driven directly here rather than through the UI: what matters is which facts
+  a configuration produces, and the panel only draws whatever comes back.
+*/
+static void assert_analog_report()
+{
+	printf("\n== the analog video report ==\n");
+
+	const uint8_t was_dv = cfg.direct_video;
+	const uint8_t was_vs = cfg.vga_scaler;
+	const uint8_t was_fs = cfg.forced_scandoubler;
+	const uint8_t was_pal = cfg.menu_pal;
+	const char was_vm = cfg.vga_mode_int;
+
+	cfg.direct_video = 0;
+	cfg.vga_scaler = 0;
+	cfg.forced_scandoubler = 0;
+	cfg.menu_pal = 0;
+	cfg.vga_mode_int = 0;
+
+	// The ordinary machine: HDMI, nothing set about the analog port. Silence.
+	check(vp_analog_facts(1) == 0, "an HDMI machine on defaults is told nothing");
+	check(vp_analog_facts(-1) == 0, "and so is one whose HDMI state cannot be read");
+
+	/*
+	  No sink on HDMI is itself a reason to speak, even on a default vga_mode: the
+	  framebuffer is being put on the analog port, and if there is no television there
+	  either then nobody sees the report anyway.
+	*/
+	check(vp_analog_facts(0) == VP_AN_60HZ,
+		"with no HDMI sink the takeover's 60 Hz is named");
+	cfg.menu_pal = 1;
+	check(vp_analog_facts(0) == 0, "and menu_pal=1 answers that, so nothing is said");
+	cfg.menu_pal = 0;
+
+	// S-Video with a display on HDMI: the front-end is not on the CRT at all, which is
+	// the whole of what the player needs to know and the one thing nothing said before.
+	cfg.vga_mode_int = 2;
+	check(vp_analog_facts(1) == VP_AN_NOTUS,
+		"S-Video plus HDMI: the CRT is showing the core, not this menu");
+	check(!(vp_analog_facts(1) & VP_AN_MONO),
+		"and nothing about colour, because the menu is not on that wire");
+
+	// The same card with the HDMI lead pulled out: now it is, and now it is grey.
+	check(vp_analog_facts(0) == (VP_AN_MONO | VP_AN_60HZ),
+		"S-Video alone: black and white, at 60 Hz");
+
+	// Composite is the same wire as far as this is concerned.
+	cfg.vga_mode_int = 3;
+	check(vp_analog_facts(0) & VP_AN_MONO, "composite loses the colour the same way");
+
+	// An external encoder taking a subcarrier from the FPGA: sys_top gates that with
+	// ~vgas_en, so it goes the same way as the built-in one.
+	cfg.vga_mode_int = 4;
+	check(vp_analog_facts(0) & VP_AN_MONO, "so does an external encoder");
+
+	// Component carries no subcarrier, so there is no colour to lose - only the 60 Hz
+	// that the first report of this class was about.
+	cfg.vga_mode_int = 1;
+	check(vp_analog_facts(0) == VP_AN_60HZ, "component keeps its colour and is told so");
+
+	/*
+	  vga_scaler=1 routes the analog port to the scaler permanently, so there is no
+	  takeover and no TV mode of ours - the refresh is the player's own - but the colour
+	  is gone for exactly the same reason.
+	*/
+	cfg.vga_mode_int = 2;
+	cfg.vga_scaler = 1;
+	check(vp_analog_facts(1) == VP_AN_MONO,
+		"vga_scaler=1 is black and white on S-Video, HDMI or not");
+	check(vp_analog_facts(0) == VP_AN_MONO, "and says nothing about a refresh it did not set");
+	cfg.vga_scaler = 0;
+
+	/*
+	  direct_video puts the framebuffer on the analog port through the same scaler leg,
+	  and video_mode_load() still scandoubles it when forced_scandoubler is set - which
+	  on an S-Video output is a 31 kHz signal no television can lock to. tv_fb_mode()
+	  no longer does that to the takeover; this path is not the front-end's to change,
+	  so it is named.
+	*/
+	cfg.direct_video = 1;
+	check(vp_analog_facts(1) == VP_AN_MONO, "direct_video on S-Video: black and white");
+	cfg.forced_scandoubler = 1;
+	check(vp_analog_facts(1) == (VP_AN_31K | VP_AN_MONO),
+		"and with forced_scandoubler=1 the 31 kHz output is called out");
+
+	// The severe one has to come first, because the panel shows the first three.
+	check(VP_AN_31K < VP_AN_NOTUS && VP_AN_NOTUS < VP_AN_MONO && VP_AN_MONO < VP_AN_60HZ,
+		"the facts are ordered worst first");
+
+	// Nothing can produce more than the panel has room for.
+	check(VP_AN_MAX >= 3, "the panel has room for every set that can hold at once");
+
+	// Every bit has a line, and every line fits the 240p panel: 33 characters at
+	// ts_ui 1 with the inset the 240p profile uses. Measured, not assumed.
+	{
+		int all = 1;
+		for (int bit = 1; bit <= VP_AN_LAST; bit <<= 1)
+		{
+			const char *t = vp_analog_text(bit);
+			if (!t || !*t || strlen(t) > 33)
+			{
+				printf("  fact 0x%02x: %s\n", bit, t ? t : "(no line)");
+				all = 0;
+			}
+		}
+		check(all, "every fact has a line that fits a 240p panel");
+	}
+	check(!vp_analog_text(VP_AN_31K | VP_AN_MONO), "and a pair of bits is not a line");
+
+	cfg.direct_video = was_dv;
+	cfg.vga_scaler = was_vs;
+	cfg.forced_scandoubler = was_fs;
+	cfg.menu_pal = was_pal;
+	cfg.vga_mode_int = was_vm;
+}
+
 static void assert_input_labels()
 {
 	printf("\n== button prompts follow the device ==\n");
@@ -8974,6 +9232,15 @@ int main()
 	// Non-nominal canvas: 1080p output with fb_size=2.
 	walk_profile("auto960", 0, 960, 540);
 
+	/*
+	  And the stretched one: a 15 kHz TV mode that reached us unhalved, which is what
+	  vga_scaler=1 and direct_video both hand over. The metrics are checked in
+	  assert_stretched_canvas(); these are for the eyes, and they are twice as wide as
+	  they will look on the television - every pixel of them is half as wide as it is
+	  tall once the mode stretches it back over a 4:3 screen.
+	*/
+	walk_profile("tv640", 0, 640, 240);
+
 	walk_looks();
 	assert_launch();
 	// Before every other in-game section: the session record is read once per process,
@@ -9012,6 +9279,10 @@ int main()
 	assert_menu_repeat();
 	assert_input_labels();
 	assert_overscan();
+	// Both about the analog output, and both pure: they read cfg and the theme and put
+	// everything back, so they can sit anywhere the canvas is not mid-transition.
+	assert_stretched_canvas();
+	assert_analog_report();
 
 	// Display must vanish entirely when the scaler output is not what is on screen.
 	printf("\n== analog output ==\n");
@@ -10276,6 +10547,38 @@ int main()
 		dump("ini-6-plan-240p");
 		check(gfx_w() == 320, "the panel lays out on a 240p canvas");
 		check(ini_plan(path, plan, INI_WANT_MAX) == 4, "and shows the plan rather than acting");
+
+		/*
+		  The same panel with something to say about the analog output, on the canvas
+		  where saying it is hardest: four settings stacked over two lines each, the
+		  undo note wrapped over three, and the video block under all of it. This is
+		  the arrangement to look at - whether it fits is measured (the block is
+		  6 + 9 + 2*11 px on top of 160, against a 212 px cap at 240p), but whether it
+		  reads as a report rather than as a fifth setting is not.
+
+		  direct_video rather than an unplugged HDMI lead, so the stub does not resize
+		  the canvas underneath the capture. Same two facts either way.
+		*/
+		{
+			const uint8_t was_dv = cfg.direct_video;
+			const uint8_t was_fs = cfg.forced_scandoubler;
+			const char was_vm = cfg.vga_mode_int;
+
+			cfg.direct_video = 1;
+			cfg.forced_scandoubler = 1;
+			cfg.vga_mode_int = 2;                 // svideo
+
+			press(KEY_ESC, 10);                   // back to Options, still on this row
+			press(KEY_ENTER, 14);                 // and in again, now with the block
+			frame(8);
+			dump("ini-7-analog-240p");
+			check(vp_analog_facts(1) == (VP_AN_31K | VP_AN_MONO),
+				"the 240p panel is drawn with both video facts on it");
+
+			cfg.direct_video = was_dv;
+			cfg.forced_scandoubler = was_fs;
+			cfg.vga_mode_int = was_vm;
+		}
 
 		press(KEY_ESC, 10);
 		press(KEY_ESC, 10);
