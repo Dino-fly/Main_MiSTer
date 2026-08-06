@@ -192,6 +192,28 @@ void gfx_disc(int cx, int cy, int r, int step,
 */
 #define GFX_DISC_HOLE_PCT 15
 
+// Blend b over a by t/255, in a buffer rather than on screen. Opaque out: the buffers this
+// composes are blitted whole, not composited.
+uint32_t gfx_mix(uint32_t a, uint32_t b, int t);
+
+/*
+  How much of the pixel at squared distance `d2` from the centre falls inside radius `rad`,
+  both in whole pixels: 255 a pixel inside, 0 a pixel outside, a straight ramp between.
+
+  The shared answer to "how does a disc's edge fade out". Exported because two places have to
+  give the same one - gfx_disc_face() below, which draws the rings, and disc_rot() in
+  chome_ui.cpp, which masks a photograph into the same rings - and the point of both going
+  through one blit is that a scan landing must not change what kind of edge the dialog has.
+  The generated disc anti-aliased and the scan hard-edged is the same seam as before with the
+  two sides swapped, and the scan is the side Derek will actually be looking at.
+
+  Costed for the caller that runs per rotation angle rather than per size: the two easy
+  answers come from the squared distance and take no square root, so only the pixels a
+  boundary passes through pay for one. That is the circumference and not the area - about 3%
+  of the buffer with the four boundaries a masked scan has.
+*/
+int gfx_disc_cover(int rad, int d2);
+
 /*
   The same disc, resolved to the display instead of to a 32-cell grid: one dia*dia ARGB
   buffer, cached, for a caller that means to rotate and blit it.

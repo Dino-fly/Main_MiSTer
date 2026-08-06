@@ -676,8 +676,7 @@ static unsigned disc_isqrt(unsigned long long n)
 	return (unsigned)root;
 }
 
-// Blend b over a by t/255. Opaque out: these buffers are blitted, not composited.
-static uint32_t disc_mix(uint32_t a, uint32_t b, int t)
+uint32_t gfx_mix(uint32_t a, uint32_t b, int t)
 {
 	if (t <= 0) return a | 0xff000000u;
 	if (t >= 255) return b | 0xff000000u;
@@ -700,6 +699,12 @@ static uint32_t disc_mix(uint32_t a, uint32_t b, int t)
   here is the spindle hole at 240p - seven pixels of radius, so a fiftieth of a pixel, five
   levels out of 255 on a boundary between two greys. Every other boundary is looser than
   that by an order of magnitude.
+
+  This is the one ramp both discs are drawn with. The generated face calls it directly, from
+  8.8 radii it has anyway; a rotated scan calls it through gfx_disc_cover() below, which is
+  the same ramp reached from whole pixels. Shared and not merely alike, because the whole
+  point of the two going through one blit is that their edges cannot come out different in
+  kind - and two copies of a ramp is exactly how they would.
 */
 static int disc_cover(int rad, int d)
 {
@@ -707,6 +712,27 @@ static int disc_cover(int rad, int d)
 	if (t <= 0) return 0;
 	if (t >= 256) return 255;
 	return (t * 255) >> 8;
+}
+
+int gfx_disc_cover(int rad, int d2)
+{
+	if (rad < 1) return d2 ? 0 : 255;
+
+	/*
+	  The two easy answers first, from the squared distance, because they are nearly every
+	  pixel and a square root is the expensive thing here.
+
+	  That matters far more on this entry point than on the ramp above. gfx_disc_face() runs
+	  once per size and can afford a root per pixel; this one is called from the rotation,
+	  which runs once per *angle* - sixteen times a second - over a quarter of a million
+	  pixels at 720p. Only the pixels a boundary actually passes through pay, and those are
+	  the circumferences rather than the area: about 3% of the buffer, measured.
+	*/
+	int in = rad - 1, out = rad + 1;
+	if (d2 <= in * in) return 255;
+	if (d2 >= out * out) return 0;
+
+	return disc_cover(rad << 8, (int)disc_isqrt(((unsigned long long)d2) << 16));
 }
 
 static uint32_t *face_buf = 0;
@@ -829,8 +855,8 @@ const uint32_t *gfx_disc_face(int dia, const uint32_t *bands, int nbands,
 			  close to doing.
 			*/
 			uint32_t col = back;
-			col = disc_mix(col, edge, disc_cover(rr_edge, d));
-			col = disc_mix(col, rim,  disc_cover(rr_dark, d));
+			col = gfx_mix(col, edge, disc_cover(rr_edge, d));
+			col = gfx_mix(col, rim,  disc_cover(rr_dark, d));
 
 			if (d < rr_rim + 256)
 			{
@@ -844,12 +870,12 @@ const uint32_t *gfx_disc_face(int dia, const uint32_t *bands, int nbands,
 				int i = (a >> 14) % nbands;
 				int f = ((a & 16383) * 255) >> 14;
 
-				uint32_t band = disc_mix(bands[i], bands[(i + 1) % nbands], f);
+				uint32_t band = gfx_mix(bands[i], bands[(i + 1) % nbands], f);
 
-				col = disc_mix(col, band, disc_cover(rr_rim, d));
-				col = disc_mix(col, ring, disc_cover(rr_data, d));
-				col = disc_mix(col, edge, disc_cover(rr_ring, d));
-				col = disc_mix(col, hole, disc_cover(rr_hole, d));
+				col = gfx_mix(col, band, disc_cover(rr_rim, d));
+				col = gfx_mix(col, ring, disc_cover(rr_data, d));
+				col = gfx_mix(col, edge, disc_cover(rr_ring, d));
+				col = gfx_mix(col, hole, disc_cover(rr_hole, d));
 			}
 
 			dst[x] = col;
