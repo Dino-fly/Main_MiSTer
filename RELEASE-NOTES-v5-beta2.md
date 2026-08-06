@@ -4,8 +4,17 @@
 repainted the whole screen to move one card; both are fixed here. If you ran beta 1,
 replace it. If you want a quiet life, stay on v4.
 
-Everything is one file, as before: copy `MiSTer` to the root of the SD card. There is one
-optional second file — see *Disc titles*.
+**Installing.** The archive unzips to a folder called `SD-CARD-ROOT` whose contents mirror
+your card. Copy that folder's *contents* into the card root and let it merge:
+
+```
+SD-CARD-ROOT/
+  MiSTer                     replaces the firmware in the card root
+  classicui/disctitles.txt   the disc name table - a new file, replaces nothing
+```
+
+`MiSTer` is the only thing that overwrites anything, so back it up first — copy it beside
+itself as `MiSTer.backup`. That is your way back.
 
 ![The disc dialog](https://raw.githubusercontent.com/Dino-fly/Main_MiSTer/disc-shelf/support/classicui/docs/img/disc-dialog-art.png)
 ![Suspend points for a disc](https://raw.githubusercontent.com/Dino-fly/Main_MiSTer/disc-shelf/support/classicui/docs/img/disc-suspend-points.png)
@@ -188,6 +197,12 @@ Please include:
 
 ## If it goes wrong
 
-Keep your previous `MiSTer` binary and copy it back — the firmware is one file, so rolling
-back is one copy. Or set `classicui=0` in `MiSTer.ini` for the stock menu with this
-firmware.
+Copy your `MiSTer.backup` over `MiSTer` — that is the only file this release replaces, so
+rolling back is one copy. `classicui/disctitles.txt` can stay; nothing else reads it. Or
+set `classicui=0` in `MiSTer.ini` for the stock menu with this firmware.
+
+**If you use `update_all`, read this.** It will replace `MiSTer` with the official build
+and put ours in `.MiSTer.old`, silently reverting the front-end — the file is owned by the
+official distribution database and no third-party database is permitted to supply it. Until
+the installer in the next release handles this for you, after running `update_all` copy your
+kept binary back. Your `MiSTer.ini` is never touched by it.

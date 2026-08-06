@@ -300,7 +300,34 @@ to the pack, and so does everything if your daily quota runs out.
 
 ## Installing
 
-**You need:** a MiSTer with a working SD card, and the ability to copy one file to it.
+**From a release, which is what most people want.** The archive unzips to a folder called
+**`SD-CARD-ROOT`** whose contents mirror your card. Installing is copying that folder's
+*contents* into the card root and letting it merge — the folders line up with the ones
+already there, so nothing needs sorting by hand:
+
+```
+SD-CARD-ROOT/
+  MiSTer                     replaces the firmware in the card root
+  classicui/disctitles.txt   the disc name table - a new file, replaces nothing
+```
+
+and, if you took the build that also carries PSX controllers over SNAC:
+
+```
+  menu.rbf                   replaces the menu core
+  _Console/*.rbf             our core builds, named so they sit beside your own
+  _Computer/*.rbf            rather than overwrite them
+  _Arcade/cores/*.rbf
+  Scripts/                   optional clean-up for superseded duplicates
+```
+
+**Back up the files you are replacing first** — `MiSTer`, and `menu.rbf` if it is in the
+archive. Copy them beside themselves as `MiSTer.backup` and `menu.rbf.backup`. That is your
+way back, and it is one copy each.
+
+Then turn it on, at step 4 below.
+
+**Building it yourself** is the rest of this section.
 
 1. **Build the firmware.** From a checkout of this fork:
 
@@ -319,8 +346,7 @@ to the pack, and so does everything if your daily quota runs out.
    | `classic-ui` | you want the front-end |
    | `deploy-all` | you also want PSX controllers over SNAC in every core |
 
-3. **Copy it to the card.** The firmware is the single file `MiSTer` in the root of
-   the SD card. Keep the old one:
+3. **Copy it to the card**, as `MiSTer` in the card root. Keep the old one:
 
    ```
    cp /media/fat/MiSTer /media/fat/MiSTer.prev
