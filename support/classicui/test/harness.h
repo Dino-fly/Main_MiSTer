@@ -44,6 +44,27 @@ int harness_recent_calls();
 unsigned int harness_last_menu_key();
 void harness_swap_pad_faces();
 
+/*
+  Make screenshot_grab() refuse, the way it does on a core with no scaler output.
+
+  Not to test the refusal itself - the front-end already survives it - but to measure what
+  the still of the game contributes to a frame, by composing the same screen twice and
+  differencing. That is the only way to answer "is this screen showing the game or not"
+  without an eye on a television, and it is the question a black in-game background over a
+  physical disc turned out to hinge on.
+*/
+void harness_set_grab(int ok);
+
+/*
+  Make the grab hand back one flat colour instead of the drawn scene. 0 puts the scene back.
+
+  This is how "is the game on screen here" is answered by counting rather than by looking: a
+  colour nothing in the front-end draws goes in, and every pixel of it that comes out the
+  other end is a pixel of the still that survived the dim, the fit and everything drawn on
+  top. Zero of them is the black background this was written for.
+*/
+void harness_set_grab_flat(uint32_t argb);
+
 int harness_muted();
 int harness_mute_changes();
 void harness_set_muted(int v);
