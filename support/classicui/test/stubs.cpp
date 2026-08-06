@@ -212,6 +212,43 @@ unsigned long harness_fb_hash_box(int x0, int y0, int x1, int y1)
 	}
 	return h;
 }
+
+/*
+  The same, with a rectangle cut out of it.
+
+  For hashing something that holds a moving part. The disc in the dialog turns, and its angle
+  at any moment is not a function of the clock: disc_step() carries a phase and a smoothstep
+  ramp, so the angle depends on the whole history of advances before it. A hash over the disc
+  is therefore a hash over "how many frames every earlier section happened to run", and it
+  changes when an unrelated section is added - which is exactly what it did, and the pixels
+  that moved were the disc's 96x96 box and nothing else.
+
+  So cut the moving part out and hash what is meant to hold still. The disc's own size and
+  position are asserted separately, a few lines above, which is the part of it worth pinning.
+*/
+unsigned long harness_fb_hash_box_except(int x0, int y0, int x1, int y1,
+	int ex0, int ey0, int ex1, int ey1)
+{
+	const uint32_t *p = fb[presented];
+	if (!p) return 0;
+
+	if (y0 < 0) y0 = 0;
+	if (y1 > fbh) y1 = fbh;
+	if (x0 < 0) x0 = 0;
+	if (x1 > fbw) x1 = fbw;
+
+	unsigned long h = 1469598103934665603UL;
+	for (int y = y0; y < y1; y++)
+	{
+		for (int x = x0; x < x1; x++)
+		{
+			if (x >= ex0 && x < ex1 && y >= ey0 && y < ey1) continue;
+			h ^= p[(size_t)y * fbw + x];
+			h *= 1099511628211UL;
+		}
+	}
+	return h;
+}
 int harness_present_count() { return present_count; }
 
 uint32_t *video_menu_fb(int n) { return (n >= 1 && n <= 2) ? fb[n] : 0; }
