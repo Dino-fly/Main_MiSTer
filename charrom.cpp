@@ -174,12 +174,48 @@ unsigned char charfont[256][8] =
 
 static unsigned char tempfont[2048];
 
-void LoadFont(char* name)
+/*
+  The table above, as it was compiled in, kept so a loaded font can be undone.
+
+  LoadFont() overwrites charfont[] in place and the array is the only copy of the built-in
+  glyphs in the process, so before this existed the sole way back from a custom font was to
+  fix MiSTer.ini and reboot. That is acceptable for a key nobody edits twice; it is a trap
+  for a front-end that offers a font picker, where trying one and putting it back is the
+  first thing anybody does. 2KB of .bss buys the way back.
+
+  Taken on the first LoadFont() call rather than at startup because that is the only moment
+  it is both needed and provably still untouched - charfont[] is a static initialiser, so
+  until something calls this it *is* the built-in font, and FontRestoreBuiltin() has
+  nothing to do.
+*/
+static unsigned char builtinfont[256][8];
+static int builtin_kept = 0;
+
+void FontRestoreBuiltin()
 {
+	if (!builtin_kept) return;
+	memcpy(charfont, builtinfont, sizeof(charfont));
+}
+
+int LoadFont(char* name)
+{
+	if (!builtin_kept)
+	{
+		memcpy(builtinfont, charfont, sizeof(charfont));
+		builtin_kept = 1;
+	}
+
 	memset(tempfont, 0, sizeof(tempfont));
 
+	/*
+	  A file that will not load leaves charfont[] exactly as it was and says nothing, which
+	  is deliberate at boot - a bad font= is not worth refusing to start over - but it means
+	  a caller cannot tell "loaded" from "left alone" without being told. Hence the return
+	  value: the font picker needs to say "that file is gone, you are still on the old one"
+	  rather than drawing a screen of blanks.
+	*/
 	int sz = FileLoad(name, tempfont, sizeof(tempfont));
-	if (sz <= 0) return;
+	if (sz <= 0) return 0;
 
 	int ch = 32;
 	int start = 0;
@@ -214,4 +250,6 @@ void LoadFont(char* name)
 
 		ch++;
 	}
+
+	return 1;
 }

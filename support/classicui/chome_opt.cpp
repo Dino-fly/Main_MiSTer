@@ -48,31 +48,31 @@ static const opt_def opts[] =
 {
 	{ "vscale_mode", "Picture Size",
 	  "Whole pixels is sharpest; fit screen is biggest.",
-	  OG_PICTURE, OPT_LIST, 1, 0, 5, 1, 0, 0, 0, ch_size, NCH(ch_size), &cfg.vscale_mode, OW_GAME },
+	  OG_PICTURE, OPT_LIST, 1, 0, 5, 1, 0, 0, 0, ch_size, NCH(ch_size), &cfg.vscale_mode, 0, OW_GAME },
 
 	{ "video_brightness", "Brightness",
 	  "Brightness of the HDMI picture. 50 is neutral.",
-	  OG_PICTURE, OPT_NUMBER, 1, 0, 100, 5, 0, 50, 50, 0, 0, &cfg.video_brightness, OW_GAME },
+	  OG_PICTURE, OPT_NUMBER, 1, 0, 100, 5, 0, 50, 50, 0, 0, &cfg.video_brightness, 0, OW_GAME },
 
 	{ "video_contrast", "Contrast",
 	  "Contrast of the HDMI picture. 50 is neutral.",
-	  OG_PICTURE, OPT_NUMBER, 1, 0, 100, 5, 0, 50, 50, 0, 0, &cfg.video_contrast, OW_GAME },
+	  OG_PICTURE, OPT_NUMBER, 1, 0, 100, 5, 0, 50, 50, 0, 0, &cfg.video_contrast, 0, OW_GAME },
 
 	{ "video_saturation", "Colour",
 	  "How strong the colours are. 0 is black and white.",
-	  OG_PICTURE, OPT_NUMBER, 1, 0, 100, 5, 0, 100, 100, 0, 0, &cfg.video_saturation, OW_GAME },
+	  OG_PICTURE, OPT_NUMBER, 1, 0, 100, 5, 0, 100, 100, 0, 0, &cfg.video_saturation, 0, OW_GAME },
 
 	{ "hdmi_limited", "Black Level",
 	  "Try a TV range if blacks look grey on your set.",
-	  OG_PICTURE, OPT_LIST, 1, 0, 2, 1, 0, 0, 0, ch_black, NCH(ch_black), &cfg.hdmi_limited, OW_GAME },
+	  OG_PICTURE, OPT_LIST, 1, 0, 2, 1, 0, 0, 0, ch_black, NCH(ch_black), &cfg.hdmi_limited, 0, OW_GAME },
 
 	{ "hdmi_game_mode", "TV Game Mode",
 	  "Asks the television for its low-lag game mode.",
-	  OG_PICTURE, OPT_LIST, 1, 0, 1, 1, 0, 0, 0, ch_offon, NCH(ch_offon), &cfg.hdmi_game_mode, OW_GAME },
+	  OG_PICTURE, OPT_LIST, 1, 0, 1, 1, 0, 0, 0, ch_offon, NCH(ch_offon), &cfg.hdmi_game_mode, 0, OW_GAME },
 
 	{ "rumble", "Rumble",
 	  "Lets games shake a controller that can.",
-	  OG_PADS, OPT_LIST, 0, 0, 1, 1, 0, 1, 1, ch_offon, NCH(ch_offon), &cfg.rumble, OW_NOW },
+	  OG_PADS, OPT_LIST, 0, 0, 1, 1, 0, 1, 1, ch_offon, NCH(ch_offon), &cfg.rumble, 0, OW_NOW },
 
 	/*
 	  The two the front-end has an opinion about, so rec is not def. Both are in the
@@ -82,19 +82,50 @@ static const opt_def opts[] =
 	*/
 	{ "disable_autofire", "Autofire Toggle",
 	  "Blocked stops a button combo turning autofire on.",
-	  OG_PADS, OPT_LIST, 0, 0, 1, 1, 0, 0, 1, ch_autofire, NCH(ch_autofire), &cfg.disable_autofire, OW_NOW },
+	  OG_PADS, OPT_LIST, 0, 0, 1, 1, 0, 0, 1, ch_autofire, NCH(ch_autofire), &cfg.disable_autofire, 0, OW_NOW },
 
 	{ "controller_info", "Button Pop-Up",
 	  "The button list a pad shows the first time in a game.",
-	  OG_PADS, OPT_LIST, 0, 0, 10, 1, 0, 6, 0, ch_popup, NCH(ch_popup), &cfg.controller_info, OW_NOW },
+	  OG_PADS, OPT_LIST, 0, 0, 10, 1, 0, 6, 0, ch_popup, NCH(ch_popup), &cfg.controller_info, 0, OW_NOW },
 
 	{ "classicui_overscan", "TV Edge Margin",
 	  "Keeps this menu clear of the edges of a TV.",
-	  OG_MENU, OPT_NUMBER, 0, 0, 15, 1, "%", 6, 6, 0, 0, &cfg.classicui_overscan, OW_NOW },
+	  OG_MENU, OPT_NUMBER, 0, 0, 15, 1, "%", 6, 6, 0, 0, &cfg.classicui_overscan, 0, OW_NOW },
 
 	{ "classicui_freeze", "Pause In Menu",
 	  "Holds the game still while this menu is open.",
-	  OG_MENU, OPT_LIST, 0, 0, 1, 1, 0, 1, 1, ch_offon, NCH(ch_offon), &cfg.classicui_freeze, OW_NOW },
+	  OG_MENU, OPT_LIST, 0, 0, 1, 1, 0, 1, 1, ch_offon, NCH(ch_offon), &cfg.classicui_freeze, 0, OW_NOW },
+
+	/*
+	  Letter spacing, and the help line is doing real work rather than describing the row.
+
+	  Every panel width and a good deal of the wording in this front-end was fitted to the
+	  ROM font's 8-pixel advance: a full-width row at 240p holds 35 characters, and several
+	  lines were written to exactly that. Positive spacing takes characters away - 31 at +1,
+	  28 at +2 - so those lines start ending in a '>'. Nothing breaks, the clip is clean and
+	  every panel still contains its own text, but a player who was not told would read it
+	  as the front-end being buggy rather than as the price of the setting they just chose.
+	  Hence "fits fewer words", in the sentence under the row, where they are looking.
+
+	  Not clamped to -1 even though -2 makes the eight widest glyphs in the stock font
+	  (& M W ^ _ m w ~) touch their neighbour. The range offered is the range cfg.cpp
+	  declares, the point of the feature is a *custom* font - a five-wide one wants -2 - and
+	  this is a dial the player is watching while they turn it.
+	*/
+	{ "classicui_tracking", "Letter Spacing",
+	  "Space between letters. Positive fits fewer words.",
+	  OG_MENU, OPT_NUMBER, 0, -2, 2, 1, 0, 0, 0, 0, 0, 0, &cfg.classicui_tracking, OW_NOW },
+
+	/*
+	  And whether this menu shouts. On, which is what it has always done, every title and
+	  label is drawn in capitals; off, they are drawn as they are written. The reason it is
+	  a setting at all is the font above it: somebody who put a .pf on the card usually
+	  chose it for its lowercase, and a front-end that never draws a lowercase glyph makes
+	  half of that font invisible.
+	*/
+	{ "classicui_caps", "Capital Letters",
+	  "Off draws titles and labels as they are written.",
+	  OG_MENU, OPT_LIST, 0, 0, 1, 1, 0, 1, 1, ch_offon, NCH(ch_offon), &cfg.classicui_caps, 0, OW_NOW },
 };
 
 #define NOPTS ((int)(sizeof(opts) / sizeof(opts[0])))
@@ -249,11 +280,11 @@ int opt_dirty()
 
 /* ----------------------------------------------------------- the write ---- */
 
-int opt_apply(const char *path)
+int opt_apply(const char *path, const ini_set *extra, int nextra)
 {
 	last_error[0] = 0;
 
-	ini_set set[OPT_MAX];
+	ini_set set[INI_SET_MAX];
 	static char vals[OPT_MAX][16];
 	int which[OPT_MAX];
 	int n = 0;
@@ -268,6 +299,12 @@ int opt_apply(const char *path)
 		which[n] = i;
 		n++;
 	}
+
+	// The screen's own keys after ours, and counted separately: they are not in the model
+	// below, so the loop that updates cfg and clears the dirty flags must not walk them.
+	int nown = n;
+	for (int i = 0; i < nextra && n < INI_SET_MAX; i++) set[n++] = extra[i];
+
 	if (!n) return 0;
 
 	if (ini_apply_set(path, set, n, "; Written by Classic Home - Options > More Settings.") < 0)
@@ -283,10 +320,11 @@ int opt_apply(const char *path)
 	  afterwards is read off the set that was written rather than being a fixed line.
 	*/
 	wrote_live = 1;
-	for (int i = 0; i < n; i++)
+	for (int i = 0; i < nown; i++)
 	{
 		const opt_def *o = &opts[which[i]];
 		if (o->live) *o->live = (uint8_t)cur[which[i]];
+		else if (o->live_s) *o->live_s = (int8_t)cur[which[i]];
 		if (o->when != OW_NOW) wrote_live = 0;
 
 		was[which[i]] = cur[which[i]];

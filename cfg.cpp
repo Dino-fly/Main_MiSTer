@@ -155,6 +155,8 @@ static const ini_var_t ini_vars[] =
 	{ "CLASSICUI", (void*)(&(cfg.classicui)), UINT8, 0, 1 },
 	{ "CLASSICUI_PROFILE", (void*)(&(cfg.classicui_profile)), UINT8, 0, 3 },
 	{ "CLASSICUI_OVERSCAN", (void*)(&(cfg.classicui_overscan)), UINT8, 0, 15 },
+	{ "CLASSICUI_TRACKING", (void*)(&(cfg.classicui_tracking)), INT8, -2, 2 },
+	{ "CLASSICUI_CAPS", (void*)(&(cfg.classicui_caps)), UINT8, 0, 1 },
 	{ "CLASSICUI_ARTDIR", (void*)(&(cfg.classicui_artdir)), STRING, 0, sizeof(cfg.classicui_artdir) - 1 },
 	{ "CLASSICUI_ARTFETCH", (void*)(&(cfg.classicui_artfetch)), UINT8, 0, 1 },
 	{ "CLASSICUI_GAMELIST", (void*)(&(cfg.classicui_gamelist)), UINT8, 0, 1 },
@@ -661,6 +663,13 @@ void cfg_parse()
 	strcpy(cfg.video_gain_offset, "1, 0, 1, 0, 1, 0");
 	strcpy(cfg.main, "MiSTer");
 	cfg.classicui_overscan = 6;
+	/*
+	  Zero, and it has to stay zero: every panel width and every hand-fitted line in the
+	  front-end was measured at the ROM font's 8-pixel advance, so 0 is the only value
+	  that is the layout those measurements describe. See support/classicui/GUIDE.md.
+	*/
+	cfg.classicui_tracking = 0;
+	cfg.classicui_caps = 1;
 	strcpy(cfg.classicui_artdir, "boxart");
 	strcpy(cfg.classicui_arturl, "https://thumbnails.libretro.com");
 	has_video_sections = false;

@@ -40,6 +40,8 @@
 
 #include <inttypes.h>
 
+#include "chome_ini.h"           // for ini_set: opt_apply() carries the screen's own keys
+
 #define OPT_MAX 24               // the table, and the view built from it
 
 // What kind of thing the value is, which is also how left and right behave on it.
@@ -95,6 +97,18 @@ struct opt_def
 	  this widened rather than silently scribbling on the field after it.
 	*/
 	uint8_t *live;
+
+	/*
+	  ...and the same thing for a signed field, which is what widening it looks like.
+
+	  classicui_tracking is an int8_t because -2 is a value a player can set, and pointing
+	  `live` at it through a cast is precisely what the paragraph above rules out: -1 would
+	  be written as 0xFF through a uint8_t* and read back correctly only because this
+	  target happens to be two's complement with 8-bit chars. One extra pointer and one
+	  extra branch in opt_apply() costs nothing and says what it means. Exactly one of the
+	  two is set on any row.
+	*/
+	int8_t *live_s;
 	uint8_t when;                // OW_NOW or OW_GAME, for what the screen says after writing
 };
 
@@ -145,8 +159,15 @@ int opt_dirty();                 // edits not yet written
   its keys would plant a dozen lines in the player's ini for things they never touched,
   and freeze today's defaults into a file that would otherwise follow the firmware.
   Returns how many were written, 0 for nothing to do, -1 with opt_error() set.
+
+  `extra` is for the keys the screen owns that this table cannot hold - today that is
+  `font=`, which is a path and not a number in a range. They go through the same call
+  rather than through a second ini_apply_set() afterwards for one concrete reason: each
+  write takes a backup, so two writes would leave MiSTer.ini.bak holding the file as it
+  was halfway through the save instead of as it was before the player touched anything.
+  The caller owns telling cfg about them; this knows nothing about what they mean.
 */
-int opt_apply(const char *path);
+int opt_apply(const char *path, const ini_set *extra, int nextra);
 const char *opt_error();
 
 // 1 when everything just written is already true for this session.
