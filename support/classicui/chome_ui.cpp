@@ -29,6 +29,7 @@
 #include "chome_osk.h"
 #include "chome_net.h"
 #include "chome_disc.h"
+#include "chome_rip.h"
 #include "chome_titles.h"
 #include "chome_bt.h"
 #include "chome_ini.h"
@@ -2721,9 +2722,27 @@ static unsigned long anim_ms() { return GetTimer(0); }
 #define DISC_TURN     1024UL
 #define DISC_RAMP_MS  300UL
 
+// Defined with the rest of the rip, further down. Whether a copy is running, which is a
+// disc that is genuinely being read from end to end.
+static int rip_busy_ui();
+
 static unsigned long disc_target_speed()
 {
-	unsigned long period = (screen == SCR_DISCBAR) ? GFX_DISC_FOCUS_MS
+	/*
+	  A rip turns it at the focus rate, which is the fastest rate this UI has.
+
+	  Not a new, faster one, and that is measured rather than a preference: there are 64
+	  positions in a turn and chome_gfx.h records that a disc advancing more than about four
+	  of them between repaints strobes instead of spinning. GFX_DISC_FOCUS_MS is already
+	  four per frame at the full-repaint rate, so it is the ceiling - the first attempt at
+	  that constant used 400ms and looked like a juddering disc rather than a fast one.
+	  "Spinning fast" therefore means the fastest thing here that still reads as spinning.
+
+	  Ahead of the SCR_DISCBAR test because a rip can be running while the badge has focus,
+	  and the rip is the more specific fact.
+	*/
+	unsigned long period = rip_busy_ui() ? GFX_DISC_FOCUS_MS
+		: (screen == SCR_DISCBAR) ? GFX_DISC_FOCUS_MS
 		: (disc_state() == DISC_SPINNING) ? GFX_DISC_FAST_MS : GFX_DISC_SLOW_MS;
 
 	return DISC_TURN * 1000UL / period;
@@ -4560,9 +4579,10 @@ static int disc_wired(int sysidx);
 
 #define DACT_PLAY   0
 #define DACT_NONE   1   // named but not playable: the daemon work has not been done
+#define DACT_RIP    2   // copy the disc into that system's games folder
 
-static int disc_row = 0;                      // the core chooser's cursor
-static int disc_picking = 0;                  // 0: the offer, 1: choosing a core
+static int disc_row = 0;                      // the Options cursor
+static int disc_picking = 0;                  // 0: the offer, 1: the Options list
 static char disc_rowtext[DISC_ROW_MAX][48];
 static int  disc_rowact[DISC_ROW_MAX];
 static int  disc_rowsys[DISC_ROW_MAX];        // system index, -1 when not a system
@@ -4581,6 +4601,132 @@ static int disc_sys_by_id(const char *id)
 		if (sc && !strcasecmp(sc->id, id)) return i;
 	}
 	return -1;
+}
+
+/* ------------------------------------------------------ ripping a disc to the card --- */
+
+/*
+  Which shelf systems a rip can be *for*, and how their cue parser has to be spoken to.
+
+  Not every system that can be handed a physical disc can be handed a folder of one. This
+  table is the set whose core loads a .cue and its tracks off the card, which is the four
+  CD cores this firmware has shelf entries for, and the flag is the one thing about them
+  that differs in what the sheet may say:
+
+    psx      MODE1/2352 and MODE2/2352 are both understood and both map to 2352
+             (psx.cpp:250), so the sheet says whichever mode the sectors actually are.
+    md       Mega CD's parser knows MODE1/2048 and MODE1/2352 and nothing else, and only
+             looks for a token on track 1 at all (megacdd.cpp:147-166). A MODE2/2352 token
+             leaves the sector size unset and the loader falls through to sniffing the
+             file's first bytes - right by luck rather than by contract.
+    tg16     PC Engine CD's is the same two tokens, per track (pcecdd.cpp:157-174).
+    neogeo   has no parser of its own: neocd_set_image() calls Mega CD's cdd_t
+             (neogeocd.cpp:192), so it is md's rules exactly.
+
+  A system that is not in this table gets no Rip row, and that is a real answer rather than
+  laziness: an MSU-1 SNES disc's core wants the .sfc off the disc and not a copy of the
+  disc, so a cue sheet in SNES/ would be a folder that never loads.
+
+  Where the rip goes is the target system's own games folder - lib_sys_games_dir(), the
+  same directory the scanner walks for that system - because a rip is a game for that
+  console and belongs where that console's games are. Anywhere else and the shelf would
+  never see it.
+*/
+struct rip_target
+{
+	const char *sysid;
+	int mode1_only;
+};
+
+static const rip_target rip_targets[] =
+{
+	{ "psx",    0 },
+	{ "md",     1 },
+	{ "tg16",   1 },
+	{ "neogeo", 1 },
+};
+
+static const rip_target *rip_target_for(int sysidx)
+{
+	const chome_sys *s = (sysidx >= 0) ? lib_sys(sysidx) : 0;
+	if (!s) return 0;
+
+	for (unsigned i = 0; i < sizeof(rip_targets) / sizeof(rip_targets[0]); i++)
+	{
+		if (!strcasecmp(rip_targets[i].sysid, s->id)) return &rip_targets[i];
+	}
+	return 0;
+}
+
+/*
+  Who the running rip is about, captured when it starts.
+
+  This exists for the same reason the disc_dlg comment below gives for the *running* disc,
+  and it is the same trap: a rip owns the drive, so the detection helper is stopped for the
+  whole length of it and disc_state() is ABSENT while disc_type(), disc_serial() and
+  disc_label() are all empty. A progress screen built from the drive would therefore be
+  blank in exactly the case it exists for. So the three facts the screen needs - the name
+  to show, the key the artwork is filed under, and which console's folder it went to - are
+  taken once, at the press, and drawn from here afterwards.
+*/
+static char rip_title[DISC_TITLE_LEN];
+static char rip_key[128];
+static int  rip_sysidx = -1;
+
+// One press from starting a rip over a folder that is already there, and when that offer
+// expires. The same two-press shape as deleting a suspend point; see del_arm_slot.
+static int rip_over_arm = 0;
+static unsigned long rip_over_until = 0;
+
+// Whether the disc dialog is showing a rip rather than a disc: one in progress, or one
+// that has finished and has something to say that the player has not dismissed.
+static int rip_showing()
+{
+	return rip_busy() || rip_reportable();
+}
+
+// The one disc_target_speed() forward-declares, so the animation above does not have to
+// know where in this file the rip lives.
+static int rip_busy_ui() { return rip_busy(); }
+
+/*
+  Whether there is a disc for the front-end to point at, which during a rip is a different
+  question from whether the *drive* has one.
+
+  Everywhere this replaces asked disc_state() directly, and every one of them was right
+  until a rip could own the drive: the detection helper is stopped for the whole length of a
+  copy, so disc_state() is ABSENT throughout. Left as it was, the badge would vanish the
+  instant the rip started, Up from the shelf would go nowhere, and - worst of the three -
+  the branch that leaves SCR_DISC when the disc goes would throw the player off the
+  progress screen at the moment it appeared, with no way back to it and a helper still
+  copying 700 MB in the background.
+*/
+static int disc_or_rip_present()
+{
+	return disc_state() != DISC_ABSENT || rip_showing();
+}
+
+/*
+  How much of the disc is revealed, 0..1024, which is the pie's fraction.
+
+  Straight from the sectors written, because that is the only quantity that advances at the
+  rate the work does - see rip_percent(). Deliberately finer than the percentage under the
+  disc: at 288 px across, a pie that moved in whole percent would visibly step, and the
+  sectors are there to be counted.
+*/
+#define DISC_REVEAL_FULL 1024
+
+static int rip_reveal()
+{
+	const rip_status *st = rip_state();
+
+	if (!rip_busy()) return DISC_REVEAL_FULL;
+	if (st->total <= 0) return 0;
+
+	long long r = (long long)st->done * DISC_REVEAL_FULL / st->total;
+	if (r < 0) r = 0;
+	if (r > DISC_REVEAL_FULL) r = DISC_REVEAL_FULL;
+	return (int)r;
 }
 
 /*
@@ -4706,10 +4852,78 @@ static chome_item *disc_susp_item_get()
 	return &disc_susp_item;
 }
 
+/*
+  The dialog, describing a rip instead of a disc.
+
+  Everything here comes from the snapshot and from the child's published line, and nothing
+  from the drive - see rip_title above for why there is nothing there to ask. The key is
+  carried through so disc_draw_face() still finds the disc's scan: the picture is the same
+  picture, and a rip that drew the generated face while the scan sat on the card would look
+  like a different disc from the one the player pressed A on.
+*/
+static void disc_dlg_from_rip(disc_dlg *d)
+{
+	const rip_status *st = rip_state();
+
+	d->sysidx = rip_sysidx;
+	snprintf(d->title, sizeof(d->title), "%s", rip_title);
+	snprintf(d->key, sizeof(d->key), "%s", rip_key);
+
+	const chome_sys *sc = (rip_sysidx >= 0) ? lib_sys(rip_sysidx) : 0;
+
+	if (rip_busy())
+	{
+		/*
+		  The percentage, and the count of what would not read if there is one. Both in the
+		  line under the title rather than on the disc: the pie is the shape of the answer
+		  and the number is the answer, and the disc has no room for text at 240p.
+		*/
+		if (st->bad) snprintf(d->sub, sizeof(d->sub), "Copying %d%% - %d unreadable so far",
+			rip_percent(st), st->bad);
+		else if (!st->total) snprintf(d->sub, sizeof(d->sub), "Reading the disc");
+		else snprintf(d->sub, sizeof(d->sub), "Copying to the card - %d%%", rip_percent(st));
+		return;
+	}
+
+	switch (st->state)
+	{
+	case RIP_DONE:
+		/*
+		  The count first when there is one. A rip with unreadable sectors that reported
+		  "Done" is the failure this whole path is written to avoid: the player would find
+		  out from a core that hangs, weeks later, with nothing to connect it to.
+		*/
+		if (st->bad) snprintf(d->sub, sizeof(d->sub), "Copied, but %d sectors would not read", st->bad);
+		else if (sc) snprintf(d->sub, sizeof(d->sub), "Copied to the %s folder", sc->name);
+		else snprintf(d->sub, sizeof(d->sub), "Copied to the card");
+		break;
+
+	case RIP_CANCELLED:
+		snprintf(d->sub, sizeof(d->sub), "Stopped - nothing was kept");
+		break;
+
+	case RIP_NOSPACE:
+		snprintf(d->sub, sizeof(d->sub), "No room: needs %d MB, %d MB free",
+			st->need_mb, st->free_mb);
+		break;
+
+	case RIP_EXISTS:
+		snprintf(d->sub, sizeof(d->sub), "That folder is already there");
+		break;
+
+	default:
+		snprintf(d->sub, sizeof(d->sub), "The copy failed - nothing was kept");
+		break;
+	}
+}
+
 static void disc_dlg_get(disc_dlg *d)
 {
 	memset(d, 0, sizeof(*d));
 	d->sysidx = -1;
+
+	// A rip first, because it owns the drive and everything below this reads the drive.
+	if (rip_showing()) { disc_dlg_from_rip(d); return; }
 
 	chome_item *run = ig_running_disc();
 	if (run)
@@ -4921,6 +5135,45 @@ static void disc_build_rows()
 		disc_rowsys[disc_nrows] = sx;
 		disc_nrows++;
 	}
+
+	/*
+	  And "copy it to the card", for the console the disc belongs to.
+
+	  One row rather than one per system, and it targets whatever the dialog has settled on
+	  - the console the disc was identified as, or the one the player picked by hand through
+	  the rows above. A rip has to go into some system's games folder in some core's format,
+	  and this screen already has an answer to which; offering the same rip four times so
+	  the player can pick the wrong folder is not a choice worth giving them.
+
+	  Absent rather than dim where there is no answer, which is an unrecognised disc and a
+	  Saturn one. A dim row says "this could work and does not"; here there is genuinely
+	  nowhere to put it and no format to put it in, and the rows above already say so.
+	*/
+	int rip_sx = (disc_chosen_sys >= 0) ? disc_chosen_sys
+		: disc_sys_by_id(disc_system_id(disc_type()));
+
+	const rip_target *rt = rip_target_for(rip_sx);
+
+	if (rt && disc_nrows < DISC_ROW_MAX)
+	{
+		const chome_sys *sc = lib_sys(rip_sx);
+
+		/*
+		  Armed, the row says what the second press will do to what is already there. The
+		  same shape the suspend strip's delete uses: the offer is written into the thing
+		  the cursor is on rather than into a dialog of its own, and it expires.
+		*/
+		if (rip_over_arm && !CheckTimer(rip_over_until))
+			snprintf(disc_rowtext[disc_nrows], sizeof(disc_rowtext[0]),
+				"Replace it? Press again");
+		else
+			snprintf(disc_rowtext[disc_nrows], sizeof(disc_rowtext[0]),
+				"Copy to %s", sc ? sc->name : "the card");
+
+		disc_rowact[disc_nrows] = DACT_RIP;
+		disc_rowsys[disc_nrows] = rip_sx;
+		disc_nrows++;
+	}
 }
 
 static int disc_rows()
@@ -4942,7 +5195,9 @@ static int disc_rows()
 #define DBTN_MAX 2
 
 #define DBTN_ACT  0        // Play the disc, or Resume the game it is already running
-#define DBTN_OPTS 1        // the core choice the "Use a different core" row used to offer
+#define DBTN_OPTS 1        // the Options list: which core, and copying it to the card
+#define DBTN_STOP 2        // ...and, while a rip runs, the only press there is
+#define DBTN_OK   3        // dismiss what a finished rip had to say
 
 static int disc_btn = 0;
 static char disc_btntext[DBTN_MAX][12];
@@ -4950,9 +5205,36 @@ static int  disc_btnact[DBTN_MAX];
 static int  disc_btndim[DBTN_MAX];
 static int  disc_nbtn = 0;
 
+// One press from stopping the rip, and when the offer expires. A rip is minutes of work
+// and the drive is spinning; asking twice is the same courtesy the suspend strip's delete
+// pays a file that took a second to write.
+static int rip_stop_arm = 0;
+static unsigned long rip_stop_until = 0;
+
 static void disc_build_btns(const disc_dlg *d)
 {
 	disc_nbtn = 0;
+
+	/*
+	  A rip has one button and it is not Play. Everything the offer's two buttons do needs
+	  the drive, which the rip has, so leaving them there would be two presses that cannot
+	  work over the one screen where the drive is definitely busy.
+	*/
+	if (rip_showing())
+	{
+		int armed = (rip_stop_arm && !CheckTimer(rip_stop_until));
+
+		if (rip_busy())
+			snprintf(disc_btntext[disc_nbtn], sizeof(disc_btntext[0]), "%s",
+				armed ? "Sure?" : "Stop");
+		else
+			snprintf(disc_btntext[disc_nbtn], sizeof(disc_btntext[0]), "OK");
+
+		disc_btnact[disc_nbtn] = rip_busy() ? DBTN_STOP : DBTN_OK;
+		disc_btndim[disc_nbtn] = 0;
+		disc_nbtn++;
+		return;
+	}
 
 	/*
 	  "Resume" rather than "Play" over a running disc, and it is the same word the shelf
@@ -4986,6 +5268,36 @@ static void disc_build_btns(const disc_dlg *d)
 static int disc_dlg_legend(legend_pair *out, int max)
 {
 	int n = 0;
+
+	/*
+	  A rip, before the Options list, because a rip can be started from that list and the
+	  screen it leaves behind is this one. Leaving is offered and does not stop the rip: the
+	  helper is a process of its own, the badge in the corner keeps turning while it works,
+	  and coming back to the dialog finds the progress where it got to. A ten-minute copy
+	  that pinned the player to one screen would be the worse of the two designs.
+	*/
+	if (rip_showing())
+	{
+		int armed = (rip_stop_arm && !CheckTimer(rip_stop_until));
+
+		// The word changes and the pad glyph's colour does not: `col` here is the button's
+		// own colour on the pad, and a red A chip would be this front-end inventing a
+		// button. The armed state is said in the label, exactly as the delete hint says it.
+		if (n < max)
+		{
+			out[n++] = rip_busy() ? lp(LBL_A, armed ? "Stop it" : "Stop", "Stop")
+				: lp(LBL_A, "OK", "OK");
+		}
+		// "Leave it running" only while something is running. Over a finished rip there is
+		// nothing to leave and B is the ordinary Back it is everywhere else - a legend that
+		// said otherwise would be telling the player a copy was still going.
+		if (n < max)
+		{
+			out[n++] = rip_busy() ? lp(LBL_B, "Leave it running", "Leave")
+				: lp(LBL_B, "Back", "Back");
+		}
+		return n;
+	}
 
 	if (disc_picking)
 	{
@@ -5519,7 +5831,183 @@ static const char disc_gen_key[] = "*generated*";
   gfx_disc stays as the last resort, because both buffers above are a malloc that can fail
   and a disc dialog with no disc on it is worse than a blocky one.
 */
-static void disc_draw_face(const disc_dlg *d, int cx, int cy, int r)
+/* ------------------------------------------------- the disc as a progress pie --- */
+
+/*
+  arctangent, as a table, because this file has no math.h and does not want one.
+
+  Same reasoning as disc_sin[] and gfx_disc_cover() in chome_gfx.cpp: the values are
+  written out, and interpolating between them is cheaper and more predictable than pulling
+  in libm for a curve that is used in exactly one place.
+
+  tab[i] is atan(i/64) in units where a full turn is 4096, so an eighth of a turn - the
+  octant this covers - is 512. Linear interpolation between the entries is accurate to
+  0.044 degrees, which at the largest disc this dialog draws (288 px across) is under a
+  fifth of a pixel at the rim.
+*/
+static const uint16_t disc_atan_tab[65] =
+{
+	   0,   10,   20,   31,   41,   51,   61,   71,
+	  81,   91,  101,  111,  121,  131,  140,  150,
+	 160,  169,  179,  188,  197,  207,  216,  225,
+	 234,  243,  252,  260,  269,  277,  286,  294,
+	 302,  310,  318,  326,  334,  342,  349,  357,
+	 364,  371,  379,  386,  393,  399,  406,  413,
+	 419,  426,  432,  439,  445,  451,  457,  463,
+	 469,  474,  480,  486,  491,  496,  502,  507,
+	 512,
+};
+
+// atan(a/b) in 4096ths of a turn, for 0 <= a <= b and b > 0. Answers 0..512.
+static int disc_atan_q(int a, int b)
+{
+	int t = (int)((long)a * 4096 / b);
+	if (t < 0) t = 0;
+	if (t > 4096) t = 4096;
+
+	int i = t >> 6, f = t & 63;
+	if (i >= 64) return disc_atan_tab[64];
+	return disc_atan_tab[i] + (disc_atan_tab[i + 1] - disc_atan_tab[i]) * f / 64;
+}
+
+/*
+  The angle of a point clockwise from twelve o'clock, in 4096ths of a turn.
+
+  `v` is how far right of the centre and `u` how far *up*, so a caller working in screen
+  coordinates passes -dy for u. Clockwise from the top because that is the direction a
+  progress pie fills and the direction this disc turns.
+*/
+static int disc_angle_q(int v, int u)
+{
+	if (!v && !u) return 0;
+
+	int a = (v < 0) ? -v : v;
+	int b = (u < 0) ? -u : u;
+
+	// The angle inside its own quadrant, 0 at the vertical axis and 1024 at the horizontal
+	// one. Folded at the diagonal so the table only has to cover an octant.
+	int q = (a <= b) ? disc_atan_q(a, b) : 1024 - disc_atan_q(b, a);
+
+	if (u >= 0 && v >= 0) return q;                    // up and right: 0 to a quarter turn
+	if (u < 0 && v >= 0) return 2048 - q;              // down and right
+	if (u < 0 && v < 0) return 2048 + q;               // down and left
+	return 4096 - q;                                   // up and left
+}
+
+#define DISC_ANG_OUTSIDE 0xffff
+
+/*
+  Every pixel's angle, computed once per diameter and then only compared against.
+
+  This is what keeps the pie off the rotation cache, which is the whole performance
+  question here. disc_rot() caches the rotated disc against the rotation step so it is
+  resampled once per angle rather than once per blit; baking a pie into that image would
+  make the cache key depend on progress as well and resample a 288 px disc every frame of
+  an operation that is already saturating the drive.
+
+  So the mask is applied *after* the cached image, and the only per-pixel work in a frame
+  is one 16-bit compare and, for the part not yet revealed, one gfx_mix. The angles
+  themselves never change: they depend on the geometry and not on the rotation or the
+  progress, so this buffer is built when the disc changes size and not again.
+
+  Pixels outside the disc are marked DISC_ANG_OUTSIDE and left exactly as the cached image
+  has them. That is not a nicety either: disc_rot() fills the corners of its square buffer
+  with COL_PANEL, and a pie that darkened those would put a dark wedge across the panel
+  behind the disc.
+*/
+static uint16_t *disc_ang_buf = 0;
+static int disc_ang_dia = 0;
+
+static const uint16_t *disc_angle_map(int dia)
+{
+	if (dia < 2) return 0;
+	if (disc_ang_buf && disc_ang_dia == dia) return disc_ang_buf;
+
+	uint16_t *nb = (uint16_t*)malloc((size_t)dia * dia * sizeof(uint16_t));
+	if (!nb) return 0;
+
+	free(disc_ang_buf);
+	disc_ang_buf = nb;
+	disc_ang_dia = dia;
+
+	int r = dia / 2;
+	int r2 = r * r;
+
+	for (int y = 0; y < dia; y++)
+	{
+		int dy = y - r;
+		uint16_t *row = disc_ang_buf + (size_t)y * dia;
+
+		for (int x = 0; x < dia; x++)
+		{
+			int dx = x - r;
+			if (dx * dx + dy * dy > r2) { row[x] = DISC_ANG_OUTSIDE; continue; }
+
+			// -dy for "up": the buffer's y grows downward and the angle is measured from
+			// twelve o'clock.
+			row[x] = (uint16_t)disc_angle_q(dx, -dy);
+		}
+	}
+
+	return disc_ang_buf;
+}
+
+/*
+  How dark the part not yet copied is, out of 255 - and the darkening is a *multiply*
+  against black rather than a wash of a flat colour.
+
+  That distinction has already cost this front-end once. Drawing a scrim of COL_BGDARK over
+  a picture forces every dark pixel to one near-black value and takes the detail with it,
+  which is why the in-game dim was changed to multiply against COL_BLACK instead. The
+  unrevealed part of the disc has to stay recognisably the disc - the player is watching
+  their own game's label appear - so every pixel keeps its own colour at three-eighths of
+  its brightness, and a scanned label is still legible through it.
+*/
+#define DISC_REVEAL_DIM 96
+
+// Where the masked frame is assembled, so the framebuffer still takes one blit and the
+// cached rotation is never written to.
+static uint32_t *disc_rev_buf = 0;
+static int disc_rev_dia = 0;
+
+/*
+  The cached rotated disc, with everything past the pie's edge dimmed.
+
+  Falls back to the plain blit whenever a buffer cannot be had: a fully bright disc with no
+  progress on it is a worse screen than this one and a much better screen than no disc.
+*/
+static void disc_blit_reveal(const uint32_t *img, int dia, int x, int y, int reveal)
+{
+	if (reveal >= DISC_REVEAL_FULL) { gfx_blit(img, dia, dia, x, y, dia, dia); return; }
+
+	const uint16_t *ang = disc_angle_map(dia);
+	if (!ang) { gfx_blit(img, dia, dia, x, y, dia, dia); return; }
+
+	if (!disc_rev_buf || disc_rev_dia != dia)
+	{
+		uint32_t *nb = (uint32_t*)malloc((size_t)dia * dia * 4);
+		if (!nb) { gfx_blit(img, dia, dia, x, y, dia, dia); return; }
+		free(disc_rev_buf);
+		disc_rev_buf = nb;
+		disc_rev_dia = dia;
+	}
+
+	// The pie's edge, in the same 4096ths the map is in. A reveal of 0 darkens the whole
+	// disc; DISC_REVEAL_FULL never reaches here.
+	int edge = reveal * 4096 / DISC_REVEAL_FULL;
+
+	size_t n = (size_t)dia * dia;
+	for (size_t i = 0; i < n; i++)
+	{
+		uint16_t a = ang[i];
+		disc_rev_buf[i] = (a == DISC_ANG_OUTSIDE || a < edge)
+			? img[i] : gfx_mix(COL_BLACK, img[i], DISC_REVEAL_DIM);
+	}
+
+	gfx_blit(disc_rev_buf, dia, dia, x, y, dia, dia);
+}
+
+static void disc_draw_face(const disc_dlg *d, int cx, int cy, int r, int reveal)
 {
 	int step = disc_step();
 	int dia = 2 * r;
@@ -5531,7 +6019,7 @@ static void disc_draw_face(const disc_dlg *d, int cx, int cy, int r)
 		const uint32_t *img = scan ? disc_rot(scan, path, dia, step, 1) : 0;
 		if (img)
 		{
-			gfx_blit(img, dia, dia, cx - r, cy - r, dia, dia);
+			disc_blit_reveal(img, dia, cx - r, cy - r, reveal);
 			return;
 		}
 	}
@@ -5542,7 +6030,7 @@ static void disc_draw_face(const disc_dlg *d, int cx, int cy, int r)
 	const uint32_t *img = face ? disc_rot(face, disc_gen_key, dia, step, 0) : 0;
 	if (img)
 	{
-		gfx_blit(img, dia, dia, cx - r, cy - r, dia, dia);
+		disc_blit_reveal(img, dia, cx - r, cy - r, reveal);
 		return;
 	}
 
@@ -5560,12 +6048,34 @@ static void draw_disc_picker(const chome_profile *p, const disc_dlg *d)
 	int rowh = 14 * s;
 	int nrows = disc_nrows ? disc_nrows : 1;
 
+	/*
+	  Twenty-four characters, or the widest row if one of them needs more.
+
+	  The fixed width was fine while every row was a console's name plus at most "(not yet)".
+	  The copy row is longer than that at some system names, and a row that does not fit is
+	  clipped by gfx_clip() below - which turned "Copy to TurboGrafx-16" into a sentence
+	  ending in a chevron. Grown rather than replaced so the existing rows are laid out
+	  exactly as they were, and still capped by the canvas: a clipped row is bad and a panel
+	  wider than the screen is worse.
+
+	  In advances, not cells: with letter spacing on, 24 * 8 * s is no longer 24 characters.
+	  gfx_text_w() already counts the tracking, so the widest-row arm needs no change.
+	*/
 	int tw = 24 * gfx_adv(s);
+	for (int i = 0; i < disc_nrows; i++)
+	{
+		int w = gfx_text_w(disc_rowtext[i], s);
+		if (w > tw) tw = w;
+	}
+
 	int maxw = p->w - 2 * p->inset;
 	if (tw > maxw - 16 * s) tw = maxw - 16 * s;
 
 	int ph = (10 * s + 6) + 6 * s + 8 * s + 8 * s + nrows * rowh + 8 * s;
-	panel_box b = draw_panel_ex(p, tw + 16 * s, ph, "Which core?");
+
+	// "Which core?" while the rows were only cores. Now one of them copies the disc to the
+	// card, and a list headed by a question none of its answers answers reads as a bug.
+	panel_box b = draw_panel_ex(p, tw + 16 * s, ph, "Disc Options");
 
 	int x = b.x + 8 * s;
 	int y = b.y + 6 * s;
@@ -5588,7 +6098,12 @@ static void draw_disc_picker(const chome_profile *p, const disc_dlg *d)
 		// landed on, but nothing about it may look like it will launch.
 		int dis = (disc_rowact[i] == DACT_NONE);
 
-		if (on) gfx_fill(x - 4 * s, yy - 3 * s, tw + 8 * s, rowh - 2 * s, COL_BLUE);
+		// And the copy row, armed, is red under the cursor: the same colour the suspend
+		// strip gives a slot that is one press from being deleted, for the same reason -
+		// this press is about to replace a folder of somebody's games.
+		int armed = (disc_rowact[i] == DACT_RIP && rip_over_arm && !CheckTimer(rip_over_until));
+
+		if (on) gfx_fill(x - 4 * s, yy - 3 * s, tw + 8 * s, rowh - 2 * s, armed ? COL_RED : COL_BLUE);
 		gfx_text(gfx_clip(disc_rowtext[i], s, tw), x, yy, s,
 			dis ? COL_DIM : (on ? COL_WHITE : COL_INK), 0);
 	}
@@ -5623,7 +6138,18 @@ static void draw_disc(const chome_profile *p)
 
 	int cy = y + L.r;
 	disc_note_rect(1, cx, cy, L.r, DISC_RECT_CELLS);
-	disc_draw_face(&d, cx, cy, L.r);
+
+	/*
+	  The disc, and while a rip runs, how much of it has been copied.
+
+	  rip_reveal() is DISC_REVEAL_FULL whenever there is no rip, so this is the same call
+	  every other frame makes and the rectangle noted above is unchanged: the pie is drawn
+	  inside the disc's own radius and adds nothing outside it, which is what lets the
+	  partial repaint stay byte-identical to a full one. See disc_blit_reveal(), and see the
+	  DISC_BADGE_CELLS comment for what happens when something is drawn outside the rect a
+	  frame records.
+	*/
+	disc_draw_face(&d, cx, cy, L.r, rip_reveal());
 	y = cy + L.r + 8 * s;
 
 	/*
@@ -5672,7 +6198,9 @@ static void draw_disc(const chome_profile *p)
 */
 static void draw_disc_badge(const chome_profile *p)
 {
-	if (disc_state() == DISC_ABSENT) return;
+	// ...or while a rip is copying it, which is the one case where there is a disc to say
+	// "there is a disc" about and the drive reports none. See disc_or_rip_present().
+	if (!disc_or_rip_present()) return;
 
 	int r = disc_radius(p);
 	int cx = p->safe_x + p->inset + r;
@@ -7271,6 +7799,83 @@ static void disc_launch(int sysidx)
 	do_launch(sysidx, PHYSICAL_DISC_SENTINEL, 0, &pl->slot, pl->rbf ? rbf : 0);
 }
 
+/*
+  Copy the disc in the drive into a system's games folder.
+
+  The drive has one owner, and this is the second thing in this file that takes it: the
+  detection helper is stopped exactly as disc_launch() stops it, and disc_poll() is kept
+  from forking a new one for as long as rip_busy() - see the drive_is_ours line in
+  chome_handle(). Two processes on /dev/sr0 is not a race that shows up as wrong data; it
+  shows up as a status ioctl sitting in state D behind a 700 MB read.
+
+  `overwrite` is the player's second press, and it is only about the *offer*: the copy is
+  assembled in a hidden staging folder either way and the old one is not touched until the
+  new one is finished. So a confirmed overwrite that is then cancelled costs nothing.
+
+  Everything the progress screen will need is captured here rather than read later, because
+  a moment after this returns there is no detection helper left to ask. See rip_title.
+*/
+static void disc_rip_begin(const disc_dlg *d, int sysidx, int overwrite)
+{
+	const rip_target *rt = rip_target_for(sysidx);
+	const chome_sys *s = (sysidx >= 0) ? lib_sys(sysidx) : 0;
+
+	// The whole feature is behind classicui_disc, and the only way here is a screen that
+	// only exists when it is on - but this is where a drive and the card both get used in
+	// earnest, so it does not rely on that.
+	if (!cfg.classicui_disc || !rt || !s || !d) { nudge(); return; }
+
+	char games[1024];
+	if (!lib_sys_games_dir(sysidx, games, sizeof(games)))
+	{
+		printf("ClassicUI: rip: %s has no games folder on this card\n", s->name);
+		nudge();
+		return;
+	}
+
+	/*
+	  The folder is named for the disc, by the same name the dialog is showing - which is
+	  the title table's answer where there is one, else the volume label, else the serial.
+	  That order is not this function's invention: it is disc_display_name()'s, and it is
+	  what makes the finished card read "Metal Gear Solid" instead of "SLES-01506".
+	*/
+	char name[96];
+	if (!rip_folder_name(d->title[0] ? d->title : d->key, name, sizeof(name)))
+	{
+		printf("ClassicUI: rip: nothing here is a usable folder name\n");
+		nudge();
+		return;
+	}
+
+	// Already there, and this is the first press. The row says what the second one does.
+	if (!overwrite && rip_folder_exists(games, name))
+	{
+		rip_over_arm = 1;
+		rip_over_until = GetTimer(3000);
+		printf("ClassicUI: rip: %s/%s exists, asking before replacing it\n", games, name);
+		mark_dirty();
+		return;
+	}
+
+	snprintf(rip_title, sizeof(rip_title), "%s", d->title);
+	snprintf(rip_key, sizeof(rip_key), "%s", d->key);
+	rip_sysidx = sysidx;
+
+	disc_watch_stop();
+
+	if (!rip_start(games, name, d->title, rt->mode1_only, overwrite))
+	{
+		printf("ClassicUI: rip: could not start the helper\n");
+		nudge();
+		return;
+	}
+
+	disc_picking = 0;
+	disc_row = 0;
+	rip_stop_arm = 0;
+	mark_dirty();
+}
+
 /* -------------------------------------------------------------- compose --- */
 
 static void draw_launch(const chome_profile *p)
@@ -7738,7 +8343,7 @@ static void move_v(int dir)
 		  only while a disc is actually in the drive, which is a state the player
 		  created deliberately and can end by taking it out.
 		*/
-		if (dir < 0 && disc_state() != DISC_ABSENT) { go_screen(SCR_DISCBAR); }
+		if (dir < 0 && disc_or_rip_present()) { go_screen(SCR_DISCBAR); }
 		else if (dir < 0) { mb_idx = 0; go_screen(SCR_MENUBAR); }
 		else
 		{
@@ -7754,7 +8359,7 @@ static void move_v(int dir)
 		break;
 
 	case SCR_MENUBAR:
-		if (dir > 0) go_screen(disc_state() != DISC_ABSENT ? SCR_DISCBAR : SCR_HOME);
+		if (dir > 0) go_screen(disc_or_rip_present() ? SCR_DISCBAR : SCR_HOME);
 		else nudge();
 		break;
 
@@ -7844,7 +8449,7 @@ static void move_v(int dir)
 			break;
 		}
 
-		if (disc_state() != DISC_ABSENT) go_screen(SCR_DISCBAR);
+		if (disc_or_rip_present()) go_screen(SCR_DISCBAR);
 		else nudge();
 		break;
 	}
@@ -8145,10 +8750,69 @@ static void accept()
 		disc_dlg d;
 		disc_dlg_get(&d);
 
+		/*
+		  A rip owns this screen while it runs, and A is the only press on it.
+
+		  Stopping takes two, like every other press in this front-end that throws work
+		  away: the drive has been turning for minutes and the alternative to asking twice
+		  is a thumb on the pad undoing all of it. The arming expires, so a stray press does
+		  not leave the console one press from cancelling for ever.
+		*/
+		if (rip_showing())
+		{
+			if (!rip_busy())
+			{
+				/*
+				  Acknowledging a finished rip, which is also where the shelf finds out.
+				  lib_rescan() rather than nothing: the folder appeared under a games
+				  directory the scanner has already walked, so without this the card the rip
+				  just created is not on the shelf until something else rescans.
+				*/
+				int done = (rip_state()->state == RIP_DONE);
+				rip_ack();
+				rip_stop_arm = 0;
+				if (done) lib_rescan();
+				go_screen(disc_state() != DISC_ABSENT ? SCR_DISC : SCR_HOME);
+				mark_dirty();
+				break;
+			}
+
+			if (rip_stop_arm && !CheckTimer(rip_stop_until))
+			{
+				rip_stop_arm = 0;
+				rip_cancel();
+				mark_dirty();
+				break;
+			}
+
+			rip_stop_arm = 1;
+			rip_stop_until = GetTimer(3000);
+			mark_dirty();
+			break;
+		}
+
 		if (disc_picking)
 		{
 			disc_build_rows();
 			if (disc_row < 0 || disc_row >= disc_nrows) { nudge(); break; }
+
+			/*
+			  Copy it to the card.
+
+			  Two presses when there is already a folder of that name, and the row says so
+			  in between - the shape the suspend strip's delete established. Nothing is
+			  destroyed by the confirmation itself either: rip_perform() builds the new copy
+			  in a hidden staging folder and only replaces the old one once every byte is
+			  written, so a rip that is cancelled or that fails halfway leaves the folder
+			  that was already there exactly as it was.
+			*/
+			if (disc_rowact[disc_row] == DACT_RIP)
+			{
+				int armed = (rip_over_arm && !CheckTimer(rip_over_until));
+				rip_over_arm = 0;
+				disc_rip_begin(&d, disc_rowsys[disc_row], armed);
+				break;
+			}
 
 			/*
 			  A "(not yet)" row refuses, and records nothing: remembering a choice that
@@ -8540,7 +9204,7 @@ static void back()
 		  so nothing is drawn in the corner and SCR_DISCBAR would be a state with nothing
 		  on screen and no way to tell it from this one.
 		*/
-		go_screen(disc_state() != DISC_ABSENT ? SCR_DISCBAR : SCR_HOME);
+		go_screen(disc_or_rip_present() ? SCR_DISCBAR : SCR_HOME);
 		return;
 
 	case SCR_SUSPEND:
@@ -10565,6 +11229,15 @@ void chome_leave()
 
 	lib_state_save();
 	net_watch(0);
+
+	/*
+	  A rip in flight goes with us, and it has to: the classic menu can load a core, which
+	  re-execs this process, and a helper holding /dev/sr0 through that would be a rip nobody
+	  can see and nothing will ever reap - reading the drive while whatever the player loads
+	  next tries to. rip_forget() cancels it and takes the staging folder with it, so the
+	  card is left as it was rather than with a hidden half-copy on it.
+	*/
+	rip_forget();
 	disc_watch_stop();
 	OsdMenuCtl(1);            // OSD overlay back on for the classic menu
 
@@ -11355,7 +12028,50 @@ int chome_handle(uint32_t key)
 	*/
 	if (disc_handed_to_core && is_menu()) disc_handed_to_core = 0;
 
-	int drive_is_ours = !disc_handed_to_core && !core_holds_disc();
+	/*
+	  And a third owner, which is the rip: its helper holds the drive for as long as the copy
+	  takes, so the detection helper has to stay stopped for the same reason it stays stopped
+	  under a playing core. Without this test disc_poll() would find nothing watching and
+	  fork a fresh helper straight onto the drive being read - the same fault that was
+	  measured under Metal Gear Solid, only over a 700 MB sequential read rather than a game.
+
+	  rip_poll() runs regardless, and must: it is what notices the copy finishing, and the
+	  screen showing the progress is drawn from what it reads. It is a read of one short line
+	  in tmpfs and touches no device.
+	*/
+	if (rip_poll())
+	{
+		/*
+		  A full repaint only when what is *written on the screen* changes, and not on every
+		  line the child publishes.
+
+		  The two are far apart. The child publishes four times a second for however many
+		  minutes the disc takes, and the percentage under the disc changes at most a hundred
+		  times in the whole rip - so marking dirty on every line would spend a full repaint
+		  of the canvas four times a second, for the length of an operation whose whole point
+		  is that the drive is the bottleneck. Folding what the screen actually shows into one
+		  number and comparing that is the same trick the Wi-Fi and controller screens use a
+		  few lines below, for the same reason.
+
+		  The pie is not in this number on purpose: it moves with the sectors rather than with
+		  the percentage, and it is inside the disc's rectangle, so the spin's partial repaint
+		  already carries it at 60fps for the price of a blit. What is in it is everything
+		  drawn *outside* that rectangle - the state, the percentage and the count of
+		  unreadable sectors, which are the three things disc_dlg_from_rip() writes into the
+		  line under the disc. Leave one out and that line goes stale behind a moving pie,
+		  which is how this was found.
+		*/
+		const rip_status *rs = rip_state();
+		static unsigned rip_shown = 0;
+
+		unsigned sig = rip_showing()
+			? (unsigned)(rip_percent(rs) | (rs->state << 8) | ((rs->bad & 0xffff) << 12))
+			: 0;
+
+		if (sig != rip_shown) { rip_shown = sig; mark_dirty(); }
+	}
+
+	int drive_is_ours = !disc_handed_to_core && !core_holds_disc() && !rip_busy();
 
 	if (drive_is_ours) disc_poll();
 	if (drive_is_ours && disc_take_dirty())
@@ -11387,7 +12103,13 @@ int chome_handle(uint32_t key)
 		  already stopped answering by now, so staying here would also mean the strip
 		  falling back to the shelf's own selection mid-screen.
 		*/
-		if (disc_state() == DISC_ABSENT && (screen == SCR_DISC || screen == SCR_DISCBAR
+		/*
+		  Not while a rip is on that screen, though. A copy running is a disc the front-end
+		  is still about even though the drive reports none - the helper has it - so leaving
+		  here would drop the player off the progress screen the instant it appeared and
+		  leave the copy running with nothing on screen to say so. disc_or_rip_present().
+		*/
+		if (!disc_or_rip_present() && (screen == SCR_DISC || screen == SCR_DISCBAR
 			|| (screen == SCR_SUSPEND && susp_is_disc && !ig_running_disc())))
 		{
 			go_screen(SCR_HOME);
@@ -11428,7 +12150,14 @@ int chome_handle(uint32_t key)
 	  disc_poll() is not running and disc_state() has been ABSENT since the launch. Without
 	  this arm the in-game dialog drew its disc once and it sat there, stopped.
 	*/
-	if (disc_state() != DISC_ABSENT || (screen == SCR_DISC && !disc_picking && ig_running_disc()))
+	/*
+	  Or while a rip is copying, which is the other case where a disc is on screen and the
+	  drive says there is none: the helper has it. This arm is also what keeps the disc
+	  turning through a stalled read - the spin follows rip_busy() and not the progress, so a
+	  drive that has gone away for a few seconds shows a disc still turning and a percentage
+	  that has stopped, which is the honest pair of facts.
+	*/
+	if (disc_or_rip_present() || (screen == SCR_DISC && !disc_picking && ig_running_disc()))
 	{
 		/*
 		  Faster than the other animations, because the disc travels further per frame -

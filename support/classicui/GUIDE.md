@@ -545,6 +545,71 @@ a drive that stops answering used to take the whole front-end down with it. See
 [The disc title table](#the-disc-title-table) for where the name on the shelf comes
 from.
 
+### Copying a disc onto the card
+
+*Only of interest with `classicui_disc=1`.*
+
+Playing from the drive needs the disc in the tray every time, and it needs the drive to
+keep up for as long as the game lasts. Copying the disc onto the card is the other
+answer: do it once, and afterwards the game loads like everything else on the shelf.
+
+Open the disc dialog, move to **Options**, and the last entry is **Copy to
+PlayStation** — or to whichever console the disc was recognised as, or whichever one you
+picked from the list above it. It goes into that system's own games folder, in a folder
+named after the disc:
+
+```
+/media/fat/games/PSX/Metal Gear Solid/Metal Gear Solid.cue
+/media/fat/games/PSX/Metal Gear Solid/Track 01.bin
+/media/fat/games/PSX/Metal Gear Solid/Track 02.bin
+```
+
+The name is the same one the shelf shows for the disc — the title table's answer if you
+have one, otherwise the disc's label or its serial. A PlayStation rip appears on the
+shelf as one card under that name as soon as the copy finishes; the tracks are not
+listed as games of their own.
+
+**What you see while it runs.** The disc spins fast and fills in from twelve o'clock as
+it is copied, with the percentage under it. That fraction is the sectors actually
+written, so it moves at the speed the work does rather than guessing. You can press B
+and leave — the copy carries on in the background, the disc badge in the corner keeps
+turning, and pressing A on it comes back to the progress. **A** on **Stop** twice stops
+it, and a stopped copy leaves nothing behind at all: it is built in a hidden folder and
+only put in place, in one step, once every byte is written. The same is true if the
+power goes.
+
+**It will not quietly overwrite anything.** If a folder of that name is already there
+the entry changes to *Replace it? Press again*, the way deleting a suspend point does.
+Even then the copy you already have is untouched until the new one is complete, so
+changing your mind costs nothing. Free space is checked before the drive is touched, and
+a card without room refuses with the two numbers rather than filling up.
+
+**A scratched disc still copies, and says so.** A sector that will not read after four
+attempts is written as silence — 2352 zero bytes — so every track stays exactly the
+length the cue sheet says and nothing after the bad spot slips out of place. The screen
+then reports *Copied, but N sectors would not read* instead of *Copied*, and the folder
+carries an `unreadable-sectors.txt` listing them with the track each was in. A zeroed
+audio frame is a click; a zeroed data sector may stop the game loading, which is why you
+are told rather than left to find out from the core. A drive that disappears mid-copy —
+a USB reset, which this dock does — is waited out rather than treated as an error, and
+the percentage stops moving while that happens.
+
+**What each console gets.** All four are raw 2352-byte tracks, one file per track,
+because that is what every CD core in this firmware reads. The only difference is the
+sheet: PlayStation gets the disc's real sector mode, `MODE2/2352` on most discs, because
+its parser understands it. Mega CD, Neo Geo CD and PC Engine CD get `MODE1/2352`, which
+is what their parsers understand and what those discs are anyway. Where the drive can
+read the raw subchannel, real pregaps are recovered and written into the track that owns
+them; where it cannot, the sheet has no pregaps, which is what a cue sheet has always
+meant by their absence.
+
+**One rough edge, and it is worth knowing before you copy a Mega CD disc.** Only
+PlayStation rips appear on the shelf. The shelf entries for Mega Drive, TurboGrafx-16
+and Neo Geo do not accept `.cue` — their cards are cartridges — so a Mega CD, PC Engine
+CD or Neo Geo CD copy is written correctly and can be loaded from that core's own file
+browser, but it will not show up as a card here yet. Giving those systems a shelf route
+to their CD core is separate work.
+
 **Reading the disc is [Anime0t4ku](https://github.com/Anime0t4ku)'s work, not ours.**
 Everything above rests on
 [Main_MiSTer_Physical_Disc](https://github.com/Anime0t4ku/Main_MiSTer_Physical_Disc), a
