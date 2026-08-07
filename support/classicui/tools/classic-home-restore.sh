@@ -73,8 +73,10 @@ STORE=$ROOT/linux/classic-home
 LIST=$STORE/protected.list
 LOG=$STORE/restore.log
 
-# Only our build has this in it. Keep it in step with cfg.cpp's ini table.
-MARKER=CLASSICUI_SCREENSCRAPER
+# Strings only our builds have, one per product. Both come from cfg.cpp's ini option
+# table, so they are compiled in whatever the build options - keep them in step with it.
+# Upstream's firmware has neither, which is the whole point.
+MARKERS="CLASSICUI_SCREENSCRAPER SNAC_PAD"
 
 # Below this, a file is not a firmware or a core however well its header reads. Ours is
 # ~1.0 MB and a menu core ~1.5 MB; the real guard is the recorded size and md5, this
@@ -171,9 +173,19 @@ elf_arm_ok() {
 # ahead. That is the right way round: not restoring at all defeats the whole hook, while
 # the case it gets wrong is a firmware copied on by hand instead of through the
 # installer.
+#
+# Any one marker is enough, and there is more than one because there is more than one
+# product. The SNAC-only firmware carries no Classic Home at all, so testing only for
+# CLASSICUI_SCREENSCRAPER called every hand-installed SNAC build "not ours" and restored
+# our stored copy over it - a silent downgrade of exactly the user this hook exists to
+# protect. Measured: the Classic Home build has both markers, the SNAC-only build has
+# SNAC_PAD alone, and releases/MiSTer_20260707 has neither.
 has_marker() {
-	grep -q -a "$MARKER" "$1" 2>/dev/null && return 0
-	grep -q "$MARKER" "$1" 2>/dev/null
+	for m in $MARKERS; do
+		grep -q -a "$m" "$1" 2>/dev/null && return 0
+		grep -q "$m" "$1" 2>/dev/null && return 0
+	done
+	return 1
 }
 
 # The user's own off switch. Someone who has deliberately gone back to the official
