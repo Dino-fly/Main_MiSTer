@@ -244,7 +244,9 @@ void osk_draw(const chome_profile *p, int pad)
 
 	char up[64];
 	snprintf(up, sizeof(up), "%s", title);
-	for (char *q = up; *q; q++) *q = (char)toupper((unsigned char)*q);
+	// The same rule every other panel header follows - see gfx_shout(). Not the CAPS key
+	// below, which is the player typing a capital letter and has nothing to do with this.
+	gfx_shout(up);
 	gfx_text(up, px + 6 * s, py + 4, s, COL_PANELHI, 0);
 
 	int y = py + phdr + pad_s;

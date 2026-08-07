@@ -42,6 +42,7 @@
 #include "../../video.h"
 #include "../../hardware.h"
 #include "../../file_io.h"
+#include "../../charrom.h"
 #include "../../menu.h"
 #include "../arcade/mra_loader.h"
 #include "../physical_disc/physical_disc.h"
@@ -134,6 +135,48 @@ static unsigned long set_quit_until = 0;
 static int set_wrote = -1;                   // -1 nothing written yet, else how many
 static int set_failed = 0;
 static int set_odd = 0;                      // options not at their recommended value
+
+/*
+  The two rows under the options: the font, then Save Changes. Named rather than written as
+  set_nview and set_nview + 1 at a dozen sites, because "which row am I on" is asked by the
+  drawing, the legend, left/right, A, X and B, and one of those left comparing against the
+  wrong number is a key that acts on the row below the cursor.
+*/
+#define SET_ROW_FONT (set_nview)
+#define SET_ROW_SAVE (set_nview + 1)
+static int set_nrows();
+
+// Everything staged and not yet written, from both models below. The Save row's count, the
+// arm, and the question B asks on the way out are all this one number.
+static int set_pending();
+
+/*
+  The Font row, which is on that same screen and is not one of the options above.
+
+  It cannot be, and the reason is written out on opt_def in chome_opt.h: that table's
+  safety property is that every value it can write is a number cfg.cpp will accept, and
+  `font=` is a 1024-character path. So it is a row of its own, staged the way the rest of
+  the screen is staged, and it writes its one key through the same ini_apply_set() the
+  Save row uses for everything else.
+
+  Entry 0 is always the built-in font and always reachable - see FontRestoreBuiltin() in
+  charrom.cpp for why that took 2KB rather than being free. The rest are whatever .pf
+  files are on the card, plus, if `font=` names something that is no longer there, that
+  name as well: the row's job is to say what the machine is set to, and dropping a missing
+  font from the list would show the player "Built-in" for a file they can see in their ini.
+*/
+#define FONT_MAX 33                          // the built-in, plus 32 files
+
+/*
+  As wide as cfg.font itself, on purpose. Anything narrower would truncate a long `font=`
+  on the way in and then write the truncated path back out on the next save - a settings
+  screen quietly corrupting the setting it was opened to look at.
+*/
+static char font_rel[FONT_MAX][sizeof(cfg.font)];   // "" for the built-in, else the path
+static int font_n = 1;
+static int font_sel = 0;                     // staged
+static int font_was = 0;                     // ...and what the file says
+static char font_note[96] = {};              // a load that did not happen, for the footer
 
 /*
   Online Covers: the player's own ScreenScraper account.
@@ -1069,7 +1112,7 @@ static void draw_fallback_card(const chome_item *it, int x, int y, int w, int h)
 	gfx_frame_rect(x, y, w, h, COL_PANELLO, 1);
 
 	int ts = (w > 180) ? 2 : 1;
-	int maxc = (w - 6 * u) / (GLYPH_W * ts);
+	int maxc = gfx_text_cols(w - 6 * u, ts);
 	if (maxc < 4) maxc = 4;
 
 	// Wrap the title on word boundaries.
@@ -1121,7 +1164,7 @@ static void draw_fallback_card(const chome_item *it, int x, int y, int w, int h)
 	{
 		char up[CH_TITLE_LEN];
 		snprintf(up, sizeof(up), "%s", lines[i]);
-		for (char *p = up; *p; p++) *p = (char)toupper((unsigned char)*p);
+		gfx_shout(up);
 		gfx_text_c(gfx_clip(up, ts, w - 4), x + w / 2, ty + i * lh, ts, COL_WHITE, COL_SHADOW);
 	}
 
@@ -1242,7 +1285,7 @@ static void draw_card(const chome_entry *e, int cx, int bottom, int w, int h, in
 
 		char up[CH_TITLE_LEN];
 		snprintf(up, sizeof(up), "%s", e->label);
-		for (char *p = up; *p; p++) *p = (char)toupper((unsigned char)*p);
+		gfx_shout(up);
 		gfx_text_c(gfx_clip(up, fs, w - 8), x + w / 2, label_y, fs, COL_INK, 0);
 
 		if (h > 80)
@@ -1278,7 +1321,7 @@ static void draw_card(const chome_entry *e, int cx, int bottom, int w, int h, in
 			gfx_blend(x, y + h - bandh, w, bandh, COL_SHADOW, 190);
 			char up[CH_TITLE_LEN];
 			snprintf(up, sizeof(up), "%s", it->title);
-			for (char *p = up; *p; p++) *p = (char)toupper((unsigned char)*p);
+			gfx_shout(up);
 			gfx_text_c(gfx_clip(up, bs, w - 4), x + w / 2, y + h - bandh + 3, bs, COL_PANELHI, 0);
 		}
 
@@ -1509,7 +1552,7 @@ static void draw_title_block(const chome_profile *p)
 	{
 		snprintf(up, sizeof(up), "%s", e->label);
 	}
-	for (char *q = up; *q; q++) *q = (char)toupper((unsigned char)*q);
+	gfx_shout(up);
 	gfx_text_c(gfx_clip(up, p->ts_title, avail), p->w / 2, p->y_title, p->ts_title, COL_WHITE, COL_SHADOW);
 
 	char meta[128] = {};
@@ -1537,7 +1580,7 @@ static void draw_title_block(const chome_profile *p)
 		snprintf(meta, sizeof(meta), "%d GAMES", e->count);
 	}
 
-	for (char *q = meta; *q; q++) *q = (char)toupper((unsigned char)*q);
+	gfx_shout(meta);
 	gfx_text_c(gfx_clip(meta, p->ts_ui, avail), p->w / 2, p->y_meta, p->ts_ui, COL_DIM, 0);
 
 	/*
@@ -1643,7 +1686,7 @@ static void draw_position(const chome_profile *p)
 	gfx_text_c(buf, p->w / 2, p->y_pos, p->ts_tiny, COL_DIM, 0);
 
 	int half = gfx_text_w(buf, p->ts_tiny) / 2;
-	if (sel > 0) gfx_text(CH_LEFT, p->w / 2 - half - GLYPH_W * p->ts_tiny, p->y_pos, p->ts_tiny, COL_DIM, 0);
+	if (sel > 0) gfx_text(CH_LEFT, p->w / 2 - half - gfx_adv(p->ts_tiny), p->y_pos, p->ts_tiny, COL_DIM, 0);
 	if (sel < n - 1) gfx_text(CH_RIGHT, p->w / 2 + half, p->y_pos, p->ts_tiny, COL_DIM, 0);
 }
 
@@ -2324,16 +2367,19 @@ static int build_legend(legend_pair *out, int max)
 		  to put the value back - and at 240p only the first three survive, which is why
 		  those three are first.
 		*/
-		if (set_row >= set_nview)
+		if (set_row == SET_ROW_SAVE)
 		{
 			// ...and only while there is something to save, or the row would keep
 			// offering a press that does nothing but shake the panel.
-			if (opt_dirty() && n < max) { out[n++] = lp(LBL_A, "Save", "Save"); }
+			if (set_pending() && n < max) { out[n++] = lp(LBL_A, "Save", "Save"); }
 			if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
 			break;
 		}
 		if (n < max) { out[n++] = { CH_LEFT CH_RIGHT, "dpad_lr", "Change", "Chg", 0, COL_WHITE }; }
-		if (n < max) { out[n++] = lp(LBL_X, "Usual Value", "Usual"); }
+		// The Font row has no recommended value to go back to - see the row's colour - so X
+		// puts back the one the file names, which is the undo somebody actually wants.
+		if (n < max) { out[n++] = lp(LBL_X, (set_row == SET_ROW_FONT) ? "Saved Font" : "Usual Value",
+			(set_row == SET_ROW_FONT) ? "Saved" : "Usual"); }
 		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
 		break;
 
@@ -2449,6 +2495,12 @@ static void draw_legend(const chome_profile *p)
 	}
 
 	int avail = p->w - p->inset * 2;
+	/*
+	  Air between the prompts, in glyph cells rather than in advances: three characters of
+	  space between "MOVE" and "CHOOSE" is what separates the pairs, and letter spacing is
+	  about the gap *inside* a word. Following the advance here would widen the gaps at the
+	  one moment the labels beside them got wider too, which is when the row is tightest.
+	*/
 	int gap = 3 * GLYPH_W * s;
 	if (n > 1)
 	{
@@ -2471,7 +2523,7 @@ static void draw_legend(const chome_profile *p)
 
 		char up[64];
 		snprintf(up, sizeof(up), "%s", labels[i]);
-		for (char *q = up; *q; q++) *q = (char)toupper((unsigned char)*q);
+		gfx_shout(up);
 		gfx_text(up, x + kw + 5 * s, p->y_legend, s, lcol, 0);
 
 		x += widths[i] + gap;
@@ -2508,7 +2560,7 @@ static void draw_menubar(const chome_profile *p, int focused)
 		*/
 		char up[32];
 		snprintf(up, sizeof(up), "%s", mb_text(i));
-		for (char *q = up; *q; q++) *q = (char)toupper((unsigned char)*q);
+		gfx_shout(up);
 
 		if (on) gfx_fill(cx - cellw / 2 + 2, y + 2, cellw - 4, h - 6, COL_BLUE);
 		gfx_text_c(gfx_clip(up, s, cellw - 8), cx, y + (h - 8 * s) / 2, s,
@@ -2542,7 +2594,7 @@ static panel_box draw_panel_at(const chome_profile *p, int x, int y, int w, int 
 
 	char up[64];
 	snprintf(up, sizeof(up), "%s", title);
-	for (char *q = up; *q; q++) *q = (char)toupper((unsigned char)*q);
+	gfx_shout(up);
 	gfx_text(up, x + 6 * s, y + 4, s, COL_PANELHI, 0);
 
 	b.x = x; b.y = y + hdr; b.w = w; b.h = h - hdr; b.s = s;
@@ -2614,14 +2666,14 @@ static void draw_rows_c(const panel_box *b, const char *const *rows, const char 
 
 		char up[64];
 		snprintf(up, sizeof(up), "%s", rows[i]);
-		for (char *q = up; *q; q++) *q = (char)toupper((unsigned char)*q);
+		gfx_shout(up);
 		gfx_text(gfx_clip(up, b->s, b->w / 2), b->x + 6 * b->s, y, b->s, on ? COL_WHITE : COL_INK, 0);
 
 		if (vals && vals[i])
 		{
 			char v[48];
 			snprintf(v, sizeof(v), "%s", vals[i]);
-			for (char *q = v; *q; q++) *q = (char)toupper((unsigned char)*q);
+			gfx_shout(v);
 			int vw = gfx_text_w(v, b->s);
 			uint32_t col = (vcol && vcol[i]) ? vcol[i] : (on ? COL_WHITE : COL_PANELLO);
 			gfx_text(v, b->x + b->w - 6 * b->s - vw, y, b->s, col, 0);
@@ -3045,7 +3097,7 @@ static void draw_section(const panel_box *b, int y, const char *text)
 
 	char up[48];
 	snprintf(up, sizeof(up), "%s", text);
-	for (char *q = up; *q; q++) *q = (char)toupper((unsigned char)*q);
+	gfx_shout(up);
 
 	// The word darker than its rule: at COL_PANELLO on COL_PANEL the heading was fainter
 	// than the second line of the rows under it, which inverts what leads what.
@@ -3078,7 +3130,7 @@ static void draw_progress(const panel_box *b, int mark, const char *head, const 
 	int box = 16 * s;
 
 	char lines[4][64];
-	int nl = wrap_text(body, (b->w - 16 * s) / (8 * s), lines, 3);
+	int nl = wrap_text(body, gfx_text_cols(b->w - 16 * s, s), lines, 3);
 
 	/*
 	  Centred in what it was given rather than starting at the top. The panel is sized
@@ -3142,7 +3194,7 @@ static void draw_progress(const panel_box *b, int mark, const char *head, const 
 static void slot_word(const char *word, int x, int y, int tw, int s, uint32_t col)
 {
 	int room = tw - 4 * s;
-	if (room < 3 * GLYPH_W * s) return;
+	if (gfx_text_cols(room, s) < 3) return;
 	gfx_text_c(gfx_clip(word, s, room), x, y, s, col, 0);
 }
 
@@ -3182,9 +3234,9 @@ static void draw_suspend(const chome_profile *p)
 		*/
 		const char *title = it ? it->title : "";
 		snprintf(hdr, sizeof(hdr), "%s - SUSPEND POINTS", title);
-		if ((int)strlen(hdr) * GLYPH_W * s > room) snprintf(hdr, sizeof(hdr), "%s", title);
+		if (gfx_text_w(hdr, s) > room) snprintf(hdr, sizeof(hdr), "%s", title);
 	}
-	for (char *q = hdr; *q; q++) *q = (char)toupper((unsigned char)*q);
+	gfx_shout(hdr);
 
 	// Armed, the header draws the button rather than naming it - the legend under it is
 	// showing that same button, and one of them saying "X" while the other drew a square
@@ -3213,7 +3265,7 @@ static void draw_suspend(const chome_profile *p)
 		int s2 = p->ts_ui;
 		char lines[4][64];
 		int nl = wrap_text("This system cannot save your place - it has no save states.",
-			(room - 16 * s2) / (8 * s2), lines, 2);
+			gfx_text_cols(room - 16 * s2, s2), lines, 2);
 		for (int i = 0; i < nl; i++)
 			gfx_text_c(lines[i], p->w / 2, y + 22 * s2 + i * 11 * s2, s2, COL_PANELHI, 0);
 		return;
@@ -3424,7 +3476,7 @@ static void draw_display_screen(const chome_profile *p)
 
 		char up[64];
 		snprintf(up, sizeof(up), "%s", vp_name(opts[i]));
-		for (char *q = up; *q; q++) *q = (char)toupper((unsigned char)*q);
+		gfx_shout(up);
 		gfx_text_c(gfx_clip(up, tiny, tile_w), x + tile_w / 2, label_y, tiny,
 			on ? COL_WHITE : COL_INK, 0);
 
@@ -3435,13 +3487,13 @@ static void draw_display_screen(const chome_profile *p)
 	if (h_blurb)
 	{
 		char lines[4][64];
-		int cols = (b.w - pad * 2) / (GLYPH_W * tiny);
+		int cols = gfx_text_cols(b.w - pad * 2, tiny);
 		int nl = wrap_text(vp_blurb(opts[look_row]), cols, lines, 2);
 		for (int i = 0; i < nl; i++)
 		{
 			char up[64];
 			snprintf(up, sizeof(up), "%s", lines[i]);
-			for (char *q = up; *q; q++) *q = (char)toupper((unsigned char)*q);
+			gfx_shout(up);
 			gfx_text_c(up, b.x + b.w / 2, blurb_y + i * 10 * tiny, tiny, COL_INK, 0);
 		}
 	}
@@ -3656,7 +3708,7 @@ static void draw_wifi(const chome_profile *p)
 	  looks broken, and a panel that changes size as more are found is worse.
 	*/
 	int w = p->w - 2 * p->inset;
-	if (w > 44 * 8 * s) w = 44 * 8 * s;
+	if (w > 44 * gfx_adv(s)) w = 44 * gfx_adv(s);
 
 	int hdr = 10 * s + 6;
 	int foot = 12 * s;
@@ -3719,7 +3771,7 @@ static void draw_wifi(const chome_profile *p)
 	{
 		char lines[4][64];
 		int nl = wrap_text("Plug a USB Wi-Fi adapter into the MiSTer and come back to this screen.",
-			(b.w - 16 * s) / (8 * s), lines, 3);
+			gfx_text_cols(b.w - 16 * s, s), lines, 3);
 		for (int i = 0; i < nl; i++)
 			gfx_text_c(lines[i], b.x + b.w / 2, b.y + b.h / 2 + i * 10 * s, s, COL_INK, 0);
 		return;
@@ -3989,7 +4041,7 @@ static void draw_pads(const chome_profile *p)
 	unsigned long ms = anim_ms();
 
 	int w = p->w - 2 * p->inset;
-	if (w > 44 * 8 * s) w = 44 * 8 * s;
+	if (w > 44 * gfx_adv(s)) w = 44 * gfx_adv(s);
 
 	int hdr = 10 * s + 6;
 	int foot = 12 * s;
@@ -4077,7 +4129,7 @@ static void draw_pads(const chome_profile *p)
 		char lines[4][64];
 		int nl = wrap_text("This MiSTer has no Bluetooth adapter. A controller plugged into "
 			"the USB port works without any setting up.",
-			(b.w - 16 * s) / (8 * s), lines, 3);
+			gfx_text_cols(b.w - 16 * s, s), lines, 3);
 		for (int i = 0; i < nl; i++)
 			gfx_text_c(lines[i], b.x + b.w / 2, b.y + b.h / 2 - 10 * s + i * 10 * s, s, COL_INK, 0);
 		return;
@@ -4355,7 +4407,7 @@ static void draw_padtest(const chome_profile *p)
 	int layout = pad_layout_for(have ? (((uint32_t)row.vid << 16) | row.pid) : 0, nm);
 
 	int w = p->w - 2 * p->inset;
-	if (w > 44 * 8 * s) w = 44 * 8 * s;
+	if (w > 44 * gfx_adv(s)) w = 44 * gfx_adv(s);
 
 	// The stick band is only there for a pad that has sticks. A SNAC pad is a digital
 	// PlayStation pad and two empty boxes would be a question it cannot answer.
@@ -5508,7 +5560,7 @@ static void draw_disc_picker(const chome_profile *p, const disc_dlg *d)
 	int rowh = 14 * s;
 	int nrows = disc_nrows ? disc_nrows : 1;
 
-	int tw = 24 * 8 * s;
+	int tw = 24 * gfx_adv(s);
 	int maxw = p->w - 2 * p->inset;
 	if (tw > maxw - 16 * s) tw = maxw - 16 * s;
 
@@ -5697,7 +5749,7 @@ static void draw_power(const chome_profile *p)
 	*/
 	int ps = p->ts_ui;
 	int pw = p->w - 2 * p->inset;
-	if (pw > 34 * 8 * ps) pw = 34 * 8 * ps;
+	if (pw > 34 * gfx_adv(ps)) pw = 34 * gfx_adv(ps);
 	int ph = (10 * ps + 6) + PWR_ROWS * 14 * ps + 30 * ps;
 
 	panel_box b = draw_panel_ex(p, pw, ph, "Power");
@@ -5728,7 +5780,7 @@ static void draw_power(const chome_profile *p)
 	{
 		char lines[4][64];
 		int nl = wrap_text("Always shut down here rather than pulling the plug.",
-			(b.w - 16 * s) / (8 * s), lines, 2);
+			gfx_text_cols(b.w - 16 * s, s), lines, 2);
 		for (int i = 0; i < nl; i++)
 			gfx_text_c(lines[i], b.x + b.w / 2, ny + i * 10 * s, s, COL_PANELHI, 0);
 	}
@@ -5787,7 +5839,7 @@ static void draw_ini(const chome_profile *p)
 	int done = (ini_wrote != -1);
 
 	int w = p->w - 2 * p->inset;
-	if (w > 46 * 8 * s) w = 46 * 8 * s;
+	if (w > 46 * gfx_adv(s)) w = 46 * gfx_adv(s);
 	int avail = w - 12 * s;
 
 	/*
@@ -5821,7 +5873,7 @@ static void draw_ini(const chome_profile *p)
 	// Sized for its content, like Power, rather than taking the default panel.
 	int lines = done ? 3 : (ini_n ? ini_n * (stacked ? 2 : 1) : 1);
 	char note[4][64];
-	int nnote = done ? 0 : (ini_n ? wrap_text(INI_NOTE, avail / (8 * s), note, 3) : 0);
+	int nnote = done ? 0 : (ini_n ? wrap_text(INI_NOTE, gfx_text_cols(avail, s), note, 3) : 0);
 
 	int h = (10 * s + 6) + 5 * s + lines * rowh + 6 * s + nnote * 9 * s + 6 * s + 12 * s;
 	if (nan) h += 6 * s + 9 * s + nan * rowh;
@@ -5904,6 +5956,126 @@ static void draw_ini(const chome_profile *p)
 	else btn_hint_c(b.x + b.w / 2, b.y + b.h - 11 * s, s, COL_INK, "Press", LBL_A, "to change them");
 }
 
+/* ------------------------------------------------------------- the font --- */
+
+#define FONT_DIR "font"
+#define FONT_HELP "The glyphs this menu draws. Put .pf files in font/."
+
+// The name on the row: "Built-in", or the file without its folder and extension. The
+// extension is dropped because every entry has it, and a column of ".PF" says nothing.
+static const char *font_label(int i, char *buf, int max)
+{
+	if (i <= 0 || i >= font_n) return "Built-in";
+
+	const char *base = strrchr(font_rel[i], '/');
+	base = base ? base + 1 : font_rel[i];
+	snprintf(buf, (size_t)max, "%s", base);
+
+	char *dot = strrchr(buf, '.');
+	if (dot && !strcasecmp(dot, ".pf")) *dot = 0;
+	return buf;
+}
+
+static int font_cmp(const void *a, const void *b)
+{
+	return strcasecmp((const char*)a, (const char*)b);
+}
+
+/*
+  What is on the card, plus what the ini says, whether or not those are the same thing.
+
+  Sorted, because readdir() order is whatever the filesystem felt like and a list that
+  reorders itself between two visits is a list nobody can navigate from memory. The
+  built-in stays at index 0 outside the sort - it is the way back, not one of the files.
+*/
+static void font_scan()
+{
+	font_n = 1;
+	font_rel[0][0] = 0;
+
+	char dir[1024];
+	snprintf(dir, sizeof(dir), "%s/%s", getRootDir(), FONT_DIR);
+
+	DIR *d = opendir(dir);
+	if (d)
+	{
+		struct dirent *de;
+		while ((de = readdir(d)) && font_n < FONT_MAX)
+		{
+			if (de->d_name[0] == '.') continue;
+
+			const char *dot = strrchr(de->d_name, '.');
+			if (!dot || strcasecmp(dot, ".pf")) continue;
+
+			snprintf(font_rel[font_n], sizeof(font_rel[font_n]), "%s/%s", FONT_DIR, de->d_name);
+			font_n++;
+		}
+		closedir(d);
+
+		// Said out loud rather than silently, as the file browser's own cap is: a player with
+		// more than this on the card would otherwise be looking for a font that is on it.
+		if (font_n >= FONT_MAX)
+			printf("ClassicUI: font list capped at %d files in %s/\n", FONT_MAX - 1, FONT_DIR);
+	}
+
+	if (font_n > 2) qsort(font_rel[1], (size_t)(font_n - 1), sizeof(font_rel[0]), font_cmp);
+
+	/*
+	  And whatever `font=` names, if the scan did not find it - a font in some other folder,
+	  or one that has been deleted since the ini was written. Either way the row has to be
+	  able to show it, because it is what the machine is set to.
+	*/
+	font_was = 0;
+	if (cfg.font[0])
+	{
+		for (int i = 1; i < font_n; i++) if (!strcmp(font_rel[i], cfg.font)) font_was = i;
+
+		if (!font_was && font_n < FONT_MAX)
+		{
+			snprintf(font_rel[font_n], sizeof(font_rel[font_n]), "%s", cfg.font);
+			font_was = font_n++;
+		}
+	}
+
+	font_sel = font_was;
+}
+
+static int font_dirty() { return (font_sel != font_was) ? 1 : 0; }
+
+/*
+  Put a choice on the screen now.
+
+  The built-in comes from the copy charrom.cpp keeps; anything else is a fresh LoadFont(),
+  which is the same call boot makes and the reason a custom font needed no code in this
+  front-end at all. Restoring first is what makes a *failed* load harmless in the other
+  direction too: LoadFont() leaves the table alone when the file will not read, so without
+  the restore, stepping from font A to a missing font B would leave A on screen while the
+  row said B.
+
+  0 back when the file would not load, and the caller says so on the footer rather than
+  leaving the player looking at a font that is not the one named. That case is the whole
+  reason LoadFont() has a return value now.
+*/
+static int font_apply(int i)
+{
+	FontRestoreBuiltin();
+
+	int ok = 1;
+	if (i > 0 && i < font_n && font_rel[i][0])
+	{
+		// A copy, because LoadFont() takes a char* and the list is what the row is showing.
+		char path[sizeof(font_rel[0])];
+		snprintf(path, sizeof(path), "%s", font_rel[i]);
+		ok = LoadFont(path);
+	}
+
+	// Every glyph on screen changed, and nothing in the compositor could know that from
+	// the shape of any region: this is a full repaint or it is a screen of two fonts.
+	gfx_damage_all();
+	mark_dirty();
+	return ok;
+}
+
 /* ------------------------------------------------------- more settings ---- */
 
 #define SET_SAVE_NOTE "Writes the changes into MiSTer.ini. A copy is kept."
@@ -5914,10 +6086,14 @@ static void draw_ini(const chome_profile *p)
   video path, which cannot change while a panel is up over it, and the values only move
   when we move them.
 */
+static int set_nrows() { return set_nview + 2; }
+static int set_pending() { return opt_dirty() + font_dirty(); }
+
 static void set_summary()
 {
 	set_nview = opt_view(set_view, OPT_MAX, video_scaler_is_visible());
 	opt_load(ini_path());
+	font_scan();
 
 	set_odd = 0;
 	for (int i = 0; i < set_nview; i++) if (!opt_is_rec(set_view[i])) set_odd++;
@@ -5933,6 +6109,7 @@ static void set_refresh()
 	set_quit_arm = 0;
 	set_wrote = -1;
 	set_failed = 0;
+	font_note[0] = 0;
 }
 
 // A value moved. The last write's result stops being the news, and an armed save is
@@ -5943,6 +6120,32 @@ static void set_edited()
 	set_failed = 0;
 	set_arm = 0;
 	mark_dirty();
+}
+
+/*
+  Step the font, and show it at once.
+
+  Live rather than on save, unlike every other row here, and the difference is the point:
+  the value of this setting is what the letters look like, and a font chosen from a list of
+  file names without seeing it is a guess. So the screen the player is reading is drawn in
+  the font under the cursor - which also means leaving without saving has to put the old
+  one back, and B already asks before it does that.
+*/
+static void set_font_step(int dir)
+{
+	int n = font_sel + dir;
+	if (n < 0) n = font_n - 1;
+	if (n >= font_n) n = 0;
+	if (n == font_sel) return;
+
+	font_sel = n;
+
+	char nm[64];
+	if (font_apply(font_sel)) font_note[0] = 0;
+	else snprintf(font_note, sizeof(font_note), "%s will not load - still on the old font",
+		font_label(font_sel, nm, sizeof(nm)));
+
+	set_edited();
 }
 
 /* ------------------------------------------------------- core options ----- */
@@ -5992,7 +6195,7 @@ static void draw_core_opts(const chome_profile *p)
 	int n = core_opts_tier_count(co_tier);
 
 	int pw = p->w - p->inset * 2;
-	if (pw > 46 * 8 * s) pw = 46 * 8 * s;
+	if (pw > 46 * gfx_adv(s)) pw = 46 * gfx_adv(s);
 	int ph = (10 * s + 6) + (n + 1) * 12 * s + 22 * s;
 	if (ph > p->h - 2 * p->safe_y) ph = p->h - 2 * p->safe_y;
 
@@ -6057,7 +6260,7 @@ static void draw_core_opts(const chome_profile *p)
 	  Two wordings again: at 240p the panel is not wide enough for the long one, and a
 	  footer that loses its end is worse than a short one that does not.
 	*/
-	int room = (b.w - 12 * s) / (8 * p->ts_tiny);
+	int room = gfx_text_cols(b.w - 12 * s, p->ts_tiny);
 	const char *foot = (room >= 36) ? "Applied at once, kept with the core" : "Applied at once";
 
 	/*
@@ -6105,7 +6308,7 @@ static void draw_core_opts(const chome_profile *p)
 	{
 		snprintf(promo, sizeof(promo), (room >= 36) ? "ALL GAMES NOW: %s" : "ALL GAMES: %s",
 			co_promoted);
-		for (char *q = promo; *q; q++) *q = (char)toupper((unsigned char)*q);
+		gfx_shout(promo);
 		gfx_text(gfx_clip(promo, p->ts_tiny, b.w - 12 * s), b.x + 6 * s, fy, p->ts_tiny,
 			COL_GREEN, 0);
 		return;
@@ -6136,7 +6339,7 @@ static void draw_settings(const chome_profile *p)
 	int fit = (b.h - 5 * s - foot) / rowh;
 	if (fit < 1) fit = 1;
 
-	int nrows = set_nview + 1;                   // the options, then Save Changes
+	int nrows = set_nrows();                     // the options, then Font, then Save Changes
 	if (fit > nrows) fit = nrows;
 
 	if (set_row < set_top) set_top = set_row;
@@ -6144,15 +6347,15 @@ static void draw_settings(const chome_profile *p)
 	if (set_top > nrows - fit) set_top = nrows - fit;
 	if (set_top < 0) set_top = 0;
 
-	const char *labels[OPT_MAX + 1];
-	const char *vals[OPT_MAX + 1];
-	uint32_t vcol[OPT_MAX + 1];
-	static char vbuf[OPT_MAX + 1][24];
+	const char *labels[OPT_MAX + 2];
+	const char *vals[OPT_MAX + 2];
+	uint32_t vcol[OPT_MAX + 2];
+	static char vbuf[OPT_MAX + 2][24];
 
-	int dirty = opt_dirty();
+	int dirty = set_pending();
 	int n = 0;
 
-	for (int r = set_top; r < set_top + fit && n <= OPT_MAX; r++)
+	for (int r = set_top; r < set_top + fit && n <= OPT_MAX + 1; r++)
 	{
 		if (r < set_nview)
 		{
@@ -6163,6 +6366,20 @@ static void draw_settings(const chome_profile *p)
 			// The whole colour code, in one line: amber is "not the value this menu
 			// recommends", which for most options is simply the machine's default.
 			vcol[n] = opt_is_rec(i) ? 0 : COL_YELLOW;
+		}
+		else if (r == SET_ROW_FONT)
+		{
+			labels[n] = "Font";
+			vals[n] = font_label(font_sel, vbuf[n], sizeof(vbuf[n]));
+
+			/*
+			  Never amber. The other rows' colour means "away from what this menu
+			  recommends", and this menu has no opinion about which font somebody should
+			  read their shelf in - the built-in is the one that ships, not the one that is
+			  right. Red is different: it means the file named on the row would not load,
+			  which is a fact about the card rather than a preference.
+			*/
+			vcol[n] = font_note[0] ? COL_RED : 0;
 		}
 		else
 		{
@@ -6191,10 +6408,15 @@ static void draw_settings(const chome_profile *p)
 	}
 
 	int fy = b.y + b.h - foot + 2 * s;
-	int cols = (b.w - 12 * s) / (8 * s);
+	int cols = gfx_text_cols(b.w - 12 * s, s);
+
+	const char *help = SET_SAVE_NOTE;
+	if (od) help = od->help;
+	else if (set_row == SET_ROW_FONT) help = FONT_HELP;
+	if (set_failed) help = opt_error();
 
 	char wrapped[4][64];
-	int nl = wrap_text(set_failed ? opt_error() : od ? od->help : SET_SAVE_NOTE, cols, wrapped, 2);
+	int nl = wrap_text(help, cols, wrapped, 2);
 	for (int i = 0; i < nl; i++)
 		gfx_text(wrapped[i], b.x + 6 * s, fy + i * 10 * s, s, set_failed ? COL_RED : COL_PANELLO, 0);
 
@@ -6215,9 +6437,19 @@ static void draw_settings(const chome_profile *p)
 		btn_hint_c(b.x + b.w / 2, y3, s, COL_RED, "Press", LBL_B, "again to lose the changes");
 		return;
 	}
-	if (set_row == set_nview && dirty)
+	if (set_row == SET_ROW_SAVE && dirty)
 	{
 		btn_hint_c(b.x + b.w / 2, y3, s, COL_INK, "Press", LBL_A, "to save");
+		return;
+	}
+	// A font that would not load outranks the rest of this line: the row above says a name
+	// and the screen is not drawn in it, and nothing else here could explain that.
+	if (font_note[0])
+	{
+		char u[96];
+		snprintf(u, sizeof(u), "%s", font_note);
+		gfx_shout(u);
+		gfx_text_c(gfx_clip(u, s, b.w - 12 * s), b.x + b.w / 2, y3, s, COL_RED, 0);
 		return;
 	}
 	if (!dirty && set_wrote > 0)
@@ -6231,7 +6463,7 @@ static void draw_settings(const chome_profile *p)
 	{
 		char u[64], rv[24];
 		snprintf(u, sizeof(u), "Usually %s", opt_rec_text(set_view[set_row], rv, sizeof(rv)));
-		for (char *q = u; *q; q++) *q = (char)toupper((unsigned char)*q);
+		gfx_shout(u);
 		gfx_text_c(gfx_clip(u, s, b.w - 12 * s), b.x + b.w / 2, y3, s, COL_YELLOW, 0);
 	}
 }
@@ -6465,7 +6697,7 @@ static void draw_covers(const chome_profile *p)
 	int foot = 3 * 10 * s + 4 * s;
 
 	int pw = p->w - p->inset * 2;
-	if (pw > 46 * 8 * s) pw = 46 * 8 * s;
+	if (pw > 46 * gfx_adv(s)) pw = 46 * gfx_adv(s);
 	// A margin under the footer as well as over the first row. Without it the status line
 	// rests on the panel border, which at 240p reads as text falling off the edge.
 	int botpad = 6 * s;
@@ -6526,7 +6758,7 @@ static void draw_covers(const chome_profile *p)
 	draw_rows_c(&b, labels, vals, vcol, COV_ROWS, cov_row);
 
 	int fy = b.y + b.h - botpad - foot + 2 * s;
-	int cols = (b.w - 12 * s) / (8 * s);
+	int cols = gfx_text_cols(b.w - 12 * s, s);
 
 	/*
 	  What the selected row is for - or, ahead of it, the one thing that outranks every
@@ -6627,7 +6859,7 @@ static void draw_about_panel(const chome_profile *p)
 	{
 		char up[80];
 		snprintf(up, sizeof(up), "%s", l[i]);
-		for (char *q = up; *q; q++) *q = (char)toupper((unsigned char)*q);
+		gfx_shout(up);
 		gfx_text(gfx_clip(up, s, b.w - 12 * s), b.x + 6 * s, y + i * rowh, s, COL_INK, 0);
 	}
 }
@@ -6732,7 +6964,7 @@ static void draw_browse(const chome_profile *p)
 	int s2 = p->ts_ui;
 	char hdr[160];
 	snprintf(hdr, sizeof(hdr), "%s  %s", s ? s->name : "", browse_rel);
-	for (char *q = hdr; *q; q++) *q = (char)toupper((unsigned char)*q);
+	gfx_shout(hdr);
 	gfx_text(gfx_clip(hdr, s2, p->w - p->inset * 2), p->inset, hy + (p->bar_h - 8 * s2) / 2, s2, COL_INK, 0);
 
 	int rowh = 12 * s2;
@@ -6756,7 +6988,7 @@ static void draw_browse(const chome_profile *p)
 		char nm[160];
 		snprintf(nm, sizeof(nm), "%s%s", bent[idx].isdir ? "[ " : "  ", bent[idx].name);
 		if (bent[idx].isdir) strncat(nm, " ]", sizeof(nm) - strlen(nm) - 1);
-		for (char *q = nm; *q; q++) *q = (char)toupper((unsigned char)*q);
+		gfx_shout(nm);
 
 		gfx_text(gfx_clip(nm, s2, p->w - p->inset * 2), p->inset, y, s2,
 			on ? COL_WHITE : (bent[idx].isdir ? COL_PANELHI : COL_DIM), 0);
@@ -7058,14 +7290,14 @@ static void draw_launch(const chome_profile *p)
 		{
 			char up[CH_TITLE_LEN];
 			snprintf(up, sizeof(up), "%s", it->title);
-			for (char *q = up; *q; q++) *q = (char)toupper((unsigned char)*q);
+			gfx_shout(up);
 			gfx_text_c(gfx_clip(up, p->ts_title, p->w - p->inset * 2), p->w / 2, p->h / 2 - 14 * s2, p->ts_title, COL_WHITE, COL_SHADOW);
 		}
 		if (s)
 		{
 			char up[64];
 			snprintf(up, sizeof(up), "%s", s->name);
-			for (char *q = up; *q; q++) *q = (char)toupper((unsigned char)*q);
+			gfx_shout(up);
 			gfx_text_c(up, p->w / 2, p->h / 2 + 4 * s2, s2, COL_DIM, 0);
 		}
 		gfx_text_c("LOADING", p->w / 2, p->h / 2 + 20 * s2, s2, COL_PANELLO, 0);
@@ -7227,6 +7459,21 @@ static void osk_settle()
 
 static void go_screen(int s)
 {
+	/*
+	  Leaving More Settings puts an unsaved font back, and it is done here rather than in
+	  the B handler because B is not the only way off that screen: the menu button jumps
+	  straight to the menu bar from anywhere (see the KEY_MENU case), which walks past every
+	  confirmation the screen has. Every other edit on that screen is only staged, so
+	  abandoning it costs nothing; the font is the one that was applied as it was chosen, and
+	  left behind it would stay on screen until the next reboot with nothing saying why.
+	*/
+	if (screen == SCR_SET && s != SCR_SET && font_dirty())
+	{
+		font_sel = font_was;
+		font_apply(font_sel);
+		font_note[0] = 0;
+	}
+
 	screen = s;
 	// Reading the link costs a process, so only do it while something is showing it.
 	net_watch(s == SCR_OPTIONS || s == SCR_WIFI);
@@ -7399,6 +7646,14 @@ static void move_h(int dir)
 	}
 
 	case SCR_SET:
+		// The font wraps where a number stops, because a ring of file names has no ends
+		// worth defending - the same rule opt_step_by() applies to a list.
+		if (set_row == SET_ROW_FONT)
+		{
+			if (font_n < 2) { nudge(); return; }
+			set_font_step(dir);
+			return;
+		}
 		if (set_row >= set_nview) { nudge(); return; }
 		if (!opt_step_by(set_view[set_row], dir)) { nudge(); return; }
 		set_edited();
@@ -7605,7 +7860,7 @@ static void move_v(int dir)
 
 	case SCR_SET:
 	{
-		int n = set_nview + 1;
+		int n = set_nrows();
 		set_row = (set_row + dir + n) % n;
 
 		// Moving off disarms, as everywhere else here: reaching for another row means
@@ -8000,14 +8255,40 @@ static void accept()
 			break;
 		}
 
-		if (!opt_dirty()) { nudge(); break; }
+		// On the font, A steps it forward too, for the same reason: a player who only
+		// presses A can still get all the way round the list.
+		if (set_row == SET_ROW_FONT)
+		{
+			if (font_n < 2) { nudge(); break; }
+			set_font_step(1);
+			break;
+		}
+
+		if (!set_pending()) { nudge(); break; }
 
 		// Rewriting the player's own ini takes two presses, as everything here that
 		// touches a real file does.
 		if (set_arm && !CheckTimer(set_arm_until))
 		{
 			set_arm = 0;
-			int w = opt_apply(ini_path());
+
+			/*
+			  The font goes in the same write as the options. It is the one key on this
+			  screen the option table cannot hold - it is a path, not a number in a range -
+			  so it is handed to opt_apply() as an extra rather than written afterwards,
+			  which would take a second backup and lose the pre-edit file. Built-in writes
+			  the key empty, which is exactly what user_io.cpp tests for.
+			*/
+			ini_set fset[1];
+			int nf = 0;
+			if (font_dirty())
+			{
+				fset[0].key = "font";
+				fset[0].value = font_rel[font_sel];
+				nf = 1;
+			}
+
+			int w = opt_apply(ini_path(), fset, nf);
 
 			if (w < 0) { set_failed = 1; set_wrote = -1; }
 			else
@@ -8015,10 +8296,17 @@ static void accept()
 				set_wrote = w;
 				set_failed = 0;
 
+				// cfg is what the running firmware reads, and set_summary() below reads
+				// cfg.font back to work out which row the font list is on. Writing the
+				// file without this would put the cursor back on the previous font.
+				if (nf) snprintf(cfg.font, sizeof(cfg.font), "%s", font_rel[font_sel]);
+
 				/*
 				  classicui_overscan is in the set and every layout metric is derived
 				  from it, so the theme has to be recomputed even though the canvas is
 				  exactly the size it was - which is the one case theme_update() skips.
+				  classicui_tracking and classicui_caps need the same repaint for a
+				  simpler reason: they change the size and shape of every string drawn.
 				*/
 				theme_invalidate();
 				theme_update(gfx_w(), gfx_h(), cfg.classicui_profile);
@@ -8027,7 +8315,7 @@ static void accept()
 			}
 
 			set_summary();
-			if (set_row > set_nview) set_row = set_nview;
+			if (set_row > SET_ROW_SAVE) set_row = SET_ROW_SAVE;
 			mark_dirty();
 			break;
 		}
@@ -8307,7 +8595,7 @@ static void back()
 		  same way closing a game does, rather than saving them on the way out: a write
 		  the player did not ask for is the worse of the two surprises.
 		*/
-		if (opt_dirty() && !(set_quit_arm && !CheckTimer(set_quit_until)))
+		if (set_pending() && !(set_quit_arm && !CheckTimer(set_quit_until)))
 		{
 			set_quit_arm = 1;
 			set_quit_until = GetTimer(3000);
@@ -8315,6 +8603,8 @@ static void back()
 			break;
 		}
 
+		// The font, which is the one edit here that was applied as it was made, is put back
+		// by go_screen() - see there for why it is not done on this line.
 		set_quit_arm = 0;
 		go_screen(SCR_OPTIONS);
 		break;
@@ -9145,7 +9435,7 @@ static void draw_running_warning(const chome_profile *p)
 	  system cannot pause your", which drops the one word that carries the warning.
 	*/
 	const char *msg = "STILL PLAYING - this system cannot pause your game";
-	int room = (p->w - 8 * s) / (8 * s);
+	int room = gfx_text_cols(p->w - 8 * s, s);
 	if ((int)strlen(msg) > room) msg = "STILL PLAYING - NOT PAUSED";
 
 	gfx_text_c(gfx_clip(msg, s, p->w - 8 * s), p->w / 2, y + (h - 7 * s) / 2, s, COL_WHITE, 0);
@@ -10895,6 +11185,18 @@ int chome_handle(uint32_t key)
 			*/
 			if (screen == SCR_SET)
 			{
+				// On the font, the value to go back to is the one the file names rather
+				// than a recommendation - this menu has no favourite font. Which is also
+				// the only undo for a row whose change is already on screen.
+				if (set_row == SET_ROW_FONT)
+				{
+					if (!font_dirty()) { nudge(); break; }
+					font_sel = font_was;
+					font_apply(font_sel);
+					font_note[0] = 0;
+					set_edited();
+					break;
+				}
 				if (set_row >= set_nview || !opt_reset(set_view[set_row])) { nudge(); break; }
 				set_edited();
 				break;

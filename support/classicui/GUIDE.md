@@ -66,6 +66,13 @@ there is nothing extra to switch on:
 font=font/myfont.pf
 ```
 
+Or pick one on screen: **Options > More Settings** has a **Font** row that lists every `.pf`
+file in the card's `font/` folder, plus **Built-in**. Left and right change it and the screen
+redraws in it straight away, so you can see a font before you keep it; **Save Changes** writes
+`font=` into MiSTer.ini, and **X** puts back the one the file already names. Leaving without
+saving puts the old font back too. If a file will not load, the row says so and the previous
+font stays on screen rather than the screen going blank.
+
 The format is the stock one: a plain 8x8 bitmap, 768 bytes for characters 32-127, or 1024 /
 1136 / up to 2048 bytes for the wider ranges. 768 bytes is enough for everything the shelf
 draws.
@@ -74,8 +81,30 @@ Two things worth knowing. The four arrow glyphs the front-end draws in button pr
 its own, not the font's, so they keep their shape whatever you load — which is deliberate,
 since a font with something unrelated at those codes would otherwise put garbage in the
 button bar. And the stock 8x8 font is really a 6-wide font with two columns of bearing: if
-your font uses all eight columns it will look tighter than the stock one does, because the
-spacing between characters is the font's own business and not something the front-end adds.
+your font uses all eight columns it will look tighter than the stock one does — which is what
+the next two options are for.
+
+### Letter spacing and capitals
+
+Two settings that go with a custom font, both on **Options > More Settings** and both also
+MiSTer.ini keys.
+
+**Letter Spacing** (`classicui_tracking`, -2 to +2, default 0) adds or removes space between
+characters. It is measured in font pixels and multiplied by the layout's text scale, so +1 is
+one pixel at 240p and three on the HD layout.
+
+- **-1** is the value a font that fills all eight columns wants. The built-in font uses six,
+  and every panel in the front-end was laid out to that.
+- **-2** makes the widest built-in glyphs — `& M W ^ _ m w ~` — touch the character next to
+  them. It is offered anyway, because a narrow custom font may want it.
+- **Positive spacing fits fewer words.** A full-width row at 240p holds 35 characters at 0 and
+  28 at +2, and some of the front-end's wording was written to 35. Those lines start ending in
+  a `>`. Nothing runs outside its panel — panels are measured in characters, so they grow with
+  the spacing — but text that no longer fits is shortened rather than wrapped.
+
+**Capital Letters** (`classicui_caps`, default on) is what draws every title, label and header
+in capitals. Turn it off and they are drawn as they are written. It is worth trying with a
+custom font: a font chosen for its lowercase never shows it otherwise.
 
 ## Save states, called Suspend Points
 
@@ -168,6 +197,12 @@ affect, with a line of help for the selected one.
 Anything not at its usual value is **amber**, and the footer tells you what the
 usual value is. **X** puts a setting back. Nothing is written until you choose
 Save Changes.
+
+The last three rows are about this menu's own text: **Letter Spacing**, **Capital Letters**
+and **Font**. They are described under [Your own font](#your-own-font) above, because that is
+what they are for. Font is the one row here that takes effect as you move it rather than when
+you save — you are choosing how the letters look, and a font picked from a list of file names
+without seeing it is a guess.
 
 Options that could leave you with no picture at all are deliberately not here.
 
