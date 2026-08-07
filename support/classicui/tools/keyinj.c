@@ -49,7 +49,13 @@ static void key(int code, int hold_ms)
 struct { const char *name; int code; } names[] = {
 	{ "f12", KEY_F12 }, { "esc", KEY_ESC }, { "enter", KEY_ENTER },
 	{ "up", KEY_UP }, { "down", KEY_DOWN }, { "left", KEY_LEFT }, { "right", KEY_RIGHT },
-	{ "menu", KEY_F12 }, { 0, 0 }
+	{ "menu", KEY_F12 },
+	// The two shoulders, which the shelf reads as the letter jump. Named for what they do
+	// rather than for the keycap, because nobody testing this thinks in "minus".
+	{ "l", KEY_MINUS }, { "r", KEY_EQUAL },
+	{ "minus", KEY_MINUS }, { "equal", KEY_EQUAL },
+	// X on a pad: cycles which file a multi-version card will launch.
+	{ "tab", KEY_TAB }, { 0, 0 }
 };
 
 int main(int argc, char **argv)
