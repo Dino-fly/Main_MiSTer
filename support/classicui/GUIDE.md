@@ -41,7 +41,9 @@ about 66px wide, which is too small to judge a filter by. It is there on HDMI.
 ![The shelf](img/shelf.png)
 
 Your whole library in one row: cover art, the system, and how many times you have
-played each game. Left and right walk the shelf; the shoulder buttons page it.
+played each game. Left and right walk the shelf; **the shoulder buttons jump by first
+letter**, which is how you cross a big library - a page is only three cards at 240p, so
+paging a thousand games was barely faster than walking.
 
 The row starts with **Favourites** and **Systems**, so from anywhere in the shelf
 **B** jumps straight back to them rather than making you walk.

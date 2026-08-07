@@ -749,6 +749,39 @@ static chome_item *shown_game()
 	return lib_item(e->game);
 }
 
+/*
+  The letter a shelf entry files under, for the shoulder jump.
+
+  Taken from the name as *shown*, which matters because the title stored for a game has
+  already had its article rotated - "The Legend of Zelda" is held as "Legend of Zelda,
+  The" and files under L, where a player looking for it will expect it.
+
+  Everything that is not a letter folds together into one stop. A shelf that opens with
+  "240p Test Suite", "3D WorldRunner" and "8 Eyes" should be one jump away from A, not
+  three, and nobody thinks of those as separate sections.
+
+  Returns 0 only when there is no name at all, which groups those together too rather
+  than making them each their own stop.
+*/
+static char jump_initial(int i)
+{
+	const chome_entry *e = lib_view_entry(i);
+	if (!e) return 0;
+
+	const char *s = 0;
+	if (e->kind == ENT_GAME)
+	{
+		chome_item *it = lib_item(e->game);
+		s = it ? it->title : 0;
+	}
+	else s = e->label;
+
+	if (!s || !*s) return 0;
+
+	unsigned char c = (unsigned char)*s;
+	return isalpha(c) ? (char)tolower(c) : '#';
+}
+
 static void sel_commit()
 {
 	if (sel_shown == sel) return;
@@ -2334,7 +2367,7 @@ static int build_legend(legend_pair *out, int max)
 			  And the way out of "this game only" that keeps the value rather than
 			  throwing it away: Y makes it the value every game on the core gets.
 
-			  Y because the shoulders page the shelf and are not read here, Select sorts,
+			  Y because the shoulders jump the shelf by letter and are not read here, Select sorts,
 			  and the other three faces are spoken for on this screen - A turns the page, B
 			  goes back, X hands a setting to every game *by discarding it*. Y is the one
 			  face button this screen had nothing for, and it sits next to the X it is the
@@ -2445,7 +2478,7 @@ static int build_legend(legend_pair *out, int max)
 			  X was the one face button the shelf had nothing for, which is what makes it
 			  the button that cycles a card's files. Everything else was taken and none of
 			  it could be given up: A starts, B jumps back to the folders, Y favourites,
-			  Select sorts, the shoulders page the shelf, up is the menu bar and down is
+			  Select sorts, the shoulders jump the shelf by letter, up is the menu bar and down is
 			  the suspend points. Taking one of those would have cost an action to gain
 			  one - and X already means "the other thing you can do to this row"
 			  elsewhere here (a shared value on core options, the usual value in
@@ -11163,6 +11196,7 @@ void chome_core_boot()
 }
 
 int chome_screen_id() { return screen; }
+int chome_sel_index() { return sel; }
 
 // See chome.h, and the comment on cov_state_of() for why the availability is an argument.
 const char *chome_covers_state(int available, int on, const char *user, int has_pass)
@@ -11923,16 +11957,52 @@ int chome_handle(uint32_t key)
 		case KEY_MINUS:
 		case KEY_EQUAL:
 		{
-			// The shoulders page the shelf, so they belong to the shelf. With a panel up
-			// they were still paging it behind the dialog.
+			// The shoulders jump the shelf, so they belong to the shelf. With a panel up
+			// they were still moving it behind the dialog.
 			if (screen != SCR_HOME) { nudge(); break; }
 
-			const chome_profile *p = theme_get();
+			/*
+			  By first letter, not by page.
+
+			  A page is three or five cards depending on the profile, so on a shelf of a
+			  thousand games paging is barely faster than walking - it took fifty presses
+			  to cross the letter M on a real card, which is how this came up. A letter is
+			  the unit somebody actually holds in their head when they are looking for
+			  Metal Gear Solid.
+
+			  Right goes to the first entry of the next letter. Left goes to the first
+			  entry of *this* letter unless it is already there, and only then to the
+			  previous letter's first entry - the same behaviour a music player's
+			  track-back button has, and it means a mistimed press costs one press rather
+			  than a whole letter.
+			*/
 			int n = lib_view_count();
-			int next = sel + ((k == KEY_MINUS) ? -p->visible : p->visible);
-			if (next < 0) next = 0;
-			if (next >= n) next = n ? n - 1 : 0;
-			if (next != sel) { sel = next; mark_dirty(); } else nudge();
+			if (n < 2) { nudge(); break; }
+
+			int next = sel;
+			char cur = jump_initial(sel);
+
+			if (k == KEY_EQUAL)
+			{
+				int i = sel;
+				while (i + 1 < n && jump_initial(i + 1) == cur) i++;
+				next = (i + 1 < n) ? i + 1 : sel;
+			}
+			else
+			{
+				int i = sel;
+				while (i > 0 && jump_initial(i - 1) == cur) i--;
+				if (i == sel && i > 0)
+				{
+					// Already at the head of this letter, so step into the one before it.
+					i--;
+					char prev = jump_initial(i);
+					while (i > 0 && jump_initial(i - 1) == prev) i--;
+				}
+				next = i;
+			}
+
+			if (next != sel) { sel = next; sel_commit(); mark_dirty(); } else nudge();
 			break;
 		}
 

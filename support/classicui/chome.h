@@ -29,6 +29,17 @@ int chome_active();
 int chome_screen_id();
 
 /*
+  Which entry the shelf has selected, as an index into the current view.
+
+  Exported for the same reason chome_screen_id() is: a navigation rule cannot be tested by
+  hashing pixels. The shoulder buttons jump by first letter, and the property worth checking
+  is "it landed on the first entry of the next letter" - a statement about the view, not
+  about which card is drawn where. Reading it off the framebuffer would tie the test to the
+  card layout and would still not distinguish the first entry of a letter from the second.
+*/
+int chome_sel_index();
+
+/*
   What Options > Online Covers is in, in one phrase: "Not Available", "Off", "No Account",
   "No Password" or "On". The Options row and the screen itself are both drawn from this, so
   they cannot come to disagree about whether a cover would really be fetched.
