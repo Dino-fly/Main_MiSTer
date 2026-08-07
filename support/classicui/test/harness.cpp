@@ -3333,6 +3333,28 @@ static void assert_disc_breath()
   disc differ with no bug present - is why every equality below is of a region that
   excludes the badge's box, and the box itself is only ever asserted to have *changed*.
 */
+/*
+  Tick until the spin path actually paints, bounded.
+
+  The spin timer fires every GFX_DISC_PART_MS but the repaint now follows the *angle*: a
+  tick on which the disc's 64-position step has not moved paints nothing at all (see
+  disc_spin_sig() in chome_ui.cpp). At the slow rate a step is 62.5ms, so "advance 60ms
+  and expect a frame" - which is what these sections did - is a coin flip over where the
+  phase happens to sit. This waits for the paint the way the device would: tick by tick,
+  up to a bit over one full step.
+*/
+static int spin_paint()
+{
+	for (int i = 0; i < 8; i++)
+	{
+		int flips = harness_present_count();
+		harness_advance(16);
+		chome_handle(0);
+		if (harness_present_count() != flips) return 1;
+	}
+	return 0;
+}
+
 static void assert_partial_repaint()
 {
 	printf("\n== partial repaint: the disc turns without repainting the world ==\n");
@@ -3390,8 +3412,7 @@ static void assert_partial_repaint()
 	  down, no clock in between, is two full repaints that end on the very frame the
 	  partial one drew.
 	*/
-	harness_advance(60);                       // past the spin interval, nothing else due
-	chome_handle(0);
+	check(spin_paint(), "a spin frame arrives within one rotation step");
 	check(gfx_damage_rows() <= 2 * BADGE_CELLS * cell, "the frame under comparison took the partial path");
 	unsigned long partial_frame = harness_fb_hash_box(0, 0, w, h);
 
@@ -3406,6 +3427,30 @@ static void assert_partial_repaint()
 		"a partially repainted frame is byte-identical to a full repaint of the same instant");
 
 	/*
+	  The ticks between angles paint nothing at all. The spin timer still fires every
+	  GFX_DISC_PART_MS, but at the slow rate the 64-position step moves every 62.5ms -
+	  so after the frame a step change just earned, the next 16ms tick cannot cross
+	  another boundary, and repainting on it would copy the disc's rectangle into the
+	  framebuffer byte-identical. That copy at 60fps was most of what a disc on a 720p
+	  canvas cost. The skipped tick has to leave the shown frame exactly alone, which
+	  presenting nothing does by construction.
+	*/
+	{
+		check(spin_paint(), "a spin frame lands on a step change");
+		unsigned long shown = harness_fb_hash_box(0, 0, w, h);
+		int flips = harness_present_count();
+
+		harness_advance(16);
+		chome_handle(0);
+		check(harness_present_count() == flips,
+			"the tick after it, inside the same rotation step, paints nothing");
+		check(harness_fb_hash_box(0, 0, w, h) == shown, "and the screen is untouched by it");
+
+		check(spin_paint(), "the tick that crosses the next step paints again");
+		check(harness_fb_hash_box(0, 0, w, h) != shown, "and the disc has turned on it");
+	}
+
+	/*
 	  The buffer-alternation carry, provoked head on: a full frame (the tier, whose
 	  legend and ring differ from the shelf's) followed by one partial frame. The
 	  partial lands in the buffer the full frame never touched, so unless its copy
@@ -3417,8 +3462,7 @@ static void assert_partial_repaint()
 	unsigned long tier_right = harness_fb_hash_box(bx1, 0, w, h);
 	check(tier_right != R, "the tier reads differently to the shelf outside the badge");
 
-	harness_advance(60);
-	chome_handle(0);                           // one partial, into the other buffer
+	check(spin_paint(), "one partial, into the other buffer");
 	check(gfx_damage_rows() <= 2 * BADGE_CELLS * cell, "and it was partial");
 	check(harness_fb_hash_box(bx1, 0, w, h) == tier_right,
 		"one partial frame later the other buffer shows the tier, not the stale shelf");
@@ -3437,8 +3481,7 @@ static void assert_partial_repaint()
 	press(KEY_ENTER);
 	check(chome_screen_id() == 17, "on the disc prompt");
 
-	harness_advance(60);
-	chome_handle(0);                           // one spin frame, the partial path
+	check(spin_paint(), "one spin frame, the partial path");
 	unsigned long prompt_partial = harness_fb_hash_box(0, 0, w, h);
 
 	chome_handle(KEY_ESC);                     // back to the tier: a full repaint
@@ -4996,20 +5039,49 @@ static void assert_disc_dialog_size()
 		if (cases[c].w == 320 && cases[c].h == 240)
 		{
 			/*
-			  Everything but the disc, which turns. The disc's box is cut out with two pixels
-			  of margin for the soft rim, and its diameter and centre are asserted above - so
-			  the disc is still pinned, just not the frame of its rotation.
+			  Everything but the disc, which turns. The disc's box is cut out with margin,
+			  and its diameter and centre are asserted above - so the disc is still pinned,
+			  just not the frame of its rotation.
 
 			  The first version of this hashed the disc too and broke when a section was added
 			  elsewhere in the harness: the extra clock advances caught the disc at a different
 			  angle. The pixels that moved were the disc's 96x96 box exactly, measured, which is
 			  how we know the dialog itself had not moved.
+
+			  The cut-out is placed from the *plate*, not from disc_drawn_box(). The measured
+			  box breathes by a pixel with the rotation - the anti-aliased rim reaches a
+			  fraction further at some angles - so an exclusion rectangle built from it moved
+			  whenever anything changed how many spin frames ran before this line, and the
+			  pinned number broke with the plate pixel-for-pixel intact. That is exactly the
+			  history-dependence the cut-out exists to remove, arriving through the back door.
+			  So: horizontally the disc is centred on the plate, vertically it sits below the
+			  title and the sub-line by draw_disc()'s own arithmetic (a copy, deliberately,
+			  like every layout number in this section), and the expected diameter comes from
+			  the case table with six pixels of margin for the rim and the wobble.
 			*/
+			int s = p->ts_ui;
+			int ecx = ox + ow / 2;
+			int ecy = oy + 6 * s + 8 * p->ts_title + 4 * s + 16 * s + cases[c].dia / 2;
+			int half = cases[c].dia / 2 + 6;
+
+			// The rectangle really does contain the drawn disc, wobble and all - the one
+			// thing the fixed placement has to keep true.
+			check(dcx - dia / 2 >= ecx - half && dcx + dia / 2 <= ecx + half &&
+				dcy - dia / 2 >= ecy - half && dcy + dia / 2 <= ecy + half,
+				"the fixed cut-out covers the drawn disc");
+
 			unsigned long hash = harness_fb_hash_box_except(ox, oy, ox + ow, oy + oh,
-				dcx - dia / 2 - 2, dcy - dia / 2 - 2,
-				dcx + dia / 2 + 2, dcy + dia / 2 + 2);
+				ecx - half, ecy - half, ecx + half, ecy + half);
 			printf("  240p dialog plate hash (disc cut out) %lu\n", hash);
-			check(hash == 8834752626955163003UL, "240p is pixel for pixel the dialog it was");
+
+			/*
+			  The number is this dialog on the build before it was resized, re-anchored when
+			  the cut-out moved to the fixed rectangle: it was computed by running this very
+			  hash over the frame the *baseline* build (bedc959) draws, so it still pins the
+			  plate to the pixels he approved. If a deliberate change to the 240p dialog ever
+			  lands, this moves with it - and the PNGs in test/out are the record.
+			*/
+			check(hash == 14061375912984922619UL, "240p is pixel for pixel the dialog it was");
 		}
 
 		disc_reset_reader();
