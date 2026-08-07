@@ -12564,6 +12564,177 @@ static void assert_half_canvas()
 	check(gfx_w() == 1280 && gfx_h() == 720, "the suite continues at the full canvas");
 }
 
+/*
+  Repaint cost, measured rather than asserted.
+
+  This section prints a table and checks almost nothing: its output is the before/after
+  evidence for the two performance changes (the half-resolution canvas and the spin
+  repaint following the angle), and a check that baked today's numbers in would fail on
+  the next machine for no reason. Host times under Docker are indicative for *ratios* -
+  the device's uncached framebuffer makes its copies far dearer than a host memcpy - so
+  what to read off this table is paints-per-tick and how each column scales with the
+  canvas, not the microseconds themselves.
+
+  Kept under 200 painted frames per row: gfx_end() flushes and resets the counters at
+  GFX_STAT_EVERY, and a row that crossed it would quietly report only the tail.
+*/
+static unsigned long perf_ticks;
+
+static void perf_row(const char *canvas, const char *state)
+{
+	unsigned long fcomp, fcopy, frows, pcomp, pcopy, prows;
+	unsigned long fc = gfx_stat_get(0, &fcomp, &fcopy, &frows);
+	unsigned long pc = gfx_stat_get(1, &pcomp, &pcopy, &prows);
+	unsigned long n = fc + pc;
+
+	printf("  %-16s %-18s %4lu paints (%lu full, %lu partial) / %lu ticks, "
+		"compose avg %4lu us, copy avg %4lu us, rows avg %4lu\n",
+		canvas, state, n, fc, pc, perf_ticks,
+		n ? (fcomp + pcomp) / n : 0,
+		n ? (fcopy + pcopy) / n : 0,
+		n ? (frows + prows) / n : 0);
+}
+
+static void perf_run(int ticks)
+{
+	gfx_stat_reset();
+	perf_ticks = (unsigned long)ticks;
+	for (int i = 0; i < ticks; i++) { harness_advance(16); chome_handle(0); }
+}
+
+static void measure_repaint_costs(const char *canvas)
+{
+	// A clean shelf, no disc, parked away from either end for the slides.
+	disc_reset_reader();
+	disc_ingest_present(0);
+	(void)disc_take_dirty();
+	chome_leave();
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 80 && lib_scanning(); i++) frame(2);
+	frame(30);
+	select_first_game();
+	press(KEY_RIGHT, 20);
+	press(KEY_RIGHT, 20);
+	frame(60);                                 // covers decoded, nothing left to land
+
+	// Idle: nothing due, so nothing painted - the number the whole front-end rests on.
+	perf_run(150);
+	perf_row(canvas, "idle shelf");
+
+	// A full repaint per tick: the menu bar toggled with the clock moving, which marks
+	// dirty on every pass the way any structural change does.
+	gfx_stat_reset();
+	perf_ticks = 120;
+	for (int i = 0; i < 60; i++)
+	{
+		chome_handle(KEY_MENU);
+		harness_advance(16);
+		chome_handle(KEY_MENU | UPSTROKE);
+		harness_advance(16);
+	}
+	perf_row(canvas, "full repaints");
+	frame(20);                                 // an even count of toggles: the shelf, settling
+
+	// The carousel: taps each way, the ease's frames clipped to the card band.
+	gfx_stat_reset();
+	perf_ticks = 0;
+	for (int k = 0; k < 6; k++)
+	{
+		int dir = (k & 1) ? KEY_LEFT : KEY_RIGHT;
+		chome_handle(dir);
+		harness_advance(16);
+		chome_handle(dir | UPSTROKE);
+		for (int i = 0; i < 20; i++) { harness_advance(16); chome_handle(0); }
+		perf_ticks += 21;
+	}
+	perf_row(canvas, "carousel slides");
+
+	// A known disc on the shelf: the badge turns through the partial path, repainting
+	// only when its 64-position step moves.
+	disc_ingest_present(1);
+	static fake_disc d;
+	memset(&d, 0, sizeof(d));
+	static const char *const none[] = { "" };
+	fake_iso(&d, 0, "PLAYSTATION", "PLAYSTATION", none, 0);
+	fake_put(&d, 20, 0, "BOOT = cdrom:\\SLUS_006.26;1", 27, 100);
+	disc_set_reader(fake_read, &d);
+	disc_ingest_identify(0);
+	frame(10);
+
+	perf_run(150);
+	perf_row(canvas, "badge spinning");
+
+	// The dialog over it: the full-size disc, still at the slow rate.
+	press(KEY_UP, 6);
+	press(KEY_ENTER, 6);
+	frame(4);
+	perf_run(150);
+	perf_row(canvas, "dialog disc");
+
+	// And a rip on that dialog, which is the worst case this front-end draws: the
+	// disc at the focus rate, a new angle nearly every tick, the reveal riding it.
+	rip_test_set(RIP_RUNNING, 900, 2000, 0);
+	chome_handle(KEY_ESC);
+	chome_handle(KEY_ESC | UPSTROKE);
+	chome_handle(KEY_ENTER);
+	chome_handle(KEY_ENTER | UPSTROKE);
+	frame(4);
+	perf_run(150);
+	perf_row(canvas, "dialog disc, rip");
+	rip_test_reset();
+
+	press(KEY_ESC, 6);
+	press(KEY_ESC, 6);
+	disc_reset_reader();
+	disc_ingest_present(0);
+	(void)disc_take_dirty();
+	frame(10);
+}
+
+static void assert_repaint_costs()
+{
+	printf("\n== repaint costs, measured (host times: read ratios, not milliseconds) ==\n");
+
+	int was_debug = cfg.debug;
+	cfg.debug = 1;                             // what gates the collection
+
+	harness_set_menu_core(1);
+	cfg.classicui_halfres = 0;
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 0);
+	measure_repaint_costs("1280x720");
+
+	// The same display through the half-resolution option: the canvas the device
+	// defaults to at 720p.
+	cfg.classicui_halfres = 1;
+	measure_repaint_costs("640x360 (half)");
+	cfg.classicui_halfres = 0;
+
+	harness_set_fb(320, 240);
+	gfx_shutdown();
+	theme_update(320, 240, 0);
+	measure_repaint_costs("320x240");
+
+	cfg.debug = was_debug;
+
+	// One assertion, because it is the claim the idle column stands for and it must
+	// never regress into "the front-end paints when nothing changed".
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 0);
+	chome_leave();
+	press(KEY_MENU, 20);
+	// Long enough for every visible cover to decode: art_step() lands one per frame,
+	// and a cover arriving mid-measurement is a legitimate repaint, not idle work.
+	frame(80);
+
+	gfx_stat_reset();
+	int flips = harness_present_count();
+	for (int i = 0; i < 100; i++) { harness_advance(16); chome_handle(0); }
+	check(harness_present_count() == flips, "an idle shelf with no disc paints nothing at all");
+}
+
 static void assert_rip_screen()
 {
 	printf("\n== ripping a disc: the screen it is watched on ==\n");
@@ -15718,7 +15889,10 @@ int main()
 		frame(6);
 	}
 
+	// The half-resolution option, and then the cost table - in that order, because the
+	// table measures the 640x360 column through the very option the section proves.
 	assert_half_canvas();
+	assert_repaint_costs();
 
 	assert_rip_format();
 	// Directly after it, because it is the other half of the same feature and it needs the

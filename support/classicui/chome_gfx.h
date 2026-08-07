@@ -61,6 +61,17 @@ void gfx_clip_clear();
 */
 void gfx_stat_compose_begin();
 
+/*
+  Read the counters behind that log, so the harness can print a cost table per canvas
+  instead of fishing numbers out of a periodic printf. `partial` picks the bucket the
+  log tags "partial" (frames composed under a clip); returns the number of frames in
+  it and fills whichever of the averages' numerators are asked for. Collection is
+  still behind cfg.debug, exactly as the log is - reading is free either way.
+*/
+void gfx_stat_reset();
+unsigned long gfx_stat_get(int partial,
+	unsigned long *compose_us, unsigned long *copy_us, unsigned long *rows);
+
 void gfx_fill(int x, int y, int w, int h, uint32_t col);
 void gfx_frame_rect(int x, int y, int w, int h, uint32_t col, int t);
 void gfx_blend(int x, int y, int w, int h, uint32_t col, int alpha);
@@ -175,6 +186,26 @@ void gfx_spinner(int cx, int cy, int r, int dot, unsigned long ms, uint32_t hot,
 */
 #define GFX_DISC_MS       50UL
 #define GFX_DISC_PART_MS  16UL
+
+/*
+  GFX_DISC_PART_MS is how often the spin *asks*, not how often it paints: a tick on
+  which the disc's 64-position step has not moved - and the rip's reveal with it - is
+  skipped outright, so the repaint rate follows the angle. At the slow rate that is 16
+  frames a second instead of 60, and the frame it draws is the same frame to the byte.
+
+  What was deliberately NOT done about the remaining cost, measured before deciding: at
+  a full-resolution 720p canvas the dialog's disc is 288px, and while a rip spins it at
+  the focus rate the angle really does move nearly every tick, so that one screen keeps
+  painting at 60fps with a 288px resample behind most frames. Fewer rotation steps at
+  large diameters, a cap on the rotated bitmap below the drawn size, and a slower spin
+  at big canvases were all considered and rejected: each trades a visible regression -
+  the strobing and block-size concerns written down above and at disc_layout_for() -
+  for a screen that is genuinely animating, whose copy is done by a helper process the
+  repaint cannot slow, on a firmware whose main loop busy-polls at 100% of a core
+  whether it draws or not. The change that actually pays is the half-resolution canvas
+  (classicui_halfres, on by default): at 640x360 the same rip dialog composes in a
+  third of the time because the disc is 160px, which is a quarter of the pixels.
+*/
 
 void gfx_disc(int cx, int cy, int r, int step,
 	const uint32_t *bands, int nbands, uint32_t rim, uint32_t ring, uint32_t hole,
