@@ -169,6 +169,24 @@ if [ -n "$SCHED_ACTION" ]; then
 	sched_repo="$(dirname "$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir)")"
 	sched_script="$sched_repo/support/classicui/tools/upstream_watch.sh"
 
+	# ...unless told otherwise. The canonical checkout is the right default but it is
+	# not always a usable one: it has whatever branch its owner is working on checked
+	# out, and if that branch does not carry this file the job is a daily no-op until
+	# somebody merges. Seen for real - the checkout was on `snac-pr` while this tool
+	# lived on `deploy-all`. CLASSICUI_WATCH_SCRIPT points the job at a stable copy
+	# instead (say ~/.local/bin/upstream_watch.sh), which is also the answer for
+	# anyone who would rather a nightly job did not depend on the tree they edit.
+	#
+	# The repo it operates on is still resolved at run time by the copy that runs, so
+	# an override only changes which script launchd starts, not what it works on.
+	if [ -n "${CLASSICUI_WATCH_SCRIPT:-}" ]; then
+		sched_script="$CLASSICUI_WATCH_SCRIPT"
+		case "$sched_script" in
+		/*) ;;
+		*) echo "CLASSICUI_WATCH_SCRIPT must be an absolute path: $sched_script" >&2; exit 2 ;;
+		esac
+	fi
+
 	case "$SCHED_ACTION" in
 	install)
 		mkdir -p "$(dirname "$SCHED_PLIST")"
