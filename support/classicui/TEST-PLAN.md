@@ -287,3 +287,28 @@ Say when you are at the device, and confirm:
    before the footer fit fix; everything else is current.
 
 I will announce each step before triggering it and wait for your report before moving on.
+
+---
+
+## Part C — the half-resolution canvas and the spin repaint (HDMI at 720p)
+
+`classicui_halfres` is ON by default, so the first boot of this build already draws the
+menu at 640x360 upscaled. The harness proves the layout and the byte-identity of every
+partial repaint at that canvas; what it cannot prove is how the upscale *looks* through
+the scaler, and the real cost figures. Host timings say the disc dialog composes in a
+third of the time at the half canvas — the device numbers are the ones that count.
+
+| Step | I do | You look at | Report |
+|---|---|---|---|
+| C1 | Nothing — boot the build | The shelf | Same layout as before (five cards, same sizes on screen)? Is the softness acceptable at sofa distance, or objectionable? |
+| C2 | Options > More Settings > Menu Resolution, set Sharp, Save | The shelf, live | Does the picture sharpen on the spot with the layout unmoved? |
+| C3 | Back to Fast, then open the disc dialog over a disc and let it sit | `/proc/$(pidof MiSTer)/stat` over a fixed window, from here | CPU with the dialog idle-spinning at Fast — the 100%-of-a-core case from the audit. I expect well under a quarter of a core now. |
+| C4 | Same, set Sharp | The same meter | The spin-skip alone should hold it near a quarter of a core; during a rip it will still run hot, which is accepted and written down in chome_gfx.h. |
+| C5 | Start a rip at Fast | The dialog | Disc turning smoothly, percentage advancing, pie moving? Any judder that was not there before? |
+| C6 | F9 to the console with the menu open, then back | The console | Full-resolution text, not 640x360? The release on the yield is what this checks. |
+| C7 | Hand off to the classic menu (Options > Advanced) | The wallpaper | Full resolution, no half-size wallpaper? |
+| C8 | On the CRT profile (analog only, no HDMI) | The 240p picture | Unchanged in every way — the request is refused below 320x240, so nothing at 240p should differ. |
+| C9 | If a 1080p display is available | The shelf | The half canvas is 960x540 there and stays hd; C1's questions again. `video_mode 8` would not take last time, so this one may stay open. |
+
+C3 and C4 are the numbers the whole change was for; C6 and C7 are the two hand-offs where
+a leaked request would be somebody else's screen at half size.

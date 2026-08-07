@@ -134,6 +134,14 @@ typedef struct {
 	int8_t classicui_tracking;
 	// 1 (default) - titles and labels are shouted in capitals, as they always were.
 	uint8_t classicui_caps;
+	/*
+	  1 (default) - the front-end asks for the menu framebuffer at half the display
+	  mode on each axis, a quarter of the pixels to compose and copy, and the scaler
+	  upscales it. See video_fb_size_request() in video.cpp for what can refuse the
+	  request, and theme_update() in support/classicui/chome_theme.cpp for how the
+	  layout keeps the display's profile rather than the shrunken canvas's.
+	*/
+	uint8_t classicui_halfres;
 	// Inert until this build carries a ScreenScraper devid; see chome_ss.h.
 	uint8_t classicui_screenscraper;
 	// OFF by default: see support/classicui/chome_disc.h.

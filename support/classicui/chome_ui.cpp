@@ -669,6 +669,28 @@ static char browse_rel[CH_PATH_LEN] = {};
 static void mark_dirty() { dirty = 1; }
 static void mark_slide() { slide_due = 1; }
 
+/*
+  The half-resolution framebuffer, asked for whenever this front-end owns the screen and
+  the option says so.
+
+  One call, made wherever the ownership changes and re-asserted every frame from the
+  loop, the same idiom video_menu_fb_analog(1) already follows there: an unchanged
+  request is free, and re-asserting is what makes the More Settings toggle take effect
+  on the next frame with no plumbing of its own - the loop below notices the canvas
+  changed and re-lays everything out, exactly as it does for the analog takeover.
+
+  The request must NOT outlive the ownership. Everything after this front-end shares the
+  same framebuffer: the classic menu's wallpaper, the F9 terminal, a script's console.
+  Each hand-off below releases it (video_fb_size_request(0)), because a terminal that
+  came up at half resolution because a menu had been open would be this front-end
+  scribbling on somebody else's screen. See the release sites in chome_leave(),
+  ig_close() and the video_fb_state() yield.
+*/
+static void fb_size_sync()
+{
+	video_fb_size_request(cfg.classicui_halfres ? 2 : 0);
+}
+
 static const uint32_t *ig_live_ref(int w, int h);
 static void ig_close(int restore_video);
 static int user_slots();
@@ -10785,7 +10807,19 @@ static void ig_close(int restore_video)
 	// left in place for a core switch: whatever runs next brings its own mode, and
 	// leaving the mux pointed at the scaler would strand it.
 	video_menu_fb_analog(0);
-	if (restore_video) video_fb_enable(0);
+	if (restore_video)
+	{
+		video_fb_enable(0);
+
+		/*
+		  After the disable, so the resize reprograms nothing that is showing. Only on
+		  this branch: a core switch re-execs the whole process, and resizing a
+		  framebuffer that is still on screen with our last frame in it would reinterpret
+		  those pixels at the new stride - a torn screen for exactly the moment the load
+		  takes.
+		*/
+		video_fb_size_request(0);
+	}
 
 	printf("ClassicUI: pause menu closed\n");
 }
@@ -10820,9 +10854,14 @@ static int ig_open()
 {
 	const chome_profile *p;
 
+	// Before anything measures: the still is scaled to the canvas below, and building
+	// it at full size only for the loop to halve the canvas on the next pass would
+	// throw the scale away and draw the menu over the grid instead of over the game.
+	fb_size_sync();
+
 	theme_update(video_menu_fb_width(), video_menu_fb_height(), cfg.classicui_profile);
 	p = theme_get();
-	if (p->w < 8 || p->h < 8) return 0;
+	if (p->w < 8 || p->h < 8) { video_fb_size_request(0); return 0; }
 
 	// Grab the running frame before we take the screen away from the core.
 	int max_px = 2048 * 1024;
@@ -10869,12 +10908,15 @@ static int ig_open()
 		for (size_t i = 0; i < n; i++) ig_shot[i] |= 0xff000000u;
 	}
 
-	if (!gfx_begin()) { free(ig_shot); ig_shot = 0; return 0; }
+	// The failed opens release the request: past here the core keeps the screen, and
+	// the request must only ever stand while this front-end is what the player sees.
+	if (!gfx_begin()) { video_fb_size_request(0); free(ig_shot); ig_shot = 0; return 0; }
 
 	// Take the framebuffer. A core without support leaves us nothing to draw on.
 	if (!video_menu_fb_present(ig_fb))
 	{
 		printf("ClassicUI: core has no HPS framebuffer, leaving the OSD to it\n");
+		video_fb_size_request(0);
 		free(ig_shot);
 		ig_shot = 0;
 		return 0;
@@ -10892,6 +10934,7 @@ static int ig_open()
 	if (p->w < 8 || p->h < 8 || !gfx_begin())
 	{
 		video_menu_fb_analog(0);
+		video_fb_size_request(0);
 		free(ig_shot);
 		ig_shot = 0;
 		return 0;
@@ -11300,6 +11343,10 @@ void chome_leave()
 	// the framebuffer, so holding the scaler would leave it invisible instead.
 	video_menu_fb_analog(0);
 
+	// And the half-resolution request with it, before the wallpaper repaint below
+	// draws into the framebuffer: the classic menu's screen is not ours to shrink.
+	video_fb_size_request(0);
+
 	lib_state_save();
 	net_watch(0);
 
@@ -11357,6 +11404,8 @@ static void enter()
 	// On an analog-only setup the framebuffer reaches no screen until the scaler
 	// output is routed there. Ask before measuring: this resizes the framebuffer to
 	// the TV mode, and the theme profile follows whatever canvas it is handed.
+	// The half-resolution request first, for the same reason - both change the canvas.
+	fb_size_sync();
 	video_menu_fb_analog(1);
 
 	theme_update(video_menu_fb_width(), video_menu_fb_height(), cfg.classicui_profile);
@@ -11675,11 +11724,13 @@ int chome_handle(uint32_t key)
 
 		// Yield while the fb terminal owns the framebuffer (F9 console, scripts).
 		// It has its own claim on the analog output, so drop ours rather than
-		// fight over the video mode.
+		// fight over the video mode - and the half-resolution request goes with it,
+		// or the console somebody pressed F9 for comes up at 640x360.
 		if (video_fb_state())
 		{
 			active = 0;
 			video_menu_fb_analog(0);
+			video_fb_size_request(0);
 			return 0;
 		}
 	}
@@ -12389,6 +12440,10 @@ int chome_handle(uint32_t key)
 	// Re-assert the claim on the analog output every frame. It is free once held,
 	// and the fb terminal shares the mechanism and drops it when a script exits,
 	// which would otherwise leave this UI drawing where nothing displays it.
+	// The half-resolution request rides the same idiom: free when unchanged, and
+	// re-asserting is what makes the More Settings toggle land - the resize branch
+	// below picks the new canvas up like any other.
+	fb_size_sync();
 	video_menu_fb_analog(1);
 
 	if (!gfx_begin())
@@ -12409,6 +12464,18 @@ int chome_handle(uint32_t key)
 	{
 		theme_update(w, h, cfg.classicui_profile);
 		art_init(theme_get()->sel_w, theme_get()->sel_h);
+
+		/*
+		  The still of the game, rebuilt at the new size. This is the hole
+		  draw_background() reports when it falls through to the grid: ig_bg is
+		  allocated at the canvas size, and until now nothing rebuilt it when the
+		  canvas changed under an open menu - the analog takeover could always do
+		  that, and the half-resolution toggle in More Settings now does it on
+		  purpose. ig_shot is kept for exactly as long as the menu is open, so the
+		  rebuild is a rescale of what was already grabbed, not a second grab.
+		*/
+		if (ig_active) ig_build_background(theme_get());
+
 		gfx_damage_all();
 		dirty = 1;
 	}

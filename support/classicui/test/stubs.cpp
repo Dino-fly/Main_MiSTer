@@ -163,8 +163,29 @@ static int fbw = 1280, fbh = 720;
 static int presented = 1;
 static int present_count = 0;
 
-void harness_set_fb(int w, int h)
+/*
+  The half-resolution request, modelled the way video_fb_config() applies it: the size
+  harness_set_fb() states is the *display mode*, and the canvas the front-end sees is
+  that divided by the request - unless the division would leave less than 320x240, in
+  which case it is refused, exactly as the firmware refuses it for the analog takeover's
+  TV modes. A model rather than the real code, because video.cpp does not compile in
+  this harness; the division and the floor are the two behaviours the front-end depends
+  on, and anything richer than that belongs on the device.
+*/
+static int fb_native_w = 1280, fb_native_h = 720;
+static int fb_req = 0;
+static int fb_div = 1;
+
+static void fb_apply()
 {
+	int div = 1;
+	if (fb_req > 1 && fb_native_w / fb_req >= 320 && fb_native_h / fb_req >= 240)
+		div = fb_req;
+
+	fb_div = div;
+	int w = fb_native_w / div, h = fb_native_h / div;
+	if (w == fbw && h == fbh && fb[1]) return;
+
 	for (int i = 1; i <= 2; i++)
 	{
 		free(fb[i]);
@@ -172,6 +193,29 @@ void harness_set_fb(int w, int h)
 	}
 	fbw = w;
 	fbh = h;
+}
+
+void video_fb_size_request(int div)
+{
+	div = (div == 2 || div == 4) ? div : 0;
+	if (div == fb_req) return;
+	fb_req = div;
+	fb_apply();
+	printf("  [stub] fb size request %d: canvas now %dx%d (div %d)\n", div, fbw, fbh, fb_div);
+}
+
+int video_menu_fb_div() { return fb_div; }
+
+void harness_set_fb(int w, int h)
+{
+	fb_native_w = w;
+	fb_native_h = h;
+
+	// Through the same gate as the request, so a section that pins the canvas while
+	// the option is on gets the same answer the device would.
+	fb_div = -1;                    // force the realloc even at an equal size
+	for (int i = 1; i <= 2; i++) { free(fb[i]); fb[i] = 0; }
+	fb_apply();
 }
 
 uint32_t *harness_fb_shown() { return fb[presented]; }
@@ -339,10 +383,13 @@ void video_menu_fb_analog(int on)
 	fb_analog = on;
 	if (on)
 	{
-		fb_analog_w = fbw;
-		fb_analog_h = fbh;
+		// The *mode*, not the canvas: with a half-resolution request in force the two
+		// differ, and restoring the canvas as the mode would shrink the display by
+		// the divisor every time the takeover bounced.
+		fb_analog_w = fb_native_w;
+		fb_analog_h = fb_native_h;
 		harness_set_fb(320, 240);
-		printf("  [stub] analog takeover: canvas now 320x240\n");
+		printf("  [stub] analog takeover: canvas now %dx%d\n", fbw, fbh);
 	}
 	else if (fb_analog_w)
 	{

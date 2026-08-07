@@ -155,6 +155,7 @@ static const ini_var_t ini_vars[] =
 	{ "CLASSICUI", (void*)(&(cfg.classicui)), UINT8, 0, 1 },
 	{ "CLASSICUI_PROFILE", (void*)(&(cfg.classicui_profile)), UINT8, 0, 3 },
 	{ "CLASSICUI_OVERSCAN", (void*)(&(cfg.classicui_overscan)), UINT8, 0, 15 },
+	{ "CLASSICUI_HALFRES", (void*)(&(cfg.classicui_halfres)), UINT8, 0, 1 },
 	{ "CLASSICUI_TRACKING", (void*)(&(cfg.classicui_tracking)), INT8, -2, 2 },
 	{ "CLASSICUI_CAPS", (void*)(&(cfg.classicui_caps)), UINT8, 0, 1 },
 	{ "CLASSICUI_ARTDIR", (void*)(&(cfg.classicui_artdir)), STRING, 0, sizeof(cfg.classicui_artdir) - 1 },
@@ -640,6 +641,15 @@ void cfg_parse()
 	  support/classicui/chome_ss.h.
 	*/
 	cfg.classicui_screenscraper = 0;
+
+	/*
+	  On by default, at the owner's request: composing and copying a menu frame is CPU
+	  work proportional to the canvas, and half the resolution on each axis is a quarter
+	  of it - a bigger saving than any amount of redraw trimming. The layout is chosen
+	  for the display rather than for the shrunken canvas (theme_update()), so what
+	  changes on screen is sharpness, not shape. 0 for the full-resolution canvas.
+	*/
+	cfg.classicui_halfres = 1;
 
 	/*
 	  Physical disc support, OFF by default. It is no longer detection alone: PC Engine

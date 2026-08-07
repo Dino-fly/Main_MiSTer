@@ -55,8 +55,8 @@
                   (the button just starts repeating), and there is no way back that
                   a novice would find. Not a feature this audience has lost.
 
-  The front-end has eleven other options and none of them is here. That is one test
-  applied eleven times, and it is worth writing down because "our own options belong in
+  The front-end has twelve other options and none of them is here. That is one test
+  applied twelve times, and it is worth writing down because "our own options belong in
   our own screen" is the obvious answer and the wrong one:
 
     A setting whose absence already gives the front-end what it wants does not belong
@@ -64,15 +64,16 @@
 
   Every classicui_* option other than the switch passes that test - cfg_parse() already
   defaults classicui_freeze to 1, classicui_gamelist to 1, classicui_overscan to 6,
-  classicui_artdir to boxart, classicui_arturl to the libretro thumbnail server and
-  classicui_profile to auto - so writing them would add lines that change nothing today
+  classicui_halfres to 1, classicui_artdir to boxart, classicui_arturl to the libretro
+  thumbnail server and classicui_profile to auto - so writing them would add lines that
+  change nothing today
   and that the player then owns and has to maintain. Worse, a written line cannot tell
   "I never set this" from "I set this on purpose": classicui_freeze=0 is precisely the
   deliberate choice of somebody whose SNES core dies when asked for a save state, and
   this screen putting a 1 back over it would be the front-end breaking a game to tidy
-  an ini. Those six are personal taste or per-television anyway, and two of them
-  (overscan, freeze) already have a row in Options > More Settings, where a value is
-  *offered* with its recommendation beside it rather than assumed.
+  an ini. Those seven are personal taste or per-television anyway, and three of them
+  (overscan, freeze, halfres) already have a row in Options > More Settings, where a
+  value is *offered* with its recommendation beside it rather than assumed.
 
   The remaining three are off by default for reasons that are not this screen's to
   overrule:
