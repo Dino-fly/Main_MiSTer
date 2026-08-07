@@ -1327,12 +1327,12 @@ void lib_rescan()
 
     the system     Aladdin on the SNES and Aladdin on the Mega Drive are different games
                    that share a name.
-    the directory  a card that keeps hacks, translations or a region in a folder of its
-                   own is the player saying those are separate collections, so
+    the directory  NOT part of the key. The argument for including it was that a player
+                   who keeps hacks, translations or a region in a folder of its own is
+                   saying those are separate collections, so
                    games/SNES/Hacks/Super Mario World.sfc is not a regional variant of
-                   ...was the argument for including it, and Derek's call is the other
-                   way: he would rather a hack shared a card with the original than have
-                   multi-disc sets split up. So the directory is NOT part of the key.
+                   the game above it. The call went the other way: better that a hack
+                   shares a card with the original than that multi-disc sets split up.
 
                    What that buys: Chrono Cross (Disc 1)/ and (Disc 2)/ become one card,
                    which is what a player wants and what the folder-based key could never

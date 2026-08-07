@@ -55,7 +55,27 @@ The strip of pips under a card is its save-state slots — filled ones are green
 Every system has an icon. They come from licensed icon sets, not hand-drawn — see
 [ICONS.md](ICONS.md) for the attribution.
 
----
+### Your own font
+
+**MiSTer's `font=` option works here.** The front-end draws its text from the same glyph
+table the stock OSD does, so a font you load for one is the font you get in the other —
+there is nothing extra to switch on:
+
+```
+[MiSTer]
+font=font/myfont.pf
+```
+
+The format is the stock one: a plain 8x8 bitmap, 768 bytes for characters 32-127, or 1024 /
+1136 / up to 2048 bytes for the wider ranges. 768 bytes is enough for everything the shelf
+draws.
+
+Two things worth knowing. The four arrow glyphs the front-end draws in button prompts are
+its own, not the font's, so they keep their shape whatever you load — which is deliberate,
+since a font with something unrelated at those codes would otherwise put garbage in the
+button bar. And the stock 8x8 font is really a 6-wide font with two columns of bearing: if
+your font uses all eight columns it will look tighter than the stock one does, because the
+spacing between characters is the font's own business and not something the front-end adds.
 
 ## Save states, called Suspend Points
 
