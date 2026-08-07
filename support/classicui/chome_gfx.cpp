@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <ctype.h>
 
 #include "chome_gfx.h"
 #include "../../cfg.h"
@@ -969,9 +970,65 @@ static void draw_glyph(unsigned char code, int x, int y, int s, uint32_t col)
 	}
 }
 
+/*
+  Letter spacing, in font pixels, read straight from cfg the way this file already reads
+  cfg.debug. Clamped here as well as in cfg.cpp: the front-end's own settings screen can
+  write this field between one frame and the next, and a value outside the range would
+  make gfx_text_cols() divide by something it has no reason to trust.
+*/
+static int track()
+{
+	int t = cfg.classicui_tracking;
+	if (t < -2) t = -2;
+	if (t > 2) t = 2;
+	return t;
+}
+
+void gfx_shout(char *s)
+{
+	if (!cfg.classicui_caps || !s) return;
+	for (char *p = s; *p; p++) *p = (char)toupper((unsigned char)*p);
+}
+
+int gfx_adv(int scale)
+{
+	if (scale < 1) scale = 1;
+	int a = (GLYPH_W + track()) * scale;
+	// The range above cannot produce this, but an advance of zero would be a text run of
+	// no width that still drew glyphs, and that is worth refusing rather than reasoning
+	// about the range from here.
+	return (a < 1) ? 1 : a;
+}
+
+/*
+  n * GLYPH_W * scale + (n - 1) * track * scale, which is the same thing as
+  (n - 1) * gfx_adv() + GLYPH_W * scale: the pen advances n - 1 times and the last glyph
+  still rasterises its full 8 columns. So this is the run's real extent, not its nominal
+  cell width, and gfx_text() can damage exactly it.
+
+  Written in that expanded form on purpose: at track 0 it is `strlen(s) * GLYPH_W * scale`
+  evaluated in the same order and with the same overflow behaviour as before, including
+  the scale-0 case that gfx_adv() would otherwise have clamped to 1.
+*/
 int gfx_text_w(const char *s, int scale)
 {
-	return s ? (int)strlen(s) * GLYPH_W * scale : 0;
+	if (!s) return 0;
+	int n = (int)strlen(s);
+	if (n < 1) return 0;
+	return n * GLYPH_W * scale + (n - 1) * track() * scale;
+}
+
+int gfx_text_cols(int px, int scale)
+{
+	if (scale < 1) scale = 1;
+
+	/*
+	  The inverse of the above: n * GLYPH_W * s + (n-1) * t * s <= px rearranges to
+	  n * (GLYPH_W + t) * s <= px + t * s. At t == 0 this is px / (GLYPH_W * s) exactly,
+	  including how C truncates a negative quotient - which is what keeps every wrapped
+	  paragraph in the front-end drawing the same lines it did before.
+	*/
+	return (px + track() * scale) / gfx_adv(scale);
 }
 
 void gfx_text(const char *s, int x, int y, int scale, uint32_t col, uint32_t shadow)
@@ -979,15 +1036,20 @@ void gfx_text(const char *s, int x, int y, int scale, uint32_t col, uint32_t sha
 	if (!s || !*s || scale < 1) return;
 
 	int len = (int)strlen(s);
+	int adv = gfx_adv(scale);
+
 	if (shadow)
 	{
 		for (int i = 0; i < len; i++)
-			draw_glyph((unsigned char)s[i], x + i * GLYPH_W * scale + scale, y + scale, scale, shadow);
+			draw_glyph((unsigned char)s[i], x + i * adv + scale, y + scale, scale, shadow);
 	}
 	for (int i = 0; i < len; i++)
-		draw_glyph((unsigned char)s[i], x + i * GLYPH_W * scale, y, scale, col);
+		draw_glyph((unsigned char)s[i], x + i * adv, y, scale, col);
 
-	gfx_damage(x, y, len * GLYPH_W * scale + scale, 8 * scale + scale);
+	// The measured extent, not len * adv: at negative tracking the two differ, and the
+	// rectangle has to cover the last glyph's whole raster or a partial repaint would
+	// leave its right-hand columns behind.
+	gfx_damage(x, y, gfx_text_w(s, scale) + scale, 8 * scale + scale);
 }
 
 void gfx_text_c(const char *s, int cx, int y, int scale, uint32_t col, uint32_t shadow)
@@ -1000,7 +1062,7 @@ const char *gfx_clip(const char *s, int scale, int maxpx)
 	static char buf[256];
 	if (!s) return "";
 
-	int max = maxpx / (GLYPH_W * scale);
+	int max = gfx_text_cols(maxpx, scale);
 	if (max < 1) max = 1;
 	if (max > (int)sizeof(buf) - 1) max = (int)sizeof(buf) - 1;
 

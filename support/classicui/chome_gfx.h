@@ -278,7 +278,56 @@ void gfx_track(int x, int y, int w, int h, int nseg, int done, int live, unsigne
 #define CH_LEFT  "\x03"
 #define CH_RIGHT "\x04"
 
+/*
+  The width of the glyph *cell*, which is not the same thing as the advance any more.
+
+  charrom's cell is 8 columns and draw_glyph() rasterises all 8 of them, so this is the
+  bitmap's width. It is not how far the pen moves - that is gfx_adv(), which adds
+  classicui_tracking. Anything meaning "how far to the next character" wants gfx_adv();
+  only the bitmap itself wants GLYPH_W.
+
+  Worth knowing which of the eight the font actually uses, because it is what makes
+  negative spacing safe: no printable glyph in the stock ROM font inks column 8, 69 of the
+  95 stop at column 6, and only `& M W ^ _ m w ~` reach column 7. So -1 always leaves a
+  gap and -2 makes those eight touch.
+*/
 #define GLYPH_W 8
+
+/*
+  One character's advance in canvas pixels, and how many characters fit in a span of them.
+
+  These two and gfx_text_w() are one model with three faces, and they are functions rather
+  than arithmetic spelled out at each site because the front-end has a couple of dozen
+  places that convert between pixels and characters - a panel capped at "46 characters
+  wide", a paragraph wrapped to "however many columns the panel has". One of them left as
+  `/ (8 * s)` is a paragraph drawn through the side of its panel.
+
+  gfx_text_cols() is the exact inverse of gfx_text_w(): the count it returns is the largest
+  n for which a string of n characters still measures <= px. gfx_clip() is built on it for
+  that reason. When the two drifted apart, the disc dialog widened its panel to fit a
+  measured title and then clipped that same title anyway - "Super Nintendo (n>".
+*/
+int gfx_adv(int scale);
+int gfx_text_cols(int px, int scale);
+
+/*
+  Shout a string in place, or leave it exactly as it was written.
+
+  Every title, label, header and legend in this front-end is drawn in capitals, and that was
+  never a decision about those particular strings - it was one idiom copied twenty-two times,
+  uppercasing whatever it was handed on its way to gfx_text(). It reads well in the MiSTer ROM
+  font, whose lowercase glyphs are four rows tall and a little cramped.
+
+  It reads badly in somebody else's font. A player who has put a .pf on the card usually chose
+  it for its lowercase, and a front-end that never draws a lowercase glyph makes half of that
+  font invisible - which is what classicui_caps=0 is for. One function rather than
+  twenty-two conditionals is not only shorter: it is what makes the rule "text is drawn as it
+  is written" true, with no screen quietly still shouting because its site was missed.
+
+  It lives here, beside gfx_text(), because it is a property of how this front-end draws text
+  rather than of any one screen - the on-screen keyboard's own panel header goes through it too.
+*/
+void gfx_shout(char *s);
 
 void gfx_text(const char *s, int x, int y, int scale, uint32_t col, uint32_t shadow);
 void gfx_text_c(const char *s, int cx, int y, int scale, uint32_t col, uint32_t shadow);

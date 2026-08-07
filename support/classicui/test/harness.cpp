@@ -28,6 +28,9 @@
   construction.
 */
 #include "../../../user_io.h"
+// The glyph table itself, for the font section: it checks that a loaded .pf really replaces
+// charfont[] and that restoring the built-in puts back every one of the 2048 bytes.
+#include "../../../charrom.h"
 #include "../chome.h"
 #include "../chome_lib.h"
 #include "../chome_core.h"
@@ -787,7 +790,7 @@ static void covers_rect(int *x0, int *y0, int *x1, int *y1)
 	int foot = 3 * 10 * s + 4 * s;
 
 	int pw = p->w - p->inset * 2;
-	if (pw > 46 * 8 * s) pw = 46 * 8 * s;
+	if (pw > 46 * gfx_adv(s)) pw = 46 * gfx_adv(s);
 
 	int ph = (10 * s + 6) + 5 * s + 4 * (12 * s) + foot + 6 * s;
 	if (ph > p->h - 2 * p->safe_y) ph = p->h - 2 * p->safe_y;
@@ -10930,6 +10933,626 @@ static void assert_input_labels()
 	check(1, "captured gamepad and keyboard legends");
 }
 
+/* ------------------------------------------------------------ typography -- */
+
+/*
+  One glyph, read off the screen and compared with the raster charfont holds for it.
+
+  Both directions, and the second is what makes it a test rather than a coincidence: every
+  inked pixel of the cell has to be the colour asked for, and every pixel the glyph does not
+  ink has to be something else. A cell filled solid passes the first half of that on any
+  glyph, and fails the second on all of them.
+
+  charfont is column-major - byte n is column n, bit y is row y - which is draw_glyph()'s own
+  reading of it. Deliberately the same source rather than a hard-coded bitmap: the question
+  asked here is "which character was drawn", and taking the shape from the table is how that
+  question stays answerable after somebody loads a different font.
+*/
+static int glyph_seen(int x, int y, int s, unsigned char code, uint32_t col)
+{
+	const uint32_t *fb = harness_fb_shown();
+	int w = gfx_w(), h = gfx_h();
+	if (!fb || s < 1) return 0;
+
+	int ink = 0;
+	for (int gx = 0; gx < 8; gx++)
+	{
+		for (int gy = 0; gy < 8; gy++)
+		{
+			int on = (charfont[code][gx] & (1 << gy)) ? 1 : 0;
+			int px = x + gx * s, py = y + gy * s;
+			if (px < 0 || py < 0 || px + s > w || py + s > h) return 0;
+
+			uint32_t got = fb[(size_t)py * w + px] | 0xff000000u;
+			if (on && got != col) return 0;
+			if (!on && got == col) return 0;
+			if (on) ink++;
+		}
+	}
+
+	// A blank cell matches every blank cell, so it is not evidence of anything.
+	return ink > 0;
+}
+
+/*
+  A .pf on the card, generated rather than shipped.
+
+  768 bytes, which is the size LoadFont() treats as "chars 32 upwards and no header": every
+  printable character becomes a solid six-column block, so the transposed result is columns
+  0..5 set and 6..7 clear for all of them. Six rather than eight because that is what the
+  ROM font really uses (no printable stock glyph inks column 8) and a test font that filled
+  the cell would be testing a shape the front-end's own layout was never fitted to.
+
+  Space is left blank. A font whose space was a solid block would make every screen in the
+  harness unreadable in a way no assertion below is about.
+*/
+static void make_pf(const char *path)
+{
+	unsigned char buf[768];
+	for (int c = 32; c < 128; c++)
+		for (int r = 0; r < 8; r++)
+			buf[(c - 32) * 8 + r] = (c == 32) ? 0x00 : 0xFC;
+
+	FILE *f = fopen(path, "wb");
+	if (!f) return;
+	fwrite(buf, 1, sizeof(buf), f);
+	fclose(f);
+}
+
+/*
+  Letter spacing, the capitals switch, and the font.
+
+  Three settings that all mean the same thing to this file: they change the size, the shape
+  or the case of every string the front-end draws. So what is checked is not that they look
+  right - nothing here can judge that - but the four properties that make them safe to ship:
+
+  1. gfx_text_w() and gfx_text_cols() are exact inverses at every tracking value and every
+     scale. That is the invariant the disc dialog rests on, and the one whose absence once
+     produced "Super Nintendo (n>": the panel is widened to hold a measured title and the
+     title is then clipped against the same width by a different sum.
+
+  2. A panel sized from its own text still contains that text, measured off the screen,
+     at each of the five tracking values.
+
+  3. The capitals switch is exactly a case change: on, the frame is bit for bit the one the
+     rest of this harness pins; off, the glyph drawn in a known position is the lowercase
+     letter and not the uppercase one.
+
+  4. A font can be put back. LoadFont() overwrites the only copy of the glyph table in the
+     process, so "restore" has to be byte-exact over all 2048 of them, and a file that will
+     not load has to leave the previous font alone rather than blanking the screen.
+
+  Run last, and it puts the built-in font, tracking 0 and the capitals back on the way out:
+  every pixel assertion above this line was taken under those three.
+*/
+static void assert_typography()
+{
+	printf("\n== typography: letter spacing, capitals, and the font ==\n");
+
+	int8_t was_track = cfg.classicui_tracking;
+	uint8_t was_caps = cfg.classicui_caps;
+
+	/* ------------------------------------------------- the advance model --- */
+
+	/*
+	  Tracking 0 is the model every panel in the front-end was measured against, so it is
+	  asserted as an identity rather than as a range: strlen * 8 * scale, which is what
+	  gfx_text_w() was before there was a setting.
+	*/
+	cfg.classicui_tracking = 0;
+	{
+		static const char *w[] = { "", "A", "SNES", "Super Nintendo (not yet)" };
+		int same = 1;
+		for (unsigned i = 0; i < sizeof(w) / sizeof(w[0]); i++)
+			for (int s = 1; s <= 3; s++)
+				if (gfx_text_w(w[i], s) != (int)strlen(w[i]) * 8 * s) same = 0;
+
+		check(same, "at zero tracking a string measures exactly what it always did");
+		check(gfx_adv(1) == 8 && gfx_adv(2) == 16 && gfx_adv(3) == 24,
+			"and one character advances by the glyph cell");
+	}
+
+	/*
+	  Monotonic, and strictly so: a setting whose middle two values measured the same would
+	  be a dial with a flat spot on it. Checked on a run long enough for one font pixel per
+	  gap to be visible at every scale.
+	*/
+	{
+		const char *t = "Super Nintendo (not yet)";
+		int mono = 1;
+
+		for (int s = 1; s <= 3; s++)
+		{
+			int prev = -1;
+			for (int k = -2; k <= 2; k++)
+			{
+				cfg.classicui_tracking = (int8_t)k;
+				int got = gfx_text_w(t, s);
+				if (prev >= 0 && got <= prev) mono = 0;
+				prev = got;
+			}
+		}
+		check(mono, "text measures strictly wider at every step of the dial, at every scale");
+
+		cfg.classicui_tracking = 0;
+		int at0 = gfx_text_w(t, 1);
+		cfg.classicui_tracking = -1;
+		int atm1 = gfx_text_w(t, 1);
+		cfg.classicui_tracking = 2;
+		int atp2 = gfx_text_w(t, 1);
+
+		// 24 characters: 23 gaps, because the last glyph still rasterises its full cell.
+		check(atm1 == at0 - 23 && atp2 == at0 + 46,
+			"and by one gap per pair of characters - the last glyph keeps its whole cell");
+	}
+
+	/*
+	  The invariant. gfx_text_cols(px) must be the largest n whose n-character string still
+	  measures no more than px, so a panel widened to hold a measured line cannot then clip
+	  that line - and a paragraph wrapped to a column count cannot exceed the pixels the
+	  count came from.
+	*/
+	{
+		int bad = 0, checked = 0;
+		char run[64];
+		for (int i = 0; i < 63; i++) run[i] = 'M';
+		run[63] = 0;
+
+		for (int k = -2; k <= 2; k++)
+		{
+			cfg.classicui_tracking = (int8_t)k;
+			for (int s = 1; s <= 3; s++)
+			{
+				for (int px = 0; px <= 400; px++)
+				{
+					int n = gfx_text_cols(px, s);
+					if (n < 0 || n > 62) continue;
+					checked++;
+
+					char buf[64];
+					snprintf(buf, sizeof(buf), "%.*s", n, run);
+					if (gfx_text_w(buf, s) > px) bad++;
+
+					snprintf(buf, sizeof(buf), "%.*s", n + 1, run);
+					if (gfx_text_w(buf, s) <= px) bad++;
+				}
+			}
+		}
+		printf("  %d pixel spans checked in both directions\n", checked);
+		check(checked > 5000 && !bad,
+			"gfx_text_cols is the exact inverse of gfx_text_w at every tracking value and scale");
+	}
+
+	/*
+	  And gfx_clip(), which is built on that pair and is where the bug actually showed. A
+	  string that fits has to come back whole - no defensive '>' on a line the panel was
+	  widened for - and one that does not has to come back inside the budget.
+	*/
+	{
+		int bad = 0, floored = 0;
+		const char *t = "Super Nintendo (not yet)";
+
+		for (int k = -2; k <= 2; k++)
+		{
+			cfg.classicui_tracking = (int8_t)k;
+			for (int s = 1; s <= 2; s++)
+			{
+				int need = gfx_text_w(t, s);
+				if (strcmp(gfx_clip(t, s, need), t)) bad++;
+				if (strcmp(gfx_clip(t, s, need + 100), t)) bad++;
+
+				for (int px = 1; px < need; px++)
+				{
+					/*
+					  Except where there is not room for one character, which gfx_clip has
+					  always answered with one character anyway - a single glyph says more
+					  about what was there than an empty string does, and no panel in the
+					  front-end is that narrow. Counted rather than ignored, so the exception
+					  stays an exception.
+					*/
+					if (gfx_text_cols(px, s) < 1) { floored++; continue; }
+					if (gfx_text_w(gfx_clip(t, s, px), s) > px) bad++;
+				}
+			}
+		}
+		printf("  %d spans too narrow for one character, floored to one\n", floored);
+		check(!bad, "a line that fits is never clipped, and a clipped one always fits");
+		check(floored > 0, "and below one character of room it still draws one, as it always did");
+	}
+
+	cfg.classicui_tracking = 0;
+
+	/* ------------------- a panel sized from its text still holds its text --- */
+
+	/*
+	  The disc dialog, which is the one panel in the front-end whose width comes from the
+	  longest line it has to draw, and therefore the one that fails if the measuring and the
+	  clipping disagree. Its plate is measured off the screen rather than recomputed here -
+	  for the same reason assert_disc_dialog_size() measures it - and the title is then run
+	  through the very gfx_clip() call draw_disc() makes, against the width the panel really
+	  came out.
+	*/
+	{
+		enum { S_DISC = 17 };
+
+		const char *tdb = ROOT "/classicui/disctitles.txt";
+		mkpath(ROOT "/classicui");
+		{
+			FILE *f = fopen(tdb, "wb");
+			if (f)
+			{
+				fprintf(f, "#classicui-disctitles 1\n");
+				fprintf(f, "SLES01506\tMetal Gear Solid\n");
+				fclose(f);
+			}
+		}
+		disc_titles_forget();
+
+		uint8_t was_disc = cfg.classicui_disc;
+		cfg.classicui_disc = 1;
+
+		fake_disc fd; memset(&fd, 0, sizeof(fd));
+		static const char *const none[] = { "" };
+		fake_iso(&fd, 0, "PLAYSTATION", "PLAYSTATION", none, 0);
+		fake_put(&fd, 20, 0, "BOOT = cdrom:\\SLES_015.06;1", 27, 100);
+
+		for (int k = -2; k <= 2; k++)
+		{
+			char what[192];
+			cfg.classicui_tracking = (int8_t)k;
+
+			chome_leave();
+			press(KEY_MENU, 20);
+			frame(10);
+
+			disc_ingest_present(1);
+			disc_set_reader(fake_read, &fd);
+			disc_ingest_identify(0);
+			frame(6);
+
+			press(KEY_UP);
+			press(KEY_ENTER);
+			frame(8);
+
+			snprintf(what, sizeof(what), "tracking %+d: the disc dialog is up", k);
+			check(chome_screen_id() == S_DISC, what);
+
+			const chome_profile *p = theme_get();
+			int ox = 0, oy = 0, ow = 0, oh = 0;
+			int got = panel_plate_seen(&ox, &oy, &ow, &oh);
+
+			snprintf(what, sizeof(what), "tracking %+d: there is a plate to measure", k);
+			check(got, what);
+
+			if (got)
+			{
+				// panel_plate_seen() gives the plate inside the two-pixel frame; the panel
+				// draw_disc() clips against is four wider, less 12*ts_ui either side.
+				int pw = ow + 4;
+				int inner = pw - 24 * p->ts_ui;
+				const char *title = "Metal Gear Solid";
+				const char *drawn = gfx_clip(title, p->ts_title, inner);
+
+				printf("  tracking %+d: panel %d wide, title measures %d in %d of room\n",
+					k, pw, gfx_text_w(title, p->ts_title), inner);
+
+				snprintf(what, sizeof(what),
+					"tracking %+d: the panel it sized for its title still holds it whole", k);
+				check(!strcmp(drawn, title), what);
+			}
+
+			disc_reset_reader();
+			disc_ingest_present(0);
+			(void)disc_take_dirty();
+			press(KEY_ESC, 10);
+			frame(6);
+		}
+
+		unlink(tdb);
+		disc_titles_forget();
+		cfg.classicui_disc = was_disc;
+		cfg.classicui_tracking = 0;
+	}
+
+	/* ---------------------------- 240p at +2, where the copy runs out of room --- */
+
+	/*
+	  The canvas the front-end's wording was fitted to, at the value that costs it the most.
+
+	  A full-width 240p row holds 35 characters at zero tracking and 28 at +2, and a dozen
+	  lines in the front-end were written to within a character or two of 35 - see the
+	  suspend header's fallback, and the note on the Letter Spacing row. Nothing here can
+	  make that copy shorter. What it can check is that the shortfall is *graceful*: the
+	  panel is still sized in characters, so it grows with the advance, and the text is still
+	  wrapped and clipped against that panel, so nothing spills onto the shelf behind it.
+
+	  Read as pixels of the body text's own colour outside the plate, which is what a line
+	  wrapped to a column count that no longer matched the pixels would leave there.
+	*/
+	{
+		enum { S_POWER = 12 };
+
+		int was_prof = cfg.classicui_profile;
+		int was_w = gfx_w(), was_h = gfx_h();
+
+		for (int k = 0; k <= 2; k++)
+		{
+			char what[192];
+			cfg.classicui_tracking = (int8_t)k;
+
+			cfg.classicui_profile = 3;
+			harness_set_fb(320, 240);
+			gfx_shutdown();
+			theme_invalidate();
+			theme_update(320, 240, 3);
+
+			chome_leave();
+			press(KEY_MENU, 20);
+			frame(12);
+			press(KEY_UP, 10);                // the menu bar; Display is dropped at 240p
+			press(KEY_RIGHT, 10);             // ...so Options is first and Power is next
+			press(KEY_ENTER, 14);
+			frame(8);
+
+			snprintf(what, sizeof(what), "240p tracking +%d: the Power panel is up", k);
+			check(chome_screen_id() == S_POWER, what);
+
+			const chome_profile *p = theme_get();
+			int ox = 0, oy = 0, ow = 0, oh = 0;
+			int got = panel_plate_seen(&ox, &oy, &ow, &oh);
+
+			snprintf(what, sizeof(what), "240p tracking +%d: with a plate to measure", k);
+			check(got, what);
+			if (!got) continue;
+
+			int spill = box_pixels(0, oy, ox, oy + oh, COL_PANELHI)
+				+ box_pixels(ox + ow, oy, p->w, oy + oh, COL_PANELHI);
+
+			printf("  240p tracking +%d: plate %d wide holds %d characters, %d body pixels "
+				"outside it\n", k, ow + 4, gfx_text_cols(ow + 4 - 16 * p->ts_ui, p->ts_ui), spill);
+
+			snprintf(what, sizeof(what),
+				"240p tracking +%d: the wrapped note stays inside its panel", k);
+			check(spill == 0, what);
+
+			press(KEY_ESC, 10);
+			press(KEY_ESC, 10);
+			frame(6);
+		}
+
+		cfg.classicui_tracking = 0;
+		cfg.classicui_profile = (uint8_t)was_prof;
+		harness_set_fb(was_w, was_h);
+		gfx_shutdown();
+		theme_invalidate();
+		theme_update(was_w, was_h, cfg.classicui_profile);
+		frame(6);
+	}
+
+	/* ------------------------------------------------------- the capitals --- */
+
+	/*
+	  Read off the About panel, whose header draw_panel_at() draws at a position this file
+	  can name: 6*ts_ui in from the plate's left edge and four rows down from the top of the
+	  title bar. So the second character of "About" is one advance further along, and the
+	  question is whether the glyph there is 'b' or 'B'.
+
+	  That is the whole claim - not "the panel changed", which a switch that blanked the
+	  screen would also satisfy.
+	*/
+	{
+		enum { S_ABOUT = 6 };
+
+		harness_set_menu_core(1);
+		chome_leave();
+		press(KEY_MENU, 20);
+		frame(8);
+		press(KEY_UP, 10);                    // the menu bar, on Display
+		press(KEY_RIGHT, 10);                 // Options
+		press(KEY_RIGHT, 10);                 // Power
+		press(KEY_RIGHT, 10);                 // About
+		press(KEY_ENTER, 14);
+		frame(8);
+		check(chome_screen_id() == S_ABOUT, "the About panel is up, which has a header to read");
+
+		int x0, y0, x1, y1;
+		panel_rect(&x0, &y0, &x1, &y1);
+		const chome_profile *p = theme_get();
+		int s = p->ts_ui;
+
+		int gx = x0 + 6 * s + gfx_adv(s);      // the second character of the header
+		int gy = y0 + 4;
+
+		/*
+		  Closed and reopened rather than repainted in place, and it is worth saying why:
+		  the compositor only recomposes when something has told it the screen is stale, and
+		  poking a cfg field from outside the front-end tells it nothing. Every other section
+		  here that changes cfg under the menu does the same thing - see the overscan walk.
+		*/
+		cfg.classicui_caps = 1;
+		press(KEY_ESC, 10);
+		press(KEY_ENTER, 14);
+		frame(8);
+		unsigned long on_hash = panel_hash();
+		int saw_upper = glyph_seen(gx, gy, s, 'B', COL_PANELHI);
+
+		cfg.classicui_caps = 0;
+		press(KEY_ESC, 10);
+		press(KEY_ENTER, 14);
+		frame(8);
+		dump("caps-off-panel");
+		unsigned long off_hash = panel_hash();
+		int saw_lower = glyph_seen(gx, gy, s, 'b', COL_PANELHI);
+
+		check(saw_upper, "with capitals on, a panel header is drawn in capitals");
+		check(saw_lower, "and with them off, the same header is drawn as it is written");
+		check(on_hash != off_hash, "which is a visible difference, not a silent one");
+
+		cfg.classicui_caps = 1;
+		press(KEY_ESC, 10);
+		press(KEY_ENTER, 14);
+		frame(8);
+		check(panel_hash() == on_hash,
+			"and putting the switch back reproduces the frame bit for bit");
+
+		press(KEY_ESC, 10);
+		frame(6);
+	}
+
+	/* ------------------------------------------------------------ the font --- */
+
+	{
+		static unsigned char before[256][8];
+		memcpy(before, charfont, sizeof(before));
+
+		mkpath(ROOT "/" "font");
+		make_pf(ROOT "/font/harness.pf");
+
+		char rel[64];
+		snprintf(rel, sizeof(rel), "font/harness.pf");
+		check(LoadFont(rel) == 1, "a generated .pf on the card loads");
+
+		check(memcmp(before, charfont, sizeof(before)) != 0, "and replaces the glyph table");
+
+		// The transpose, checked on one character: six solid columns and two clear, which is
+		// what a row-major 0xFC becomes. A load that got the axes the wrong way round would
+		// give six solid rows instead and pass any "it changed" test.
+		int shaped = 1;
+		for (int c = 33; c < 127; c++)
+		{
+			for (int col = 0; col < 6; col++) if (charfont[c][col] != 0xFF) shaped = 0;
+			for (int col = 6; col < 8; col++) if (charfont[c][col] != 0x00) shaped = 0;
+		}
+		check(shaped, "and transposes it: byte n is column n, as draw_glyph reads it");
+
+		/*
+		  A missing file. LoadFont() returns early without touching the table, which is what
+		  lets the font row say "still on the old one" instead of drawing a screen of blanks -
+		  and is why it has a return value at all.
+		*/
+		static unsigned char loaded[256][8];
+		memcpy(loaded, charfont, sizeof(loaded));
+
+		char gone[64];
+		snprintf(gone, sizeof(gone), "font/not-here.pf");
+		check(LoadFont(gone) == 0, "a font that is not there refuses");
+		check(!memcmp(loaded, charfont, sizeof(loaded)),
+			"and leaves the one already loaded exactly as it was");
+
+		// And the way back, which is the reason charrom.cpp keeps 2KB aside.
+		FontRestoreBuiltin();
+		check(!memcmp(before, charfont, sizeof(before)),
+			"Built-in restores all 2048 bytes of the compiled-in font, byte for byte");
+
+		/*
+		  Then the same thing through the screen: the Font row writes `font=` into MiSTer.ini
+		  and tells cfg, because cfg is what the next LoadFont at boot reads. Driven with keys
+		  rather than by calling the writer, so the row, the save and the file are one test.
+		*/
+		char path[1024], bak[1024];
+		snprintf(path, sizeof(path), "%s/MiSTer.ini", ROOT);
+		snprintf(bak, sizeof(bak), "%s.bak", path);
+		put_file(path, "[MiSTer]\r\ndisable_autofire=1\r\ncontroller_info=0\r\n");
+		cfg.font[0] = 0;
+
+		chome_leave();
+		press(KEY_MENU, 20);
+		frame(8);
+		press(KEY_UP, 10);                    // the menu bar
+		press(KEY_RIGHT, 10);                 // Options
+		press(KEY_ENTER, 14);
+		press(KEY_UP, 8);                     // wrap to the last row
+		press(KEY_UP, 8);                     // More Settings
+		press(KEY_ENTER, 14);
+		frame(8);
+
+		// Up once from the first row is Save Changes; up again is the Font row above it.
+		press(KEY_UP, 8);
+		press(KEY_UP, 8);
+		frame(6);
+
+		press(KEY_RIGHT, 10);                 // Built-in -> the only .pf on the card
+		frame(8);
+		dump("font-row-picked");
+		check(memcmp(before, charfont, sizeof(before)) != 0,
+			"stepping the Font row loads the font at once, without waiting for a save");
+
+		static char now[8192];
+		check(slurp_file(path, now, sizeof(now)) > 0 && !strstr(now, "font"),
+			"and writes nothing on its own");
+
+		press(KEY_DOWN, 8);                   // down to Save Changes
+		press(KEY_ENTER, 12);                 // arms
+		press(KEY_ENTER, 12);                 // writes
+		frame(8);
+
+		check(slurp_file(path, now, sizeof(now)) > 0
+			&& strstr(now, "font=font/harness.pf") != 0,
+			"saving puts font= in MiSTer.ini");
+		check(!strcmp(cfg.font, "font/harness.pf"),
+			"and tells the running firmware, which is what the next boot reads back");
+
+		int bare_lf = 0;
+		for (int i = 0; now[i]; i++) if (now[i] == '\n' && (!i || now[i - 1] != '\r')) bare_lf++;
+		check(!bare_lf, "in CRLF, through the same writer every other setting goes through");
+
+		/*
+		  And back to Built-in through the row, which writes the key empty - exactly what
+		  user_io.cpp tests for when it decides whether to load a font at all.
+		*/
+		press(KEY_UP, 8);                     // back up to the Font row
+		press(KEY_LEFT, 10);
+		frame(8);
+		check(!memcmp(before, charfont, sizeof(before)),
+			"stepping back to Built-in puts the compiled-in glyphs back on screen");
+
+		press(KEY_DOWN, 8);
+		press(KEY_ENTER, 12);
+		press(KEY_ENTER, 12);
+		frame(8);
+		check(slurp_file(path, now, sizeof(now)) > 0 && strstr(now, "font=\r\n") != 0,
+			"and saves it as an empty font=, which is how the firmware spells no font");
+		check(!cfg.font[0], "with cfg agreeing");
+
+		/*
+		  And the way off this screen that is not B. The menu button goes straight to the menu
+		  bar from wherever it is pressed, walking past the "again to lose the changes" prompt
+		  - so a font chosen and not saved has to be put back on that path too, or it would
+		  stay on screen until the next reboot with nothing on any screen saying why.
+		*/
+		press(KEY_UP, 8);                     // the Font row again
+		press(KEY_RIGHT, 10);
+		frame(8);
+		check(memcmp(before, charfont, sizeof(before)) != 0, "a font is staged again");
+
+		press(KEY_MENU, 14);
+		frame(8);
+		check(!memcmp(before, charfont, sizeof(before)),
+			"and the menu button off the screen puts it back, not only B");
+
+		press(KEY_ESC, 10);
+		press(KEY_ESC, 10);
+		press(KEY_ESC, 10);
+
+		unlink(ROOT "/font/harness.pf");
+		unlink(path);
+		unlink(bak);
+		cfg.font[0] = 0;
+
+		// Whatever the presses above left staged, the table is the built-in one from here on.
+		FontRestoreBuiltin();
+		check(!memcmp(before, charfont, sizeof(before)),
+			"and the section leaves the front-end on the font every frame above was drawn in");
+	}
+
+	cfg.classicui_tracking = was_track;
+	cfg.classicui_caps = was_caps;
+	theme_invalidate();
+	theme_update(gfx_w(), gfx_h(), cfg.classicui_profile);
+	gfx_damage_all();
+	frame(6);
+}
+
 /* ------------------------------------------------------------------ main -- */
 
 int main()
@@ -10943,6 +11566,14 @@ int main()
 	cfg.classicui_artfetch = 0;                       // no network in tests
 	cfg.classicui_freeze = 1;                         // as cfg.cpp defaults it
 	cfg.classicui_overscan = 6;                       // as cfg_parse() defaults it
+	/*
+	  The two typography keys, at the values cfg_parse() gives them. Both matter to every
+	  pixel assertion in this file: zero tracking is the 8-pixel advance every panel width
+	  was measured against, and caps on is the case every pinned frame was captured in. A
+	  zero-initialised cfg would have turned the capitals off for the whole run.
+	*/
+	cfg.classicui_tracking = 0;
+	cfg.classicui_caps = 1;
 	snprintf(cfg.classicui_artdir, sizeof(cfg.classicui_artdir), "boxart");
 	cfg.classicui_gamelist = 1;                       // as cfg.cpp defaults it
 	cfg.osd_timeout = 0;
@@ -12631,7 +13262,7 @@ int main()
 		opt_step_by(i_rum, 1);
 		check(opt_dirty() == 2, "two edits, two things to write");
 
-		check(opt_apply(path) == 2, "and writing reports both");
+		check(opt_apply(path, 0, 0) == 2, "and writing reports both");
 
 		static char now[8192], saved[8192];
 		check(slurp_file(path, now, sizeof(now)) > 0, "the ini is still readable afterwards");
@@ -12652,7 +13283,7 @@ int main()
 
 		check(cfg.classicui_overscan == 9 && cfg.rumble == 1, "the running firmware is told as well");
 		check(opt_wrote_live(), "both of those are true for this session already, and the screen says so");
-		check(!opt_dirty() && opt_apply(path) == 0, "and there is nothing left to write");
+		check(!opt_dirty() && opt_apply(path, 0, 0) == 0, "and there is nothing left to write");
 
 		/* ------------------------------------------------------------ the screen --- */
 
@@ -12716,8 +13347,6 @@ int main()
 			"the second press writes it");
 		check(strstr(now, "disable_autofire=1") != 0 && !strstr(now, "video_brightness"),
 			"and writes only what was changed, not the whole table");
-		check(panel_rows_pixels(COL_YELLOW) > 0,
-			"the colour is about the default, not about being unsaved, so it stays");
 
 		static char written[8192];
 		snprintf(written, sizeof(written), "%s", now);
@@ -12728,6 +13357,18 @@ int main()
 		  leaving look identical from outside until the panel is gone.
 		*/
 		press(KEY_DOWN, 8);                   // back round to the first setting
+		frame(6);
+
+		/*
+		  Asserted here rather than on the frame above, and the move is the reason: with the
+		  font and the two typography rows the list is longer than a 720p panel holds, so
+		  saving leaves the cursor on the last row and the amber ones scrolled off the top.
+		  The claim is about what the colour means, not about which rows happen to be in
+		  view, so it is made where the coloured row is on screen.
+		*/
+		check(panel_rows_pixels(COL_YELLOW) > 0,
+			"the colour is about the default, not about being unsaved, so it stays");
+
 		press(KEY_RIGHT, 10);
 		frame(6);
 		unsigned long h_edit = panel_hash();
@@ -13739,6 +14380,8 @@ int main()
 		press(KEY_ESC, 10);
 		frame(6);
 	}
+
+	assert_typography();
 
 	printf("\n== presents ==\n");
 	printf("  page flips: %d\n", harness_present_count());

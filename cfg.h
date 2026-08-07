@@ -125,6 +125,15 @@ typedef struct {
 	uint8_t classicui_freeze;
 	uint8_t classicui_profile;
 	uint8_t classicui_overscan;
+	/*
+	  Letter spacing, in font pixels, added to the 8-pixel advance of the OSD ROM font.
+	  Signed, so it is an int8_t and not a uint8_t like everything else here - which is
+	  why the front-end's option table needed a signed pointer of its own rather than
+	  reusing the uint8_t one; see the comment on opt_def in support/classicui/chome_opt.h.
+	*/
+	int8_t classicui_tracking;
+	// 1 (default) - titles and labels are shouted in capitals, as they always were.
+	uint8_t classicui_caps;
 	// Inert until this build carries a ScreenScraper devid; see chome_ss.h.
 	uint8_t classicui_screenscraper;
 	// OFF by default: see support/classicui/chome_disc.h.
