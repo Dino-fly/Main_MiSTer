@@ -327,25 +327,32 @@ already there, so nothing needs sorting by hand:
 
 ```
 SD-CARD-ROOT/
-  MiSTer                     replaces the firmware in the card root
-  classicui/disctitles.txt   the disc name table - a new file, replaces nothing
+  MiSTer                            replaces the firmware in the card root
+  classicui/disctitles.txt          the disc name table - a new file, replaces nothing
+  Scripts/classic_home_protect.sh   run once, so updates stop reverting the front-end
+  Scripts/classic_home_unprotect.sh undoes that again
+  linux/classic-home/               what those two install; nothing to open yourself
+  MANIFEST_*.txt                    every file in the archive, with its size and md5
 ```
 
 and, if you took the build that also carries PSX controllers over SNAC:
 
 ```
-  menu.rbf                   replaces the menu core
-  _Console/*.rbf             our core builds, named so they sit beside your own
-  _Computer/*.rbf            rather than overwrite them
+  menu.rbf                          replaces the menu core
+  _Console/*.rbf                    our core builds, named so they sit beside your own
+  _Computer/*.rbf                   rather than overwrite them
   _Arcade/cores/*.rbf
-  Scripts/                   optional clean-up for superseded duplicates
+  Scripts/snac_remove_old_cores.sh  optional clean-up for superseded duplicates
 ```
 
 **Back up the files you are replacing first** — `MiSTer`, and `menu.rbf` if it is in the
 archive. Copy them beside themselves as `MiSTer.backup` and `menu.rbf.backup`. That is your
 way back, and it is one copy each.
 
-Then turn it on, at step 4 below.
+Then turn it on, at step 4 below — and run **`classic_home_protect`** from the MiSTer
+Scripts menu once you are there, or the next `update_all` puts the official firmware back
+and the front-end with it. [Surviving `update_all`](#surviving-update_all) is the whole
+story.
 
 **Building it yourself** is the rest of this section.
 
@@ -397,6 +404,52 @@ Then turn it on, at step 4 below.
 
 If something goes wrong, `classicui=0` gives you the stock menu back, and
 `MiSTer.prev` is the firmware you were running before.
+
+### Surviving `update_all`
+
+**Run `classic_home_protect` once, from the MiSTer Scripts menu.** Then updates stop
+reverting the front-end.
+
+They do revert it otherwise, and it is not a bug anyone can fix in an update script:
+the file `MiSTer` belongs to MiSTer's official distribution database, so `update_all`
+and the MiSTer Downloader replace it with the official build, move ours to
+`.MiSTer.old`, and ask you to reboot. `menu.rbf` is owned the same way, which matters
+in the build that also carries PSX controllers over SNAC. No third-party database is
+allowed to supply either file, so there is nowhere to publish this as an update — the
+only place to put the firmware back is at boot, on your own machine.
+
+That is what the Scripts entry sets up. It keeps a verified copy of the firmware in
+`linux/classic-home/`, a folder no database may write to for the same reason
+`MiSTer.ini` is safe from them, and adds a marked block to
+`linux/user-startup.sh` — the file `/etc/init.d/S99user` runs at boot. From then on:
+
+- boot with the right firmware in place and it does nothing at all, silently;
+- boot after an updater replaced it and ours goes back, with a line saying so in
+  `linux/classic-home/restore.log`;
+- the official build it displaced is kept as `MiSTer.official`, so you can go back;
+- a **newer** Classic Home firmware that you copied on yourself is left alone, not
+  quietly downgraded. Re-run the Scripts entry after copying one on, so the stored
+  copy is the one you are actually running.
+
+Nothing is ever restored from a copy that has not been checked first — its size and
+md5 must match what was recorded, and the firmware must still be an ARM executable —
+and the new file is written under a temporary name and renamed into place, so there is
+no moment at which the card has no `MiSTer` on it. If a check fails it changes nothing
+and says why in the log.
+
+One thing it cannot do: if the restore happens after the firmware has already been
+launched, it takes effect at the *next* boot, so an update can still cost you one boot
+of the stock menu. It will not kill and restart the firmware to avoid that — nothing
+supervises that process, so a failed relaunch would be a machine showing nothing at
+all.
+
+`classic_home_unprotect` undoes all of it: the block comes out of `user-startup.sh`
+(anything else in that file, including MiSTer_SAM's own lines, is left exactly as it
+was), and the official firmware goes back if we kept a copy. Note that `.MiSTer.old`
+is *not* the official firmware — an updater puts the file it replaced there, so that
+copy is ours.
+
+Both scripts print exactly what they changed, and running either twice is harmless.
 
 ### Is your ini set up?
 
