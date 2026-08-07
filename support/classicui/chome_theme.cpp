@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include "chome_theme.h"
 #include "../../cfg.h"
+#include "../../video.h"
 
 static chome_profile P;
 
@@ -22,11 +23,25 @@ void theme_invalidate()
 void theme_update(int w, int h, int force)
 {
 	static int last_force = -1;
+	static int last_div = -1;
+
+	/*
+	  How many pixels of glass one canvas pixel covers. With classicui_halfres on - or a
+	  global fb_size=2 - the framebuffer is a fraction of the display mode and the scaler
+	  upscales it, so the canvas alone no longer says how big anything is on the screen.
+	  1 whenever the framebuffer is the mode 1:1, which makes everything below exactly
+	  what it always was.
+	*/
+	int div = video_menu_fb_div();
+	if (div < 1) div = 1;
 
 	// Recompute when the canvas changes or when the forced profile changes;
-	// the Display panel relies on the latter.
-	if (w == P.w && h == P.h && P.name && force == last_force) return;
+	// the Display panel relies on the latter. The divisor is in the key for the one
+	// case where it moves without the canvas moving: a refused request being granted
+	// after a mode change to the same size.
+	if (w == P.w && h == P.h && P.name && force == last_force && div == last_div) return;
 	last_force = force;
+	last_div = div;
 
 	/*
 	  Are the canvas pixels square?
@@ -59,12 +74,29 @@ void theme_update(int w, int h, int force)
 	int px = (w >= h * 2) ? 2 : 1;
 	int ew = w / px;                  // the width in square units
 
+	/*
+	  The profile is chosen from the glass, not from the canvas.
+
+	  The hd/sd/lo split answers "how far away is this screen and how much fits on it",
+	  and that is a property of the display: a 720p television is the same television
+	  whether the framebuffer behind it is 1280 or 640 wide. Chosen from the canvas, a
+	  720p display with classicui_halfres on landed on the sd layout - three cards
+	  instead of five, and a 6% overscan margin meant for a CRT's bezel spent on an HDMI
+	  panel that shows every pixel - while a 1080p display halved to 960 stayed hd. The
+	  same discontinuity was already reachable with a global fb_size=2, which is why this
+	  reads the divisor that is actually in force rather than the front-end's own option.
+
+	  Every metric below is a fraction of the canvas, so the same profile at half the
+	  canvas is the same picture on the glass, upscaled.
+	*/
+	int eg = ew * div;                // the width in square units of glass
+
 	int id;
 	if (force == 1) id = PROF_HD;
 	else if (force == 2) id = PROF_SD;
 	else if (force == 3) id = PROF_LO;
-	else if (ew >= 900) id = PROF_HD;
-	else if (ew >= 480) id = PROF_SD;
+	else if (eg >= 900) id = PROF_HD;
+	else if (eg >= 480) id = PROF_SD;
 	else id = PROF_LO;
 
 	P.id = id;
@@ -79,10 +111,26 @@ void theme_update(int w, int h, int force)
 	default:      P.name = "lo"; P.visible = 3; break;
 	}
 
-	// Text scales. Integer only: the ROM font is never resampled.
-	if (ew >= 900)      { P.ts_title = 3; P.ts_ui = 2; P.ts_tiny = 2; }
-	else if (ew >= 480) { P.ts_title = 2; P.ts_ui = 1; P.ts_tiny = 1; }
-	else                { P.ts_title = 1; P.ts_ui = 1; P.ts_tiny = 1; }
+	/*
+	  Text scales. Integer only: the ROM font is never resampled.
+
+	  Chosen on the glass like the profile, then divided back to canvas pixels, so a
+	  glyph covers the same screen area whether the canvas is halved or not: 720p gives
+	  ts_ui 2 whole and 1 halved, which are the same 16 pixels of glass. The one that
+	  cannot survive the division exactly is the title at half resolution - 3 canvas
+	  pixels has no half, so it rounds up to 2, which is 32 pixels of glass against 24
+	  native. A title a third bigger beats every string on the screen shrinking to
+	  half height, which is what dividing 900 by the divisor and reading the old
+	  thresholds off the canvas would have done.
+	*/
+	int tt, tu, ty;
+	if (eg >= 900)      { tt = 3; tu = 2; ty = 2; }
+	else if (eg >= 480) { tt = 2; tu = 1; ty = 1; }
+	else                { tt = 1; tu = 1; ty = 1; }
+
+	P.ts_title = (tt + div - 1) / div; if (P.ts_title < 1) P.ts_title = 1;
+	P.ts_ui    = (tu + div - 1) / div; if (P.ts_ui < 1) P.ts_ui = 1;
+	P.ts_tiny  = (ty + div - 1) / div; if (P.ts_tiny < 1) P.ts_tiny = 1;
 
 	/*
 	  Overscan. An analog canvas means a TV, and a TV keeps a few percent of every
@@ -209,8 +257,10 @@ void theme_update(int w, int h, int force)
 	P.panel_h = pct(h, (id == PROF_LO) ? 0.62 : 0.56);
 	P.row_h = 12 * P.ts_ui;
 
-	printf("ClassicUI: profile %s, canvas %dx%d%s, card %dx%d, pitch %d, text %dx/%dx\n",
-		P.name, P.w, P.h, (px > 1) ? " (half-width pixels)" : "",
+	char divs[24] = "";
+	if (div > 1) snprintf(divs, sizeof(divs), " (1/%d of the display)", div);
+	printf("ClassicUI: profile %s, canvas %dx%d%s%s, card %dx%d, pitch %d, text %dx/%dx\n",
+		P.name, P.w, P.h, (px > 1) ? " (half-width pixels)" : "", divs,
 		P.card_w, P.card_h, P.pitch, P.ts_title, P.ts_ui);
 	printf("ClassicUI: strip %d tall at y=%d, slot tile %dx%d, margin %dx%d\n",
 		P.strip_h, P.h - P.safe_y - P.strip_h, P.thumb_w, P.thumb_h, P.safe_x, P.safe_y);

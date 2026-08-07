@@ -669,6 +669,28 @@ static char browse_rel[CH_PATH_LEN] = {};
 static void mark_dirty() { dirty = 1; }
 static void mark_slide() { slide_due = 1; }
 
+/*
+  The half-resolution framebuffer, asked for whenever this front-end owns the screen and
+  the option says so.
+
+  One call, made wherever the ownership changes and re-asserted every frame from the
+  loop, the same idiom video_menu_fb_analog(1) already follows there: an unchanged
+  request is free, and re-asserting is what makes the More Settings toggle take effect
+  on the next frame with no plumbing of its own - the loop below notices the canvas
+  changed and re-lays everything out, exactly as it does for the analog takeover.
+
+  The request must NOT outlive the ownership. Everything after this front-end shares the
+  same framebuffer: the classic menu's wallpaper, the F9 terminal, a script's console.
+  Each hand-off below releases it (video_fb_size_request(0)), because a terminal that
+  came up at half resolution because a menu had been open would be this front-end
+  scribbling on somebody else's screen. See the release sites in chome_leave(),
+  ig_close() and the video_fb_state() yield.
+*/
+static void fb_size_sync()
+{
+	video_fb_size_request(cfg.classicui_halfres ? 2 : 0);
+}
+
 static const uint32_t *ig_live_ref(int w, int h);
 static void ig_close(int restore_video);
 static int user_slots();
@@ -4838,6 +4860,36 @@ static int rip_reveal()
 }
 
 /*
+  Everything a disc's pixels are a function of, folded into one number, so the spin
+  repaint can tell "the timer fired" from "the disc will actually look different".
+
+  The spin tick fires every GFX_DISC_PART_MS for smoothness, but the angle is quantised
+  to 64 positions a turn - at the slow rate that is a new position every 62.5ms, so three
+  ticks in four were composing, blitting and copying a rectangle that came out identical
+  to the byte. On the device that was most of what an open disc dialog cost: the 288px
+  disc's rectangle is ~330 rows of a 720p canvas, copied into uncached memory at 60fps to
+  show a rotation that only held 16 distinct frames a second. Skipping the identical
+  ticks makes the repaint rate follow the angle, which is what it was for all along.
+
+  The reveal is in the number for the one thing inside the rectangle that moves between
+  angles: the rip's pie follows the sectors, not the clock. The step is disc_step(),
+  which both discs draw from and which is memoised on the millisecond, so asking here
+  and drawing a moment later cannot disagree.
+
+  What is NOT in the number is the badge's breath and its ring's pulse, which are
+  continuous in the clock - so the skip is never taken while the badge has focus (the
+  dispatch checks SCR_DISCBAR). On every other screen a disc's pixels are this number
+  and nothing else. Byte-identity against a full repaint is untouched: a skipped tick
+  presents nothing at all.
+*/
+static int disc_drawn_sig = -1;
+
+static int disc_spin_sig()
+{
+	return disc_step() | (rip_reveal() << 6);
+}
+
+/*
   Who the dialog is about, gathered once per draw and per press.
 
   There are two moments a player wants this screen and only one of them can ask the drive.
@@ -6135,6 +6187,10 @@ static void disc_draw_face(const disc_dlg *d, int cx, int cy, int r, int reveal)
 	int dia = 2 * r;
 	char path[1024];
 
+	// What this frame's disc is a function of, for the spin repaint's skip. Recorded
+	// by the draw itself so the two can never disagree; see disc_spin_sig().
+	disc_drawn_sig = disc_spin_sig();
+
 	if (d->key[0] && disc_art_path(d->key, path, sizeof(path)))
 	{
 		const uint32_t *scan = art_thumb(path, dia, dia);
@@ -6375,6 +6431,11 @@ static void draw_disc_badge(const chome_profile *p)
 	  pulsing under a panel would be movement drawing the eye away from the panel.
 	*/
 	int focused = (screen == SCR_DISCBAR);
+
+	// As in disc_draw_face(): what the badge is a function of, for the spin repaint's
+	// skip. The breath and the pulse are not in it, which is why the skip is never
+	// taken while the badge has focus.
+	disc_drawn_sig = disc_spin_sig();
 
 	gfx_disc(cx, cy, focused ? disc_breath_r(r) : r, disc_step(),
 		disc_bands, DISC_BANDS_N, COL_WHITE, COL_PANELHI, COL_BGDARK,
@@ -10835,7 +10896,19 @@ static void ig_close(int restore_video)
 	// left in place for a core switch: whatever runs next brings its own mode, and
 	// leaving the mux pointed at the scaler would strand it.
 	video_menu_fb_analog(0);
-	if (restore_video) video_fb_enable(0);
+	if (restore_video)
+	{
+		video_fb_enable(0);
+
+		/*
+		  After the disable, so the resize reprograms nothing that is showing. Only on
+		  this branch: a core switch re-execs the whole process, and resizing a
+		  framebuffer that is still on screen with our last frame in it would reinterpret
+		  those pixels at the new stride - a torn screen for exactly the moment the load
+		  takes.
+		*/
+		video_fb_size_request(0);
+	}
 
 	printf("ClassicUI: pause menu closed\n");
 }
@@ -10870,9 +10943,14 @@ static int ig_open()
 {
 	const chome_profile *p;
 
+	// Before anything measures: the still is scaled to the canvas below, and building
+	// it at full size only for the loop to halve the canvas on the next pass would
+	// throw the scale away and draw the menu over the grid instead of over the game.
+	fb_size_sync();
+
 	theme_update(video_menu_fb_width(), video_menu_fb_height(), cfg.classicui_profile);
 	p = theme_get();
-	if (p->w < 8 || p->h < 8) return 0;
+	if (p->w < 8 || p->h < 8) { video_fb_size_request(0); return 0; }
 
 	// Grab the running frame before we take the screen away from the core.
 	int max_px = 2048 * 1024;
@@ -10919,12 +10997,15 @@ static int ig_open()
 		for (size_t i = 0; i < n; i++) ig_shot[i] |= 0xff000000u;
 	}
 
-	if (!gfx_begin()) { free(ig_shot); ig_shot = 0; return 0; }
+	// The failed opens release the request: past here the core keeps the screen, and
+	// the request must only ever stand while this front-end is what the player sees.
+	if (!gfx_begin()) { video_fb_size_request(0); free(ig_shot); ig_shot = 0; return 0; }
 
 	// Take the framebuffer. A core without support leaves us nothing to draw on.
 	if (!video_menu_fb_present(ig_fb))
 	{
 		printf("ClassicUI: core has no HPS framebuffer, leaving the OSD to it\n");
+		video_fb_size_request(0);
 		free(ig_shot);
 		ig_shot = 0;
 		return 0;
@@ -10942,6 +11023,7 @@ static int ig_open()
 	if (p->w < 8 || p->h < 8 || !gfx_begin())
 	{
 		video_menu_fb_analog(0);
+		video_fb_size_request(0);
 		free(ig_shot);
 		ig_shot = 0;
 		return 0;
@@ -11350,6 +11432,10 @@ void chome_leave()
 	// the framebuffer, so holding the scaler would leave it invisible instead.
 	video_menu_fb_analog(0);
 
+	// And the half-resolution request with it, before the wallpaper repaint below
+	// draws into the framebuffer: the classic menu's screen is not ours to shrink.
+	video_fb_size_request(0);
+
 	lib_state_save();
 	net_watch(0);
 
@@ -11407,6 +11493,8 @@ static void enter()
 	// On an analog-only setup the framebuffer reaches no screen until the scaler
 	// output is routed there. Ask before measuring: this resizes the framebuffer to
 	// the TV mode, and the theme profile follows whatever canvas it is handed.
+	// The half-resolution request first, for the same reason - both change the canvas.
+	fb_size_sync();
 	video_menu_fb_analog(1);
 
 	theme_update(video_menu_fb_width(), video_menu_fb_height(), cfg.classicui_profile);
@@ -11725,11 +11813,13 @@ int chome_handle(uint32_t key)
 
 		// Yield while the fb terminal owns the framebuffer (F9 console, scripts).
 		// It has its own claim on the analog output, so drop ours rather than
-		// fight over the video mode.
+		// fight over the video mode - and the half-resolution request goes with it,
+		// or the console somebody pressed F9 for comes up at 640x360.
 		if (video_fb_state())
 		{
 			active = 0;
 			video_menu_fb_analog(0);
+			video_fb_size_request(0);
 			return 0;
 		}
 	}
@@ -12439,6 +12529,10 @@ int chome_handle(uint32_t key)
 	// Re-assert the claim on the analog output every frame. It is free once held,
 	// and the fb terminal shares the mechanism and drops it when a script exits,
 	// which would otherwise leave this UI drawing where nothing displays it.
+	// The half-resolution request rides the same idiom: free when unchanged, and
+	// re-asserting is what makes the More Settings toggle land - the resize branch
+	// below picks the new canvas up like any other.
+	fb_size_sync();
 	video_menu_fb_analog(1);
 
 	if (!gfx_begin())
@@ -12459,6 +12553,18 @@ int chome_handle(uint32_t key)
 	{
 		theme_update(w, h, cfg.classicui_profile);
 		art_init(theme_get()->sel_w, theme_get()->sel_h);
+
+		/*
+		  The still of the game, rebuilt at the new size. This is the hole
+		  draw_background() reports when it falls through to the grid: ig_bg is
+		  allocated at the canvas size, and until now nothing rebuilt it when the
+		  canvas changed under an open menu - the analog takeover could always do
+		  that, and the half-resolution toggle in More Settings now does it on
+		  purpose. ig_shot is kept for exactly as long as the menu is open, so the
+		  rebuild is a rescale of what was already grabbed, not a second grab.
+		*/
+		if (ig_active) ig_build_background(theme_get());
+
 		gfx_damage_all();
 		dirty = 1;
 	}
@@ -12547,7 +12653,20 @@ int chome_handle(uint32_t key)
 		*/
 		int y0, y1;
 		if (ui_busy() || screen != SCR_HOME || !slide_band(&y0, &y1)) render();
-		else render_region(0, y0, gfx_w(), y1 - y0 + 1);
+		else
+		{
+			render_region(0, y0, gfx_w(), y1 - y0 + 1);
+
+			/*
+			  A band frame replays the badge's draw under a clip that excludes it, so the
+			  signature it recorded describes pixels that never reached the screen. Left
+			  standing, the spin tick after the slide would compare equal and skip, and
+			  the badge would hold a stale angle for up to a whole position after the
+			  shelf came to rest. Unknown forces the next tick to paint, which is exactly
+			  what the pending spin did before the skip existed.
+			*/
+			disc_drawn_sig = -1;
+		}
 	}
 	else if (disc_spin_due)
 	{
@@ -12563,7 +12682,18 @@ int chome_handle(uint32_t key)
 		*/
 		int x, y, w, h;
 		if (ui_busy()) render();
-		else if (disc_spin_rect(&x, &y, &w, &h)) render_region(x, y, w, h);
+		else if (disc_spin_rect(&x, &y, &w, &h))
+		{
+			/*
+			  Only when the disc will actually look different. The tick fires every
+			  GFX_DISC_PART_MS; the angle moves every 62.5ms at the slow rate, so most
+			  ticks would repaint the rectangle byte-identical - see disc_spin_sig().
+			  The focused badge is exempt: its breath and pulse ride the clock, not
+			  the angle, so on the tier every tick is a real frame.
+			*/
+			if (screen == SCR_DISCBAR || disc_spin_sig() != disc_drawn_sig)
+				render_region(x, y, w, h);
+		}
 		// Otherwise the last frame drew no disc (the browser, say): nothing on screen
 		// is turning, so nothing needs painting at all.
 	}

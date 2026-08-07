@@ -56,6 +56,9 @@
 
 #include "harness.h"
 
+// From video.h, which this file does not include; the stub in stubs.cpp models it.
+int video_menu_fb_div();
+
 #define ROOT "/tmp/chome_sd"
 #define OUT  "/tmp/chome_out"
 
@@ -3569,6 +3572,28 @@ static void assert_disc_breath()
   disc differ with no bug present - is why every equality below is of a region that
   excludes the badge's box, and the box itself is only ever asserted to have *changed*.
 */
+/*
+  Tick until the spin path actually paints, bounded.
+
+  The spin timer fires every GFX_DISC_PART_MS but the repaint now follows the *angle*: a
+  tick on which the disc's 64-position step has not moved paints nothing at all (see
+  disc_spin_sig() in chome_ui.cpp). At the slow rate a step is 62.5ms, so "advance 60ms
+  and expect a frame" - which is what these sections did - is a coin flip over where the
+  phase happens to sit. This waits for the paint the way the device would: tick by tick,
+  up to a bit over one full step.
+*/
+static int spin_paint()
+{
+	for (int i = 0; i < 8; i++)
+	{
+		int flips = harness_present_count();
+		harness_advance(16);
+		chome_handle(0);
+		if (harness_present_count() != flips) return 1;
+	}
+	return 0;
+}
+
 static void assert_partial_repaint()
 {
 	printf("\n== partial repaint: the disc turns without repainting the world ==\n");
@@ -3626,8 +3651,7 @@ static void assert_partial_repaint()
 	  down, no clock in between, is two full repaints that end on the very frame the
 	  partial one drew.
 	*/
-	harness_advance(60);                       // past the spin interval, nothing else due
-	chome_handle(0);
+	check(spin_paint(), "a spin frame arrives within one rotation step");
 	check(gfx_damage_rows() <= 2 * BADGE_CELLS * cell, "the frame under comparison took the partial path");
 	unsigned long partial_frame = harness_fb_hash_box(0, 0, w, h);
 
@@ -3642,6 +3666,30 @@ static void assert_partial_repaint()
 		"a partially repainted frame is byte-identical to a full repaint of the same instant");
 
 	/*
+	  The ticks between angles paint nothing at all. The spin timer still fires every
+	  GFX_DISC_PART_MS, but at the slow rate the 64-position step moves every 62.5ms -
+	  so after the frame a step change just earned, the next 16ms tick cannot cross
+	  another boundary, and repainting on it would copy the disc's rectangle into the
+	  framebuffer byte-identical. That copy at 60fps was most of what a disc on a 720p
+	  canvas cost. The skipped tick has to leave the shown frame exactly alone, which
+	  presenting nothing does by construction.
+	*/
+	{
+		check(spin_paint(), "a spin frame lands on a step change");
+		unsigned long shown = harness_fb_hash_box(0, 0, w, h);
+		int flips = harness_present_count();
+
+		harness_advance(16);
+		chome_handle(0);
+		check(harness_present_count() == flips,
+			"the tick after it, inside the same rotation step, paints nothing");
+		check(harness_fb_hash_box(0, 0, w, h) == shown, "and the screen is untouched by it");
+
+		check(spin_paint(), "the tick that crosses the next step paints again");
+		check(harness_fb_hash_box(0, 0, w, h) != shown, "and the disc has turned on it");
+	}
+
+	/*
 	  The buffer-alternation carry, provoked head on: a full frame (the tier, whose
 	  legend and ring differ from the shelf's) followed by one partial frame. The
 	  partial lands in the buffer the full frame never touched, so unless its copy
@@ -3653,8 +3701,7 @@ static void assert_partial_repaint()
 	unsigned long tier_right = harness_fb_hash_box(bx1, 0, w, h);
 	check(tier_right != R, "the tier reads differently to the shelf outside the badge");
 
-	harness_advance(60);
-	chome_handle(0);                           // one partial, into the other buffer
+	check(spin_paint(), "one partial, into the other buffer");
 	check(gfx_damage_rows() <= 2 * BADGE_CELLS * cell, "and it was partial");
 	check(harness_fb_hash_box(bx1, 0, w, h) == tier_right,
 		"one partial frame later the other buffer shows the tier, not the stale shelf");
@@ -3673,8 +3720,7 @@ static void assert_partial_repaint()
 	press(KEY_ENTER);
 	check(chome_screen_id() == 17, "on the disc prompt");
 
-	harness_advance(60);
-	chome_handle(0);                           // one spin frame, the partial path
+	check(spin_paint(), "one spin frame, the partial path");
 	unsigned long prompt_partial = harness_fb_hash_box(0, 0, w, h);
 
 	chome_handle(KEY_ESC);                     // back to the tier: a full repaint
@@ -5232,20 +5278,49 @@ static void assert_disc_dialog_size()
 		if (cases[c].w == 320 && cases[c].h == 240)
 		{
 			/*
-			  Everything but the disc, which turns. The disc's box is cut out with two pixels
-			  of margin for the soft rim, and its diameter and centre are asserted above - so
-			  the disc is still pinned, just not the frame of its rotation.
+			  Everything but the disc, which turns. The disc's box is cut out with margin,
+			  and its diameter and centre are asserted above - so the disc is still pinned,
+			  just not the frame of its rotation.
 
 			  The first version of this hashed the disc too and broke when a section was added
 			  elsewhere in the harness: the extra clock advances caught the disc at a different
 			  angle. The pixels that moved were the disc's 96x96 box exactly, measured, which is
 			  how we know the dialog itself had not moved.
+
+			  The cut-out is placed from the *plate*, not from disc_drawn_box(). The measured
+			  box breathes by a pixel with the rotation - the anti-aliased rim reaches a
+			  fraction further at some angles - so an exclusion rectangle built from it moved
+			  whenever anything changed how many spin frames ran before this line, and the
+			  pinned number broke with the plate pixel-for-pixel intact. That is exactly the
+			  history-dependence the cut-out exists to remove, arriving through the back door.
+			  So: horizontally the disc is centred on the plate, vertically it sits below the
+			  title and the sub-line by draw_disc()'s own arithmetic (a copy, deliberately,
+			  like every layout number in this section), and the expected diameter comes from
+			  the case table with six pixels of margin for the rim and the wobble.
 			*/
+			int s = p->ts_ui;
+			int ecx = ox + ow / 2;
+			int ecy = oy + 6 * s + 8 * p->ts_title + 4 * s + 16 * s + cases[c].dia / 2;
+			int half = cases[c].dia / 2 + 6;
+
+			// The rectangle really does contain the drawn disc, wobble and all - the one
+			// thing the fixed placement has to keep true.
+			check(dcx - dia / 2 >= ecx - half && dcx + dia / 2 <= ecx + half &&
+				dcy - dia / 2 >= ecy - half && dcy + dia / 2 <= ecy + half,
+				"the fixed cut-out covers the drawn disc");
+
 			unsigned long hash = harness_fb_hash_box_except(ox, oy, ox + ow, oy + oh,
-				dcx - dia / 2 - 2, dcy - dia / 2 - 2,
-				dcx + dia / 2 + 2, dcy + dia / 2 + 2);
+				ecx - half, ecy - half, ecx + half, ecy + half);
 			printf("  240p dialog plate hash (disc cut out) %lu\n", hash);
-			check(hash == 8834752626955163003UL, "240p is pixel for pixel the dialog it was");
+
+			/*
+			  The number is this dialog on the build before it was resized, re-anchored when
+			  the cut-out moved to the fixed rectangle: it was computed by running this very
+			  hash over the frame the *baseline* build (bedc959) draws, so it still pins the
+			  plate to the pixels he approved. If a deliberate change to the 240p dialog ever
+			  lands, this moves with it - and the PNGs in test/out are the record.
+			*/
+			check(hash == 14061375912984922619UL, "240p is pixel for pixel the dialog it was");
 		}
 
 		disc_reset_reader();
@@ -12610,6 +12685,348 @@ static void rip_show(int state, int done, int total, int bad)
 	frame(2);
 }
 
+// Pixels of one exact colour anywhere on the shown frame. Exact is legitimate for the
+// same reason panel_rows_pixels() says it is: gfx writes colours through unblended.
+static int count_shown(uint32_t want)
+{
+	const uint32_t *fb = harness_fb_shown();
+	int w = gfx_w(), h = gfx_h();
+	if (!fb) return 0;
+
+	int n = 0;
+	for (int i = 0; i < w * h; i++) if (fb[i] == want) n++;
+	return n;
+}
+
+/*
+  The half-resolution canvas: the option classicui_halfres stands for, on by default on
+  the device and exercised here against the model in stubs.cpp.
+
+  What is being claimed, in order: the request halves the canvas; the layout profile
+  and the overscan follow the *display* rather than the shrunken canvas, so a 720p
+  screen keeps the hd layout instead of dropping to sd with a CRT margin on an HDMI
+  panel; the text scales halve to the same glass size; turning the option off mid-
+  session restores the full canvas on the next frame with nothing pressed; the request
+  is refused below 320x240, which is what protects the analog takeover's TV canvas; the
+  in-game still survives the resize instead of falling through to the grid; and leaving
+  the front-end releases the request, because the framebuffer after us belongs to
+  somebody else.
+*/
+static void assert_half_canvas()
+{
+	printf("\n== the half-resolution canvas: quarter the pixels, the same layout ==\n");
+
+	// A clean shelf at 720p, the option off, exactly as the suite runs everywhere else.
+	harness_set_menu_core(1);
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 0);
+	chome_leave();
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 80 && lib_scanning(); i++) frame(2);
+	frame(20);
+
+	check(chome_screen_id() == 0 && gfx_w() == 1280 && gfx_h() == 720,
+		"on the shelf at the full 720p canvas");
+
+	const chome_profile *p = theme_get();
+	check(p->id == PROF_HD && p->visible == 5, "which lays out hd");
+	int full_tt = p->ts_title, full_tu = p->ts_ui;
+
+	/*
+	  The option lands with no key pressed: the frame loop re-asserts the request the
+	  way it re-asserts the analog claim, and the resize branch picks the new canvas up.
+	*/
+	cfg.classicui_halfres = 1;
+	frame(6);
+
+	check(gfx_w() == 640 && gfx_h() == 360, "turning the option on halves the canvas by itself");
+	check(video_menu_fb_div() == 2, "and the divisor in force says so");
+
+	p = theme_get();
+	check(p->id == PROF_HD && p->visible == 5,
+		"the layout is still hd: the profile is chosen from the display, not the canvas");
+	check(p->safe_x == 0 && p->safe_y == 0,
+		"and no overscan margin appears - this is still an HDMI display showing every pixel");
+	check(p->ts_ui == 1 && full_tu == 2,
+		"ui text halves in canvas pixels, which is the same size on the glass");
+	check(p->ts_title == (full_tt + 1) / 2,
+		"the title rounds up to 2, the one scale that cannot halve exactly");
+
+	frame(6);
+	dump("half-1-shelf-360");
+
+	// The partial machinery is the same code at this size; prove the strongest thing
+	// about it once here: a forced full repaint reproduces the shown frame exactly.
+	{
+		unsigned long shown = harness_fb_hash_box(0, 0, gfx_w(), gfx_h());
+		check(force_full_repaint(), "a full repaint can be forced at the half canvas");
+		check(harness_fb_hash_box(0, 0, gfx_w(), gfx_h()) == shown,
+			"and it reproduces the shown frame byte for byte");
+	}
+
+	// The row is in the option table with the shipped default, so More Settings
+	// carries it: the generic table checks cover the rest.
+	{
+		int i = opt_find("classicui_halfres");
+		check(i >= 0, "the option is on the More Settings screen");
+		check(i >= 0 && opt_at(i)->def == 1 && opt_at(i)->rec == 1,
+			"fast is both the firmware default and the recommendation");
+		check(i >= 0 && opt_at(i)->when == OW_NOW, "and it says it takes effect now");
+	}
+
+	// Off again mid-session: the same no-key path, the other direction.
+	cfg.classicui_halfres = 0;
+	frame(6);
+	check(gfx_w() == 1280 && gfx_h() == 720, "turning it off restores the full canvas live");
+
+	/*
+	  The floor. A 320x240 canvas is the analog takeover's, and half of it would be
+	  smaller than the smallest layout this front-end ships - so the request is refused
+	  and the canvas arrives whole, option or no option.
+	*/
+	cfg.classicui_halfres = 1;
+	harness_set_fb(320, 240);
+	gfx_shutdown();
+	theme_update(320, 240, 0);
+	frame(6);
+	check(gfx_w() == 320 && gfx_h() == 240, "a 240p canvas is never halved");
+	check(video_menu_fb_div() == 1, "the request was refused, not applied and clamped");
+	check(theme_get()->id == PROF_LO, "and it lays out lo, exactly as it always did");
+
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 0);
+	frame(10);
+
+	/*
+	  In a game: the menu opens at the half canvas with the still of the game behind it,
+	  and toggling the option under the open menu rebuilds the still at the new size
+	  rather than dropping it. The still is painted flat here so it can be counted: the
+	  6/16 dim of one known colour is one exact other colour, and a single pixel of it
+	  proves the still survived where the grid background would have none.
+	*/
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "gb\nTetris (World).gb\n"); fclose(f); }
+
+		harness_set_grab_flat(0xff204060);        // dims to 0xff0c1824, counted below
+		harness_set_menu_core(0);
+		frame(2);
+
+		press(KEY_MENU, 20);
+		check(chome_ingame_active(), "the in-game menu opens with the option on");
+		check(gfx_w() == 640 && gfx_h() == 360, "at the half canvas");
+		frame(10);
+
+		int at_half = count_shown(0xff0c1824);
+		check(at_half > 1000, "the still of the game is behind the shelf at that size");
+
+		cfg.classicui_halfres = 0;
+		frame(6);
+		check(gfx_w() == 1280 && gfx_h() == 720, "the canvas grows back under the open menu");
+		int at_full = count_shown(0xff0c1824);
+		check(at_full > at_half * 3,
+			"and the still is rebuilt at the new size instead of falling through to the grid");
+
+		press(KEY_MENU, 10);
+		check(!chome_ingame_active(), "the menu closes back into the game");
+
+		harness_set_grab_flat(0);
+		harness_set_menu_core(1);
+		frame(4);
+	}
+
+	/*
+	  Leaving releases the request. What runs after this front-end - the classic menu's
+	  wallpaper, the F9 terminal - shares the one framebuffer, and a half-size console
+	  because a menu had been open would be this front-end scribbling on somebody
+	  else's screen.
+	*/
+	cfg.classicui_halfres = 1;
+	frame(6);
+	check(gfx_w() == 640, "at the half canvas again");
+	chome_leave();
+	check(video_menu_fb_div() == 1, "handing off to the classic menu releases the request");
+
+	// And back to the state every later section assumes: option off, 720p, on the shelf.
+	cfg.classicui_halfres = 0;
+	press(KEY_MENU, 20);
+	frame(10);
+	check(gfx_w() == 1280 && gfx_h() == 720, "the suite continues at the full canvas");
+}
+
+/*
+  Repaint cost, measured rather than asserted.
+
+  This section prints a table and checks almost nothing: its output is the before/after
+  evidence for the two performance changes (the half-resolution canvas and the spin
+  repaint following the angle), and a check that baked today's numbers in would fail on
+  the next machine for no reason. Host times under Docker are indicative for *ratios* -
+  the device's uncached framebuffer makes its copies far dearer than a host memcpy - so
+  what to read off this table is paints-per-tick and how each column scales with the
+  canvas, not the microseconds themselves.
+
+  Kept under 200 painted frames per row: gfx_end() flushes and resets the counters at
+  GFX_STAT_EVERY, and a row that crossed it would quietly report only the tail.
+*/
+static unsigned long perf_ticks;
+
+static void perf_row(const char *canvas, const char *state)
+{
+	unsigned long fcomp, fcopy, frows, pcomp, pcopy, prows;
+	unsigned long fc = gfx_stat_get(0, &fcomp, &fcopy, &frows);
+	unsigned long pc = gfx_stat_get(1, &pcomp, &pcopy, &prows);
+	unsigned long n = fc + pc;
+
+	printf("  %-16s %-18s %4lu paints (%lu full, %lu partial) / %lu ticks, "
+		"compose avg %4lu us, copy avg %4lu us, rows avg %4lu\n",
+		canvas, state, n, fc, pc, perf_ticks,
+		n ? (fcomp + pcomp) / n : 0,
+		n ? (fcopy + pcopy) / n : 0,
+		n ? (frows + prows) / n : 0);
+}
+
+static void perf_run(int ticks)
+{
+	gfx_stat_reset();
+	perf_ticks = (unsigned long)ticks;
+	for (int i = 0; i < ticks; i++) { harness_advance(16); chome_handle(0); }
+}
+
+static void measure_repaint_costs(const char *canvas)
+{
+	// A clean shelf, no disc, parked away from either end for the slides.
+	disc_reset_reader();
+	disc_ingest_present(0);
+	(void)disc_take_dirty();
+	chome_leave();
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 80 && lib_scanning(); i++) frame(2);
+	frame(30);
+	select_first_game();
+	press(KEY_RIGHT, 20);
+	press(KEY_RIGHT, 20);
+	frame(60);                                 // covers decoded, nothing left to land
+
+	// Idle: nothing due, so nothing painted - the number the whole front-end rests on.
+	perf_run(150);
+	perf_row(canvas, "idle shelf");
+
+	// A full repaint per tick: the menu bar toggled with the clock moving, which marks
+	// dirty on every pass the way any structural change does.
+	gfx_stat_reset();
+	perf_ticks = 120;
+	for (int i = 0; i < 60; i++)
+	{
+		chome_handle(KEY_MENU);
+		harness_advance(16);
+		chome_handle(KEY_MENU | UPSTROKE);
+		harness_advance(16);
+	}
+	perf_row(canvas, "full repaints");
+	frame(20);                                 // an even count of toggles: the shelf, settling
+
+	// The carousel: taps each way, the ease's frames clipped to the card band.
+	gfx_stat_reset();
+	perf_ticks = 0;
+	for (int k = 0; k < 6; k++)
+	{
+		int dir = (k & 1) ? KEY_LEFT : KEY_RIGHT;
+		chome_handle(dir);
+		harness_advance(16);
+		chome_handle(dir | UPSTROKE);
+		for (int i = 0; i < 20; i++) { harness_advance(16); chome_handle(0); }
+		perf_ticks += 21;
+	}
+	perf_row(canvas, "carousel slides");
+
+	// A known disc on the shelf: the badge turns through the partial path, repainting
+	// only when its 64-position step moves.
+	disc_ingest_present(1);
+	static fake_disc d;
+	memset(&d, 0, sizeof(d));
+	static const char *const none[] = { "" };
+	fake_iso(&d, 0, "PLAYSTATION", "PLAYSTATION", none, 0);
+	fake_put(&d, 20, 0, "BOOT = cdrom:\\SLUS_006.26;1", 27, 100);
+	disc_set_reader(fake_read, &d);
+	disc_ingest_identify(0);
+	frame(10);
+
+	perf_run(150);
+	perf_row(canvas, "badge spinning");
+
+	// The dialog over it: the full-size disc, still at the slow rate.
+	press(KEY_UP, 6);
+	press(KEY_ENTER, 6);
+	frame(4);
+	perf_run(150);
+	perf_row(canvas, "dialog disc");
+
+	// And a rip on that dialog, which is the worst case this front-end draws: the
+	// disc at the focus rate, a new angle nearly every tick, the reveal riding it.
+	rip_test_set(RIP_RUNNING, 900, 2000, 0);
+	chome_handle(KEY_ESC);
+	chome_handle(KEY_ESC | UPSTROKE);
+	chome_handle(KEY_ENTER);
+	chome_handle(KEY_ENTER | UPSTROKE);
+	frame(4);
+	perf_run(150);
+	perf_row(canvas, "dialog disc, rip");
+	rip_test_reset();
+
+	press(KEY_ESC, 6);
+	press(KEY_ESC, 6);
+	disc_reset_reader();
+	disc_ingest_present(0);
+	(void)disc_take_dirty();
+	frame(10);
+}
+
+static void assert_repaint_costs()
+{
+	printf("\n== repaint costs, measured (host times: read ratios, not milliseconds) ==\n");
+
+	int was_debug = cfg.debug;
+	cfg.debug = 1;                             // what gates the collection
+
+	harness_set_menu_core(1);
+	cfg.classicui_halfres = 0;
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 0);
+	measure_repaint_costs("1280x720");
+
+	// The same display through the half-resolution option: the canvas the device
+	// defaults to at 720p.
+	cfg.classicui_halfres = 1;
+	measure_repaint_costs("640x360 (half)");
+	cfg.classicui_halfres = 0;
+
+	harness_set_fb(320, 240);
+	gfx_shutdown();
+	theme_update(320, 240, 0);
+	measure_repaint_costs("320x240");
+
+	cfg.debug = was_debug;
+
+	// One assertion, because it is the claim the idle column stands for and it must
+	// never regress into "the front-end paints when nothing changed".
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 0);
+	chome_leave();
+	press(KEY_MENU, 20);
+	// Long enough for every visible cover to decode: art_step() lands one per frame,
+	// and a cover arriving mid-measurement is a legitimate repaint, not idle work.
+	frame(80);
+
+	gfx_stat_reset();
+	int flips = harness_present_count();
+	for (int i = 0; i < 100; i++) { harness_advance(16); chome_handle(0); }
+	check(harness_present_count() == flips, "an idle shelf with no disc paints nothing at all");
+}
+
 static void assert_rip_screen()
 {
 	printf("\n== ripping a disc: the screen it is watched on ==\n");
@@ -12997,6 +13414,16 @@ int main()
 	snprintf(cfg.classicui_artdir, sizeof(cfg.classicui_artdir), "boxart");
 	cfg.classicui_gamelist = 1;                       // as cfg.cpp defaults it
 	cfg.osd_timeout = 0;
+
+	/*
+	  Off for the suite, though cfg.cpp defaults it on: every harness_set_fb() below
+	  states the canvas a section runs at, and with the halving in force each of those
+	  statements would quietly mean something else - 1280x720 arriving as 640x360 under
+	  every pinned frame in the file. The option gets its own section
+	  (assert_half_canvas), which turns it on against the model in stubs.cpp and
+	  checks the layout, the live toggle and the floor.
+	*/
+	cfg.classicui_halfres = 0;
 
 	harness_set_fb(1280, 720);
 
@@ -15825,6 +16252,11 @@ int main()
 		press(KEY_ESC, 10);
 		frame(6);
 	}
+
+	// The half-resolution option, and then the cost table - in that order, because the
+	// table measures the 640x360 column through the very option the section proves.
+	assert_half_canvas();
+	assert_repaint_costs();
 
 	assert_rip_format();
 	// Directly after it, because it is the other half of the same feature and it needs the
