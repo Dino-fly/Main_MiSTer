@@ -48,11 +48,12 @@ on show — `2/3  Final Fantasy VII (USA) (Disc 2).cue` — in the file's own ca
 line exists to be read against what is on the card. X is offered only where there is
 something to cycle.
 
-What counts as the same title is the cleaned title **plus** the system, the folder and the
-extension, and the last three are there to stop a merge that would be wrong rather than to
-make one that would be right: Aladdin on the SNES is not Aladdin on the Mega Drive, a hack
-in `SNES/Hacks` is not a regional variant of the game it was built from, and the `.sms`
-and `.gg` of one name are two games with different levels. Merging two genuinely different
+What counts as the same title is the cleaned title **plus** the system and the extension,
+which are there to stop a merge that would be wrong rather than to make one that would be
+right: Aladdin on the SNES is not Aladdin on the Mega Drive, and the `.sms` and `.gg` of one
+name are two games with different levels. The folder is deliberately *not* part of it, so a
+romset filed under `USA/` and `Europe/` groups the way a player expects and a multi-disc game
+stays one card wherever its discs live. Merging two genuinely different
 games would hide one behind a button nobody knows to press, which is worse than the
 duplicate cards this replaces. A card that still shares its title with another — those
 three cases, and Recently Played, which is deliberately not grouped because its content is
@@ -117,12 +118,16 @@ them apart. Same-titled files are now one card, **X** cycles the files behind it
 title block names the file on show — in the file's own case, because `MEGA MAN (E).NES` is not
 a filename.
 
-The grouping key is title + system + directory + extension. The last three each prevent a
-merge that would be *wrong*: Aladdin on SNES is not Aladdin on Mega Drive, a hack in its own
-folder is not a regional variant, `Sonic 2.sms` is not `Sonic 2.gg`. The cost is that a
-`USA/` + `Europe/` layout groups nothing, which is the safe way to be wrong — and cards that
-merely *share* a title show the filename anyway, so the original complaint is answered either
-way. Above, Chrono Cross's two discs stay separate cards and each says which disc it is.
+The grouping key is title + system + extension — **not** the directory. The two that remain
+each prevent a merge that would be *wrong*: Aladdin on SNES is not Aladdin on Mega Drive, and
+`Sonic 2.sms` is not `Sonic 2.gg`.
+
+The directory was part of the key until 97775f0 and it is worth knowing why it left. With it,
+a romset split into `USA/` and `Europe/` grouped nothing — `Batman (U).nes` and `Batman (E).nes`
+sat on separate cards — and, worse, a multi-disc game whose discs live in their own folders
+split up. Dropping it costs the case where a hack in its own folder shares a card with the
+game it was built from, which was judged the better trade: a card that shares its title shows
+the filename anyway, so nothing is hidden, whereas split discs looked like a fault.
 
 ### Recently Played
 
