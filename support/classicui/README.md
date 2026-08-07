@@ -30,7 +30,9 @@ a harness render. The harness renders live in [GUIDE.md](GUIDE.md); these do not
 ![The shelf with cover art](docs/img/device/shelf-cover.png)
 
 Cover art, the system, and how many times you have played each game. Left and right walk the
-shelf; the shoulder buttons page it. The row begins with **Favourites** and **Systems**, and
+shelf; the shoulder buttons jump to the first entry of the next letter, and back to the head
+of the current letter before leaving it - a page was p->visible cards, which on a 1431-game
+shelf took about fifty presses to cross the letter M. The row begins with **Favourites** and **Systems**, and
 **B** from anywhere jumps back to them rather than making you walk.
 
 Art is found locally under `games/<System>/boxart/`, or downloaded on demand with

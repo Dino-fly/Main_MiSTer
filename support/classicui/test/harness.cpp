@@ -3610,6 +3610,138 @@ static int badge_outline_px()
   with a single-file card selected, at the same position, so anything else on the shelf is
   common to both and cancels out.
 */
+/*
+  The shoulders jump by first letter.
+
+  This replaced paging, and the reason is measurable rather than aesthetic: a page is
+  p->visible cards - three at 240p, five at 720p - so on the owner's 1431-game shelf it
+  took roughly fifty presses to cross the letter M looking for one game. A letter is the
+  unit a person searching actually holds in their head.
+
+  Checked against the *view*, not the pixels: what matters is which entry is selected, and
+  the assertions below are about the initial of the name at that index. Reading it off the
+  screen would tie the check to the layout of a card.
+*/
+// The selected index, and the letter the front-end would file that entry under.
+static int view_sel() { return chome_sel_index(); }
+
+/*
+  A deliberate second implementation of jump_initial(). The two agreeing is the point: a
+  helper that asked the front-end which letter it chose would agree with it for ever, including
+  when both were wrong.
+*/
+static char view_initial(int i)
+{
+	const chome_entry *e = lib_view_entry(i);
+	if (!e) return 0;
+
+	const char *s = 0;
+	if (e->kind == ENT_GAME)
+	{
+		chome_item *it = lib_item(e->game);
+		s = it ? it->title : 0;
+	}
+	else s = e->label;
+
+	if (!s || !*s) return 0;
+	unsigned char c = (unsigned char)*s;
+	return isalpha(c) ? (char)tolower(c) : '#';
+}
+
+static void assert_letter_jump()
+{
+	printf("\n== the shoulders jump by letter, not by page ==\n");
+
+	chome_leave();
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 80 && lib_scanning(); i++) frame(2);
+	frame(30);
+
+	check(chome_screen_id() == 0, "on the shelf");
+
+	int n = lib_view_count();
+	check(n > 20, "with enough entries for a jump to mean something");
+
+	// The initial of whatever is selected, read the way the front-end reads it.
+	int at = -1;
+	for (int i = 0; i < 40; i++) press(KEY_LEFT, 2);
+	frame(20);
+	at = view_sel();
+	check(at == 0, "rewound to the first entry");
+
+	/*
+	  Forward: every jump must land on a *different* letter from the one it left, and the
+	  entry before it must share the old letter - that is what "the first entry of the next
+	  letter" means, and it is the property a naive "skip N" would fail.
+	*/
+	int jumps = 0, bad_start = 0, bad_prev = 0;
+	char seen[64];
+	int nseen = 0;
+	for (int guard = 0; guard < 60; guard++)
+	{
+		char before = view_initial(view_sel());
+		int was = view_sel();
+		press(KEY_EQUAL, 4);
+		frame(12);
+		int now = view_sel();
+		if (now == was) break;               // ran out of shelf
+
+		jumps++;
+		if (view_initial(now) == before) bad_start++;
+		if (now > 0 && view_initial(now - 1) != before) bad_prev++;
+
+		/*
+		  Only the games are collected for the monotonic check below. The shelf opens with
+		  folders - Favourites, Systems and the rest - in a curated order that is
+		  deliberately not alphabetical, so the first few jumps legitimately go s, c, #
+		  before the sorted games begin. Asserting monotonicity across them failed the code
+		  for doing the right thing.
+		*/
+		if (now >= leading_folders() && nseen < (int)sizeof(seen)) seen[nseen++] = view_initial(now);
+	}
+
+	printf("  %d forward jumps, letters:", jumps);
+	for (int i = 0; i < nseen && i < 20; i++) printf(" %c", seen[i] ? seen[i] : '?');
+	printf("\n");
+
+	check(jumps >= 5, "the shoulder crosses several letters on this shelf");
+	check(bad_start == 0, "every jump lands on a letter different from the one it left");
+	check(bad_prev == 0, "and on the FIRST entry of that letter, not into the middle of it");
+
+	/*
+	  Monotonic: the shelf is sorted, so the letters a forward jump visits must not go
+	  backwards. A jump that overshoots and wraps would satisfy every check above.
+	*/
+	int backwards = 0;
+	for (int i = 1; i < nseen; i++) if (seen[i] < seen[i - 1]) backwards++;
+	check(backwards == 0, "and the letters it visits only ever move forwards");
+
+	/*
+	  Back: from the middle of a letter, one press goes to the head of *that* letter rather
+	  than the previous one. A mistimed press should cost one press, not a whole letter.
+	*/
+	press(KEY_RIGHT, 4);
+	frame(12);
+	int mid = view_sel();
+	char midc = view_initial(mid);
+	if (view_initial(mid - 1) == midc)          // genuinely mid-letter
+	{
+		press(KEY_MINUS, 4);
+		frame(12);
+		int head = view_sel();
+		check(view_initial(head) == midc && (head == 0 || view_initial(head - 1) != midc),
+			"back from mid-letter goes to the head of that same letter");
+
+		// And only the second press leaves it.
+		press(KEY_MINUS, 4);
+		frame(12);
+		check(view_initial(view_sel()) != midc, "and the next press leaves for the one before");
+	}
+	else printf("  (selected entry was already at a letter head; mid-letter case skipped)\n");
+
+	dump("letterjump-1-shelf");
+}
+
 static void assert_stack_badge()
 {
 	printf("\n== a card with several files behind it wears a stack ==\n");
@@ -12566,6 +12698,7 @@ int main()
 	assert_partial_repaint();
 	// Directly after it, because it is the same mechanism on the other region of the screen
 	// and it starts from the state that one leaves: the shelf at 720p with an empty drive.
+	assert_letter_jump();
 	assert_stack_badge();
 	assert_carousel_slide();
 	assert_disc_launch();
