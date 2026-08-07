@@ -43,8 +43,11 @@ JOB=${JOB:-snacjob_win}
 MANIFEST=${MANIFEST:-$BASE/builds-snac.tsv}
 LIST=${1:?usage: build_via_windows_snac.sh <listfile>}
 NPROC=${NPROC:-2}
-STALL=5400
-HARD_CAP=10800
+STALL=${STALL:-5400}
+# Overridable, because 10800 (3h) is not a universal ceiling: Arcade-RushnAttack
+# took 227 minutes in wave 1 and would be declared "overran" and thrown away at
+# 180. A cap that discards a finished artifact is worse than a long wait.
+HARD_CAP=${HARD_CAP:-10800}
 FORCE=${FORCE:-0}
 
 [ -f "$MODULE" ] || { echo "no framework module at $MODULE"; exit 1; }
