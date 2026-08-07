@@ -340,13 +340,28 @@ const char *disc_type_name(int type)
 }
 
 /*
-  Which of our shelf systems can load this.
+  Which of our shelf systems can load this - meaning the *pressed disc*, which is not the
+  same question as which system reads an image of it off the card.
 
-  Several deliberately answer nothing. Saturn, 3DO and CD-i have no entry in this
-  firmware's system table, so "we identified it" and "we can launch it" are
-  different questions and the caller has to ask both - that is exactly the case
-  where the player gets asked to pick a core instead. Audio CDs answer nothing
-  because no core plays them; that is a job for the firmware, not a shelf card.
+  Several deliberately answer nothing. 3DO and CD-i have no entry in the shelf's system
+  table at all, so "we identified it" and "we can launch it" are different questions and
+  the caller has to ask both - that is exactly the case where the player gets asked to pick
+  a core instead. Audio CDs answer nothing because no core plays them; that is a job for
+  the firmware, not a shelf card.
+
+  Saturn answers nothing for a different reason and it is worth being precise about, since
+  the obvious reading is now wrong: Saturn IS a shelf system, and a .cue or .chd in
+  games/Saturn is a card that launches the Saturn core. What it has no entry in is
+  disc_playables - saturncdd.cpp has not been taught to stream sectors from a drive, the
+  way megacdd and pcecdd have - so there is no core to hand the *drive* to, and claiming
+  one here would offer a Play that could only fail.
+
+  Nor is this table what the shelf entries changed. Mega CD still answers "md", because
+  the Mega Drive row is where a player looks for Sega and its launch already overrides the
+  rbf to the MegaCD core; that route is hardware-verified and had no reason to move. Where
+  a *copy* of the disc goes is a separate question with a separate answer - see
+  rip_target::dest in chome_ui.cpp - because a folder of tracks in games/Genesis is not a
+  Mega Drive game and never became a card.
 */
 const char *disc_system_id(int type)
 {

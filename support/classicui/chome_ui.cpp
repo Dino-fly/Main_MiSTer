@@ -1105,6 +1105,26 @@ static void picto(const char *name, int x, int y, int box, uint32_t col)
 #define CH_UNLOCK "\x18"
 
 /*
+  A system with no drawing of its own, and the one whose drawing it borrows.
+
+  chome_icons32.h is generated from a licensed set by tools/icons32.py and is the only
+  file allowed to hold artwork, so a new system cannot be given an icon here - it either
+  has one in that header or it does not. Three of the CD systems do not, and each of them
+  is a peripheral bolted onto a machine that does: the drawing of a Mega Drive is the
+  right picture for a Mega CD shelf, and it is the picture a player recognises. Without
+  this they would all draw the folder, which says nothing about which console they are.
+
+  Saturn is a machine of its own and has nothing to borrow, so it keeps the folder until
+  the generator is run against a Saturn icon.
+*/
+static const struct { const char *id; const char *icon; } sysicon_alias[] =
+{
+	{ "megacd",   "md"     },
+	{ "pcecd",    "tg16"   },
+	{ "neogeocd", "neogeo" },
+};
+
+/*
   Per-system icon, if this system has one. Sampled rather than scaled by whole
   pixels: the box a card can spare is 60-odd pixels at HD but barely 20 at 240p, so
   an integer scale would be either too small on one or clipped on the other.
@@ -1116,7 +1136,24 @@ static const sysicon_def *sysicon_find(const char *id)
 	{
 		if (!strcasecmp(sysicons[i].id, id)) return &sysicons[i];
 	}
+
+	for (size_t i = 0; i < sizeof(sysicon_alias) / sizeof(sysicon_alias[0]); i++)
+	{
+		if (strcasecmp(sysicon_alias[i].id, id)) continue;
+		for (size_t j = 0; j < sizeof(sysicons) / sizeof(sysicons[0]); j++)
+		{
+			if (!strcasecmp(sysicons[j].id, sysicon_alias[i].icon)) return &sysicons[j];
+		}
+	}
 	return 0;
+}
+
+// See chome.h: which drawing a system ends up with, asked of the resolver above rather
+// than worked out again by whoever wants to know.
+const char *chome_sysicon_id(const char *sysid)
+{
+	const sysicon_def *d = sysicon_find(sysid);
+	return d ? d->id : 0;
 }
 
 static void draw_sysicon(const sysicon_def *d, int x, int y, int box, uint32_t col)
@@ -4660,23 +4697,41 @@ static int disc_sys_by_id(const char *id)
   laziness: an MSU-1 SNES disc's core wants the .sfc off the disc and not a copy of the
   disc, so a cue sheet in SNES/ would be a folder that never loads.
 
-  Where the rip goes is the target system's own games folder - lib_sys_games_dir(), the
-  same directory the scanner walks for that system - because a rip is a game for that
-  console and belongs where that console's games are. Anywhere else and the shelf would
-  never see it.
+  Where the rip goes is a games folder - lib_sys_games_dir(), the same directory the
+  scanner walks - because a copy that the shelf cannot see is not worth making. For
+  PlayStation that is the system's own folder and `dest` is empty.
+
+  For the other three it is not, and that is what `dest` is for. The row the dialog
+  settles on for a Mega CD disc is "md", because Mega Drive is where a player looks for
+  Sega and because that row's core is what plays the pressed disc; but a folder of tracks
+  in games/Genesis is not a Mega Drive game, `md` accepts no .cue, and the copy was
+  written correctly and then never appeared as a card - the one place this feature used to
+  be knowingly incomplete. games/MegaCD is its own shelf system now, with its own core and
+  its own mount slot, so that is where the copy belongs and where the card comes from. PC
+  Engine CD and Neo Geo CD had the same hole and are redirected the same way.
+
+  `dest` names a system rather than a folder so the destination is resolved through
+  lib_sys_games_dir() like any other - a card whose systems file has dropped that system
+  has nowhere to put the copy, and then there is no Rip row rather than a copy nothing can
+  see. The destination is itself in this table, so the mode token is decided by the row
+  that actually receives the sheet.
 */
 struct rip_target
 {
 	const char *sysid;
 	int mode1_only;
+	const char *dest;      // the system whose games folder receives it; 0 = its own
 };
 
 static const rip_target rip_targets[] =
 {
-	{ "psx",    0 },
-	{ "md",     1 },
-	{ "tg16",   1 },
-	{ "neogeo", 1 },
+	{ "psx",      0, 0          },
+	{ "md",       1, "megacd"   },
+	{ "megacd",   1, 0          },
+	{ "tg16",     1, "pcecd"    },
+	{ "pcecd",    1, 0          },
+	{ "neogeo",   1, "neogeocd" },
+	{ "neogeocd", 1, 0          },
 };
 
 static const rip_target *rip_target_for(int sysidx)
@@ -4689,6 +4744,26 @@ static const rip_target *rip_target_for(int sysidx)
 		if (!strcasecmp(rip_targets[i].sysid, s->id)) return &rip_targets[i];
 	}
 	return 0;
+}
+
+/*
+  The system a rip of this system's disc is written into, which is itself unless the row
+  redirects it. -1 when there is nowhere: either the disc cannot be copied at all, or the
+  folder it would go into belongs to a system this card's table does not carry.
+
+  Everything downstream - the row's wording, the folder, the mode token and the card that
+  appears afterwards - is asked about the answer to this rather than about what the dialog
+  settled on, so there is one place where "which console" turns into "which folder".
+*/
+static int rip_dest_sys(int sysidx)
+{
+	const rip_target *rt = rip_target_for(sysidx);
+	if (!rt) return -1;
+	if (!rt->dest) return sysidx;
+
+	int dx = disc_sys_by_id(rt->dest);
+	if (dx < 0) printf("ClassicUI: rip: no %s system on this card to copy into\n", rt->dest);
+	return dx;
 }
 
 /*
@@ -5179,11 +5254,25 @@ static void disc_build_rows()
 	  the player can pick the wrong folder is not a choice worth giving them.
 
 	  Absent rather than dim where there is no answer, which is an unrecognised disc and a
-	  Saturn one. A dim row says "this could work and does not"; here there is genuinely
-	  nowhere to put it and no format to put it in, and the rows above already say so.
+	  Saturn one. A dim row says "this could work and does not"; here there is nothing for
+	  the row to be about, and the rows above already say so.
+
+	  Saturn is worth spelling out because the reason has changed and the old one - "nowhere
+	  to put it and no format to put it in" - is no longer true. There is a folder now, and
+	  saturncdd.cpp reads the same sheet the others do. What there is not is anything that
+	  settles on Saturn: disc_system_id() answers nothing for a Saturn disc and Saturn is
+	  absent from disc_capable_systems(), both because its daemon cannot read the drive, so
+	  neither the identification nor a hand-picked core can name it. Offering a copy of a
+	  disc whose Play row does not exist would be the only place on this screen that
+	  promised something about a core it had just refused.
+
+	  The row names the folder's console and not the disc's, which for three of the four is
+	  not the same word: a Mega CD disc plays on the Mega Drive row above and copies into
+	  Mega CD. Saying "Copy to Mega CD" is what tells the player where the card will turn
+	  up, which is the only thing about the destination they can act on. rip_dest_sys().
 	*/
-	int rip_sx = (disc_chosen_sys >= 0) ? disc_chosen_sys
-		: disc_sys_by_id(disc_system_id(disc_type()));
+	int rip_sx = rip_dest_sys((disc_chosen_sys >= 0) ? disc_chosen_sys
+		: disc_sys_by_id(disc_system_id(disc_type())));
 
 	const rip_target *rt = rip_target_for(rip_sx);
 

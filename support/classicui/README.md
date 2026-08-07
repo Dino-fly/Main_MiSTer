@@ -286,6 +286,48 @@ and the game will not boot. The built-in table uses the common values but they a
 not verified per core. Override without rebuilding by copying
 `docs/classicui_systems.example.txt` to `classicui_systems.txt` on the SD root.
 
+### The five CD systems
+
+`psx`, `megacd`, `pcecd`, `neogeocd` and `saturn` are rows of their own rather than extra
+extensions on the cartridge machine each one plugs into. Three of them share an rbf or a
+machine with a row above them and are told apart from it by the mount:
+
+| id | folder | core | mount | source of the slot |
+|---|---|---|---|---|
+| `psx` | `PSX` | `_Console/PSX` | `s`/1 | `H7S1,CUECHD,Load CD` in PSX.sv |
+| `megacd` | `MegaCD` | `_Console/MegaCD` | `s`/0 | `S0,CUECHD,Insert Disk` in MegaCD.sv |
+| `pcecd` | `TGFX16-CD` | `_Console/TurboGrafx16` | `s`/0 | `S0,CUECHD,Insert CD` in TurboGrafx16.sv |
+| `neogeocd` | `NeoGeo-CD` | `_Console/NeoGeo` | `s`/1 | `S1,CUECHD,Load CD Image` in neogeo.sv |
+| `saturn` | `Saturn` | `_Console/Saturn` | `s`/0 | menu.cpp, not a .sv - see below |
+
+Adding `cue` to the `md`, `tg16` or `neogeo` rows instead was considered and is wrong:
+`md` launches the Genesis core with an `f` load-to-memory mount, so a `.cue` card there
+would draw, sort and scrape like a game and fail the instant it was pressed. `neogeo`'s
+index 1 is its romset slot and is type `f`; menu.cpp routes an `s` mount on that core to
+`neocd_set_image()` and an `f` one to the romset loader, which is what keeps the two rows
+from colliding on the same index.
+
+Saturn has no `.sv` in this tree, so its slot comes from the code that consumes it:
+`MENU_GENERIC_IMAGE_SELECTED` calls `saturn_set_image()` when `ioctl_index` is 0 and
+`saturn_mount_save()` for anything else, and the browser marks index 1 `SCANO_SAVES`. So
+index 0 is the disc and index 1 is the backup RAM. `saturn_set_image()` ignores the number
+it is passed, which means a wrong index here mounts a disc as a save file rather than
+failing loudly. It also has no `disc_playables` entry - `saturncdd.cpp` has not been taught
+to stream from a drive - so a pressed Saturn disc is still identified, named and refused.
+
+The folder names are the official MiSTer Distribution's, and two of them are fixed in the
+firmware rather than chosen here: `PCECD_DIR` in `support/pcecd/pcecd.h` and `NEOCD_DIR` in
+`support/neogeo/neogeocd.h`, which is also where each core looks for its own BIOS. That
+matters for the MGL, because a relative MGL path resolves under `HomeDir()`: `menu.cpp`
+already special-cased PC Engine there and did **not** special-case Neo Geo, so a relative
+MGL naming a Neo Geo CD image resolved against `games/NEOGEO` and mounted nothing. That
+one-line asymmetry is fixed alongside these rows.
+
+`ext` is `cue,chd` on all five and widening it is the mistake to guard against, not an
+improvement: those folders hold the cores' boot ROMs, and any extension reaching one puts a
+card on the shelf that scrapes like a game and cannot boot. The harness keeps a BIOS file in
+each folder, deliberately not beside a `.cue`, for exactly that.
+
 The same table records **whether each system's core has save states**
 (`CH_SS_YES`/`CH_SS_NO`/`CH_SS_UNKNOWN`), which is the only way the Suspend Points
 strip can say "this system cannot save your place" from the *shelf* - no core is
@@ -293,6 +335,10 @@ loaded there, so there is no `CONF_STR` to read. In the running core the `CONF_S
 answers and the table is not consulted at all, so a rebuilt core that gains save
 states is believed over a stale `CH_SS_NO`. A system nobody has measured stays
 `CH_SS_UNKNOWN` and is promised nothing either way.
+
+`pcecd` and `neogeocd` load the same rbf as `tg16` and `neogeo`, whose `CH_SS_NO` was read
+off the loaded core, so they carry the same measured answer rather than a guess. `megacd`
+and `saturn` are separate cores nobody has loaded and read, so they are `CH_SS_UNKNOWN`.
 
 ## The Display screen
 
@@ -528,7 +574,9 @@ Shared cores are split by extension in `class_of()`: `.gbc` in the Game Boy core
 a GBC game, `.gg` in the SMS core is a Game Gear game, `.wsc` in the WonderSwan
 core is a Colour game. Lynx, WonderSwan and Neo Geo Pocket are new entries in the
 systems table - like every other entry, their rbf path and MGL index need verifying
-on hardware.
+on hardware. So do Mega CD, PC Engine CD, Neo Geo CD and Saturn: their slots are read off
+the code that consumes them rather than guessed, but nothing has loaded any of those four
+cores from the shelf yet. All four take the console look, since all four are consoles.
 
 The three GBA revisions differ in black level and contrast, which is exactly what
 distinguished them in the hand (measured from the generated LUTs, black -> white):
@@ -1098,6 +1146,14 @@ whether a core accepts the MGL.
   core**, not the shelf's Genesis core - `Genesis.sv` has no disc mount entry at all - so
   `disc_playables` carries an rbf override per disc type. And Neo Geo CD has no daemon of its
   own; it shares Mega CD's `cdd_t`.
+
+  A pressed disc still plays on the row for the machine it belongs to - a Mega CD disc on
+  **Mega Drive**, which is where a player looks for Sega - because that route is
+  hardware-verified and the rbf override already sends it to the right core. A *copy* of the
+  same disc does not go to that row's folder: `games/Genesis` is a cartridge folder, `md`
+  reads no `.cue`, and a copy written there was correct and invisible. `rip_target::dest`
+  redirects it to `games/MegaCD`, and the Options row names the destination so the player can
+  see where the card will appear. See [The five CD systems](#the-five-cd-systems).
 
   The disc gets a screen of its own rather than a row on the shelf, because it has no card:
   the game's name, a large disc under it, and two buttons - **Play** and **Options**, the

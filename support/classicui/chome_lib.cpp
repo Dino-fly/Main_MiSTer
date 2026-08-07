@@ -70,6 +70,59 @@ static const sys_def defaults[] =
 	{ "tg16",  "TurboGrafx-16",                 "TG16", "_Console/TurboGrafx16", "TGFX16",  "pce,sgx",      "NEC - PC Engine - TurboGrafx 16",                'f', 0, 2, 0, 0, 0x8a6e2b, 0, CH_SS_NO      },
 	{ "a7800", "Atari 7800",                    "A78",  "_Console/Atari7800",    "A7800",   "a78,a26,bin",  "Atari - 7800",                                   'f', 0, 2, 0, 0, 0x6e2b2b, 0, CH_SS_NO      },
 	{ "psx",   "PlayStation",                   "PSX",  "_Console/PSX",          "PSX",     "cue,chd,exe",  "Sony - PlayStation",                             's', 1, 3, 0, 0, 0x4a4c58, 0, CH_SS_YES     },
+
+	/*
+	  The CD consoles, each one its own system rather than an extra extension on the
+	  cartridge machine it sits inside.
+
+	  Three of them share a shelf row's worth of hardware with an entry above - Mega CD
+	  with Mega Drive, PC Engine CD with TurboGrafx-16, Neo Geo CD with Neo Geo - and
+	  adding "cue" to those rows instead was tried and is wrong: `md` launches the Genesis
+	  core with an 'f' load-to-memory mount, and a .cue card there would draw, sort and
+	  scrape like a game and then fail the moment it was pressed. A disc is a different
+	  core, a different slot and a different games folder, so it is a different row.
+
+	  The games folders are the official MiSTer Distribution's, which is the whole point:
+	  someone who downloads a romset drops it into games/MegaCD or games/TGFX16-CD without
+	  being told to, and a disc copied off the drive has to land where a download would.
+	  Two of them are also fixed in the firmware rather than chosen here - PCECD_DIR in
+	  support/pcecd/pcecd.h and NEOCD_DIR in support/neogeo/neogeocd.h - and those two are
+	  where the core itself looks for its BIOS.
+
+	  `ext` is cue,chd and nothing else, and the temptation to widen it has a cost that is
+	  not obvious: these folders hold the cores' BIOS images (TGFX16-CD/cd_bios.rom,
+	  NeoGeo-CD/neocd.bin and top-sp1.bin, Saturn/boot.rom). Any extension that reaches one
+	  of those puts a card on the shelf that looks like a game, scrapes like a game and
+	  cannot boot. "bin" is the dangerous one and it is deliberately absent - a rip's
+	  "Track 01.bin" is already hidden beside its sheet by dir_has_playlist(), so nothing
+	  needs it.
+
+	  Save states: pcecd and neogeocd load the *same rbf* as tg16 and neogeo above, whose
+	  CH_SS_NO was read off the loaded core, so they carry the same measured answer rather
+	  than a guess. MegaCD and Saturn are separate cores that nobody has loaded and read,
+	  so they stay CH_SS_UNKNOWN and promise nothing either way.
+
+	  The slots, each from the code that consumes them:
+
+	    megacd    "S0,CUECHD,Insert Disk" in MegaCD.sv, the same slot disc_playables in
+	              chome_ui.cpp hands a pressed disc to.
+	    pcecd     "S0,CUECHD,Insert CD" in TurboGrafx16.sv. The core is shared with the
+	              HuCard row above, which is 'f'/0 - the type is what tells them apart.
+	    neogeocd  "S1,CUECHD,Load CD Image" in neogeo.sv. Index 1 is also the romset slot
+	              ("FS1,*,Load ROM set") that `neogeo` above uses, and that one is type
+	              'f': menu.cpp routes an 's' mount on this core to neocd_set_image() and
+	              an 'f' one to the romset loader, so the two rows cannot collide.
+	    saturn    index 0, from menu.cpp rather than from a .sv this tree does not carry:
+	              MENU_GENERIC_IMAGE_SELECTED calls saturn_set_image() when ioctl_index is
+	              0 and saturn_mount_save() for anything else, and the browser marks index
+	              1 as SCANO_SAVES. Index 1 is the backup RAM, so a disc sent there would
+	              be mounted as a save file.
+	*/
+	{ "megacd","Mega CD",                       "MCD",  "_Console/MegaCD",       "MegaCD",   "cue,chd",     "Sega - Mega-CD - Sega CD",                       's', 0, 3, 0, 0, 0x3a6e8a, 0, CH_SS_UNKNOWN },
+	{ "pcecd", "PC Engine CD",                  "PCD",  "_Console/TurboGrafx16", "TGFX16-CD","cue,chd",     "NEC - PC Engine CD - TurboGrafx-CD",             's', 0, 3, 0, 0, 0x8a4e3a, 0, CH_SS_NO      },
+	{ "neogeocd","Neo Geo CD",                  "NCD",  "_Console/NeoGeo",       "NeoGeo-CD","cue,chd",     "SNK - Neo Geo CD",                               's', 1, 3, 0, 0, 0x4a2030, 0, CH_SS_NO      },
+	{ "saturn","Saturn",                        "SAT",  "_Console/Saturn",       "Saturn",   "cue,chd",     "Sega - Saturn",                                  's', 0, 3, 0, 0, 0x4a3a5e, 0, CH_SS_UNKNOWN },
+
 	/*
 	  Neo Geo games are romsets rather than ROM files: the archive is loaded whole and
 	  named for the board, so `romset` sends titles through the firmware's romsets.xml
@@ -1234,8 +1287,18 @@ int lib_scan_progress() { return nitems; }
 static const char *const name_alias[][ALIAS_MAX] =
 {
 	{ "Genesis",       "MegaDrive",       "Mega Drive",    0            },
-	// Not a shelf system: the physical-disc launch loads this core for a Mega CD
-	// disc - see disc_playables in chome_ui.cpp - and US naming renames it.
+	/*
+	  Now a shelf system of its own as well as the core the physical-disc launch hands a
+	  Mega CD disc to, and US naming renames both halves of it: the core file becomes
+	  SegaCD.rbf and the games folder becomes games/SegaCD. Both are resolved through this
+	  row, independently, because a card can carry either spelling of either.
+
+	  Its two CD siblings need no row of their own. PC Engine CD and Neo Geo CD live in
+	  folders the firmware names itself - PCECD_DIR and NEOCD_DIR - so a renamed core does
+	  not move them; and their cores are found under the names their cartridge rows already
+	  use, TurboGrafx16 through the row below and NeoGeo through no row at all, since
+	  nothing renames it.
+	*/
 	{ "MegaCD",        "SegaCD",          "Sega CD",       0            },
 	{ "TurboGrafx16",  "TGFX16",          "PCEngine",      "PC Engine"  },
 	{ "NeoGeo-Pocket", "NeoGeoPocket",    "NGP",           0            },

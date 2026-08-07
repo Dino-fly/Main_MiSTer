@@ -2845,7 +2845,22 @@ void HandleUI(void)
 				*/
 				if (!strcmp(mgl->item[mgl->current].path, PHYSICAL_DISC_SENTINEL)) snprintf(selPath, sizeof(selPath), "%s", PHYSICAL_DISC_SENTINEL);
 				else if (mgl->item[mgl->current].path[0] == '/') snprintf(selPath, sizeof(selPath), "%s", mgl->item[mgl->current].path);
-				else snprintf(selPath, sizeof(selPath), "%s/%s", HomeDir(((is_pce() && !strncasecmp(fs_pFileExt, "CUE", 3)) ? PCECD_DIR : NULL)), mgl->item[mgl->current].path);
+				/*
+				  A relative path resolves under the core's own games folder, and for the
+				  two cores that keep their discs somewhere else that is not the folder
+				  the file is in. PC Engine CD lives in TGFX16-CD and Neo Geo CD in
+				  NeoGeo-CD, both beside the cartridge folder rather than inside it,
+				  which is also where each core looks for its own BIOS.
+
+				  The same pair the file browser resolves in ScanDirectory() above - Neo
+				  Geo was missing from this half of it, so an MGL naming a Neo Geo CD
+				  image relatively resolved against games/NEOGEO and mounted nothing.
+				*/
+				else snprintf(selPath, sizeof(selPath), "%s/%s",
+					HomeDir((is_pce()    && !strncasecmp(fs_pFileExt, "CUE", 3)) ? PCECD_DIR :
+					        (is_neogeo() && !strncasecmp(fs_pFileExt, "CUE", 3)) ? NEOCD_DIR :
+					        NULL),
+					mgl->item[mgl->current].path);
 
 				// Update /tmp/ files to reflect the actual image being loaded by MGL
 				if (cfg.log_file_entry)

@@ -526,6 +526,59 @@ static void build_sd()
 	touch(ROOT "/games/PSX", "Final Fantasy VII (USA) (Disc 3).cue", 2048);
 
 	/*
+	  The other four CD systems, in the folder names the official MiSTer Distribution
+	  uses - which is the whole reason these exist, since a romset download and a rip both
+	  land here without anybody being told to move them.
+
+	  Each folder is laid out the way a real one is, and each layout is a check:
+
+	  MegaCD/Europe/ and MegaCD/USA/  the same game twice under the regional subfolders a
+	                                  downloaded Mega CD set actually ships with. One card.
+	  MegaCD/Silpheed/                a sheet and its tracks, which is what a rip writes.
+	                                  One card, and the tracks are not games.
+	  TGFX16-CD/cd_bios.rom           the cores' own BIOS images, at the root of the games
+	  NeoGeo-CD/neocd.bin + two more  folder each core reads them from. These are the
+	  Saturn/boot.rom                 fixtures that fail when "bin" or "rom" is added to a
+	                                  CD system's extension list, which is the mistake that
+	                                  turns a BIOS into a card nobody can press.
+
+	                                  The two .bin ones are deliberately NOT beside a .cue,
+	                                  because 73b0f71's rule would hide them if they were
+	                                  and a widened list would then go unnoticed. The .rom
+	                                  ones need no such care: that rule only covers
+	                                  bin/iso/wav/raw, so Saturn/boot.rom is exposed even
+	                                  sitting beside the two sheets below it.
+	  Saturn/                         a two-disc game, flat, the way his own card has it.
+	*/
+	mkpath(ROOT "/games/MegaCD/Europe");
+	touch(ROOT "/games/MegaCD/Europe", "Lunar - Eternal Blue.cue", 2048);
+	mkpath(ROOT "/games/MegaCD/USA");
+	touch(ROOT "/games/MegaCD/USA", "Lunar - Eternal Blue.cue", 2048);
+	mkpath(ROOT "/games/MegaCD/Silpheed");
+	touch(ROOT "/games/MegaCD/Silpheed", "Silpheed.cue", 512);
+	touch(ROOT "/games/MegaCD/Silpheed", "Track 01.bin", 4096);
+	touch(ROOT "/games/MegaCD/Silpheed", "Track 02.bin", 4096);
+
+	mkpath(ROOT "/games/TGFX16-CD");
+	touch(ROOT "/games/TGFX16-CD", "cd_bios.rom", 1024);
+	mkpath(ROOT "/games/TGFX16-CD/Rondo of Blood");
+	touch(ROOT "/games/TGFX16-CD/Rondo of Blood", "Rondo of Blood.cue", 512);
+	touch(ROOT "/games/TGFX16-CD/Rondo of Blood", "Track 01.bin", 4096);
+
+	mkpath(ROOT "/games/NeoGeo-CD");
+	touch(ROOT "/games/NeoGeo-CD", "neocd.bin", 512);
+	touch(ROOT "/games/NeoGeo-CD", "top-sp1.bin", 512);
+	touch(ROOT "/games/NeoGeo-CD", "uni-bioscd.rom", 512);
+	mkpath(ROOT "/games/NeoGeo-CD/Samurai Shodown RPG");
+	touch(ROOT "/games/NeoGeo-CD/Samurai Shodown RPG", "Samurai Shodown RPG.cue", 512);
+	touch(ROOT "/games/NeoGeo-CD/Samurai Shodown RPG", "Track 01.bin", 4096);
+
+	mkpath(ROOT "/games/Saturn");
+	touch(ROOT "/games/Saturn", "boot.rom", 1024);
+	touch(ROOT "/games/Saturn", "Deep Fear (Europe) (Disc 1).cue", 2048);
+	touch(ROOT "/games/Saturn", "Deep Fear (Europe) (Disc 2).cue", 2048);
+
+	/*
 	  Multi-track CD rips under the Mega Drive folder, which is where this bites: md accepts
 	  "bin" and a rip names its tracks after their position, so two games' tracks are two
 	  sets of files called the same thing. Both layouts in the wild:
@@ -1859,6 +1912,183 @@ static void assert_variants()
 	check(promised == cards, "a folder promises as many games as its shelf will show");
 }
 
+/* ------------------------------------------------------------ CD systems --- */
+
+/*
+  The four disc consoles, from the folder a download lands in to the mount the MGL asks
+  for. Both halves matter and they fail differently.
+
+  The scanning half is what makes a card appear at all. Before these rows existed a Mega
+  CD, PC Engine CD or Neo Geo CD image on the card was invisible to the shelf, because the
+  only system pointing at a .cue was PlayStation - so the copies the rip feature wrote were
+  correct and unreachable. The fixtures are laid out the way the real folders are, so what
+  is checked is the layout a player will actually have rather than a convenient one.
+
+  The route half is the riskier one and cannot be seen on screen. type and index come from
+  each core's CONF_STR, and a wrong index does not draw wrong or refuse - it mounts the
+  file into some other input of the right core and the game simply never starts. There is
+  nothing to observe, so it is asserted against the table directly, field by field, with
+  the source of each value written in the row's own comment in chome_lib.cpp.
+
+  The BIOS assertions are the ones to keep. Every one of these folders holds the core's own
+  boot ROM at its root - that is where the cores look for it - so an extension list widened
+  by one word turns a BIOS into a card that scrapes, sorts and sits on the shelf like a
+  game and then cannot boot. The two .bin ones sit in a folder with no .cue in it on
+  purpose: 73b0f71's rule hides a .bin beside a sheet, so a .bin BIOS placed next to one
+  would keep this passing while the hole it exists for was open.
+*/
+static void assert_cd_systems()
+{
+	printf("\n== the CD systems ==\n");
+
+	struct route { const char *id, *name, *dir, *rbf; char type; int index; int ss; };
+	static const route want[] =
+	{
+		// "S0,CUECHD,Insert Disk" in MegaCD.sv, and a core nobody has read for save states.
+		{ "megacd",   "Mega CD",      "MegaCD",    "_Console/MegaCD",       's', 0, CH_SS_UNKNOWN },
+		// "S0,CUECHD,Insert CD" in TurboGrafx16.sv - the same rbf as tg16, told apart by the
+		// type, so it inherits tg16's measured CH_SS_NO rather than guessing.
+		{ "pcecd",    "PC Engine CD", "TGFX16-CD", "_Console/TurboGrafx16", 's', 0, CH_SS_NO      },
+		// "S1,CUECHD,Load CD Image" in neogeo.sv. Index 1 is also the romset slot, which is
+		// type 'f' - menu.cpp routes an 's' mount here to neocd_set_image().
+		{ "neogeocd", "Neo Geo CD",   "NeoGeo-CD", "_Console/NeoGeo",       's', 1, CH_SS_NO      },
+		// Index 0 from menu.cpp, not from a .sv: saturn_set_image() is called when
+		// ioctl_index is 0 and saturn_mount_save() for anything else, and index 1 is marked
+		// SCANO_SAVES by the browser. So index 1 is the backup RAM, not the disc.
+		{ "saturn",   "Saturn",       "Saturn",    "_Console/Saturn",       's', 0, CH_SS_UNKNOWN },
+	};
+
+	for (unsigned i = 0; i < sizeof(want) / sizeof(want[0]); i++)
+	{
+		const route *w = &want[i];
+		int sx = -1;
+		for (int j = 0; j < lib_sys_count(); j++)
+			if (!strcmp(lib_sys(j)->id, w->id)) sx = j;
+
+		char msg[160];
+		snprintf(msg, sizeof(msg), "%s is a system on the shelf", w->name);
+		check(sx >= 0, msg);
+		if (sx < 0) continue;
+
+		const chome_sys *s = lib_sys(sx);
+		printf("  %-9s %-11s %-22s type=%c index=%d ext=%s\n",
+			s->id, s->dir, s->rbf, s->type, s->index, s->ext);
+
+		snprintf(msg, sizeof(msg), "%s reads the official %s folder", w->name, w->dir);
+		check(!strcmp(s->dir, w->dir), msg);
+
+		snprintf(msg, sizeof(msg), "%s launches %s", w->name, w->rbf);
+		check(!strcmp(s->rbf, w->rbf), msg);
+
+		/*
+		  Written as one check per field rather than one per row, because these are the
+		  three values a mistake in cannot be seen: the right core comes up and mounts
+		  nothing. The message names the value so a failure says which one moved.
+		*/
+		snprintf(msg, sizeof(msg), "%s mounts its image rather than loading it to memory", w->name);
+		check(s->type == w->type, msg);
+
+		snprintf(msg, sizeof(msg), "%s mounts into slot %d", w->name, w->index);
+		check(s->index == w->index, msg);
+
+		snprintf(msg, sizeof(msg), "%s takes cue and chd and nothing else", w->name);
+		check(!strcmp(s->ext, "cue,chd"), msg);
+
+		snprintf(msg, sizeof(msg), "%s titles files by name, not through romsets.xml", w->name);
+		check(s->romset == 0, msg);
+
+		snprintf(msg, sizeof(msg), "%s says %s about save states", w->name,
+			w->ss == CH_SS_UNKNOWN ? "nothing" : "no");
+		check(s->savestates == w->ss, msg);
+	}
+
+	lib_view_build(VIEW_ALL, -1, SORT_TITLE);
+
+	/* ------------------------------------------- the regional-subfolder case --- */
+
+	/*
+	  What his own card has: a downloaded Mega CD set files each release under Europe/,
+	  Japan/ or USA/, so one game is the same filename in two directories. The folder left
+	  the grouping key in 97775f0 precisely so this is one card - and the check is here
+	  because the folder coming back would show up as duplicate cards for half his library.
+	*/
+	{
+		int eu = item_at("megacd", "Europe/Lunar - Eternal Blue.cue");
+		int us = item_at("megacd", "USA/Lunar - Eternal Blue.cue");
+		check(eu >= 0 && us >= 0, "a Mega CD game filed under Europe/ and USA/ is indexed twice");
+		if (eu >= 0 && us >= 0)
+		{
+			int card = entry_carrying(eu);
+			check(card >= 0 && card == entry_carrying(us),
+				"and the two regions are one card, not two");
+			check(entry_nvar(card) == 2, "with both releases behind it");
+		}
+	}
+
+	/* ------------------------------------------------ a sheet and its tracks --- */
+
+	/*
+	  The shape a rip writes, now read back by the system the rip goes to. 73b0f71's rule
+	  does the hiding and it is not conditional on the system accepting "bin" - which is
+	  what makes it right here, where the row accepts no "bin" at all and the tracks would
+	  be invisible either way. Asserting it anyway is what keeps that true if the row ever
+	  changes.
+	*/
+	{
+		int cue = item_at("megacd", "Silpheed/Silpheed.cue");
+		check(cue >= 0, "a folder holding a sheet and its tracks is on the shelf");
+		check(item_at("megacd", "Silpheed/Track 01.bin") < 0,
+			"and its first track is not a game of its own");
+		check(item_at("megacd", "Silpheed/Track 02.bin") < 0, "nor its second");
+		if (cue >= 0) check(entry_nvar(entry_carrying(cue)) == 1,
+			"so the folder is exactly one card");
+	}
+
+	/* --------------------------------------------------------- and the BIOS --- */
+
+	/*
+	  Four boot ROMs, in the three folders the cores read them from. None of them is a
+	  game, and the way each of these fails is the same: one more word in a row's extension
+	  list and the shelf grows a card that cannot be pressed.
+	*/
+	check(item_at("pcecd", "cd_bios.rom") < 0,
+		"the PC Engine CD BIOS is not a game");
+	check(item_at("neogeocd", "neocd.bin") < 0,
+		"nor the Neo Geo CD BIOS");
+	check(item_at("neogeocd", "top-sp1.bin") < 0,
+		"nor the Neo Geo top-sp1 BIOS beside it");
+	check(item_at("neogeocd", "uni-bioscd.rom") < 0,
+		"nor the universal Neo Geo CD BIOS");
+	check(item_at("saturn", "boot.rom") < 0,
+		"nor the Saturn boot ROM");
+
+	// ...and the games in those same folders are, so the checks above are not passing
+	// because the folder was never scanned.
+	check(item_at("pcecd", "Rondo of Blood/Rondo of Blood.cue") >= 0,
+		"while the PC Engine CD game in that folder is");
+	check(item_at("neogeocd", "Samurai Shodown RPG/Samurai Shodown RPG.cue") >= 0,
+		"and so is the Neo Geo CD one");
+
+	/* ------------------------------------------------------ a two-disc game --- */
+
+	/*
+	  His Saturn folder, which is where this started: "Deep Fear (Europe) (Disc 1)" and
+	  "(Disc 2)". clean_title() drops both brackets, so the two discs collide on "Deep
+	  Fear" and group the way the PlayStation set above does.
+	*/
+	{
+		int d1 = item_at("saturn", "Deep Fear (Europe) (Disc 1).cue");
+		int d2 = item_at("saturn", "Deep Fear (Europe) (Disc 2).cue");
+		check(d1 >= 0 && d2 >= 0, "both discs of a Saturn game are indexed");
+		if (d1 >= 0 && d2 >= 0)
+		{
+			int card = entry_carrying(d1);
+			check(card >= 0 && card == entry_carrying(d2), "and they are one card");
+			check(entry_nvar(card) == 2, "with two discs to cycle");
+		}
+	}
+}
+
 static void assert_slots()
 {
 	printf("\n== suspend slots ==\n");
@@ -2490,11 +2720,17 @@ static void assert_physical_disc()
 	check(!strcmp(disc_system_id(DISC_T_MEGACD), "md"), "a Mega CD maps to the Mega Drive core");
 
 	/*
-	  The ones that matter for the UI: identified, but this firmware has no shelf
-	  system for them. "We know what it is" and "we can launch it" are different
-	  questions, and this is the case that forces the player to be asked.
+	  The ones that matter for the UI: identified, but with no core this firmware can hand
+	  the *drive* to. "We know what it is" and "we can launch it" are different questions,
+	  and this is the case that forces the player to be asked.
+
+	  Saturn is the one to read carefully, because it is now a shelf system - a .cue in
+	  games/Saturn is a card that launches the Saturn core - and this still has to answer
+	  nothing. saturncdd.cpp cannot stream from a drive, so what it lacks is a
+	  disc_playables entry, and a Play row here would be one that could only fail.
 	*/
-	check(disc_system_id(DISC_T_SATURN) == 0, "a Saturn disc is identified but has no core here");
+	check(disc_system_id(DISC_T_SATURN) == 0,
+		"a Saturn disc is identified, and no core here can read it off the drive");
 	check(disc_system_id(DISC_T_CDI) == 0, "nor a CD-i disc");
 	check(disc_system_id(DISC_T_AUDIO) == 0, "and an audio CD is nobody's game");
 	check(disc_type_name(DISC_T_PSX) && disc_type_name(DISC_T_PSX)[0],
@@ -12177,32 +12413,36 @@ static void assert_rip_format()
 	snprintf(path, sizeof(path), "%s/%s.cue", edir, ename);
 	check(file_bytes(path) > 0, "and the new sheet is in its place");
 
-	/* ---------------------------------- what the other three cores' folders do NOT get --- */
+	/* -------------------------------- what the other three cores' folders DO get now --- */
 
 	/*
-	  Ripping a Mega CD disc writes a folder the *core* can load and the *shelf* cannot see,
-	  and that is worth a check rather than a footnote, because it is the one place this
-	  feature is knowingly incomplete.
+	  A Mega CD copy, end to end: the bytes, and then the card.
 
-	  The md shelf entry accepts "md,bin,gen" and not "cue", so the sheet is not a game to
-	  it; and 73b0f71's rule then correctly hides the tracks beside that sheet, because a
-	  Mega CD track handed to the Genesis core as a cartridge was never going to boot. So a
-	  Mega CD rip yields no card at all and has to be loaded from the core's own file
-	  browser. Adding "cue" to that entry is not the fix - md launches the Genesis core with
-	  a load-to-memory mount, and a .cue card there would fail when pressed. The fix is a
-	  shelf route to the MegaCD core, which disc_playables already has the slot for and is
-	  its own piece of work.
+	  This used to be the check that a Mega CD rip appeared nowhere. The copy was written
+	  into games/Genesis, `md` accepts "md,bin,gen" and not "cue" so the sheet was not a game
+	  to it, and 73b0f71's rule then correctly hid the tracks beside it - so the folder was
+	  correct, loadable from the core's own browser, and invisible to the shelf. That was the
+	  one place this feature was knowingly incomplete and the check said so out loud.
 
-	  This check exists so that whoever does it finds out here rather than from a player.
+	  It is not the case any more, and the fix is not the one that was tempting. "cue" was
+	  never going to be added to the md row - that row launches the Genesis core with a
+	  load-to-memory mount, and a .cue card there would draw and sort like a game and fail
+	  the moment it was pressed. Mega CD is its own shelf system, reading games/MegaCD with
+	  an 's'/0 mount into the MegaCD core, so a copy written there is a card.
+
+	  Which folder the front-end chooses is asserted where that choice is made, in
+	  assert_rip_screen(); what is asserted here is that a copy in that folder becomes
+	  exactly one properly named card with its tracks hidden - the shape 73b0f71 promised and
+	  the thing a player will actually look for.
 	*/
 	{
 		const char *gname = "Mega Test Disc";
 		char gdir[1024];
-		snprintf(gdir, sizeof(gdir), "%s/%s", ROOT "/games/Genesis", gname);
+		snprintf(gdir, sizeof(gdir), "%s/%s", ROOT "/games/MegaCD", gname);
 		rip_rmdir_flat(gdir);
 
 		fk.reads = 0;
-		check(rip_perform(&plan, ROOT "/games/Genesis", gname, 1, 0, &io, &bad) == RIP_DONE,
+		check(rip_perform(&plan, ROOT "/games/MegaCD", gname, 1, 0, &io, &bad) == RIP_DONE,
 			"a Mega CD rip writes its folder");
 
 		snprintf(path, sizeof(path), "%s/%s.cue", gdir, gname);
@@ -12218,13 +12458,65 @@ static void assert_rip_format()
 
 		char rel[256];
 		snprintf(rel, sizeof(rel), "%s/%s.cue", gname, gname);
-		check(item_at("md", rel) < 0,
-			"and it is NOT on the shelf: md accepts no cue, so this one has to be loaded "
-			"from the core's own browser until md gains a route to the MegaCD core");
+		int card_item = item_at("megacd", rel);
+		check(card_item >= 0,
+			"and it IS on the shelf: Mega CD reads cue and mounts it into the MegaCD core, "
+			"so the copy is a card rather than something only the core's browser can find");
+
 		snprintf(rel, sizeof(rel), "%s/Track 01.bin", gname);
-		check(item_at("md", rel) < 0, "and its tracks are hidden rather than listed as games");
+		check(item_at("megacd", rel) < 0, "with its tracks hidden rather than listed as games");
+
+		lib_view_build(VIEW_ALL, -1, SORT_TITLE);
+		int card = entry_carrying(card_item);
+		check(card >= 0 && entry_nvar(card) == 1, "so the copy is exactly one card");
+		if (card >= 0)
+		{
+			chome_item *ci = lib_item(card_item);
+			check(ci && !strcmp(ci->title, gname), "under the name the disc was copied as");
+		}
 
 		rip_rmdir_flat(gdir);
+	}
+
+	/*
+	  And the same for the other two, on the folder alone. Their sheets are byte-identical to
+	  Mega CD's - neogeocd.cpp calls megacdd's own parser and pcecdd reads the same two mode
+	  tokens - so what is worth checking separately is only that each one's folder is scanned
+	  by a system that accepts a .cue, which is the part that was missing.
+	*/
+	{
+		static const struct { const char *sysid, *games; } cd[] =
+		{
+			{ "pcecd",    ROOT "/games/TGFX16-CD" },
+			{ "neogeocd", ROOT "/games/NeoGeo-CD" },
+		};
+
+		for (unsigned i = 0; i < sizeof(cd) / sizeof(cd[0]); i++)
+		{
+			const char *gname = "Disc Test";
+			char gdir[1024];
+			snprintf(gdir, sizeof(gdir), "%s/%s", cd[i].games, gname);
+			rip_rmdir_flat(gdir);
+
+			fk.reads = 0;
+			check(rip_perform(&plan, cd[i].games, gname, 1, 0, &io, &bad) == RIP_DONE,
+				"a rip writes its folder");
+
+			lib_rescan();
+			for (int j = 0; j < 400 && lib_scanning(); j++) frame(2);
+			frame(10);
+
+			char rel[256], msg[160];
+			snprintf(rel, sizeof(rel), "%s/%s.cue", gname, gname);
+			snprintf(msg, sizeof(msg), "and %s shows it as a card", cd[i].sysid);
+			check(item_at(cd[i].sysid, rel) >= 0, msg);
+
+			snprintf(rel, sizeof(rel), "%s/Track 01.bin", gname);
+			snprintf(msg, sizeof(msg), "with %s's tracks not listed as games", cd[i].sysid);
+			check(item_at(cd[i].sysid, rel) < 0, msg);
+
+			rip_rmdir_flat(gdir);
+		}
 	}
 
 	/* ------------------------------------------------------------------ tidy up --- */
@@ -12621,6 +12913,54 @@ static void assert_rip_screen()
 	press(KEY_ENTER, 8);
 	check(!rip_reportable(), "OK dismisses it");
 
+	/* ------------------------------------------ where a Mega CD copy actually goes --- */
+
+	/*
+	  The folder a copy lands in is not always the folder of the console the dialog settled
+	  on, and this is the check for the case where it is not.
+
+	  A Mega CD disc plays on the "md" row - Mega Drive is where a player looks for Sega, and
+	  that row's launch hands the disc to the separate MegaCD core. But games/Genesis is a
+	  Mega Drive folder, `md` accepts no .cue, and a copy written there was correct and
+	  invisible: no card, and nothing on screen to say why. games/MegaCD is a shelf system of
+	  its own now, so that is where the copy goes and where the card comes from.
+
+	  Asserted on the folder rather than on the row's wording because the folder is the thing
+	  that decides whether a card appears. rip_target::dest and rip_dest_sys().
+	*/
+	rip_test_reset();
+	disc_reset_reader();
+	disc_ingest_present(0);
+	(void)disc_take_dirty();
+	chome_leave();
+	press(KEY_MENU, 20);
+	frame(10);
+
+	disc_ingest_present(1);
+	fake_disc dmc; memset(&dmc, 0, sizeof(dmc));
+	fake_put(&dmc, 0, 0, "SEGADISCSYSTEM", 14, 0);
+	disc_set_reader(fake_read, &dmc);
+	disc_ingest_identify(0);
+	frame(6);
+	check(disc_type() == DISC_T_MEGACD, "a Mega CD disc is in the drive");
+
+	press(KEY_UP);
+	press(KEY_ENTER);
+	check(chome_screen_id() == S_DISC, "and its dialog is up");
+
+	press(KEY_RIGHT);
+	press(KEY_ENTER);
+	for (int i = 0; i < 8; i++) press(KEY_DOWN, 6);
+	dump("rip-12-megacd-options");
+
+	press(KEY_ENTER, 8);
+	check(rip_test_starts() == 1, "the copy row starts a rip for a Mega CD disc too");
+	check(!strcmp(rip_test_last_dir(), ROOT "/games/MegaCD"),
+		"into games/MegaCD, which is the shelf system that reads .cue and launches the "
+		"MegaCD core - not games/Genesis, where the card would never have appeared");
+	check(rip_test_last_mode1() == 1,
+		"and told MODE1 only, which is all megacdd's parser reads");
+
 	/* ------------------------------------------------------------------ tidy up --- */
 
 	rip_test_reset();
@@ -12670,6 +13010,10 @@ int main()
 	// Before anything has been launched, so the choice of which file a card shows is not
 	// yet under the influence of a play count. See the section's own comment.
 	assert_variants();
+	// Directly after it, because it asserts the same grouping on the CD systems' own
+	// folders and needs the same untouched play counts: a card with nothing played shows
+	// its first file, which is what makes "one card, two discs" checkable.
+	assert_cd_systems();
 	assert_slots();
 	assert_art();
 	assert_gamelist();
@@ -14940,22 +15284,42 @@ int main()
 	  screen as a system quietly falling back to the generic art - and any icon that
 	  came out empty or nearly solid, which is what a bad source file or a bad
 	  threshold looks like.
+
+	  Asked of chome_sysicon_id() rather than of the table, because "has an icon" is no
+	  longer the same question as "has a row in chome_icons32.h": the CD systems added beside
+	  their cartridge siblings borrow those siblings' drawings, since only tools/icons32.py
+	  may put artwork in that header. Working it out here a second way is exactly how a
+	  renamed id would keep passing while the shelf had already fallen back.
+
+	  Saturn is named, because it is the one system with nothing to borrow. If a Saturn icon
+	  is ever generated this list gets shorter, and a system arriving in it that was not
+	  there before is a regression.
 	*/
 	printf("\n== system icons ==\n");
 	{
-		int missing = 0;
+		static const char *const no_icon[] = { "saturn" };
+
+		int missing = 0, unexpected = 0;
 		for (int i = 0; i < lib_sys_count(); i++)
 		{
 			const chome_sys *sy = lib_sys(i);
 			if (!sy) continue;
 
-			int found = 0;
-			for (size_t k = 0; k < sizeof(sysicons) / sizeof(sysicons[0]); k++)
-				if (!strcasecmp(sysicons[k].id, sy->id)) { found = 1; break; }
+			const char *icon = chome_sysicon_id(sy->id);
+			if (icon && strcasecmp(icon, sy->id))
+				printf("  system \"%s\" draws \"%s\"\n", sy->id, icon);
+			if (icon) continue;
 
-			if (!found) { printf("  no icon for system \"%s\"\n", sy->id); missing++; }
+			int allowed = 0;
+			for (size_t k = 0; k < sizeof(no_icon) / sizeof(no_icon[0]); k++)
+				if (!strcasecmp(no_icon[k], sy->id)) allowed = 1;
+
+			printf("  no icon for system \"%s\"%s\n", sy->id, allowed ? " (known)" : "");
+			if (allowed) missing++; else unexpected++;
 		}
-		check(!missing, "every system in the table has an icon");
+		check(!unexpected, "every system draws an icon, or is one of the known few that cannot");
+		check(missing == (int)(sizeof(no_icon) / sizeof(no_icon[0])),
+			"and the systems falling back to the folder are exactly the ones listed here");
 
 		int bad = 0;
 		for (size_t k = 0; k < sizeof(sysicons) / sizeof(sysicons[0]); k++)

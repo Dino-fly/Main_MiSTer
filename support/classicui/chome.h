@@ -114,4 +114,17 @@ void chome_text_entry(const char *title, const char *prompt, const char *initial
 int chome_hidden_slot();
 int chome_ss_quiet();
 
+/*
+  The icon a system actually draws, as a key into chome_icons32.h, or 0 when it has none
+  and falls back to the folder.
+
+  Usually the system's own id, because the id doubles as the icon key. Not always: three of
+  the CD systems have no drawing of their own and borrow the machine they bolt onto, and the
+  drawings can only ever be added by tools/icons32.py, which is generated from a licensed
+  set. Exported so the harness can ask which systems fall back rather than working it out
+  from the same table twice - the version that worked it out separately went on passing
+  while a renamed id had already lost its icon on screen.
+*/
+const char *chome_sysicon_id(const char *sysid);
+
 #endif
