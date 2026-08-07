@@ -54,8 +54,41 @@ The strip of pips under a card is its save-state slots — filled ones are green
 
 ![System icons](img/system-icons.png)
 
-Every system has an icon. They come from licensed icon sets, not hand-drawn — see
-[ICONS.md](ICONS.md) for the attribution.
+Almost every system has an icon. They come from licensed icon sets, not hand-drawn — see
+[ICONS.md](ICONS.md) for the attribution. Mega CD, PC Engine CD and Neo Geo CD draw the
+machine they plug into, since that is the console you are looking for; Saturn has no icon
+yet and draws a plain folder.
+
+### The games folders it reads
+
+One folder per system under `games/`, and they are the names the official MiSTer
+Distribution uses — so if you have downloaded romsets or used `update_all`, your games are
+already in the right places and there is nothing to move.
+
+| Console | Folder |
+|---|---|
+| NES, SNES, Game Boy, Game Boy Advance, Nintendo 64 | `NES` `SNES` `GAMEBOY` `GBA` `N64` |
+| Mega Drive, Master System, TurboGrafx-16, Atari 7800 | `Genesis` `SMS` `TGFX16` `A7800` |
+| PlayStation | `PSX` |
+| **Mega CD** | **`MegaCD`** |
+| **PC Engine CD** | **`TGFX16-CD`** |
+| **Neo Geo CD** | **`NeoGeo-CD`** |
+| **Saturn** | **`Saturn`** |
+| Neo Geo (romsets) | `NEOGEO` |
+| Arcade | `_Arcade` |
+| Lynx, WonderSwan, Neo Geo Pocket | `AtariLynx` `WonderSwan` `NGP` |
+| Amiga, Atari ST, C64, Spectrum, Amstrad, MSX, PC/DOS, Apple II | `Amiga` `AtariST` `C64` `Spectrum` `Amstrad` `MSX` `AO486` `Apple-II` |
+
+The five disc systems read `.cue` and `.chd` and nothing else, which is why the BIOS files
+that live in those same folders — `TGFX16-CD/cd_bios.rom`, `NeoGeo-CD/neocd.bin`,
+`Saturn/boot.rom` — never appear as games. A disc copied into a folder as a `.cue` and a
+set of `Track NN.bin` files is one card named after the folder; the tracks are not listed
+separately. Regional subfolders (`MegaCD/Europe/`, `MegaCD/USA/`) are walked into and the
+same game in two of them is one card, not two.
+
+A card renamed for your region works too — `SegaCD` instead of `MegaCD`, `MegaDrive`
+instead of `Genesis` — as long as the core file is renamed the same way, which is what the
+downloader's `names.txt` does.
 
 ### Your own font
 
@@ -128,9 +161,13 @@ put back when you leave. Either way the game is where you left it.
 
 ![No save states](img/no-savestates.png)
 
-Not every system supports save states — Neo Geo, Mega Drive, N64 and most home
-computers do not. Rather than showing you three empty slots to try and fail at, the
-shelf says so before you launch, and says it again inside the game.
+Not every system supports save states — Neo Geo, Neo Geo CD, PC Engine CD, Mega Drive, N64
+and most home computers do not. Rather than showing you three empty slots to try and fail
+at, the shelf says so before you launch, and says it again inside the game.
+
+Mega CD and Saturn say nothing either way before you launch, because nobody has checked
+those two cores. Once the game is running the core answers for itself and the slots appear
+if it has them.
 
 ---
 
@@ -557,7 +594,7 @@ answer: do it once, and afterwards the game loads like everything else on the sh
 
 Open the disc dialog, move to **Options**, and the last entry is **Copy to
 PlayStation** — or to whichever console the disc was recognised as, or whichever one you
-picked from the list above it. It goes into that system's own games folder, in a folder
+picked from the list above it. It goes into that console's own games folder, in a folder
 named after the disc:
 
 ```
@@ -566,10 +603,16 @@ named after the disc:
 /media/fat/games/PSX/Metal Gear Solid/Track 02.bin
 ```
 
+A Mega CD, PC Engine CD or Neo Geo CD disc goes into that console's **CD** folder rather
+than its cartridge one — `games/MegaCD`, `games/TGFX16-CD` and `games/NeoGeo-CD`, which
+are the folders those cores read their discs and their BIOS out of, and the ones a
+downloaded set lands in. The row says which, so you can see where the card will turn up
+before you press it.
+
 The name is the same one the shelf shows for the disc — the title table's answer if you
-have one, otherwise the disc's label or its serial. A PlayStation rip appears on the
-shelf as one card under that name as soon as the copy finishes; the tracks are not
-listed as games of their own.
+have one, otherwise the disc's label or its serial. The copy appears on the shelf as one
+card under that name as soon as it finishes; the tracks are not listed as games of their
+own.
 
 **What you see while it runs.** The disc spins fast and fills in from twelve o'clock as
 it is copied, with the percentage under it. That fraction is the sectors actually
@@ -605,12 +648,12 @@ read the raw subchannel, real pregaps are recovered and written into the track t
 them; where it cannot, the sheet has no pregaps, which is what a cue sheet has always
 meant by their absence.
 
-**One rough edge, and it is worth knowing before you copy a Mega CD disc.** Only
-PlayStation rips appear on the shelf. The shelf entries for Mega Drive, TurboGrafx-16
-and Neo Geo do not accept `.cue` — their cards are cartridges — so a Mega CD, PC Engine
-CD or Neo Geo CD copy is written correctly and can be loaded from that core's own file
-browser, but it will not show up as a card here yet. Giving those systems a shelf route
-to their CD core is separate work.
+**All four now become cards, which they did not used to.** A Mega CD, PC Engine CD or
+Neo Geo CD copy went into the cartridge machine's folder, and those shelf entries take
+cartridges and not `.cue` — so the copy was written correctly and could only be loaded
+from the core's own file browser. Each of those consoles has a shelf entry of its own
+now, reading its own CD folder and launching its own CD core, so the copy is a card as
+soon as it finishes. Nothing about the copy itself changed; only where it is put.
 
 **Reading the disc is [Anime0t4ku](https://github.com/Anime0t4ku)'s work, not ours.**
 Everything above rests on

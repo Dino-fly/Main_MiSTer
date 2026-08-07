@@ -182,8 +182,9 @@ const char *disc_display_name();
 
   Derived from disc_system_id() rather than listed separately, so the two can never
   disagree: it is exactly the set of systems some disc type maps to. Used for the
-  "pick a core yourself" prompt, which is what an unidentified disc - or an
-  identified one with no core here, like Saturn - has to fall back on.
+  "pick a core yourself" prompt, which is what an unidentified disc - or an identified
+  one whose core cannot read the drive, like Saturn - has to fall back on. Saturn is a
+  shelf system for images on the card; what it has not got is a disc_playables entry.
 
   Writes up to `max` pointers into `out` and returns how many. The pointers are
   static strings.
