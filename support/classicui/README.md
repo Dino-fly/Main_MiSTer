@@ -244,7 +244,8 @@ itself as "Wireless Controller" over Bluetooth still get PlayStation shapes.
 | `chome_ini.cpp` | The `MiSTer.ini` settings this front-end assumes, and a rewrite that leaves the rest of the player's file alone |
 | `chome_opt.cpp` | The `MiSTer.ini` options the player may edit: labels, defaults, ranges, and what a value is worth changing to |
 | `chome_ui.cpp` | Screens, navigation, launch |
-| `test/` | Host harness: compiles the modules unmodified against fakes, asserts behaviour, renders every screen to PNG |
+| `test/` | Host harness: compiles the modules unmodified against fakes, asserts behaviour, renders every screen to PNG. `test/protect.sh` is separate and needs no toolchain: it runs the release scripts below against a fake SD card in `/tmp` |
+| `tools/` | Release tooling: `make_sdcard_root.sh` builds the SD-CARD-ROOT archive; `classic_home_protect.sh`, `classic_home_unprotect.sh` and `classic-home-restore.sh` are the boot hook that puts our firmware back after `update_all`; `disctitles.py` generates the disc name table |
 
 Integration points outside this directory, all additive:
 
