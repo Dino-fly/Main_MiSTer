@@ -197,6 +197,22 @@ void gfx_stat_compose_begin()
 	compose_t0 = cfg.debug ? gfx_us() : 0;
 }
 
+void gfx_stat_reset()
+{
+	memset(&stat_full, 0, sizeof(stat_full));
+	memset(&stat_part, 0, sizeof(stat_part));
+}
+
+unsigned long gfx_stat_get(int partial,
+	unsigned long *compose_us, unsigned long *copy_us, unsigned long *rows)
+{
+	const gfx_stat_t *s = partial ? &stat_part : &stat_full;
+	if (compose_us) *compose_us = s->compose_us;
+	if (copy_us) *copy_us = s->copy_us;
+	if (rows) *rows = s->rows;
+	return s->n;
+}
+
 void gfx_end()
 {
 	// Which bucket this frame lands in. Reset here rather than in gfx_clip_clear(), so
