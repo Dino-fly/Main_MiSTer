@@ -82,6 +82,12 @@ int video_scaler_is_visible();
 uint32_t* video_menu_fb(int n);
 int video_menu_fb_width();
 int video_menu_fb_height();
+
+// Ask for the menu framebuffer at 1/div of the display mode (2 or 4; 0 releases). May
+// be refused - see video.cpp. Release it before handing the framebuffer to anyone else.
+void video_fb_size_request(int div);
+// The divisor actually in force between the display mode and the framebuffer, >= 1.
+int video_menu_fb_div();
 // Returns 1 when the core accepted the framebuffer, 0 when it has no support for
 // it (in which case a front-end must fall back to the OSD).
 int video_menu_fb_present(int n);

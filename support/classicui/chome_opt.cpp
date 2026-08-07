@@ -29,6 +29,10 @@ static const opt_choice ch_black[] =
 static const opt_choice ch_offon[]   = { { 0, "Off" },     { 1, "On" } };
 static const opt_choice ch_autofire[] = { { 0, "Allowed" }, { 1, "Blocked" } };
 
+// Named for what the player is choosing between, not for the mechanism: "Half" of what
+// would mean nothing on this screen, and Off/On would not say which way is which.
+static const opt_choice ch_res[] = { { 0, "Sharp" }, { 1, "Fast" } };
+
 /*
   controller_info is a number of seconds, 0 for never - but the only two answers a
   player has are "I want to see it" and "I do not". Six is what the shipped ini uses,
@@ -95,6 +99,19 @@ static const opt_def opts[] =
 	{ "classicui_freeze", "Pause In Menu",
 	  "Holds the game still while this menu is open.",
 	  OG_MENU, OPT_LIST, 0, 0, 1, 1, 0, 1, 1, ch_offon, NCH(ch_offon), &cfg.classicui_freeze, 0, OW_NOW },
+
+	/*
+	  The half-resolution canvas, on by default and at the owner's request: a quarter of
+	  the pixels to compose and copy, which on the device is the difference between a
+	  spinning disc costing a full core at 720p and fitting in the frame budget. The
+	  layout does not change with it - the profile is chosen from the display, see
+	  theme_update() - so what "Fast" costs is sharpness alone, and the help line says
+	  which side of the trade each value sits on. Applied by the frame loop's
+	  fb_size_sync() the moment it is written, which is why it can be OW_NOW.
+	*/
+	{ "classicui_halfres", "Menu Resolution",
+	  "Fast draws this menu with fewer pixels. Games are unaffected.",
+	  OG_MENU, OPT_LIST, 0, 0, 1, 1, 0, 1, 1, ch_res, NCH(ch_res), &cfg.classicui_halfres, 0, OW_NOW },
 
 	/*
 	  Letter spacing, and the help line is doing real work rather than describing the row.

@@ -3787,6 +3787,16 @@ int video_menu_fb_present(int n)
 }
 
 
+/*
+  An alternative front-end's request for a smaller framebuffer than cfg.fb_size would
+  give it - see video_fb_size_request() below for why it exists and who sets it.
+  fb_scale_cur is the divisor the last video_fb_config() actually applied, which is not
+  always the request: it is what video_menu_fb_div() answers with, so the front-end lays
+  out for what really happened rather than for what it asked.
+*/
+static int fb_size_req = 0;
+static int fb_scale_cur = 1;
+
 static void video_fb_config()
 {
 	PROFILE_FUNCTION();
@@ -3802,6 +3812,25 @@ static void video_fb_config()
 	}
 	else if (fb_scale == 3) fb_scale = 2;
 	else if (fb_scale > 4) fb_scale = 4;
+
+	/*
+	  The request only ever coarsens what cfg.fb_size chose: a player who asked for
+	  quarter resolution globally keeps it, and a request equal to what the ini already
+	  gives changes nothing at all.
+
+	  And it is refused outright when the mode is small. The point of the request is a
+	  720p or 1080p canvas with a quarter of the pixels; the same division applied to
+	  the 15 kHz TV mode of the analog takeover would hand the front-end 120 lines, and
+	  at 480p and below the full canvas is already cheap. The floor is the smallest
+	  canvas the front-end ships a layout for - 320x240 - so no mode this can act on
+	  ever produces something smaller than the smallest thing already supported.
+	*/
+	if (fb_size_req > fb_scale && v_cur.item[1] && v_cur.item[5])
+	{
+		int wq = v_cur.item[1] / fb_size_req;
+		int hq = v_cur.item[5] / (v_cur.param.pr == 0 ? fb_size_req : fb_size_req * 2);
+		if (wq >= 320 && hq >= 240) fb_scale = fb_size_req;
+	}
 
 	const int fb_scale_x = fb_scale;
 	const int fb_scale_y = v_cur.param.pr == 0 ? fb_scale : fb_scale * 2;
@@ -3828,12 +3857,50 @@ static void video_fb_config()
 	*/
 	if (vga_fb_takeover && fb_num && !(tv_fb_mode_index() & 1)) fb_width /= 2;
 
+	fb_scale_cur = fb_scale_x;
+
 	brd_x = cfg.vscale_border / fb_scale_x;
 	brd_y = cfg.vscale_border / fb_scale_y;
 
 	if (fb_enabled) video_fb_enable(1, fb_num);
 
 	fb_write_module_params();
+}
+
+/*
+  Let an alternative front-end (support/classicui) ask for the menu framebuffer at a
+  fraction of the display mode: 2 for half of each axis, 4 for a quarter, 0 to give the
+  choice back to cfg.fb_size. Composing and copying a menu frame is CPU work proportional
+  to the canvas, and the scaler upscales whatever it is given, so a front-end that knows
+  its layout survives the division can trade sharpness for three quarters of that work -
+  measured on the device, a spinning disc that costs a full core at a 1280x720 canvas and
+  nothing at all at 320x240.
+
+  Requesting is not getting: video_fb_config() ignores a request finer than what
+  cfg.fb_size already imposes, and one that would leave less than a 320x240 canvas. Ask
+  video_menu_fb_div() what actually happened, and video_menu_fb_width/height() for the
+  resulting canvas.
+
+  The caller owns the request's lifetime. It must be released (0) whenever the
+  framebuffer is handed to anything that is not the requester - the fb terminal, the
+  classic menu's wallpaper - because the division is applied to the one framebuffer they
+  all share; see fb_size_sync() in support/classicui/chome_ui.cpp for the sites. Safe to
+  re-assert every frame: an unchanged request returns without touching anything.
+*/
+void video_fb_size_request(int div)
+{
+	div = (div == 2 || div == 4) ? div : 0;
+	if (div == fb_size_req) return;
+
+	fb_size_req = div;
+	if (fb_base && v_cur.item[1]) video_fb_config();
+}
+
+// The divisor between the current display mode and the menu framebuffer, >= 1. What the
+// front-end sizes its layout profile from: canvas pixels times this is pixels of glass.
+int video_menu_fb_div()
+{
+	return (fb_scale_cur > 0) ? fb_scale_cur : 1;
 }
 
 static void draw_checkers()

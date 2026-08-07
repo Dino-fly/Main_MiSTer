@@ -2,10 +2,13 @@
   Classic Home - layout profiles and palette.
 
   Metrics are derived proportionally from the canvas so that any framebuffer size
-  works, not just the three nominal ones. The canvas is output resolution divided
-  by cfg.fb_size (video_fb_config() in video.cpp), so a 1080p output with fb_size=2
-  lands on a 960x540 canvas and must still lay out correctly. A 15 kHz TV canvas is
-  not square-pixelled at all - see px below.
+  works, not just the three nominal ones. The canvas is the output resolution divided
+  by cfg.fb_size or by the front-end's own classicui_halfres request (video_fb_config()
+  in video.cpp), so a 1080p output can arrive as a 960x540 canvas and a 720p one as
+  640x360. The hd/sd/lo profile and the text scales are chosen from the *display* -
+  canvas width times video_menu_fb_div() - so dividing the framebuffer changes how
+  sharp the picture is and not what the layout looks like; see theme_update(). A
+  15 kHz TV canvas is not square-pixelled at all - see px below.
 
   The four accent colours are the PAL pad's face buttons and are only ever used
   to encode state: green saved, yellow locked, blue focus, red destructive.
