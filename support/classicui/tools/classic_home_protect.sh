@@ -46,10 +46,15 @@ EXPECT_MD5=""
 EXPECT_MENU_MD5=""
 RELEASE_NAME=""
 
-# Present only in our firmware - the CLASSICUI ini keys are string literals in cfg.cpp
-# and so sit in .rodata. Verified absent from the official 20260603 and 20260707
-# builds. It is the fallback when this copy of the script was not stamped with an md5.
-MARKER=CLASSICUI_SCREENSCRAPER
+# Present only in our firmware - these ini keys are string literals in cfg.cpp and so
+# sit in .rodata. Verified absent from the official 20260603 and 20260707 builds. It is
+# the fallback when this copy of the script was not stamped with an md5.
+#
+# One per product: the Classic Home build carries both, the SNAC-only build carries
+# SNAC_PAD alone. Testing only for the Classic Home key made this refuse to protect the
+# SNAC firmware outright - "does not look like a Classic Home build" - which would have
+# left every SNAC-only user with no defence against update_all at all.
+MARKERS="CLASSICUI_SCREENSCRAPER SNAC_PAD"
 MIN_SIZE=131072
 
 ROOT=${CHOME_ROOT:-/media/fat}
@@ -151,8 +156,11 @@ syntax_ok() {
 # -a and then without it: BSD grep needs -a to match inside a binary, busybox grep does
 # not document -a and rejects options it does not know. See classic-home-restore.sh.
 has_marker() {
-	grep -q -a "$MARKER" "$1" 2>/dev/null && return 0
-	grep -q "$MARKER" "$1" 2>/dev/null
+	for m in $MARKERS; do
+		grep -q -a "$m" "$1" 2>/dev/null && return 0
+		grep -q "$m" "$1" 2>/dev/null && return 0
+	done
+	return 1
 }
 
 # Copy verified: written to a temp name in the destination folder, compared byte for
@@ -208,7 +216,7 @@ if [ -n "$EXPECT_MD5" ]; then
 	fi
 elif [ "$FORCE" != 1 ]; then
 	has_marker "$FROM" ||
-		die "$FROM does not look like a Classic Home build (no $MARKER in it). Use --force if you are sure."
+		die "$FROM does not look like one of our builds (none of: $MARKERS). Use --force if you are sure."
 fi
 
 # ---------------------------------------------------------------- the menu core
