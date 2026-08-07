@@ -33,6 +33,7 @@
 #include "../../../user_io.h"
 #include "../../../spi.h"
 #include "../../arcade/mra_loader.h"
+#include "../../../file_io.h"
 
 #include "harness.h"
 
@@ -1133,3 +1134,33 @@ void harness_swap_pad_faces()
 int harness_muted() { return muted; }
 int harness_mute_changes() { return mute_changes; }
 void harness_set_muted(int v) { muted = !!v; mute_changes = 0; }
+
+/*
+  fileTYPE's three members, which live in file_io.cpp and are the only thing in that whole
+  file this harness needs.
+
+  It needs them because cd_track_t carries a fileTYPE and toc_t carries a hundred of them,
+  so declaring a table of contents on the stack - which the rip tests do, to drive the
+  ripper off a disc nobody owns - instantiates them. Nothing else here has ever built one.
+
+  Linking file_io.cpp instead was the alternative and is the wrong trade: it pulls in the
+  zip reader, the SD-card path resolution and the firmware's whole notion of a root
+  directory, none of which the harness wants and all of which it already fakes elsewhere.
+  These three are copies of the real ones bar the FileClose() in the destructor, which
+  cannot run here and has nothing to close: a toc_t built by a test has no open files in it,
+  because the ripper never opens one - it reads through an injected reader and writes with
+  stdio.
+*/
+fileTYPE::fileTYPE()
+{
+	filp = 0;
+	mode = 0;
+	type = 0;
+	zip = 0;
+	size = 0;
+	offset = 0;
+}
+
+fileTYPE::~fileTYPE() {}
+
+int fileTYPE::opened() { return filp || zip; }
