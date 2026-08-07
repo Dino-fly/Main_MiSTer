@@ -1288,6 +1288,47 @@ static void draw_card(const chome_entry *e, int cx, int bottom, int w, int h, in
 			gfx_fill(x + w - box - 6, y + 4, box + 4, box + 4, COL_SHADOW);
 			picto("star", x + w - box - 4, y + 6, box, COL_YELLOW);
 		}
+
+		/*
+		  Several files behind one card, said as a stack of cards rather than as a number.
+		  A count would need a digit legible at 240p, where a card is 84 wide and the band
+		  along its bottom already has the title in it; the stack reads at a glance and at
+		  any size, which is the whole reason the shape is conventional.
+
+		  Top left, because the favourite star is top right and a game can be both.
+
+		  Three rectangles rather than a picto, deliberately. A picto is a 1-bit mask
+		  sampled to its box, and three one-pixel outlines with one-pixel gaps do not
+		  survive being sampled to 12 pixels - they turn into a grey smudge. Drawn as
+		  geometry it stays crisp at every size, and gfx_frame_rect is exactly the
+		  primitive for it.
+
+		  Back to front, each one filling before it frames, so the front card occludes the
+		  two behind it and only their bottom-right edges show. Drawn the other way round
+		  the outlines cross each other and it reads as a grid.
+
+		  Not animated, and inside the card's own rectangle. Both matter: draw_card()
+		  records the damage band from this card's geometry a few lines above, so anything
+		  drawn within it is already covered, while a badge that breathed would want the
+		  band grown to its maximum for a frame it has not drawn yet - the trap the disc
+		  badge needed DISC_BADGE_CELLS for.
+		*/
+		if (e->nvar > 1)
+		{
+			int box = h / 5;
+			if (box > 16) box = 16;              // never larger than the star opposite it
+			if (box < 6) box = 6;                // below this the gaps close up anyway
+			int step = (box >= 12) ? 2 : 1;
+			int side = box - 2 * step;
+
+			gfx_fill(x + 4, y + 4, box + 4, box + 4, COL_SHADOW);
+			for (int i = 2; i >= 0; i--)
+			{
+				int rx = x + 6 + i * step, ry = y + 6 + i * step;
+				gfx_fill(rx, ry, side, side, COL_SHADOW);
+				gfx_frame_rect(rx, ry, side, side, COL_PANELHI, 1);
+			}
+		}
 	}
 
 	if (selected)

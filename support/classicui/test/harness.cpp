@@ -3475,6 +3475,155 @@ static int force_full_repaint()
   one - where the selected card is at its full size and its focus ring is on the top row of
   the band. That check is what found the snap in animate(): see the comment there.
 */
+/*
+  Where the stack badge lands on the selected card. Computed rather than hunted for: the
+  selected card is sel_w x sel_h and centred, and draw_card() insets the badge by 4, so
+  there is nothing to search and no chance of matching something else that happens to be
+  the same colour elsewhere on the shelf.
+
+  Kept in step with draw_card() by hand. That is a copy, deliberately - a check that asked
+  the drawing code where it drew would agree with it for ever while both drifted away from
+  the picture.
+*/
+static void sel_badge_box(int *bx, int *by, int *bw)
+{
+	const chome_profile *p = theme_get();
+	int box = p->sel_h / 5;
+	if (box > 16) box = 16;
+	if (box < 6) box = 6;
+	*bx = (p->w - p->sel_w) / 2 + 4;
+	*by = p->y_shelf - p->sel_h + 4;
+	*bw = box + 4;
+}
+
+// The entry index of a game whose title contains `want`, found the same way
+// select_titled() finds it so the two cannot disagree about which card is meant.
+static int entry_titled(const char *want)
+{
+	for (int i = 0; i < lib_view_count(); i++)
+	{
+		const chome_entry *e = lib_view_entry(i);
+		if (e->kind != ENT_GAME) continue;
+		chome_item *it = lib_item(e->game);
+		if (it && strstr(it->title, want)) return i;
+	}
+	return -1;
+}
+
+static int badge_outline_px()
+{
+	int bx, by, bw;
+	sel_badge_box(&bx, &by, &bw);
+	const uint32_t *fb = harness_fb_shown();
+	int w = gfx_w(), h = gfx_h(), n = 0;
+	if (!fb) return -1;
+	for (int y = by; y < by + bw && y < h; y++)
+	{
+		for (int x = bx; x < bx + bw && x < w; x++)
+		{
+			if (fb[(size_t)y * w + x] == COL_PANELHI) n++;
+		}
+	}
+	return n;
+}
+
+/*
+  A card holding several files says so on its face.
+
+  The reader who asked for this had a NES romset split into USA/ and Europe/ folders, and
+  wanted the card to admit it carries both - the grouping itself was already fixed, but
+  nothing on the card showed it. A stack of cards rather than a count, because at 240p a
+  card is 84 px wide and its bottom band already holds the title.
+
+  Checked as pixels and by difference: the same screen with a multi-file card selected and
+  with a single-file card selected, at the same position, so anything else on the shelf is
+  common to both and cancels out.
+*/
+static void assert_stack_badge()
+{
+	printf("\n== a card with several files behind it wears a stack ==\n");
+
+	disc_reset_reader();
+	disc_ingest_present(0);
+	(void)disc_take_dirty();
+
+	/*
+	  Re-entered from scratch rather than trusting whichever view the section before this
+	  one left up. select_titled() searches the *current* view and only presses LEFT, which
+	  cannot climb out of a system folder - so inheriting a sub-view makes every check here
+	  fail for a reason that has nothing to do with the badge. The carousel section below
+	  learned this the same way.
+	*/
+	chome_leave();
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 80 && lib_scanning(); i++) frame(2);
+	frame(40);
+
+	check(chome_screen_id() == 0, "on the shelf");
+
+	// Final Fantasy VII is three discs behind one card in the fake library.
+	check(select_titled("Final Fantasy VII") == 1, "selected a game with several files");
+	int multi = entry_titled("Final Fantasy VII");
+	check(entry_nvar(multi) == 3, "and it really does have three");
+	int with = badge_outline_px();
+	printf("  badge outline pixels, three files: %d\n", with);
+	check(with > 0, "the badge is drawn on it");
+	dump("stack-1-three-files");
+
+	// Bonk's Adventure is one file, and the shelf puts it in the same place.
+	check(select_titled("Bonk") == 1, "selected a game with one file");
+	int single = entry_titled("Bonk");
+	check(entry_nvar(single) == 1, "and it really does have one");
+	int without = badge_outline_px();
+	printf("  badge outline pixels, one file:    %d\n", without);
+	check(without == 0, "and no badge is drawn on that one");
+	dump("stack-2-one-file");
+
+	/*
+	  The badge must sit inside the card, because draw_card() records the damage band from
+	  the card's own geometry. A badge hanging outside it would be drawn into rows nothing
+	  repaints, which shows up as dirt that survives a slide - so assert the band is what
+	  it was rather than trusting the arithmetic.
+	*/
+	const chome_profile *p = theme_get();
+	int bx, by, bw;
+	sel_badge_box(&bx, &by, &bw);
+	check(by >= p->y_shelf - p->sel_h && by + bw <= p->y_shelf,
+		"and it is inside the card's own rows, so the slide band still covers it");
+
+	// It must also not collide with the favourite star, which is the top right corner.
+	check(bx + bw < (p->w + p->sel_w) / 2 - 16 - 6,
+		"and clear of the favourite star opposite it");
+
+	/*
+	  And again at 240p, which is the canvas that actually matters: the owner's MiSTer is
+	  analog only, so this is the size he will judge it at. A card there is 61 rows tall, so
+	  the badge is 12 px with 1 px gaps - the size where a picto would have turned to
+	  porridge and the reason this is drawn as rectangles.
+	*/
+	harness_set_fb(320, 240);
+	chome_leave();
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 80 && lib_scanning(); i++) frame(2);
+	frame(40);
+
+	check(select_titled("Final Fantasy VII") == 1, "240p: on the multi-file card");
+	int lo_px = badge_outline_px();
+	const chome_profile *lp = theme_get();
+	int lb = lp->sel_h / 5; if (lb > 16) lb = 16; if (lb < 6) lb = 6;
+	printf("  240p card %dx%d, badge %d px, outline pixels %d\n",
+		lp->sel_w, lp->sel_h, lb, lo_px);
+	check(lo_px > 0, "240p: the badge is drawn");
+	check(lb >= 6 && lb <= lp->sel_h / 3, "240p: and it is a badge, not a third of the card");
+	dump("stack-3-240p");
+
+	harness_set_fb(1280, 720);
+	chome_leave();
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 80 && lib_scanning(); i++) frame(2);
+	frame(20);
+}
+
 static void assert_carousel_slide()
 {
 	printf("\n== the carousel: a slide repaints the card row and nothing else ==\n");
@@ -10771,6 +10920,7 @@ int main()
 	assert_partial_repaint();
 	// Directly after it, because it is the same mechanism on the other region of the screen
 	// and it starts from the state that one leaves: the shelf at 720p with an empty drive.
+	assert_stack_badge();
 	assert_carousel_slide();
 	assert_disc_launch();
 	// After it, because it leaves the same state that one does and starts from it: a disc
