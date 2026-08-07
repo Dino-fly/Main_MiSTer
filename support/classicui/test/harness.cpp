@@ -56,6 +56,9 @@
 
 #include "harness.h"
 
+// From video.h, which this file does not include; the stub in stubs.cpp models it.
+int video_menu_fb_div();
+
 #define ROOT "/tmp/chome_sd"
 #define OUT  "/tmp/chome_out"
 
@@ -12390,6 +12393,177 @@ static void rip_show(int state, int done, int total, int bad)
 	frame(2);
 }
 
+// Pixels of one exact colour anywhere on the shown frame. Exact is legitimate for the
+// same reason panel_rows_pixels() says it is: gfx writes colours through unblended.
+static int count_shown(uint32_t want)
+{
+	const uint32_t *fb = harness_fb_shown();
+	int w = gfx_w(), h = gfx_h();
+	if (!fb) return 0;
+
+	int n = 0;
+	for (int i = 0; i < w * h; i++) if (fb[i] == want) n++;
+	return n;
+}
+
+/*
+  The half-resolution canvas: the option classicui_halfres stands for, on by default on
+  the device and exercised here against the model in stubs.cpp.
+
+  What is being claimed, in order: the request halves the canvas; the layout profile
+  and the overscan follow the *display* rather than the shrunken canvas, so a 720p
+  screen keeps the hd layout instead of dropping to sd with a CRT margin on an HDMI
+  panel; the text scales halve to the same glass size; turning the option off mid-
+  session restores the full canvas on the next frame with nothing pressed; the request
+  is refused below 320x240, which is what protects the analog takeover's TV canvas; the
+  in-game still survives the resize instead of falling through to the grid; and leaving
+  the front-end releases the request, because the framebuffer after us belongs to
+  somebody else.
+*/
+static void assert_half_canvas()
+{
+	printf("\n== the half-resolution canvas: quarter the pixels, the same layout ==\n");
+
+	// A clean shelf at 720p, the option off, exactly as the suite runs everywhere else.
+	harness_set_menu_core(1);
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 0);
+	chome_leave();
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 80 && lib_scanning(); i++) frame(2);
+	frame(20);
+
+	check(chome_screen_id() == 0 && gfx_w() == 1280 && gfx_h() == 720,
+		"on the shelf at the full 720p canvas");
+
+	const chome_profile *p = theme_get();
+	check(p->id == PROF_HD && p->visible == 5, "which lays out hd");
+	int full_tt = p->ts_title, full_tu = p->ts_ui;
+
+	/*
+	  The option lands with no key pressed: the frame loop re-asserts the request the
+	  way it re-asserts the analog claim, and the resize branch picks the new canvas up.
+	*/
+	cfg.classicui_halfres = 1;
+	frame(6);
+
+	check(gfx_w() == 640 && gfx_h() == 360, "turning the option on halves the canvas by itself");
+	check(video_menu_fb_div() == 2, "and the divisor in force says so");
+
+	p = theme_get();
+	check(p->id == PROF_HD && p->visible == 5,
+		"the layout is still hd: the profile is chosen from the display, not the canvas");
+	check(p->safe_x == 0 && p->safe_y == 0,
+		"and no overscan margin appears - this is still an HDMI display showing every pixel");
+	check(p->ts_ui == 1 && full_tu == 2,
+		"ui text halves in canvas pixels, which is the same size on the glass");
+	check(p->ts_title == (full_tt + 1) / 2,
+		"the title rounds up to 2, the one scale that cannot halve exactly");
+
+	frame(6);
+	dump("half-1-shelf-360");
+
+	// The partial machinery is the same code at this size; prove the strongest thing
+	// about it once here: a forced full repaint reproduces the shown frame exactly.
+	{
+		unsigned long shown = harness_fb_hash_box(0, 0, gfx_w(), gfx_h());
+		check(force_full_repaint(), "a full repaint can be forced at the half canvas");
+		check(harness_fb_hash_box(0, 0, gfx_w(), gfx_h()) == shown,
+			"and it reproduces the shown frame byte for byte");
+	}
+
+	// The row is in the option table with the shipped default, so More Settings
+	// carries it: the generic table checks cover the rest.
+	{
+		int i = opt_find("classicui_halfres");
+		check(i >= 0, "the option is on the More Settings screen");
+		check(i >= 0 && opt_at(i)->def == 1 && opt_at(i)->rec == 1,
+			"fast is both the firmware default and the recommendation");
+		check(i >= 0 && opt_at(i)->when == OW_NOW, "and it says it takes effect now");
+	}
+
+	// Off again mid-session: the same no-key path, the other direction.
+	cfg.classicui_halfres = 0;
+	frame(6);
+	check(gfx_w() == 1280 && gfx_h() == 720, "turning it off restores the full canvas live");
+
+	/*
+	  The floor. A 320x240 canvas is the analog takeover's, and half of it would be
+	  smaller than the smallest layout this front-end ships - so the request is refused
+	  and the canvas arrives whole, option or no option.
+	*/
+	cfg.classicui_halfres = 1;
+	harness_set_fb(320, 240);
+	gfx_shutdown();
+	theme_update(320, 240, 0);
+	frame(6);
+	check(gfx_w() == 320 && gfx_h() == 240, "a 240p canvas is never halved");
+	check(video_menu_fb_div() == 1, "the request was refused, not applied and clamped");
+	check(theme_get()->id == PROF_LO, "and it lays out lo, exactly as it always did");
+
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 0);
+	frame(10);
+
+	/*
+	  In a game: the menu opens at the half canvas with the still of the game behind it,
+	  and toggling the option under the open menu rebuilds the still at the new size
+	  rather than dropping it. The still is painted flat here so it can be counted: the
+	  6/16 dim of one known colour is one exact other colour, and a single pixel of it
+	  proves the still survived where the grid background would have none.
+	*/
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "gb\nTetris (World).gb\n"); fclose(f); }
+
+		harness_set_grab_flat(0xff204060);        // dims to 0xff0c1824, counted below
+		harness_set_menu_core(0);
+		frame(2);
+
+		press(KEY_MENU, 20);
+		check(chome_ingame_active(), "the in-game menu opens with the option on");
+		check(gfx_w() == 640 && gfx_h() == 360, "at the half canvas");
+		frame(10);
+
+		int at_half = count_shown(0xff0c1824);
+		check(at_half > 1000, "the still of the game is behind the shelf at that size");
+
+		cfg.classicui_halfres = 0;
+		frame(6);
+		check(gfx_w() == 1280 && gfx_h() == 720, "the canvas grows back under the open menu");
+		int at_full = count_shown(0xff0c1824);
+		check(at_full > at_half * 3,
+			"and the still is rebuilt at the new size instead of falling through to the grid");
+
+		press(KEY_MENU, 10);
+		check(!chome_ingame_active(), "the menu closes back into the game");
+
+		harness_set_grab_flat(0);
+		harness_set_menu_core(1);
+		frame(4);
+	}
+
+	/*
+	  Leaving releases the request. What runs after this front-end - the classic menu's
+	  wallpaper, the F9 terminal - shares the one framebuffer, and a half-size console
+	  because a menu had been open would be this front-end scribbling on somebody
+	  else's screen.
+	*/
+	cfg.classicui_halfres = 1;
+	frame(6);
+	check(gfx_w() == 640, "at the half canvas again");
+	chome_leave();
+	check(video_menu_fb_div() == 1, "handing off to the classic menu releases the request");
+
+	// And back to the state every later section assumes: option off, 720p, on the shelf.
+	cfg.classicui_halfres = 0;
+	press(KEY_MENU, 20);
+	frame(10);
+	check(gfx_w() == 1280 && gfx_h() == 720, "the suite continues at the full canvas");
+}
+
 static void assert_rip_screen()
 {
 	printf("\n== ripping a disc: the screen it is watched on ==\n");
@@ -12729,6 +12903,16 @@ int main()
 	snprintf(cfg.classicui_artdir, sizeof(cfg.classicui_artdir), "boxart");
 	cfg.classicui_gamelist = 1;                       // as cfg.cpp defaults it
 	cfg.osd_timeout = 0;
+
+	/*
+	  Off for the suite, though cfg.cpp defaults it on: every harness_set_fb() below
+	  states the canvas a section runs at, and with the halving in force each of those
+	  statements would quietly mean something else - 1280x720 arriving as 640x360 under
+	  every pinned frame in the file. The option gets its own section
+	  (assert_half_canvas), which turns it on against the model in stubs.cpp and
+	  checks the layout, the live toggle and the floor.
+	*/
+	cfg.classicui_halfres = 0;
 
 	harness_set_fb(1280, 720);
 
@@ -15533,6 +15717,8 @@ int main()
 		press(KEY_ESC, 10);
 		frame(6);
 	}
+
+	assert_half_canvas();
 
 	assert_rip_format();
 	// Directly after it, because it is the other half of the same feature and it needs the
