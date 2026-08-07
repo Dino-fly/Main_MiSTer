@@ -35,6 +35,7 @@
 #include "../chome_gamelist.h"
 #include "../chome_ss.h"
 #include "../chome_disc.h"
+#include "../chome_rip.h"
 #include "../chome_titles.h"
 #include "../../physical_disc/physical_disc.h"
 #include "../chome_theme.h"
@@ -10932,6 +10933,953 @@ static void assert_input_labels()
 
 /* ------------------------------------------------------------------ main -- */
 
+/* ================================================== ripping a disc to the card ===== */
+
+/*
+  A disc that does not exist, driven through the ripper, and then the bytes it wrote.
+
+  This is the whole of what a host test can say about a rip and it is more than it sounds:
+  everything about the *format* - which files, how long, what the sheet says, where the
+  pregap went - is decided by code that never touches a drive, so all of it is checkable
+  here. What is not checkable here is the drive: the helper process, the speed cap, the
+  re-attach after a USB reset and every timing question are hardware and are called out as
+  unproven in the guide rather than faked into a green tick.
+
+  The fixture is three tracks chosen so that each of them is a case that has its own bug:
+
+    01  data, and MODE2 on the surface while the table of contents says MODE1 - which is
+        what every PlayStation disc looks like, and is the case rip_plan_build() reads a
+        sector to settle. A plan that trusted the TOC would write MODE1/2352 here.
+    02  audio with a 150-sector pregap, so INDEX 00 and INDEX 01 are both exercised and
+        the pregap is inside the track's own file where the multi-FILE readers expect it.
+    03  audio with no pregap, so the INDEX 00 line has to be *absent* rather than zero -
+        a sheet that emitted it unconditionally would claim a pregap on every track.
+*/
+
+#define RF_T1_END  1000          // track 1: LBA 0..999, data
+#define RF_T2_IX0  1000          // track 2: INDEX 00 here...
+#define RF_T2_PRE  150           // ...INDEX 01 150 sectors later, audio
+#define RF_T2_END  1600
+#define RF_T3_END  2000          // track 3: audio, no pregap. Leadout at 2000.
+
+struct rip_fake
+{
+	int fail_lba;                // a sector that will never read, or -1
+	int cancel_after;            // cancel once this many sectors have been asked for, or -1
+	int reads;
+};
+
+// A sector whose every byte is derived from its LBA, so a file can be checked rather than
+// just weighed. Data tracks carry a real sync pattern and a mode byte, because that is what
+// rip_plan_build() reads the mode out of.
+static void rip_fake_sector(int lba, uint8_t *dst)
+{
+	memset(dst, 0, PHYSICAL_DISC_RAW);
+
+	if (lba < RF_T1_END)
+	{
+		dst[0] = 0x00;
+		for (int i = 1; i <= 10; i++) dst[i] = 0xFF;
+		dst[11] = 0x00;
+		dst[12] = (uint8_t)(lba / 4500);
+		dst[13] = (uint8_t)((lba / 75) % 60);
+		dst[14] = (uint8_t)(lba % 75);
+		dst[15] = 0x02;                              // MODE2, which the TOC cannot say
+	}
+
+	for (int i = 16; i < PHYSICAL_DISC_RAW; i++)
+		dst[i] = (uint8_t)((lba * 7 + i * 3) & 0xff);
+}
+
+static int rip_fake_read(int lba, uint8_t *dst, void *ctx)
+{
+	rip_fake *f = (rip_fake*)ctx;
+	f->reads++;
+
+	if (lba < 0 || lba >= RF_T3_END) return -1;
+	if (f->fail_lba >= 0 && lba == f->fail_lba) return -1;
+
+	rip_fake_sector(lba, dst);
+	return 0;
+}
+
+static int rip_fake_cancelled(void *ctx)
+{
+	rip_fake *f = (rip_fake*)ctx;
+	return (f->cancel_after >= 0 && f->reads >= f->cancel_after);
+}
+
+static void rip_fake_toc(toc_t *toc)
+{
+	memset(toc, 0, sizeof(*toc));
+
+	toc->last = 3;
+	toc->end = RF_T3_END;
+	toc->sectorSize = PHYSICAL_DISC_RAW;
+	toc->phys = 1;
+
+	for (int i = 0; i < 3; i++)
+	{
+		toc->tracks[i].sector_size = PHYSICAL_DISC_RAW;
+		toc->tracks[i].index_num = 2;
+	}
+
+	// Exactly what physical_disc_load_toc() produces - every data track TT_MODE1, because a
+	// TOC entry has one data bit and no mode - followed by what
+	// physical_disc_psx_enrich_toc() does to track 2 when the drive can report its pregap.
+	toc->tracks[0].start = 0;             toc->tracks[0].end = RF_T1_END;  toc->tracks[0].type = TT_MODE1;
+	toc->tracks[1].start = RF_T2_IX0;     toc->tracks[1].end = RF_T2_END;  toc->tracks[1].type = TT_CDDA;
+	toc->tracks[1].indexes[1] = RF_T2_PRE;
+	toc->tracks[2].start = RF_T2_END;     toc->tracks[2].end = RF_T3_END;  toc->tracks[2].type = TT_CDDA;
+}
+
+static long long file_bytes(const char *path)
+{
+	struct stat st;
+	if (stat(path, &st)) return -1;
+	return (long long)st.st_size;
+}
+
+static int dir_is_there(const char *path)
+{
+	struct stat st;
+	return !stat(path, &st) && S_ISDIR(st.st_mode);
+}
+
+// The whole of a small file, as text. Returns 0 when it is not there.
+static int slurp(const char *path, char *out, int outsz)
+{
+	out[0] = 0;
+	FILE *f = fopen(path, "rb");
+	if (!f) return 0;
+	size_t n = fread(out, 1, (size_t)outsz - 1, f);
+	fclose(f);
+	out[n] = 0;
+	return (int)n;
+}
+
+// One sector out of a track file, so the bytes can be compared against what the reader
+// handed over rather than merely counted.
+static int track_sector(const char *path, int index, uint8_t *dst)
+{
+	FILE *f = fopen(path, "rb");
+	if (!f) return 0;
+	if (fseek(f, (long)index * PHYSICAL_DISC_RAW, SEEK_SET)) { fclose(f); return 0; }
+	size_t n = fread(dst, 1, PHYSICAL_DISC_RAW, f);
+	fclose(f);
+	return n == PHYSICAL_DISC_RAW;
+}
+
+static void assert_rip_format()
+{
+	printf("\n== ripping a disc: the plan, the sheet and the bytes ==\n");
+
+	const char *psx = ROOT "/games/PSX";
+
+	/* ------------------------------------------------------------- the arithmetic --- */
+
+	{
+		int m, s, f;
+		rip_msf(0, &m, &s, &f);
+		check(!m && !s && !f, "no pregap is 00:00:00");
+		rip_msf(150, &m, &s, &f);
+		check(!m && s == 2 && !f, "the standard 150-sector pregap is 00:02:00");
+		rip_msf(75 * 60 + 1, &m, &s, &f);
+		check(m == 1 && !s && f == 1, "and a minute and a frame carries into the minutes");
+	}
+
+	{
+		char n[96];
+		check(rip_folder_name("Metal Gear Solid", n, sizeof(n)) && !strcmp(n, "Metal Gear Solid"),
+			"a title that is already a legal folder name is left alone");
+		check(rip_folder_name("Wing Commander III: Heart", n, sizeof(n)) &&
+			!strcmp(n, "Wing Commander III_ Heart"),
+			"and a colon becomes one underscore, not one per character");
+		check(rip_folder_name("Tomb Raider (Europe)", n, sizeof(n)) &&
+			!strcmp(n, "Tomb Raider (Europe)"),
+			"brackets survive, because every romset on the card has them");
+		check(!rip_folder_name("///", n, sizeof(n)),
+			"and a title with nothing legal in it is refused rather than made into a dot");
+		check(!rip_folder_name("", n, sizeof(n)), "as is an empty one");
+	}
+
+	/*
+	  Free space, decided separately from asking the filesystem so it can be tested without
+	  one of a chosen size. The margin is the point: a rip that exactly fits must refuse,
+	  because a card with no room left cannot save a state or write an index afterwards.
+	*/
+	{
+		long long mb = 1024 * 1024;
+		check(rip_space_ok(100 * mb, 400 * mb), "a rip with room to spare goes ahead");
+		check(!rip_space_ok(100 * mb, 100 * mb), "one that exactly fits does not");
+		check(!rip_space_ok(100 * mb, (100 + RIP_SPARE_MB - 1) * mb),
+			"nor one that would leave less than the spare behind");
+		check(rip_space_ok(100 * mb, (100 + RIP_SPARE_MB) * mb), "and one that would leave exactly it does");
+		check(rip_space_ok(700 * mb, 0),
+			"a filesystem statvfs could not read is allowed through rather than refusing every rip");
+	}
+
+	/* ------------------------------------------------------------------- the plan --- */
+
+	toc_t toc;
+	rip_fake fk = { -1, -1, 0 };
+	rip_plan plan;
+
+	rip_fake_toc(&toc);
+	check(rip_plan_build(&toc, &plan, rip_fake_read, &fk) == 3, "three tracks are planned");
+
+	check(plan.sectors == RF_T3_END, "and the sector count is the whole disc to the leadout");
+	check(plan.t[0].num == 1 && plan.t[0].start == 0 && plan.t[0].sectors == RF_T1_END,
+		"track 1 runs from the first sector to where track 2 begins");
+	check(plan.t[1].start == RF_T2_IX0 && plan.t[1].sectors == RF_T2_END - RF_T2_IX0,
+		"track 2 starts at its INDEX 00, so its pregap is inside its own file");
+	check(plan.t[1].pregap == RF_T2_PRE, "and the pregap's length came through");
+	check(plan.t[2].pregap == 0, "track 3 has none");
+	check(plan.t[2].sectors == RF_T3_END - RF_T2_END,
+		"and the last track runs to the leadout, not to one short of it");
+
+	/*
+	  The measurement that the table of contents cannot make. This is the check that fails if
+	  rip_plan_build() ever stops reading a sector and starts believing the TOC's TT_MODE1.
+	*/
+	check(plan.t[0].type == TT_MODE2,
+		"the data track is MODE2 because a sector says so, though the TOC said MODE1");
+	check(plan.t[1].type == TT_CDDA && plan.t[2].type == TT_CDDA,
+		"and the audio tracks are audio, with no sector read to decide it");
+
+	check(rip_bytes_needed(&plan) > (long long)RF_T3_END * PHYSICAL_DISC_RAW,
+		"the space asked for covers the sectors and then some, for the clusters they round up to");
+
+	/* ------------------------------------------------------------------ the sheet --- */
+
+	/*
+	  Byte for byte, because this is the deliverable. Every one of the parsers in this tree
+	  compares uppercase keywords with memcmp and skips indent with `while (*lptr == 0x20)`,
+	  so the capitals and the spaces in here are load-bearing and a test that matched loosely
+	  would pass a tab-indented sheet that no core can read.
+	*/
+	static const char cue_true[] =
+		"FILE \"Track 01.bin\" BINARY\n"
+		"  TRACK 01 MODE2/2352\n"
+		"    INDEX 01 00:00:00\n"
+		"FILE \"Track 02.bin\" BINARY\n"
+		"  TRACK 02 AUDIO\n"
+		"    INDEX 00 00:00:00\n"
+		"    INDEX 01 00:02:00\n"
+		"FILE \"Track 03.bin\" BINARY\n"
+		"  TRACK 03 AUDIO\n"
+		"    INDEX 01 00:00:00\n";
+
+	char cue[4096];
+	check(rip_cue_text(&plan, 0, cue, sizeof(cue)) == (int)strlen(cue_true) &&
+		!strcmp(cue, cue_true), "the sheet is exactly what a PlayStation rip should say");
+
+	/*
+	  And the same disc for a core whose parser knows no MODE2 token - Mega CD, Neo Geo CD and
+	  PC Engine CD. megacdd.cpp only looks for MODE1/2048 and MODE1/2352 and only on track 1,
+	  and a MODE2 token there leaves its sector size unset and drops it into a byte sniff. So
+	  the one line changes and nothing else does.
+	*/
+	static const char cue_m1[] =
+		"FILE \"Track 01.bin\" BINARY\n"
+		"  TRACK 01 MODE1/2352\n"
+		"    INDEX 01 00:00:00\n"
+		"FILE \"Track 02.bin\" BINARY\n"
+		"  TRACK 02 AUDIO\n"
+		"    INDEX 00 00:00:00\n"
+		"    INDEX 01 00:02:00\n"
+		"FILE \"Track 03.bin\" BINARY\n"
+		"  TRACK 03 AUDIO\n"
+		"    INDEX 01 00:00:00\n";
+
+	check(rip_cue_text(&plan, 1, cue, sizeof(cue)) && !strcmp(cue, cue_m1),
+		"and for a parser with no MODE2 token the data track is written MODE1/2352");
+
+	check(!rip_cue_text(&plan, 0, cue, 40),
+		"a sheet that will not fit its buffer is refused, not truncated into an unparseable one");
+
+	/* ------------------------------------------------------------------ the bytes --- */
+
+	const char *name = "Ripped Test Disc";
+	char dir[1024], stage[1024], path[1024];
+	snprintf(dir, sizeof(dir), "%s/%s", psx, name);
+	rip_stage_path(psx, name, stage, sizeof(stage));
+
+	rip_rmdir_flat(dir);
+	rip_rmdir_flat(stage);
+
+	rip_io io;
+	memset(&io, 0, sizeof(io));
+	io.read = rip_fake_read;
+	io.read_ctx = &fk;
+	io.cancelled = rip_fake_cancelled;
+	io.cancel_ctx = &fk;
+
+	int bad = -1;
+	fk.reads = 0;
+	check(rip_perform(&plan, psx, name, 0, 0, &io, &bad) == RIP_DONE, "the rip finishes");
+	check(bad == 0, "with nothing unreadable on a disc with nothing wrong with it");
+	check(!dir_is_there(stage), "and the staging folder it was built in is gone");
+	check(dir_is_there(dir), "the folder is at the name the shelf will look for");
+
+	snprintf(path, sizeof(path), "%s/%s.cue", dir, name);
+	{
+		char got[4096];
+		check(slurp(path, got, sizeof(got)) && !strcmp(got, cue_true),
+			"the sheet on the card is the sheet that was promised, byte for byte");
+	}
+
+	// Sizes: sectors times 2352 and not a byte more, which is what a reader deriving track
+	// lengths from file sizes depends on.
+	snprintf(path, sizeof(path), "%s/Track 01.bin", dir);
+	check(file_bytes(path) == (long long)RF_T1_END * PHYSICAL_DISC_RAW,
+		"track 1 is its sector count times 2352");
+
+	{
+		// ...and the bytes are the disc's. The first sector of the file must be the first
+		// sector of the track, which is where an off-by-one in the start LBA would show.
+		uint8_t got[PHYSICAL_DISC_RAW], want[PHYSICAL_DISC_RAW];
+		check(track_sector(path, 0, got), "track 1's first sector can be read back");
+		rip_fake_sector(0, want);
+		check(!memcmp(got, want, PHYSICAL_DISC_RAW), "and it is LBA 0's 2352 bytes");
+
+		check(track_sector(path, RF_T1_END - 1, got), "and its last one");
+		rip_fake_sector(RF_T1_END - 1, want);
+		check(!memcmp(got, want, PHYSICAL_DISC_RAW),
+			"which is the sector before track 2, so no sector was dropped at the seam");
+	}
+
+	snprintf(path, sizeof(path), "%s/Track 02.bin", dir);
+	check(file_bytes(path) == (long long)(RF_T2_END - RF_T2_IX0) * PHYSICAL_DISC_RAW,
+		"track 2 is as long as its pregap plus its audio");
+	{
+		uint8_t got[PHYSICAL_DISC_RAW], want[PHYSICAL_DISC_RAW];
+		check(track_sector(path, 0, got), "track 2's first sector can be read back");
+		rip_fake_sector(RF_T2_IX0, want);
+		check(!memcmp(got, want, PHYSICAL_DISC_RAW),
+			"and it is INDEX 00 - the pregap really is at the head of the file the sheet says it is");
+
+		check(track_sector(path, RF_T2_PRE, got), "the sector at the pregap's length can be read");
+		rip_fake_sector(RF_T2_IX0 + RF_T2_PRE, want);
+		check(!memcmp(got, want, PHYSICAL_DISC_RAW),
+			"and it is INDEX 01, which is where INDEX 01 00:02:00 points");
+	}
+
+	snprintf(path, sizeof(path), "%s/Track 03.bin", dir);
+	check(file_bytes(path) == (long long)(RF_T3_END - RF_T2_END) * PHYSICAL_DISC_RAW,
+		"and track 3 runs to the leadout");
+
+	snprintf(path, sizeof(path), "%s/%s", dir, RIP_BADFILE);
+	check(file_bytes(path) < 0, "a clean rip leaves no list of unreadable sectors");
+
+	/* ------------------------------------ the folder the scanner makes of it --- */
+
+	/*
+	  The interaction commit 73b0f71 exists for, end to end rather than assumed: a folder
+	  holding a .cue and its Track NN.bin parts is ONE game named after the folder. This is
+	  the reason the rip is laid out the way it is, so it is checked against the scanner
+	  rather than against the commit message.
+	*/
+	lib_rescan();
+	for (int i = 0; i < 400 && lib_scanning(); i++) frame(2);
+	frame(10);
+
+	{
+		char rel[256];
+		snprintf(rel, sizeof(rel), "%s/%s.cue", name, name);
+		int it = item_at("psx", rel);
+		check(it >= 0, "the finished rip is on the shelf");
+		check(it >= 0 && !strcmp(lib_item(it)->title, name),
+			"under the disc's own name, which is what the folder was called after");
+
+		snprintf(rel, sizeof(rel), "%s/Track 01.bin", name);
+		check(item_at("psx", rel) < 0, "and its tracks are not games of their own");
+
+		int n = 0;
+		for (int i = 0; i < lib_item_count(); i++)
+		{
+			chome_item *item = lib_item(i);
+			if (item && item->kind == IT_GAME && !strncmp(item->path, name, strlen(name))) n++;
+		}
+		check(n == 1, "so the whole rip is exactly one card");
+	}
+
+	/* --------------------------------------------------------- a scratched disc --- */
+
+	/*
+	  The read-error policy, which is: retry, then write 2352 zero bytes, count it, list it
+	  and tell the player. Not abort - one bad frame in an audio track is a click and
+	  throwing away a finished 700 MB copy over it is the worse answer - and above all not
+	  *skip*, because a short track file puts every sector after the hole at the wrong offset
+	  and desynchronises the rest of the disc.
+	*/
+	const char *bname = "Scratched Test Disc";
+	char bdir[1024];
+	snprintf(bdir, sizeof(bdir), "%s/%s", psx, bname);
+	rip_rmdir_flat(bdir);
+
+	fk.fail_lba = RF_T2_IX0 + RF_T2_PRE + 10;      // inside track 2's audio
+	fk.reads = 0;
+	bad = -1;
+	check(rip_perform(&plan, psx, bname, 0, 0, &io, &bad) == RIP_DONE,
+		"a disc with an unreadable sector still finishes");
+	check(bad == 1, "and says how many sectors it could not read");
+
+	snprintf(path, sizeof(path), "%s/Track 02.bin", bdir);
+	check(file_bytes(path) == (long long)(RF_T2_END - RF_T2_IX0) * PHYSICAL_DISC_RAW,
+		"the track is still exactly the length the sheet says, so nothing after the hole moved");
+	{
+		uint8_t got[PHYSICAL_DISC_RAW], zero[PHYSICAL_DISC_RAW];
+		memset(zero, 0, sizeof(zero));
+		check(track_sector(path, fk.fail_lba - RF_T2_IX0, got), "the bad sector is readable back");
+		check(!memcmp(got, zero, PHYSICAL_DISC_RAW), "and it is 2352 zero bytes, not a gap");
+
+		uint8_t want[PHYSICAL_DISC_RAW];
+		check(track_sector(path, fk.fail_lba - RF_T2_IX0 + 1, got), "and the one after it");
+		rip_fake_sector(fk.fail_lba + 1, want);
+		check(!memcmp(got, want, PHYSICAL_DISC_RAW),
+			"is still its own sector, which is what zero-filling instead of skipping buys");
+	}
+
+	snprintf(path, sizeof(path), "%s/%s", bdir, RIP_BADFILE);
+	{
+		char got[2048], lba[32];
+		snprintf(lba, sizeof(lba), "%d", fk.fail_lba);
+		check(slurp(path, got, sizeof(got)) > 0, "the folder carries a list of what did not read");
+		check(strstr(got, lba) != 0, "naming the sector by its LBA");
+		check(strstr(got, "audio") != 0, "and which kind of track it was in");
+	}
+
+	rip_rmdir_flat(bdir);
+	fk.fail_lba = -1;
+
+	/* --------------------------------------------------------------- cancelling --- */
+
+	/*
+	  A cancelled rip leaves nothing at all, and by construction rather than by cleanup: the
+	  copy is assembled in a folder whose name begins with a dot, which scan_dir() skips, and
+	  it is only renamed to the finished name once every byte is written. So there is no
+	  instant at which a half-written folder looks like a game.
+	*/
+	const char *cname = "Cancelled Test Disc";
+	char cdir[1024], cstage[1024];
+	snprintf(cdir, sizeof(cdir), "%s/%s", psx, cname);
+	rip_stage_path(psx, cname, cstage, sizeof(cstage));
+	rip_rmdir_flat(cdir);
+	rip_rmdir_flat(cstage);
+
+	fk.cancel_after = 100;
+	fk.reads = 0;
+	bad = -1;
+	check(rip_perform(&plan, psx, cname, 0, 0, &io, &bad) == RIP_CANCELLED,
+		"a rip that is asked to stop, stops");
+	check(fk.reads < RF_T3_END, "well before the end of the disc");
+	check(!dir_is_there(cdir), "and there is no folder at the name a game would have");
+	check(!dir_is_there(cstage), "nor the hidden one it was being built in");
+
+	fk.cancel_after = -1;
+
+	/* ------------------------------------------------- never over the top, silently --- */
+
+	/*
+	  An existing folder is refused outright, and the confirmation for replacing it is the
+	  front-end's - see the two presses in assert_rip_screen(). What is checked here is the
+	  guard behind that, and the property that makes the confirmation safe to give: with
+	  `overwrite` set the old folder is not touched until the new copy is finished, so a
+	  confirmed replacement that is then cancelled costs nothing.
+	*/
+	const char *ename = "Existing Test Disc";
+	char edir[1024], estage[1024], keep[1024];
+	snprintf(edir, sizeof(edir), "%s/%s", psx, ename);
+	rip_stage_path(psx, ename, estage, sizeof(estage));
+	rip_rmdir_flat(edir);
+	rip_rmdir_flat(estage);
+
+	mkpath(edir);
+	touch(edir, "already-here.txt", 11);
+	snprintf(keep, sizeof(keep), "%s/already-here.txt", edir);
+
+	fk.reads = 0;
+	check(rip_perform(&plan, psx, ename, 0, 0, &io, &bad) == RIP_EXISTS,
+		"a rip onto a folder that is already there refuses");
+	check(fk.reads == 0, "without having read a single sector off the disc");
+	check(file_bytes(keep) == 11, "and what was there is untouched");
+	check(!dir_is_there(estage), "with no staging folder left behind either");
+
+	fk.cancel_after = 100;
+	fk.reads = 0;
+	check(rip_perform(&plan, psx, ename, 0, 1, &io, &bad) == RIP_CANCELLED,
+		"a confirmed replacement can still be cancelled");
+	check(file_bytes(keep) == 11,
+		"and the folder it was going to replace is still exactly as it was");
+	check(!dir_is_there(estage), "and nothing hidden is left over");
+
+	fk.cancel_after = -1;
+	fk.reads = 0;
+	check(rip_perform(&plan, psx, ename, 0, 1, &io, &bad) == RIP_DONE,
+		"and a confirmed replacement that finishes, replaces");
+	check(file_bytes(keep) < 0, "the old contents are gone");
+	snprintf(path, sizeof(path), "%s/%s.cue", edir, ename);
+	check(file_bytes(path) > 0, "and the new sheet is in its place");
+
+	/* ---------------------------------- what the other three cores' folders do NOT get --- */
+
+	/*
+	  Ripping a Mega CD disc writes a folder the *core* can load and the *shelf* cannot see,
+	  and that is worth a check rather than a footnote, because it is the one place this
+	  feature is knowingly incomplete.
+
+	  The md shelf entry accepts "md,bin,gen" and not "cue", so the sheet is not a game to
+	  it; and 73b0f71's rule then correctly hides the tracks beside that sheet, because a
+	  Mega CD track handed to the Genesis core as a cartridge was never going to boot. So a
+	  Mega CD rip yields no card at all and has to be loaded from the core's own file
+	  browser. Adding "cue" to that entry is not the fix - md launches the Genesis core with
+	  a load-to-memory mount, and a .cue card there would fail when pressed. The fix is a
+	  shelf route to the MegaCD core, which disc_playables already has the slot for and is
+	  its own piece of work.
+
+	  This check exists so that whoever does it finds out here rather than from a player.
+	*/
+	{
+		const char *gname = "Mega Test Disc";
+		char gdir[1024];
+		snprintf(gdir, sizeof(gdir), "%s/%s", ROOT "/games/Genesis", gname);
+		rip_rmdir_flat(gdir);
+
+		fk.reads = 0;
+		check(rip_perform(&plan, ROOT "/games/Genesis", gname, 1, 0, &io, &bad) == RIP_DONE,
+			"a Mega CD rip writes its folder");
+
+		snprintf(path, sizeof(path), "%s/%s.cue", gdir, gname);
+		{
+			char got[4096];
+			check(slurp(path, got, sizeof(got)) && !strcmp(got, cue_m1),
+				"in the MODE1/2352 form Mega CD's parser can read");
+		}
+
+		lib_rescan();
+		for (int i = 0; i < 400 && lib_scanning(); i++) frame(2);
+		frame(10);
+
+		char rel[256];
+		snprintf(rel, sizeof(rel), "%s/%s.cue", gname, gname);
+		check(item_at("md", rel) < 0,
+			"and it is NOT on the shelf: md accepts no cue, so this one has to be loaded "
+			"from the core's own browser until md gains a route to the MegaCD core");
+		snprintf(rel, sizeof(rel), "%s/Track 01.bin", gname);
+		check(item_at("md", rel) < 0, "and its tracks are hidden rather than listed as games");
+
+		rip_rmdir_flat(gdir);
+	}
+
+	/* ------------------------------------------------------------------ tidy up --- */
+
+	// The card goes back as it was, because everything after this section scans it.
+	rip_rmdir_flat(dir);
+	rip_rmdir_flat(edir);
+
+	lib_rescan();
+	for (int i = 0; i < 400 && lib_scanning(); i++) frame(2);
+	frame(10);
+
+	{
+		char rel[256];
+		snprintf(rel, sizeof(rel), "%s/%s.cue", name, name);
+		check(item_at("psx", rel) < 0, "and the card is back as this section found it");
+	}
+}
+
+/* ------------------------------------------------ the screen a rip is watched on --- */
+
+/*
+  The dialog while a copy runs: what it offers, what it says, and the pie.
+
+  There is no child and no drive here, so what drives this is rip_test_set(), which writes
+  the same fields the child's published line writes - see chome_rip.h. Everything downstream
+  of those fields is the shipping code: the row that starts it, the snapshot the screen is
+  drawn from, the fraction, the two presses that stop it and the rectangle the partial
+  repaint clips to.
+*/
+/*
+  One frame of the rip screen at a chosen progress, composed WITHOUT letting the clock move.
+
+  That last part is the whole method. The disc is turning, so two frames taken a moment apart
+  differ in nearly every pixel of it whatever the pie is doing - which is how the first
+  version of this measurement reported 90% of the disc dimmed at every fraction. With the
+  clock held, disc_step() answers from its memo and the rotation is bit-for-bit the same, so
+  the *only* difference between two shots is the mask, and counting changed pixels counts
+  exactly the area the pie covers.
+
+  Out to the badge and back is what forces a full repaint at an instant the clock has not
+  moved through - the same trick assert_partial_repaint() uses, and it works here for the
+  same reason: a screen change marks dirty, and no key press of its own advances time.
+*/
+static void rip_pie_shot(int done, int total, int x0, int y0, int x1, int y1, uint32_t *out)
+{
+	rip_test_set(RIP_RUNNING, done, total, 0);
+
+	chome_handle(KEY_ESC);
+	chome_handle(KEY_ESC | UPSTROKE);
+	chome_handle(KEY_ENTER);
+	chome_handle(KEY_ENTER | UPSTROKE);
+
+	const uint32_t *fb = harness_fb_shown();
+	int w = gfx_w();
+	for (int y = y0, i = 0; y < y1; y++)
+		for (int x = x0; x < x1; x++, i++) out[i] = fb[(size_t)y * w + x];
+}
+
+// How many pixels of one shot differ from another, which is how much of the disc is dimmed.
+static int rip_pie_diff(const uint32_t *a, const uint32_t *b, int n)
+{
+	int d = 0;
+	for (int i = 0; i < n; i++) if (a[i] != b[i]) d++;
+	return d;
+}
+
+/*
+  Publish what a rip has got to, and then ask for the repaint that publishing it would have
+  asked for.
+
+  In the firmware chome_handle() folds the state, the percentage and the unreadable count into
+  one number as rip_poll() reads each line, and marks dirty when it changes - so the line
+  under the disc and the button beside it are only ever drawn by a full frame. That is
+  deliberate: everything except the pie is outside the disc's rectangle, and the spin's
+  partial repaint does not touch it.
+
+  rip_test_set() writes those fields without going through rip_poll(), so a test that only
+  advanced time afterwards would be looking at the *previous* line under a moving pie - which
+  is exactly what the first version of this section dumped, and what made a finished rip's
+  screen still say "Stop". So every use of it here comes through this.
+*/
+static void rip_show(int state, int done, int total, int bad)
+{
+	rip_test_set(state, done, total, bad);
+
+	chome_handle(KEY_ESC);
+	chome_handle(KEY_ESC | UPSTROKE);
+	chome_handle(KEY_ENTER);
+	chome_handle(KEY_ENTER | UPSTROKE);
+	frame(2);
+}
+
+static void assert_rip_screen()
+{
+	printf("\n== ripping a disc: the screen it is watched on ==\n");
+
+	enum { S_HOME = 0, S_DISC = 17, S_DISCBAR = 18 };
+
+	int was_prof = cfg.classicui_profile;
+	int was_w = gfx_w(), was_h = gfx_h();
+
+	cfg.classicui_profile = 1;
+	harness_set_fb(1280, 720);
+	frame(6);
+
+	cfg.classicui_disc = 1;
+	rip_test_reset();
+
+	// A PlayStation disc, identified, exactly as the other disc sections set one up.
+	fake_disc dp; memset(&dp, 0, sizeof(dp));
+	static const char *const none[] = { "" };
+	fake_iso(&dp, 0, "PLAYSTATION", "PLAYSTATION", none, 0);
+	fake_put(&dp, 20, 0, "BOOT = cdrom:\\SLUS_006.26;1", 27, 100);
+
+	disc_ingest_present(1);
+	disc_set_reader(fake_read, &dp);
+	disc_ingest_identify(0);
+	frame(6);
+
+	press(KEY_UP);
+	press(KEY_ENTER);
+	check(chome_screen_id() == S_DISC, "the dialog is up over a PlayStation disc");
+
+	/* ------------------------------------------------------- the row that starts it --- */
+
+	press(KEY_RIGHT);                                  // onto Options
+	press(KEY_ENTER);
+	int rows_shot = (int)pt_panel_hash();
+	check(rows_shot != 0, "the Options list is up");
+
+	/*
+	  Down to the last row, which is the copy. The rows above it are the cores, and the copy
+	  row is deliberately last: it is not what most players open this list for.
+	*/
+	for (int i = 0; i < 8; i++) press(KEY_DOWN, 6);
+	dump("rip-01-options");
+
+	check(rip_test_starts() == 0, "nothing has been started yet");
+	press(KEY_ENTER, 8);
+
+	check(rip_test_starts() == 1, "pressing the copy row starts a rip");
+	check(!strcmp(rip_test_last_dir(), ROOT "/games/PSX"),
+		"into the PlayStation games folder, which is where the shelf looks for PlayStation games");
+	check(!strcmp(rip_test_last_name(), "Ridge Racer") ||
+		!strcmp(rip_test_last_name(), "SLUS-00626"),
+		"in a folder named for the disc by the best name anything knows it by");
+	check(rip_test_last_mode1() == 0,
+		"and told that this core's parser understands MODE2/2352, so the sheet may say it");
+	check(rip_test_last_overwrite() == 0, "with nothing to replace, so no confirmation was needed");
+
+	check(chome_screen_id() == S_DISC, "the dialog stays up, now showing the copy");
+
+	/* ------------------------------------------------------------ what it says --- */
+
+	rip_show(RIP_RUNNING, 0, 0, 0);
+	dump("rip-02-reading");
+
+	rip_show(RIP_RUNNING, 500, 2000, 0);
+	check(rip_percent(rip_state()) == 25, "a quarter of the sectors written reads as 25%");
+	dump("rip-03-quarter");
+
+	rip_show(RIP_RUNNING, 1000, 2000, 0);
+	dump("rip-04-half");
+
+	rip_show(RIP_RUNNING, 1990, 2000, 0);
+	check(rip_percent(rip_state()) == 99,
+		"and the last few sectors read as 99, not 100 - the sheet is not written yet");
+
+	/*
+	  Progress is the sectors and nothing else. A fraction taken from the track index would
+	  sit at a third through a PlayStation disc's one huge data track for twenty minutes; a
+	  fraction taken from the clock would be a guess. This is the check that fails if either
+	  ever creeps in.
+	*/
+	rip_test_set(RIP_RUNNING, 0, 2000, 0);
+	check(rip_percent(rip_state()) == 0, "nothing written is 0%");
+	rip_test_set(RIP_DONE, 2000, 2000, 0);
+	check(rip_percent(rip_state()) == 100, "and only a finished rip is 100%");
+
+	/* ------------------------------------------------------------------- the pie --- */
+
+	/*
+	  The reveal, measured off the screen rather than asked of the code.
+
+	  The disc has no scan on the card here, so it is the generated face: twelve bands of
+	  known colour turning. That makes "is this pixel dimmed" answerable without knowing the
+	  picture - the dim is a multiply by DISC_REVEAL_DIM/255 against black, so a dimmed pixel
+	  is strictly darker than the same pixel undimmed, and the *count* of pixels that changed
+	  between two reveals of the same instant is the area the pie covers.
+
+	  Counted between two composes with the clock held still, so the rotation is identical
+	  and the only difference between the two frames is the mask. disc_step() memoises on the
+	  millisecond clock, which is what makes that possible at all.
+	*/
+	int cx = 0, cy = 0;
+	rip_show(RIP_RUNNING, 2000, 2000, 0);            // fully revealed
+	frame(20);                                       // and any scan on the card loaded
+	int dia = disc_drawn_box(&cx, &cy);
+	check(dia > 200, "the disc is drawn at the dialog's own size while the rip runs");
+	printf("  the disc is %d px across at (%d,%d) during a rip\n", dia, cx, cy);
+
+	int r = dia / 2;
+	int x0 = cx - r, y0 = cy - r, x1 = cx + r, y1 = cy + r;
+	if (x0 < 0) x0 = 0;
+	if (y0 < 0) y0 = 0;
+	if (x1 > gfx_w()) x1 = gfx_w();
+	if (y1 > gfx_h()) y1 = gfx_h();
+
+	int nbox = (x1 - x0) * (y1 - y0);
+	uint32_t *full = (uint32_t*)malloc((size_t)nbox * 4);
+	uint32_t *shot = (uint32_t*)malloc((size_t)nbox * 4);
+	check(full && shot, "buffers for two shots of the same instant");
+
+	if (full && shot)
+	{
+		rip_pie_shot(2000, 2000, x0, y0, x1, y1, full);
+
+		/*
+		  The disc's own pixel count, which is what a fraction is a fraction of. Taken as the
+		  pixels the pie at zero changes: at nothing copied every pixel of the disc is dimmed
+		  and every pixel outside it is left exactly as it was - which is itself the check
+		  that the pie does not spill onto the panel behind the disc.
+		*/
+		rip_pie_shot(0, 2000, x0, y0, x1, y1, shot);
+		int all = rip_pie_diff(shot, full, nbox);
+
+		printf("  the disc covers %d of the %d pixels in its box\n", all, nbox);
+		check(all > nbox / 2, "at nothing copied the whole disc is dimmed");
+
+		/*
+		  And the corners are not, which is the panel behind it. A pie that darkened those -
+		  the corners of the square buffer the rotation lives in, which disc_rot() fills with
+		  the panel's own colour - would put a dark wedge across the plate, and it would only
+		  show at some angles.
+		*/
+		int corner_changed = 0;
+		for (int k = 0; k < 6; k++)
+		{
+			int xs[4] = { x0 + k, x1 - 1 - k, x0 + k, x1 - 1 - k };
+			int ys[4] = { y0 + k, y0 + k, y1 - 1 - k, y1 - 1 - k };
+			for (int q = 0; q < 4; q++)
+			{
+				int i = (ys[q] - y0) * (x1 - x0) + (xs[q] - x0);
+				if (shot[i] != full[i]) corner_changed++;
+				(void)xs; (void)ys;
+			}
+		}
+		check(corner_changed == 0,
+			"and the panel showing through the corners of the disc's box is untouched by it");
+
+		/*
+		  Then the fractions. The pie fills clockwise from twelve o'clock, so a quarter copied
+		  leaves three quarters dimmed - and the arithmetic is exact at the quadrants whatever
+		  the arctangent's precision, which is why these are the three values pinned.
+
+		  A tolerance of a fortieth of the disc rather than a pixel: the rim and the hub are
+		  anti-aliased, and the wedge's edge crosses pixels that are a blend of two bands,
+		  some of which the dim leaves within rounding of where they already were.
+		*/
+		static const int frac[] = { 25, 50, 75 };
+		for (unsigned k = 0; k < sizeof(frac) / sizeof(frac[0]); k++)
+		{
+			rip_pie_shot(2000 * frac[k] / 100, 2000, x0, y0, x1, y1, shot);
+			int dim = rip_pie_diff(shot, full, nbox);
+
+			int want = all * (100 - frac[k]) / 100;
+			int slack = all / 40;
+
+			char what[160];
+			snprintf(what, sizeof(what),
+				"%d%% copied leaves %d%% of the disc dimmed (%d of %d, wanted about %d)",
+				frac[k], 100 - frac[k], dim, all, want);
+			check(dim >= want - slack && dim <= want + slack, what);
+
+			snprintf(what, sizeof(what), "rip-05-pie-%d", frac[k]);
+			dump(what);
+		}
+
+		free(full);
+		free(shot);
+	}
+
+	/* ------------------------------------------ the rectangle the pie has to fit in --- */
+
+	/*
+	  The invariant the DISC_BADGE_CELLS comment is about: a frame drawn by the partial path
+	  has to be byte-identical to a full repaint of the same instant, and it can only be if
+	  everything drawn lands inside the rectangle the previous frame recorded.
+
+	  The pie is drawn inside the disc's own radius and adds nothing outside it, which is the
+	  reason there is no ring around the disc - see the report. This check is what would fail
+	  if one were added without growing disc_note_rect()'s cell count to cover it.
+	*/
+	/*
+	  A full repaint at this progress first, and the reason is worth writing down because the
+	  first version of this check failed on it.
+
+	  The percentage under the disc is drawn *outside* the disc's rectangle, so a partial
+	  repaint does not touch it - and it must not need to. In the firmware that is handled by
+	  chome_handle(): rip_poll() folds the state, the percentage and the unreadable count into
+	  one number and marks dirty when it changes, so the line under the disc is only ever
+	  redrawn by a full frame. rip_test_set() writes those fields without going through
+	  rip_poll(), so the test has to ask for that full repaint itself; without it the partial
+	  frame carries a percentage from several frames ago and the comparison measures the stale
+	  text rather than the pie.
+	*/
+	rip_test_set(RIP_RUNNING, 900, 2000, 0);
+	chome_handle(KEY_ESC);
+	chome_handle(KEY_ESC | UPSTROKE);
+	chome_handle(KEY_ENTER);
+	chome_handle(KEY_ENTER | UPSTROKE);
+
+	harness_advance(60);
+	chome_handle(0);                                  // one spin frame, the partial path
+	check(gfx_damage_rows() < gfx_h(),
+		"the frame under comparison was drawn by the partial path");
+	unsigned long partial = harness_fb_hash_box(0, 0, gfx_w(), gfx_h());
+
+	chome_handle(KEY_ESC);                            // out and back, a full repaint...
+	chome_handle(KEY_ESC | UPSTROKE);
+	chome_handle(KEY_ENTER);                          // ...at the same instant, clock unmoved
+	chome_handle(KEY_ENTER | UPSTROKE);
+	check(chome_screen_id() == S_DISC, "back on the rip screen without the clock moving");
+	check(harness_fb_hash_box(0, 0, gfx_w(), gfx_h()) == partial,
+		"a partial repaint of a rip in progress is byte-identical to a full one of the same instant");
+
+	/* ---------------------------------------------------------------- stopping it --- */
+
+	check(rip_busy(), "the rip is still running");
+	press(KEY_ENTER, 8);
+	check(rip_busy(), "one press on Stop does not stop it");
+	dump("rip-06-armed");
+
+	press(KEY_ENTER, 8);
+	check(!rip_busy(), "the second one does");
+	check(rip_state()->state == RIP_CANCELLED, "and it is recorded as cancelled, not failed");
+	check(rip_reportable(), "with something still to say to the player");
+	dump("rip-07-stopped");
+
+	// And the arming expires rather than leaving the console one press from cancelling.
+	rip_show(RIP_RUNNING, 400, 2000, 0);
+	press(KEY_ENTER, 8);
+	check(rip_busy(), "the arming is up again");
+	harness_advance(4000);
+	frame(4);
+	press(KEY_ENTER, 8);
+	check(rip_busy(), "and a press after it has expired only arms it again rather than stopping");
+	press(KEY_ENTER, 8);
+	check(!rip_busy(), "two in a row still stop it");
+
+	/* -------------------------------------------------- leaving it running --- */
+
+	/*
+	  B leaves and the copy carries on, because the helper is a process of its own. The badge
+	  in the corner is what says so and what leads back - and it exists while a rip runs even
+	  though the drive reports no disc, which is the whole of disc_or_rip_present().
+	*/
+	rip_show(RIP_RUNNING, 800, 2000, 0);
+	disc_reset_reader();
+	disc_ingest_present(0);                           // the drive is the rip helper's now
+	(void)disc_take_dirty();
+	frame(6);
+
+	check(chome_screen_id() == S_DISC,
+		"a running rip is not thrown off its own screen when the drive reports no disc");
+
+	press(KEY_ESC, 8);
+	check(chome_screen_id() == S_DISCBAR,
+		"B leaves the copy running and lands on the badge, which is the way back to it");
+	check(rip_busy(), "and the copy is indeed still running");
+	dump("rip-08-badge");
+
+	press(KEY_ENTER, 8);
+	check(chome_screen_id() == S_DISC, "and the badge opens the progress screen again");
+
+	/* ------------------------------------------------- what a finished one says --- */
+
+	rip_show(RIP_DONE, 2000, 2000, 0);
+	check(!rip_busy() && rip_reportable(), "a finished rip waits to be acknowledged");
+	dump("rip-09-done");
+
+	/*
+	  And the case this whole path exists for. A rip with unreadable sectors must not report
+	  "Done": the player has to be told the copy is imperfect here, not by a core that hangs
+	  weeks later.
+	*/
+	rip_show(RIP_DONE, 2000, 2000, 12);
+	dump("rip-10-imperfect");
+
+	rip_show(RIP_NOSPACE, 0, 2000, 0);
+	dump("rip-11-nospace");
+
+	press(KEY_ENTER, 8);
+	check(!rip_reportable(), "OK dismisses it");
+
+	/* ------------------------------------------------------------------ tidy up --- */
+
+	rip_test_reset();
+	disc_reset_reader();
+	disc_ingest_present(0);
+	(void)disc_take_dirty();
+	frame(6);
+	cfg.classicui_disc = 0;
+
+	cfg.classicui_profile = was_prof;
+	harness_set_fb(was_w, was_h);
+	frame(6);
+}
+
 int main()
 {
 	printf("Classic Home host harness\n\n");
@@ -13739,6 +14687,11 @@ int main()
 		press(KEY_ESC, 10);
 		frame(6);
 	}
+
+	assert_rip_format();
+	// Directly after it, because it is the other half of the same feature and it needs the
+	// state that one leaves: no rip in flight and the games folders back as they were.
+	assert_rip_screen();
 
 	printf("\n== presents ==\n");
 	printf("  page flips: %d\n", harness_present_count());
