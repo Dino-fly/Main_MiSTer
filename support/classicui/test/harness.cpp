@@ -522,6 +522,34 @@ static void build_sd()
 	touch(ROOT "/games/PSX", "Final Fantasy VII (USA) (Disc 3).cue", 2048);
 
 	/*
+	  Multi-track CD rips under the Mega Drive folder, which is where this bites: md accepts
+	  "bin" and a rip names its tracks after their position, so two games' tracks are two
+	  sets of files called the same thing. Both layouts in the wild:
+
+	  Sonic CD/    a cue naming its tracks - the tracks are parts, not games
+	  Snatcher/    the same, and the pair of them is what used to collide
+	  Keio Flying Squadron/  tracks with no cue at all, so the folder has to name them
+
+	  And a plain cartridge in the same folder, to prove an ordinary .bin is untouched.
+	*/
+	mkpath(ROOT "/games/Genesis/Sonic CD");
+	touch(ROOT "/games/Genesis/Sonic CD", "Sonic CD.cue", 512);
+	touch(ROOT "/games/Genesis/Sonic CD", "Track 01.bin", 4096);
+	touch(ROOT "/games/Genesis/Sonic CD", "Track 02.bin", 4096);
+	mkpath(ROOT "/games/Genesis/Snatcher");
+	touch(ROOT "/games/Genesis/Snatcher", "Snatcher.cue", 512);
+	touch(ROOT "/games/Genesis/Snatcher", "Track 01.bin", 4096);
+	touch(ROOT "/games/Genesis/Snatcher", "Track 02.bin", 4096);
+	mkpath(ROOT "/games/Genesis/Keio Flying Squadron");
+	touch(ROOT "/games/Genesis/Keio Flying Squadron", "Track 01.bin", 4096);
+	touch(ROOT "/games/Genesis/Keio Flying Squadron", "Track 02.bin", 4096);
+
+	// In a folder, so that borrowing the folder's name is available and visibly not taken.
+	mkpath(ROOT "/games/Genesis/Capcom");
+	touch(ROOT "/games/Genesis/Capcom", "1942.bin", 4096);
+	touch(ROOT "/games/Genesis/Capcom", "Discworld.bin", 4096);
+
+	/*
 	  One title on two systems, and *only* the system telling them apart: both are ".bin"
 	  at the top of their own games folder, which the Mega Drive and the Atari 7800 both
 	  accept. The Sonic pair below differs by extension as well, so it cannot be the check
@@ -1674,6 +1702,45 @@ static void assert_variants()
 	// Multi-disc.
 	int ff7 = entry_carrying(ff7_2);
 	check(ff7 >= 0 && entry_nvar(ff7) == 3, "the three discs of one game are one card");
+
+	/*
+	  ...and the same arithmetic must not swallow CD rips. Dropping the directory from the
+	  key made every "Track 01.bin" on the card one title, so two games' tracks landed
+	  behind one card - and none of those files would have loaded anyway, since a Mega CD
+	  track is not a Genesis cartridge. Two rules, checked separately because they fix
+	  different halves and either could regress alone.
+	*/
+	check(item_at("md", "Sonic CD/Track 01.bin") < 0 &&
+		item_at("md", "Snatcher/Track 02.bin") < 0,
+		"a track beside its cue is not a game at all");
+	check(item_at("md", "Sonic CD/Sonic CD.cue") < 0,
+		"and the cue is not one either on a system that cannot load one");
+
+	/*
+	  With no cue there is nothing to say the tracks are parts, so they are listed - and
+	  then the folder has to name them, or two folders of "Track 01" are one card again.
+	*/
+	int keio1 = item_at("md", "Keio Flying Squadron/Track 01.bin");
+	int keio2 = item_at("md", "Keio Flying Squadron/Track 02.bin");
+	check(keio1 >= 0 && keio2 >= 0, "tracks with no cue are still listed");
+	check(keio1 >= 0 && !strcmp(lib_item(keio1)->title, "Keio Flying Squadron"),
+		"and the folder names them, not the position in the set");
+	check(keio1 >= 0 && keio2 >= 0 &&
+		entry_carrying(keio1) == entry_carrying(keio2),
+		"so one game's tracks are one card");
+
+	/*
+	  The two ways this rule could be too greedy, both in a folder so that borrowing the
+	  folder name is available and therefore visibly not taken. A title of digits alone is
+	  a title - 1942, 1943, 2048 and 720 are games - and a real title merely starting with
+	  one of the words is a title too.
+	*/
+	int n1942 = item_at("md", "Capcom/1942.bin");
+	check(n1942 >= 0 && !strcmp(lib_item(n1942)->title, "1942"),
+		"a title that is only a number is a title, not a part number");
+	int dw = item_at("md", "Capcom/Discworld.bin");
+	check(dw >= 0 && !strcmp(lib_item(dw)->title, "Discworld"),
+		"and a real title starting with one of those words is left alone");
 	check(strstr(lib_view_variant_file(ff7, 1), "(Disc 2)") != 0,
 		"and the second of them is the second disc");
 

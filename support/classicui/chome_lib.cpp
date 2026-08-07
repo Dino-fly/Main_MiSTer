@@ -375,6 +375,85 @@ static int ext_matches(const char *name, const char *list)
 }
 
 // "Super Metroid (Europe) [!].sfc" -> "Super Metroid"
+/*
+  A folder holding a playlist and its parts is one game, not a shelf of fragments.
+
+  A CD rip is normally a .cue naming a set of tracks - Track 01.bin, Track 02.bin - and
+  those tracks are parts of a game rather than games. Two things go wrong if they are
+  listed. They do not load: a Mega CD track handed to the Genesis core as a cartridge was
+  never going to boot, so each one is a card that fails when pressed. And their names are
+  not titles, so once the directory left the grouping key in 97775f0, every "Track 01.bin"
+  on the card grouped behind one card whatever game it came from.
+
+  The test is a .cue or .m3u in the same folder, and deliberately not whether *this* system
+  can load one - md accepts bin and not cue, which is exactly the case that breaks. A cue
+  beside a bin means the bin is a track, whoever can read the cue.
+
+  Deliberately not img/ima/vhd: ao486 and Atari ST load those as games in their own right
+  and no rip layout needs them covered.
+
+  One opendir per directory, done once before the entries are walked rather than per
+  candidate file, which would make it quadratic in a folder of tracks.
+*/
+static int dir_has_playlist(const char *path)
+{
+	DIR *d = opendir(path);
+	if (!d) return 0;
+
+	int found = 0;
+	struct dirent *de;
+	while (!found && (de = readdir(d)))
+	{
+		if (de->d_name[0] == '.') continue;
+		if (ext_matches(de->d_name, "cue,m3u")) found = 1;
+	}
+
+	closedir(d);
+	return found;
+}
+
+static int ext_is_part(const char *name)
+{
+	return ext_matches(name, "bin,iso,wav,raw");
+}
+
+/*
+  A name that is only a part designator is not a title: "Track 01", "Disc 2", "CD1". Where
+  clean_title() reduces a filename to one of those, the file cannot name its own card and
+  the folder does it instead - which stops two folders colliding and gets the card called
+  "Sonic CD" rather than "Track 01".
+
+  Note what this must NOT match. "Final Fantasy VII (USA) (Disc 1).cue" is a real title
+  with a qualifier, and clean_title() dropping that qualifier is what makes its three discs
+  one card; the bug is only when the *whole* name is the qualifier. A bare number is left
+  alone on purpose too - 1942, 1943, 2048 and 720 are games.
+*/
+static int title_is_part_only(const char *t)
+{
+	static const char *const word[] = { "track", "disc", "disk", "cd", "side", "part" };
+
+	char low[CH_TITLE_LEN];
+	int n = 0;
+	for (const char *p = t; *p && n < (int)sizeof(low) - 1; p++)
+		low[n++] = (char)tolower((unsigned char)*p);
+	low[n] = 0;
+
+	for (size_t i = 0; i < sizeof(word) / sizeof(word[0]); i++)
+	{
+		size_t wl = strlen(word[i]);
+		if (strncmp(low, word[i], wl)) continue;
+
+		const char *p = low + wl;
+		while (*p == ' ' || *p == '-' || *p == '_' || *p == '.') p++;
+		if (!isdigit((unsigned char)*p)) continue;
+
+		while (isdigit((unsigned char)*p)) p++;
+		while (*p == ' ') p++;
+		if (!*p) return 1;
+	}
+	return 0;
+}
+
 static void clean_title(const char *file, char *out, int len)
 {
 	char tmp[CH_TITLE_LEN * 2];
@@ -420,6 +499,20 @@ static void add_item(int sysidx, const char *relpath, const char *filename)
 	it->sysidx = (int16_t)sysidx;
 	snprintf(it->path, sizeof(it->path), "%s", relpath);
 	clean_title(filename, it->title, sizeof(it->title));
+
+	// A part designator cannot name a card; its folder can. See title_is_part_only().
+	if (title_is_part_only(it->title))
+	{
+		const char *slash = strrchr(relpath, '/');
+		if (slash && slash > relpath)
+		{
+			char dir[CH_PATH_LEN];
+			snprintf(dir, sizeof(dir), "%.*s", (int)(slash - relpath), relpath);
+			const char *last = strrchr(dir, '/');
+			clean_title(last ? last + 1 : dir, it->title, sizeof(it->title));
+		}
+		// At the system root there is no folder to borrow from, so the name stands.
+	}
 
 	char keybuf[CH_PATH_LEN + 32];
 	snprintf(keybuf, sizeof(keybuf), "%s/%s", systems[sysidx].id, relpath);
@@ -1000,6 +1093,9 @@ static void scan_dir(int sysidx, const char *root, const char *rel, int depth)
 
 	idx_note_dir(full);
 
+	// Once per directory, not once per file: see dir_has_playlist().
+	int has_playlist = dir_has_playlist(full);
+
 	struct dirent *de;
 	while ((de = readdir(d)))
 	{
@@ -1052,6 +1148,9 @@ static void scan_dir(int sysidx, const char *root, const char *rel, int depth)
 		}
 		else if (ext_matches(de->d_name, systems[sysidx].ext))
 		{
+			// A track beside its cue is part of a game, not a game. dir_has_playlist().
+			if (has_playlist && ext_is_part(de->d_name)) continue;
+
 			if (systems[sysidx].romset)
 			{
 				char buf[CH_TITLE_LEN];
