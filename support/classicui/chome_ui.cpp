@@ -2870,14 +2870,18 @@ static unsigned long disc_speed_now(unsigned long now)
 }
 
 /*
-  The disc's rotation, 0-63.
+  The disc's phase, 0..DISC_TURN-1.
 
-  Accumulates phase from elapsed time at the current speed, so a speed change moves the
+  Accumulates from elapsed time at the current speed, so a speed change moves the
   speed and nothing else. Memoised on the clock because two discs can be on screen in one
   frame - the badge and the prompt's - and advancing the phase once per *draw* would spin
   it at double rate on that screen.
+
+  This is the one accumulator both quantisations below read, which is what keeps the
+  badge and the dialog the same physical disc: the dialog resolves the same turn four
+  times as finely, it does not turn at its own rate.
 */
-static int disc_step()
+static unsigned long disc_phase_now()
 {
 	unsigned long now = anim_ms();
 
@@ -2889,7 +2893,7 @@ static int disc_step()
 		disc_step_ms = now;
 	}
 
-	if (now == disc_step_ms && disc_phase_ms) return disc_step_cached;
+	if (now == disc_step_ms && disc_phase_ms) return disc_phase;
 
 	unsigned long target = disc_target_speed();
 	if (target != disc_spd_to)
@@ -2914,7 +2918,96 @@ static int disc_step()
 
 	disc_step_ms = now;
 	disc_step_cached = (int)(disc_phase * 64UL / DISC_TURN);
+	return disc_phase;
+}
+
+// The badge's rotation, 0-63: what gfx_disc()'s 32-cell sprite can express, and all
+// a 32-pixel disc has ever needed.
+static int disc_step()
+{
+	disc_phase_now();
 	return disc_step_cached;
+}
+
+/*
+  Whether something the player is actually waiting on needs the loop's time more than
+  the disc needs its angles. This is the owner's rule stated as code - "only reduce the
+  animation steps when performance is required for the rest of the interface" - so the
+  test is for named work in flight, not for how expensive the disc looks on paper.
+
+  Three signals, all cheap reads of state something else already maintains:
+
+    a rip. The copy runs in a helper process, but the sectors it writes share the memory
+    bus with every rectangle this loop copies into the uncached framebuffer, and the
+    whole point of the screen is that the copy finishes;
+
+    a library scan, which runs a slice per pass through this same loop and is the one
+    job the player sits watching a counter for;
+
+    covers queued to decode - art_step() pays for one image decode per pass while any
+    are, and a decode is milliseconds, the scale of an entire frame.
+
+  Deliberately NOT a measurement of the previous frame's cost. That was considered and
+  rejected: the harness drives these frames on a fake clock and asserts them byte for
+  byte against full repaints, and an angle count that depended on how fast the host
+  happened to run would make the drawn frame a function of wall-clock luck - the exact
+  history-dependence the pinned hashes in the test suite exist to keep out.
+
+  And NOT chome_core_idle(), which reads like the right signal and is the wrong one: it
+  answers "may the scheduler sleep between passes", which is true on an idle disc dialog
+  - precisely when the disc should be spending the budget, not trimming it.
+*/
+static int disc_contended()
+{
+	return rip_busy_ui() || lib_scanning() || art_pending();
+}
+
+// Defined with the rotation cache, further down: how coarsely disc_step_fine() quantises
+// while disc_contended(), which is the spacing of the angles the cache holds whole.
+static int disc_rot_stride();
+
+/*
+  The dialog's rotation, 0-255.
+
+  Four times disc_step()'s resolution, because the dialog is where he asked for 60fps: at
+  the slow rate a 64-position turn moves every 62.5ms, so of sixty frames a second only
+  sixteen could show a new angle however often the screen repainted. 256 positions move
+  every 15.6ms, which is just under the 16ms spin tick - the smallest count that gives
+  every tick a new angle at every speed the disc turns.
+
+  Quantised from the same phase as the badge's step, and the coarse table is exactly
+  every fourth entry of the fine one, so the two discs cannot disagree about where the
+  turn is - the dialog only resolves it more finely.
+
+  Under contention it backs off to the angles the rotation cache holds whole - see
+  disc_rot() - which makes every contended frame a cached blit and never a resample.
+  Masking low bits rather than rounding, because masking floors within the same
+  sequence: the step shown never exceeds the fine step, so entering or leaving
+  contention can only pause the rotation for a slice of a frame, never run it backwards.
+
+  Memoised on the same clock as the phase, and the memo carries the *quantised* answer
+  deliberately: the contention signals move with work - art_step() can drain its queue
+  between two asks at one instant - and byte-identity between a partial frame and a full
+  repaint of the same instant is only checkable if the same millisecond always answers
+  with the same step. The phase memo alone would leave the quantisation free to flip.
+*/
+static int disc_fine_cached = 0;
+static unsigned long disc_fine_ms = (unsigned long)-1;
+
+static int disc_step_fine()
+{
+	unsigned long phase = disc_phase_now();
+
+	if (disc_fine_ms != disc_step_ms)
+	{
+		int fine = (int)(phase * 256UL / DISC_TURN);
+		if (disc_contended()) fine &= ~(disc_rot_stride() - 1);
+
+		disc_fine_cached = fine;
+		disc_fine_ms = disc_step_ms;
+	}
+
+	return disc_fine_cached;
 }
 
 /*
@@ -4863,18 +4956,22 @@ static int rip_reveal()
   Everything a disc's pixels are a function of, folded into one number, so the spin
   repaint can tell "the timer fired" from "the disc will actually look different".
 
-  The spin tick fires every GFX_DISC_PART_MS for smoothness, but the angle is quantised
-  to 64 positions a turn - at the slow rate that is a new position every 62.5ms, so three
-  ticks in four were composing, blitting and copying a rectangle that came out identical
-  to the byte. On the device that was most of what an open disc dialog cost: the 288px
-  disc's rectangle is ~330 rows of a 720p canvas, copied into uncached memory at 60fps to
-  show a rotation that only held 16 distinct frames a second. Skipping the identical
-  ticks makes the repaint rate follow the angle, which is what it was for all along.
+  The spin tick fires every GFX_DISC_PART_MS, and which quantisation of the turn goes
+  into the number is exactly the question "which disc is on screen". The dialog's disc
+  resolves the turn to 256 positions (disc_step_fine), so with the dialog up nearly
+  every tick is a genuinely new frame - that is the 60fps he asked for, and the skip
+  correctly all but disappears there. Everywhere else the only turning disc is the
+  badge, a 32-cell sprite that quantises to 64 positions whatever it is handed - so the
+  badge screens keep the coarse step here, and with it the skip: at the slow rate three
+  ticks in four would compose, blit and copy the badge's rectangle byte-identical, which
+  on the device was most of what a disc on the shelf cost. A fine step in the number on
+  those screens would repaint sprite frames that cannot differ.
 
   The reveal is in the number for the one thing inside the rectangle that moves between
-  angles: the rip's pie follows the sectors, not the clock. The step is disc_step(),
-  which both discs draw from and which is memoised on the millisecond, so asking here
-  and drawing a moment later cannot disagree.
+  angles: the rip's pie follows the sectors, not the clock. Both step functions are
+  memoised on the millisecond off one phase accumulator, so asking here and drawing a
+  moment later cannot disagree - and the draw itself records this same number, which is
+  what keeps the two honest whichever quantisation applied.
 
   What is NOT in the number is the badge's breath and its ring's pulse, which are
   continuous in the clock - so the skip is never taken while the badge has focus (the
@@ -4886,7 +4983,8 @@ static int disc_drawn_sig = -1;
 
 static int disc_spin_sig()
 {
-	return disc_step() | (rip_reveal() << 6);
+	int step = (screen == SCR_DISC && !disc_picking) ? disc_step_fine() : disc_step();
+	return step | (rip_reveal() << 8);
 }
 
 /*
@@ -5544,8 +5642,8 @@ static void disc_open_screen()
   canvas on than making the disc as large as the canvas allows.
 
   288 - twice that, and 9 of gfx_disc's cells - is the ceiling. Past it a bigger disc buys
-  no legibility at all and costs real work: cells are what a rotated scan is cached against
-  (see disc_rot), so every extra cell is resampling on every angle the disc turns through.
+  no legibility at all and costs real work twice over: a dearer resample per angle, and a
+  rotation cache whose fixed budget holds fewer of the turn's angles whole (see disc_rot).
 */
 #define DISC_DLG_READABLE  144
 #define DISC_DLG_MAX_CELLS 9
@@ -5732,31 +5830,44 @@ static void disc_layout_for(const chome_profile *p, const disc_dlg *d, disc_layo
 /*
   A real photograph of the disc, turning, when the card has one.
 
-  Cosine at 64 positions to a turn, in 8.8 fixed point, quarter-turn table plus symmetry.
-  64 because that is what disc_step() quantises the phase accumulator to and what
-  gfx_disc's own wedges move by, so the scan and the drawn disc turn at exactly the same
-  rate - and because it is what makes this affordable: the rotated image only has to be
-  recomputed when the angle actually changes, which at the slow rate is sixteen times a
-  second and not sixty. See disc_rot() for the arithmetic that would otherwise be per
-  frame.
+  Cosine at 256 positions to a turn, in 8.8 fixed point, quarter-turn table plus symmetry.
+  256 because that is what disc_step_fine() quantises the phase accumulator to: the count
+  the dialog's 60fps ask needs, chosen there. Every fourth entry is the old 64-position
+  table exactly, so the angles the badge's sprite steps through are a strict subset of
+  these and the two discs stay in register.
+
+  The folds are not just a smaller table: they are what makes the quadrant cache in
+  disc_rot() *exact*. Composing "the angle inside one quadrant, then a quarter turn" is
+  byte-identical to rotating by the full angle only if cos(q+64) == -sin(q) holds in the
+  table's own integers, which the folding guarantees by construction - both sides read
+  the same entry. An independently rounded full-turn table would be off by one count on
+  some entries, and one count is a moved pixel at the rim of a 288px disc.
 */
-static const int disc_cos_tab[17] =
+static const int disc_cos_tab[65] =
 {
-	256, 255, 251, 245, 237, 226, 213, 198, 181, 162, 142, 121, 98, 74, 50, 25, 0
+	256, 256, 256, 255, 255, 254, 253, 252,
+	251, 250, 248, 247, 245, 243, 241, 239,
+	237, 234, 231, 229, 226, 223, 220, 216,
+	213, 209, 206, 202, 198, 194, 190, 185,
+	181, 177, 172, 167, 162, 157, 152, 147,
+	142, 137, 132, 126, 121, 115, 109, 104,
+	98, 92, 86, 80, 74, 68, 62, 56,
+	50, 44, 38, 31, 25, 19, 13, 6,
+	0,
 };
 
 static int disc_cos_q8(int q)
 {
-	q &= 63;
-	if (q <= 16) return disc_cos_tab[q];
-	if (q <= 32) return -disc_cos_tab[32 - q];
-	if (q <= 48) return -disc_cos_tab[q - 32];
-	return disc_cos_tab[64 - q];
+	q &= 255;
+	if (q <= 64) return disc_cos_tab[q];
+	if (q <= 128) return -disc_cos_tab[128 - q];
+	if (q <= 192) return -disc_cos_tab[q - 128];
+	return disc_cos_tab[256 - q];
 }
 
 static int disc_sin_q8(int q)
 {
-	return disc_cos_q8(q + 48);
+	return disc_cos_q8(q + 192);
 }
 
 /*
@@ -5768,9 +5879,30 @@ static int disc_sin_q8(int q)
   20k to 80k one-pixel fills a frame would spend more time in the damage bookkeeping than
   in the resampling.
 
-  Deliberately NOT 64 pre-rendered frames. At 288px square that would be 27MB, on a board
-  with 1GB shared with the FPGA; recomputing one angle costs 83k samples, and only when
-  the angle moves.
+  Behind the per-frame answer sits a bounded cache of quadrant frames, because the dialog
+  now asks for 256 angles a turn and at 60fps nearly every ask is a new one - see
+  disc_step_fine(). An earlier note here rejected pre-rendering outright ("64 frames at
+  288px would be 27MB"), and the arithmetic was right while a frame only had to exist
+  every 62.5ms; sixty resamples a second is a different regime, and the two facts that
+  make caching affordable now are the quarter turn and the budget below.
+
+  The quarter turn: rotating this square buffer by exactly 90 degrees is a permutation of
+  its pixels, and with the sampling and the mask both measured from the true centre - the
+  point *between* the four middle pixels, where gfx_disc_face() has always measured from -
+  composing "the angle inside one quadrant, then quarter turns" is byte-identical to
+  rotating by the full angle. Identical because the trig folds guarantee cos(q+64) is
+  read from the same table entry as -sin(q), so the integer sums inside disc_rot_pick()
+  are equal term for term, not merely close. One cached frame therefore serves four
+  angles of every turn, and 64 slots cover all 256.
+
+  The budget: DISC_ROT_CACHE_BYTES bounds what the slots may hold, sized so the disc the
+  default configuration actually draws - 160px, on the halved 720p canvas - caches a
+  whole turn. Where a frame is bigger the slot count halves until it fits (it must stay
+  a power of two, or the kept angles would not divide the turn evenly), and the angles
+  between the kept ones are resampled on demand, exactly as every angle used to be. So
+  memory decides how much of a turn is *cheap*, never how smooth it is - reducing the
+  angle count is the contention rule's decision alone, and the set it reduces to is the
+  cached set, which is what makes a contended frame a blit and never a resample.
 
   This was written for the scan and is now what draws the disc either way, which is the
   point of it: the generated face comes through here too (see disc_draw_face), so the dialog
@@ -5789,10 +5921,12 @@ static int disc_sin_q8(int q)
   rim and clear inner ring, drawn at the display's resolution. Masking it would paint the
   photograph's plainer rings over the disc's own.
 
-  Both buffers are kept when the dialog closes, deliberately, and the number is worth stating
-  because it doubled when the generated face arrived: this one and gfx_disc_face()'s together
-  are 1.8 MB at 720p, 648 KB at 480p and on a 960x540 canvas, 72 KB at 240p. Only ever one
-  size at a time - a canvas change frees and reallocates both.
+  Everything here is kept when the dialog closes, deliberately, and the numbers are worth
+  stating because the cache is most of them now: the scratch buffer and gfx_disc_face()'s
+  together are 1.8 MB at 720p, 648 KB at 480p and on a 960x540 canvas, 72 KB at 240p; the
+  slots on top of that reach DISC_ROT_CACHE_BYTES at worst - the exact figure per canvas is
+  a slot count times a frame, printed by the harness. Only ever one size at a time - a
+  canvas change frees and reallocates the lot.
 
   Why keeping them is right, buffer by buffer rather than as one answer:
 
@@ -5802,21 +5936,71 @@ static int disc_sin_q8(int q)
     reclaim 900 KB that the very next open asks for again. Opening the disc dialog is not a
     rare event; it is the disc's only entry point.
 
-    This one costs a malloc and nothing else, since the angle has always moved by the time
-    the dialog is looked at again and the contents are rebuilt regardless. So freeing it
-    would genuinely reclaim 900 KB for the price of one allocation - and buy a 900 KB
-    mmap/munmap pair per visit, which glibc will do at that size, for a board with 1 GB where
-    the compose buffer alone is 3.6 MB at 720p. Not worth the churn or the second code path.
+    The scratch costs a malloc and nothing else, since the angle has always moved by the
+    time the dialog is looked at again and the contents are rebuilt regardless. So freeing
+    it would genuinely reclaim 900 KB for the price of one allocation - and buy a 900 KB
+    mmap/munmap pair per visit, which glibc will do at that size, for a board with 1 GB
+    where the compose buffer alone is 3.6 MB at 720p. Not worth the churn or the second
+    code path.
 
-  If that ever stops being true the release to write is one function that drops both, called
-  from chome_leave() rather than from leaving SCR_DISC - the dialog is reopened far more often
-  than the front-end is left.
+    The slots are the same trade at a bigger number: they refill at one resample per frame
+    - the misses of the first revolution after a flush, work the uncached design did every
+    frame forever - so dropping them on close would cost nothing visible and reclaim a few
+    megabytes, at the price of sixty-odd mmap/munmap pairs per dialog visit and a second
+    lifecycle to hold in the head. On a board where a core launch re-execs this whole
+    process, idle megabytes are reclaimed by the thing the player was leaving to do anyway.
+
+  If that ever stops being true the release to write is one function that drops all of it,
+  called from chome_leave() rather than from leaving SCR_DISC - the dialog is reopened far
+  more often than the front-end is left.
 */
 static uint32_t *disc_rot_buf = 0;
 static int disc_rot_dia = 0;
 static int disc_rot_step = -1;
 static char disc_rot_path[1024] = {};
 static const uint32_t *disc_rot_src = 0;
+static const uint32_t *disc_rot_out = 0;   // what the memo above answers with
+
+/*
+  The slot budget. 64 quadrant frames of the 160px disc, which is the disc the shipped
+  default draws: classicui_halfres is on, so a 720p display is a 640x360 canvas and its
+  dialog disc is 160px - the one canvas where "the whole turn is a blit" matters most and
+  costs a number this board does not miss. 6.4 MB against 1 GB, beside a compose buffer
+  that is 3.6 MB whenever halfres is off.
+
+  Not a setting. A knob for cache bytes is a promise to explain cache bytes to a player;
+  the observable thing is the disc turning smoothly, and that is true at every size - the
+  budget only moves where the smoothness is paid for.
+*/
+#define DISC_ROT_CACHE_BYTES (64UL * 160 * 160 * 4)
+
+static uint32_t *disc_rot_slot[64];
+static unsigned char disc_rot_slot_ok[64];
+static int disc_rot_slots = 0;              // slots this diameter is allowed
+static int disc_rot_stride_now = 4;         // quadrant angles per kept one: 64/slots
+static int disc_rot_cache_dia = 0;
+static const uint32_t *disc_rot_cache_src = 0;
+static char disc_rot_cache_key[1024] = {};
+
+#ifdef CHOME_HOST_TEST
+static int disc_rot_force_direct = 0;       // see disc_test_rot_direct()
+#endif
+
+/*
+  How coarsely a contended frame quantises, declared back beside disc_step_fine(): the
+  spacing of the cached angles, so "contended" means "only frames that are a blit".
+
+  4 before the first dialog frame has sized the cache, because 4 is the old 64-position
+  turn: a contended frame on a cache that does not exist yet behaves exactly as every
+  frame did before any of this. Clamped at 4 from the other side too - if the budget or
+  the diameter cap ever moves and a size ends up with fewer than 16 slots, contention
+  must not grind the disc below the turn that shipped.
+*/
+static int disc_rot_stride()
+{
+	int s = disc_rot_stride_now;
+	return (s > 4) ? 4 : s;
+}
 
 /*
   Where a destination pixel comes from in the source, for a rotation about the centre of a
@@ -5833,49 +6017,38 @@ static const uint32_t *disc_rot_src = 0;
   gfx_disc_face() also keeps a pixel of background inside its own edge, for the same reason.
   Both, because one is a property of the source and this is a property of the map, and either
   alone leaves the other free to be wrong.
+
+  `dx2`/`dy2` are in half-pixel units about the true centre - 2*(x-r)+1, odd numbers, the
+  same frame gfx_disc_face() draws in - and not about pixel (r,r) as they used to be.
+  Half a pixel is not a nicety here; it is the whole quadrant cache: about the true centre
+  a quarter turn maps the pixel grid onto itself exactly, so the map at step q+64 *is* the
+  map at q followed by that permutation, integer for integer. About a pixel the same
+  composition lands one pixel off, and the disc jumped sideways four times a turn.
 */
-static const uint32_t *disc_rot_pick(const uint32_t *src, int dia, int r, int dx, int dy,
+static const uint32_t *disc_rot_pick(const uint32_t *src, int dia, int r, int dx2, int dy2,
 	int cs, int sn)
 {
-	int sx = (dx * cs + dy * sn) >> 8;
-	int sy = (dy * cs - dx * sn) >> 8;
+	int sx2 = (dx2 * cs + dy2 * sn) >> 8;
+	int sy2 = (dy2 * cs - dx2 * sn) >> 8;
 
-	int u = sx + r, v = sy + r;
+	// Back from half-pixel units to the pixel whose centre is nearest: the arithmetic
+	// shift floors, which pairs each even value with the odd one above it.
+	int u = r + (sx2 >> 1), v = r + (sy2 >> 1);
 	if (u < 0 || u >= dia || v < 0 || v >= dia) return 0;
 
 	return src + (size_t)v * dia + u;
 }
 
-static const uint32_t *disc_rot(const uint32_t *src, const char *key, int dia, int step,
-	int mask)
+// How many times the resample below has actually run. The whole cost argument for the
+// 256-position turn is that a steady-state frame is a blit and not a resample, and a
+// counter is the only way a test can see the difference - the pixels are identical by
+// design. Counted in the firmware too (it is one increment), read only by the harness.
+static int disc_rot_renders = 0;
+
+static void disc_rot_render(uint32_t *out, const uint32_t *src, int dia, int step, int mask)
 {
-	if (!src || dia < 2) return 0;
-
-	/*
-	  The decode is in the key as well as the path, because art_thumb() hands back a fresh
-	  allocation when it notices the file was rewritten - which is precisely what happens
-	  when the fetcher lands a scan while this dialog is up. Keyed on the path alone, the
-	  first angle after that would still be the picture that was there before.
-	*/
-	if (disc_rot_buf && disc_rot_dia == dia && disc_rot_step == step
-		&& disc_rot_src == src && !strcmp(disc_rot_path, key))
-	{
-		return disc_rot_buf;
-	}
-
-	if (!disc_rot_buf || disc_rot_dia != dia)
-	{
-		free(disc_rot_buf);
-		disc_rot_buf = (uint32_t*)malloc((size_t)dia * dia * 4);
-		disc_rot_dia = disc_rot_buf ? dia : 0;
-		if (!disc_rot_buf) return 0;
-	}
-
-	snprintf(disc_rot_path, sizeof(disc_rot_path), "%s", key);
-	disc_rot_step = step;
-	disc_rot_src = src;
-
 	int r = dia / 2;
+	disc_rot_renders++;
 
 	/*
 	  Turned by the negated angle, so that this and gfx_disc turn the same way.
@@ -5889,7 +6062,7 @@ static const uint32_t *disc_rot(const uint32_t *src, const char *key, int dia, i
 
 	  Verified rather than argued: at step 0 the face and the sprite put the specular band at
 	  the same angle, and stepping both forward moves it the same way round to within the
-	  three degrees the 8.8 sine costs.
+	  degree and a half the 8.8 sine costs.
 	*/
 	int cs = disc_cos_q8(-step), sn = disc_sin_q8(-step);
 
@@ -5917,20 +6090,24 @@ static const uint32_t *disc_rot(const uint32_t *src, const char *key, int dia, i
 
 	for (int y = 0; y < dia; y++)
 	{
-		int dy = y - r;
-		uint32_t *dst = disc_rot_buf + (size_t)y * dia;
+		int dy2 = 2 * (y - r) + 1;
+		uint32_t *dst = out + (size_t)y * dia;
 
 		for (int x = 0; x < dia; x++)
 		{
-			int dx = x - r;
-			int d2 = dx * dx + dy * dy;
+			int dx2 = 2 * (x - r) + 1;
+			int d2h = dx2 * dx2 + dy2 * dy2;
 
 			if (mask)
 			{
 				/*
 				  The mask, composited from the outside in with a coverage per boundary, which
-				  is the same shape - and the same ramp, gfx_disc_cover() - that gfx_disc_face()
-				  draws its rings with.
+				  is the same shape - and the same ramp, through gfx_disc_cover_h() - that
+				  gfx_disc_face() draws its rings with, measured from the same between-pixels
+				  centre. The rings have to be centred where the rotation is centred, or a
+				  quarter-turned cache frame would carry its rings one pixel out of place; a
+				  side effect worth having is that a scan's rings now sit exactly on the
+				  face's, where they used to be half a pixel off.
 
 				  It used to be four comparisons and four hard edges, and that was defensible
 				  only for as long as the alternative in this dialog was a 32-cell sprite: a
@@ -5941,23 +6118,23 @@ static const uint32_t *disc_rot(const uint32_t *src, const char *key, int dia, i
 				  Measured before the change: not one blended pixel at any of the four
 				  boundaries.
 
-				  Affordable because gfx_disc_cover() answers 0 or 255 from the squared distance
-				  and only roots the pixels a boundary actually passes through - circumference,
-				  not area. This loop runs per rotation angle, so that distinction is the whole
-				  reason it can be done at all.
+				  Affordable because gfx_disc_cover_h() answers 0 or 255 from the squared
+				  distance and only roots the pixels a boundary actually passes through -
+				  circumference, not area. This loop runs per rotation angle, so that
+				  distinction is the whole reason it can be done at all.
 				*/
-				int a_edge  = gfx_disc_cover(r_edge, d2);
+				int a_edge  = gfx_disc_cover_h(r_edge, d2h);
 				if (!a_edge) { dst[x] = COL_PANEL; continue; }
 
-				int a_photo = gfx_disc_cover(r_dark, d2);
-				int a_ring  = gfx_disc_cover(r_ring, d2);
-				int a_hole  = gfx_disc_cover(r_hub, d2);
+				int a_photo = gfx_disc_cover_h(r_dark, d2h);
+				int a_ring  = gfx_disc_cover_h(r_ring, d2h);
+				int a_hole  = gfx_disc_cover_h(r_hub, d2h);
 
 				uint32_t col = gfx_mix(COL_PANEL, edge, a_edge);
 
 				if (a_photo)
 				{
-					const uint32_t *p = disc_rot_pick(src, dia, r, dx, dy, cs, sn);
+					const uint32_t *p = disc_rot_pick(src, dia, r, dx2, dy2, cs, sn);
 					if (p) col = gfx_mix(col, *p, a_photo);
 				}
 
@@ -5968,13 +6145,216 @@ static const uint32_t *disc_rot(const uint32_t *src, const char *key, int dia, i
 				continue;
 			}
 
-			const uint32_t *p = disc_rot_pick(src, dia, r, dx, dy, cs, sn);
+			const uint32_t *p = disc_rot_pick(src, dia, r, dx2, dy2, cs, sn);
 			dst[x] = p ? (*p | 0xff000000u) : COL_PANEL;
 		}
 	}
-
-	return disc_rot_buf;
 }
+
+/*
+  A quarter turn as the pixel permutation it is: out(x,y) = in(dia-1-y, x) per quarter,
+  which about the between-pixels centre is exactly what the sampling map does at step
+  q+64 - see disc_rot_pick(). This is the blit that lets one cached frame stand in for
+  four resamples a turn.
+
+  Derived once and checked in the harness rather than trusted: the smoothness section
+  compares a frame served through here against the same step resampled directly, byte
+  for byte, on both the face and a scan.
+
+  The half turn reads backwards linearly; the odd quarters read a column per row, so
+  they walk in 32-pixel tiles - the source lines a tile touches stay resident instead of
+  being evicted dia times each, which is the difference between a copy and a copy that
+  costs like a resample at 288px.
+*/
+static void disc_rot_quarter(uint32_t *out, const uint32_t *in, int dia, int k)
+{
+	size_t n = (size_t)dia * dia;
+
+	if (k == 2)
+	{
+		for (size_t i = 0; i < n; i++) out[i] = in[n - 1 - i];
+		return;
+	}
+
+	const int T = 32;
+	for (int y0 = 0; y0 < dia; y0 += T)
+	{
+		int y1 = (y0 + T < dia) ? y0 + T : dia;
+		for (int x0 = 0; x0 < dia; x0 += T)
+		{
+			int x1 = (x0 + T < dia) ? x0 + T : dia;
+			for (int y = y0; y < y1; y++)
+			{
+				uint32_t *dst = out + (size_t)y * dia;
+				if (k == 1)
+				{
+					// out(x,y) = in(dia-1-y, x): column dia-1-y, walking rows with x.
+					const uint32_t *p = in + (size_t)x0 * dia + (dia - 1 - y);
+					for (int x = x0; x < x1; x++, p += dia) dst[x] = *p;
+				}
+				else
+				{
+					// k == 3, the quarter the other way: out(x,y) = in(y, dia-1-x).
+					const uint32_t *p = in + (size_t)(dia - 1 - x0) * dia + y;
+					for (int x = x0; x < x1; x++, p -= dia) dst[x] = *p;
+				}
+			}
+		}
+	}
+}
+
+static const uint32_t *disc_rot(const uint32_t *src, const char *key, int dia, int step,
+	int mask)
+{
+	if (!src || dia < 2) return 0;
+
+	/*
+	  The decode is in the key as well as the path, because art_thumb() hands back a fresh
+	  allocation when it notices the file was rewritten - which is precisely what happens
+	  when the fetcher lands a scan while this dialog is up. Keyed on the path alone, the
+	  first angle after that would still be the picture that was there before.
+	*/
+	if (disc_rot_out && disc_rot_dia == dia && disc_rot_step == step
+		&& disc_rot_src == src && !strcmp(disc_rot_path, key))
+	{
+		return disc_rot_out;
+	}
+
+	if (!disc_rot_buf || disc_rot_dia != dia)
+	{
+		free(disc_rot_buf);
+		disc_rot_buf = (uint32_t*)malloc((size_t)dia * dia * 4);
+		disc_rot_dia = disc_rot_buf ? dia : 0;
+		if (!disc_rot_buf) { disc_rot_out = 0; return 0; }
+	}
+
+	/*
+	  The cache generation: a different picture, a different decode of the same picture, or
+	  a different size invalidates every slot at once. The slots themselves are only freed
+	  when the size moves - a scan landing reuses the allocations with new contents.
+	*/
+	if (disc_rot_cache_dia != dia || disc_rot_cache_src != src
+		|| strcmp(disc_rot_cache_key, key))
+	{
+		if (disc_rot_cache_dia != dia)
+		{
+			for (int i = 0; i < 64; i++) { free(disc_rot_slot[i]); disc_rot_slot[i] = 0; }
+
+			/*
+			  How many of the 64 quadrant angles the budget holds at this size, as a power
+			  of two so the kept angles divide the turn evenly - 64ths at a stride of 1, the
+			  old 64-position turn at a stride of 4. Every diameter the layout can produce
+			  (96 to the 288 cap) lands between 16 and 64.
+			*/
+			int k = (int)(DISC_ROT_CACHE_BYTES / ((unsigned long)dia * dia * 4));
+			if (k > 64) k = 64;
+			if (k < 1) k = 1;
+			while (k & (k - 1)) k &= k - 1;
+			disc_rot_slots = k;
+			disc_rot_stride_now = 64 / k;
+		}
+		memset(disc_rot_slot_ok, 0, sizeof(disc_rot_slot_ok));
+		disc_rot_cache_dia = dia;
+		disc_rot_cache_src = src;
+		snprintf(disc_rot_cache_key, sizeof(disc_rot_cache_key), "%s", key);
+	}
+
+	snprintf(disc_rot_path, sizeof(disc_rot_path), "%s", key);
+	disc_rot_step = step;
+	disc_rot_src = src;
+
+	/*
+	  The angle inside one quadrant and the quarter turns outside it. A kept angle is
+	  resampled once per generation into its slot and served as a blit ever after - as
+	  itself when the quarter count is zero, through disc_rot_quarter() otherwise. An
+	  angle between the kept ones is resampled directly at the full step, which is
+	  byte-identical to what a slot would have produced for it: the trig folds make the
+	  one-step map and the composed map the same integers, so the cache can never be
+	  seen in the pixels, only in the time. The harness holds it to that.
+	*/
+	int q = step & 63;
+	int quarters = (step >> 6) & 3;
+	int stride = disc_rot_stride_now;
+	const uint32_t *out = 0;
+
+#ifdef CHOME_HOST_TEST
+	if (disc_rot_force_direct) stride = 0;
+#endif
+
+	if (stride && !(q % stride))
+	{
+		int si = q / stride;
+		if (!disc_rot_slot[si])
+			disc_rot_slot[si] = (uint32_t*)malloc((size_t)dia * dia * 4);
+
+		if (disc_rot_slot[si])
+		{
+			if (!disc_rot_slot_ok[si])
+			{
+				disc_rot_render(disc_rot_slot[si], src, dia, q, mask);
+				disc_rot_slot_ok[si] = 1;
+			}
+
+			if (!quarters) out = disc_rot_slot[si];
+			else
+			{
+				disc_rot_quarter(disc_rot_buf, disc_rot_slot[si], dia, quarters);
+				out = disc_rot_buf;
+			}
+		}
+	}
+
+	if (!out)
+	{
+		// Between the kept angles, or a slot the allocator refused: the resample this
+		// path always was, at the full angle.
+		disc_rot_render(disc_rot_buf, src, dia, step, mask);
+		out = disc_rot_buf;
+	}
+
+	disc_rot_out = out;
+	return out;
+}
+
+#ifdef CHOME_HOST_TEST
+/*
+  Hooks for the harness's smoothness section, compiled out of the firmware. The cache is
+  deliberately invisible in the pixels, so proving that takes levers no player needs:
+  drop the slots without moving the clock, force the direct resample for the same
+  instant, and read what the cache decided it may hold.
+*/
+void disc_test_rot_drop()
+{
+	memset(disc_rot_slot_ok, 0, sizeof(disc_rot_slot_ok));
+	disc_rot_step = -1;
+	disc_rot_out = 0;
+}
+
+void disc_test_rot_direct(int on)
+{
+	disc_rot_force_direct = on;
+	disc_rot_step = -1;
+	disc_rot_out = 0;
+}
+
+int disc_test_rot_info(int *slots, int *stride, long *bytes)
+{
+	if (slots) *slots = disc_rot_slots;
+	if (stride) *stride = disc_rot_stride();
+	if (bytes) *bytes = (long)disc_rot_slots * disc_rot_cache_dia * disc_rot_cache_dia * 4;
+	return disc_rot_cache_dia;
+}
+
+int disc_test_shown_step()
+{
+	return disc_rot_step;
+}
+
+int disc_test_rot_renders()
+{
+	return disc_rot_renders;
+}
+#endif
 
 /*
   The cache key the generated face goes under, in the slot a scan's path goes in. It cannot
@@ -6183,7 +6563,10 @@ static void disc_blit_reveal(const uint32_t *img, int dia, int x, int y, int rev
 
 static void disc_draw_face(const disc_dlg *d, int cx, int cy, int r, int reveal)
 {
-	int step = disc_step();
+	// The fine step: this is the disc he asked to see at 60fps, so it gets the 256-position
+	// turn. The sprite fallback below keeps the coarse one - 64 positions is all a 32-cell
+	// sprite can express anyway.
+	int step = disc_step_fine();
 	int dia = 2 * r;
 	char path[1024];
 
@@ -6212,7 +6595,7 @@ static void disc_draw_face(const disc_dlg *d, int cx, int cy, int r, int reveal)
 		return;
 	}
 
-	gfx_disc(cx, cy, r, step,
+	gfx_disc(cx, cy, r, disc_step(),
 		disc_bands, DISC_BANDS_N, COL_WHITE, COL_PANELHI, COL_BGDARK, 0);
 }
 

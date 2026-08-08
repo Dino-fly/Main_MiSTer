@@ -141,10 +141,12 @@ void gfx_spinner(int cx, int cy, int r, int dot, unsigned long ms, uint32_t hot,
 */
 /*
   One full turn, per state. These are chosen against the repaint rate, not picked for
-  feel alone: there are 64 positions in a turn, and a disc that advances more than about
-  four of them between repaints strobes instead of spinning. At GFX_DISC_MS these give
-  roughly 4, 2 and 1 positions per frame; at GFX_DISC_PART_MS, roughly 1.3, 0.7 and 0.3,
-  which is under one position per frame and as smooth as 64 positions can be.
+  feel alone: the sprite has 64 positions in a turn, and a disc that advances more than
+  about four of them between repaints strobes instead of spinning. At GFX_DISC_MS these
+  give roughly 4, 2 and 1 positions per frame; at GFX_DISC_PART_MS, roughly 1.3, 0.7 and
+  0.3, which is under one position per frame and as smooth as 64 positions can be. (The
+  dialog resolves the same turn to 256 positions - see disc_step_fine() in chome_ui.cpp -
+  which moves these ratios, not the periods: the same angular speed, sampled finer.)
 
   The first attempt used 400ms for focus, which at a 100ms repaint was sixteen positions
   a frame - a disc that looked like it was juddering rather than turning quickly.
@@ -189,22 +191,21 @@ void gfx_spinner(int cx, int cy, int r, int dot, unsigned long ms, uint32_t hot,
 
 /*
   GFX_DISC_PART_MS is how often the spin *asks*, not how often it paints: a tick on
-  which the disc's 64-position step has not moved - and the rip's reveal with it - is
-  skipped outright, so the repaint rate follows the angle. At the slow rate that is 16
-  frames a second instead of 60, and the frame it draws is the same frame to the byte.
+  which the step has not moved - and the rip's reveal with it - is skipped outright, so
+  the repaint rate follows the angle, and a painted frame is never byte-identical to
+  the one before it.
 
-  What was deliberately NOT done about the remaining cost, measured before deciding: at
-  a full-resolution 720p canvas the dialog's disc is 288px, and while a rip spins it at
-  the focus rate the angle really does move nearly every tick, so that one screen keeps
-  painting at 60fps with a 288px resample behind most frames. Fewer rotation steps at
-  large diameters, a cap on the rotated bitmap below the drawn size, and a slower spin
-  at big canvases were all considered and rejected: each trades a visible regression -
-  the strobing and block-size concerns written down above and at disc_layout_for() -
-  for a screen that is genuinely animating, whose copy is done by a helper process the
-  repaint cannot slow, on a firmware whose main loop busy-polls at 100% of a core
-  whether it draws or not. The change that actually pays is the half-resolution canvas
-  (classicui_halfres, on by default): at 640x360 the same rip dialog composes in a
-  third of the time because the disc is 160px, which is a quarter of the pixels.
+  How often the step moves depends on which disc is up. The badge quantises the turn to
+  the 64 positions its sprite can express, so on the shelf the skip does most of the
+  work: 16 paints a second at the slow rate, not 60. The dialog resolves the same turn
+  to 256 positions - his ask, verbatim: "as close as possible to 60FPS when disc dialog
+  is open" - so there a new angle lands on nearly every tick and nearly every tick
+  paints. What makes that affordable is that a dialog frame is no longer a resample: a
+  bounded cache of quadrant frames turns the steady state into a blit (see disc_rot()
+  in chome_ui.cpp), the angle count backs off to the cached set when a rip, a library
+  scan or a cover decode needs the time (see disc_step_fine()), and the half-resolution
+  canvas (classicui_halfres, on by default) keeps the disc at 160px on a 720p display,
+  the size at which the cache holds every angle of the turn.
 */
 
 void gfx_disc(int cx, int cy, int r, int step,
@@ -244,6 +245,29 @@ uint32_t gfx_mix(uint32_t a, uint32_t b, int t);
   of the buffer with the four boundaries a masked scan has.
 */
 int gfx_disc_cover(int rad, int d2);
+
+/*
+  The same ramp, measured from between pixels rather than from one.
+
+  `d2h` is the squared distance in *half*-pixel units from the true centre of a dia-square
+  buffer - the point between the four middle pixels, which is where gfx_disc_face() has
+  always measured from (its X = 2*(x-r)+1). `rad` stays in whole pixels and the ramp stays
+  one whole pixel wide, so this answers exactly what gfx_disc_cover() answers, half a pixel
+  over.
+
+  It exists because disc_rot() moved to the same centre. Rotating a square buffer by a
+  quarter turn is an exact permutation of its pixels *only* about the between-pixels centre
+  - about a pixel it is off by one, which is what made composing "rotate by the angle inside
+  one quadrant, then turn quarters" impossible: the rings landed a pixel out and the disc
+  jumped four times a turn. Measured about the true centre the rings are invariant under
+  that permutation, the composition is byte-exact, and one cached quadrant frame can serve
+  four angles of the turn. It also closes the half-pixel gap the harness used to have to
+  tolerate between a scan's rings and the face's.
+
+  Same cost shape as gfx_disc_cover(), for the same caller-per-angle reason: the two easy
+  answers come from the squared distance, and only the circumference pays for a root.
+*/
+int gfx_disc_cover_h(int rad, int d2h);
 
 /*
   The same disc, resolved to the display instead of to a 32-cell grid: one dia*dia ARGB
