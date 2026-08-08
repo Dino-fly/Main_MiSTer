@@ -37,8 +37,11 @@
 #     --menu PATH          menu.rbf to ship (SNAC-carrying builds)
 #     --disctitles PATH    the file to ship as classicui/disctitles.txt
 #     --cores DIR          a tree already shaped like the card: its top level must be
-#                          _Console, _Computer, _Arcade, _Other or _Utility. Copied as
-#                          it stands.
+#                          _Console, _Computer, _Arcade, _Other, _Utility or
+#                          _ExtraCores. Copied as it stands. _ExtraCores is on the list
+#                          because it is a real card folder - it is where a core with a
+#                          name the distribution already uses for something else goes,
+#                          and one of ours (Genesis) is exactly that.
 #     --console-cores DIR  a flat directory of .rbf, placed in _Console/
 #     --computer-cores DIR ditto, into _Computer/
 #     --arcade-cores DIR   ditto, into _Arcade/cores/
@@ -46,6 +49,11 @@
 #                          on). Repeatable.
 #     --out DIR            where to build, default bin/release (bin is git-ignored)
 #     --keep               do not delete an existing SD-CARD-ROOT first
+#     --ss-env PATH        the ScreenScraper credentials file the firmware should have
+#                          been built with, default $HOME/.config/classicui/ss.env. Used
+#                          only to confirm the firmware carries them - see below.
+#     --no-ss-creds        this firmware is meant to have no scraper in it (the
+#                          SNAC-only build). Skips that check rather than failing it.
 #
 # A flat directory is never classified by guesswork: 274 core names do not sort
 # themselves into console, computer and arcade reliably, and a core in the wrong folder
@@ -80,6 +88,8 @@ ARCADE=''
 DOCS=''
 OUT=''
 KEEP=0
+SS_ENV=${SS_ENV:-$HOME/.config/classicui/ss.env}
+NO_SS=0
 
 while [ $# -gt 0 ]; do
 	case $1 in
@@ -139,6 +149,12 @@ $2"
 		OUT=$2
 		shift
 		;;
+	--ss-env)
+		need_arg --ss-env "${2:-}"
+		SS_ENV=$2
+		shift
+		;;
+	--no-ss-creds) NO_SS=1 ;;
 	--keep) KEEP=1 ;;
 	-h | --help)
 		usage
@@ -208,6 +224,52 @@ if [ "$(printf '%s' "$fw_md5" | cut -c1-"$elen")" != "$expect_lc" ]; then
 	exit 1
 fi
 
+# WHY THE SCREENSCRAPER CREDENTIALS ARE CHECKED HERE
+#
+# Because a clean rebuild inside a container silently drops them, and the result is a
+# release where nobody's cover art ever downloads and nothing anywhere says why.
+#
+# The Makefile regenerates bin/ss_credentials.h at parse time from $(SS_ENV), default
+# $HOME/.config/classicui/ss.env - and ss_creds.sh *deletes* that header when the file
+# is not there. In a container $HOME is /root and the developer's env file is not
+# mounted, so the header is removed, chome_ss.cpp compiles with its gate shut, and the
+# build log looks exactly like a good one. Pre-generating the header on the host does
+# not save you either: the next make inside the container removes it again. The fix is
+# to mount the env file and pass SS_ENV, and the reason this check exists is that
+# forgetting to is invisible everywhere else.
+#
+# The devid is looked for on grep's *stdin*, never in its argument vector, so the
+# secret does not reach `ps` or a build log - the same reason it is not a -D.
+#
+# Not fatal when the env file is absent: somebody with no credentials of their own must
+# still be able to package a build. --no-ss-creds is how a firmware that is meant to
+# have no scraper in it - the SNAC-only build - says so out loud.
+if [ "$NO_SS" -eq 1 ]; then
+	:
+elif [ ! -f "$SS_ENV" ]; then
+	echo "make_sdcard_root: no credentials file at $SS_ENV, so whether the firmware" >&2
+	echo "  carries ScreenScraper credentials could not be checked. Cover art will not" >&2
+	echo "  download if it does not. Pass --ss-env or --no-ss-creds to say which you mean." >&2
+else
+	ss_devid=$(sed -n 's/^SS_DEVID=//p' "$SS_ENV" | head -1)
+	ss_devid=${ss_devid#\"}
+	ss_devid=${ss_devid%\"}
+
+	if [ -z "$ss_devid" ]; then
+		echo "make_sdcard_root: $SS_ENV has no SS_DEVID, so the firmware could not be" >&2
+		echo "  checked for it." >&2
+	elif ! printf '%s\n' "$ss_devid" | LC_ALL=C grep -F -f - -q "$FIRMWARE"; then
+		echo "make_sdcard_root: refusing to package - the firmware has no ScreenScraper" >&2
+		echo "developer credentials in it, so no cover art will ever download." >&2
+		echo "  $FIRMWARE" >&2
+		echo "A container build strips them unless the env file is mounted:" >&2
+		echo "  docker run ... -v $SS_ENV:/ss.env:ro ... make SS_ENV=/ss.env" >&2
+		echo "Rebuild that way, or pass --no-ss-creds if this firmware is meant to have" >&2
+		echo "no scraper in it." >&2
+		exit 1
+	fi
+fi
+
 menu_md5=''
 if [ -n "$MENU" ]; then
 	[ -f "$MENU" ] || die "$MENU does not exist"
@@ -224,8 +286,8 @@ if [ -n "$CORES" ]; then
 	for e in "$CORES"/*; do
 		[ -e "$e" ] || continue
 		case $(basename "$e") in
-		_Console | _Computer | _Arcade | _Other | _Utility) ;;
-		*) die "--cores $CORES has '$(basename "$e")' at its top level. A shaped tree may only hold _Console, _Computer, _Arcade, _Other or _Utility; use --console-cores and friends for a flat directory." ;;
+		_Console | _Computer | _Arcade | _Other | _Utility | _ExtraCores) ;;
+		*) die "--cores $CORES has '$(basename "$e")' at its top level. A shaped tree may only hold _Console, _Computer, _Arcade, _Other, _Utility or _ExtraCores; use --console-cores and friends for a flat directory, and --doc for a text file." ;;
 		esac
 	done
 fi
