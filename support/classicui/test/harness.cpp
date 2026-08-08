@@ -6727,7 +6727,7 @@ static void assert_screenscraper()
 
 	/* --------------------------------------------------------- the URL ---- */
 
-	strcpy(cfg.classicui_ss_user, "dinofly");
+	strcpy(cfg.classicui_ss_user, "dune");
 	strcpy(cfg.classicui_ss_pass, "s3cret&pass");
 
 	ss_query q;
@@ -6747,7 +6747,7 @@ static void assert_screenscraper()
 	check(strstr(url, "romtaille=1234567") != 0, "the size is sent");
 	check(strstr(url, "md5=d41d8cd98f00b204e9800998ecf8427e") != 0, "so is the hash");
 	check(strstr(url, "sha1=") == 0, "a hash we do not have is left out entirely");
-	check(strstr(url, "ssid=dinofly") != 0, "the user's own account is sent");
+	check(strstr(url, "ssid=dune") != 0, "the user's own account is sent");
 
 	/*
 	  The one that matters more than the rest of this section. Everything that logs
@@ -6801,7 +6801,7 @@ static void assert_screenscraper()
 	cfg.classicui_screenscraper = 1;
 	cfg.classicui_ss_user[0] = 0;
 	check(ss_enabled() == 0, "turned on with no account is still off");
-	strcpy(cfg.classicui_ss_user, "dinofly");
+	strcpy(cfg.classicui_ss_user, "dune");
 	check(ss_enabled() == 1, "on, with an account, is on");
 	cfg.classicui_screenscraper = 0;
 	check(ss_enabled() == 0, "and the option itself turns it off again");
@@ -7237,7 +7237,7 @@ static void assert_disc_art()
 	*/
 	cfg.classicui_artfetch = 0;
 	cfg.classicui_screenscraper = 1;
-	strcpy(cfg.classicui_ss_user, "dinofly");
+	strcpy(cfg.classicui_ss_user, "dune");
 
 	check(disc_art_request("SLES-01506", "psx", 0) == 0, "with the fetch off, nothing is asked for");
 	check(disc_art_active() == 0, "and no download was started");
@@ -7253,7 +7253,7 @@ static void assert_disc_art()
 	check(disc_art_request("SLES-01506", "psx", 0) == 0, "nor with no account to ask under");
 	check(disc_art_active() == 0, "and still none");
 
-	strcpy(cfg.classicui_ss_user, "dinofly");
+	strcpy(cfg.classicui_ss_user, "dune");
 	check(disc_art_request("SLES-01506", "c64", 0) == 0,
 		"nor for a system whose systemeid we never verified");
 	check(disc_art_active() == 0, "and still none");
@@ -7377,7 +7377,7 @@ static void assert_disc_art()
 	*/
 	cfg.classicui_artfetch = 1;
 	cfg.classicui_screenscraper = 1;
-	strcpy(cfg.classicui_ss_user, "dinofly");
+	strcpy(cfg.classicui_ss_user, "dune");
 
 	check(disc_art_request("SLES-01506", "psx", 0) == 1,
 		"a scan already on the card needs no fetch and says so");
@@ -16159,7 +16159,7 @@ int main()
 		  thing rather than asserted in a comment.
 		*/
 		cfg.classicui_screenscraper = 1;
-		strcpy(cfg.classicui_ss_user, "dinofly");
+		strcpy(cfg.classicui_ss_user, "dune");
 		check(ss_enabled() == 1 && !strcmp(chome_covers_state(ss_available(),
 			cfg.classicui_screenscraper, cfg.classicui_ss_user, 1), "On"),
 			"the state the screen calls On is the state a request is really made in");
@@ -16299,10 +16299,9 @@ int main()
 		// further up this file, and what is being checked here is where the text lands.
 		harness_set_input_pad(0);
 		press(KEY_D, 6);
+		press(KEY_U, 6);
+		press(KEY_N, 6);
 		press(KEY_E, 6);
-		press(KEY_R, 6);
-		press(KEY_E, 6);
-		press(KEY_K, 6);
 		press(KEY_ENTER, 8);
 		harness_set_input_pad(1);
 		frame(6);
@@ -16368,7 +16367,7 @@ int main()
 		check(strstr(logtext, "hunt3") == 0, "and not one word of it was the password");
 		check(strstr(logtext, "classicui_ss_pass = ***") != 0,
 			"the line for it is there, with the value replaced rather than the line dropped");
-		check(strstr(logtext, "classicui_ss_user = dinofly") != 0,
+		check(strstr(logtext, "classicui_ss_user = dune") != 0,
 			"while the login, which is not a secret, is logged as itself");
 		unlink(logpath);
 
@@ -16378,14 +16377,14 @@ int main()
 			"the password key is unloggable whoever writes it");
 		check(!strcmp(ini_loggable("CLASSICUI_SS_PASS", "hunter2"), "***"),
 			"and however MiSTer.ini happens to spell it");
-		check(!strcmp(ini_loggable("classicui_ss_user", "dinofly"), "dinofly"),
+		check(!strcmp(ini_loggable("classicui_ss_user", "dune"), "dune"),
 			"and nothing else is redacted, or the log would stop being worth reading");
 		check(!strcmp(ini_loggable("vscale_mode", "1"), "1"), "least of all a number");
 
 		dump("covers-8-saved");
 
 		check(cfg.classicui_screenscraper == 1, "the second press tells the running firmware");
-		check(!strcmp(cfg.classicui_ss_user, "dinofly"), "the account name reaches cfg");
+		check(!strcmp(cfg.classicui_ss_user, "dune"), "the account name reaches cfg");
 		check(!strcmp(cfg.classicui_ss_pass, "hunt3"), "and so does the password");
 		check(ss_enabled() == 1, "which is the whole point: a request would now be made");
 
@@ -16402,11 +16401,11 @@ int main()
 			"the switch was set in the line that was already there");
 		check(strstr(now, "; Written by Classic Home - Options > Online Covers.") != 0,
 			"the block at the end says which screen added it");
-		check(strstr(now, "[MiSTer]\r\nclassicui_ss_user=dinofly\r\nclassicui_ss_pass=hunt3\r\n") != 0,
+		check(strstr(now, "[MiSTer]\r\nclassicui_ss_user=dune\r\nclassicui_ss_pass=hunt3\r\n") != 0,
 			"and the two new keys are under a [MiSTer] header, not left in [NES]");
 
 		const char *nes = strstr(now, "[NES]");
-		const char *acct = strstr(now, "classicui_ss_user=dinofly");
+		const char *acct = strstr(now, "classicui_ss_user=dune");
 		const char *hdr = strstr(now, "; Written by Classic Home - Options > Online Covers.");
 		check(nes && acct && hdr && nes < hdr && hdr < acct,
 			"in that order, so nothing lands in the core section the file ended in");
@@ -16467,7 +16466,7 @@ int main()
 		  to run into itself at this size, and the reason the phrases in cov_state_of() are
 		  measured rather than chosen.
 		*/
-		strcpy(cfg.classicui_ss_user, "dinofly");
+		strcpy(cfg.classicui_ss_user, "dune");
 		cfg.classicui_ss_pass[0] = 0;
 		cfg.classicui_screenscraper = 1;
 
