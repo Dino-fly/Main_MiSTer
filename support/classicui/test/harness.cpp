@@ -2813,6 +2813,109 @@ static void assert_physical_disc()
 	check(disc_state() == DISC_ABSENT, "an identify with no disc present changes nothing");
 
 	disc_reset_reader();
+
+	/*
+	  Probe retry and helper backoff: disc_probe_due() and disc_refork_due().
+
+	  The bug these replace was `watching = 1` set the moment open() failed once, in the
+	  real (non-CHOME_HOST_TEST) disc_watch_start() - a drive that enumerated a second or
+	  two after the menu loop started was then invisible for the life of the process. The
+	  fix moved the "should I look now" and "should I fork now" decisions into these two
+	  pure functions, precisely so they could be driven here without a device node, a
+	  fork(), or a real clock - see chome_disc.cpp's own comment above them for the
+	  reasoning, and disc_watch_start()/disc_poll() for how production drives them.
+
+	  Both take their own notion of "now" as a plain int, so the timeline below is one
+	  this test made up entirely; nothing here sleeps or reads the wall clock.
+	*/
+	{
+		// A drive present at boot: due on the very first look, and never again once found
+		// - so a machine where this always worked keeps doing exactly one open() per run.
+		int now = 0;
+		int last_probe = DISC_NEVER_PROBED;
+		int found = 0;
+		int looks = 0;
+
+		check(disc_probe_due(found, last_probe, now) == 1,
+			"a drive present at boot is due for a look immediately");
+		looks++;
+		found = 1;                                 // the look succeeds
+		check(disc_probe_due(found, last_probe, now) == 0,
+			"and once found, never due again at the same instant");
+
+		for (now = 1; now <= 50; now++)
+		{
+			if (disc_probe_due(found, last_probe, now)) looks++;
+		}
+		check(looks == 1,
+			"nor at any later time - a working drive costs exactly one look, ever");
+	}
+
+	{
+		// No drive at boot, one appears a few seconds later. This is the reported shape:
+		// "works from the F12 menu but not on the shelf", because the old code looked
+		// once, found nothing, and latched - so a drive plugged in a moment later was
+		// never noticed until a core relaunch reset the latch by accident.
+		int last_probe = DISC_NEVER_PROBED;
+		int found = 0;
+		int attempts = 0;
+		const int drive_shows_up_at = 12;          // arbitrary, well past one retry interval
+
+		int found_at = -1;
+		for (int now = 0; now <= 40 && !found; now++)
+		{
+			if (!disc_probe_due(found, last_probe, now)) continue;
+
+			attempts++;
+			last_probe = now;
+
+			if (now >= drive_shows_up_at) { found = 1; found_at = now; }
+		}
+
+		// Retries land on a fixed schedule (every DISC_PROBE_RETRY_S in chome_disc.cpp,
+		// 5 here to match), so "found" lands on the next scheduled look at or after the
+		// drive actually appeared - not necessarily the exact second it did.
+		check(found == 1, "a drive that shows up after boot is eventually found");
+		check(found_at >= drive_shows_up_at,
+			"never found before it actually appeared");
+		check(found_at >= 0 && found_at - drive_shows_up_at < 5,
+			"and found within one retry interval of it appearing, not left for longer");
+		check(attempts >= 2 && attempts < drive_shows_up_at,
+			"and it took more than one look but nowhere near one per second");
+	}
+
+	{
+		// A helper that dies: re-forked once immediately, and only backed off if the
+		// replacement also dies instantly. Mirrors disc_poll()'s own state - quick_deaths
+		// and the time of the last fork - without a process anywhere in sight.
+		int quick_deaths = 0;
+		int last_fork = 0;
+
+		// First helper forked at t=0, dies instantly (a bad binary, a denied open()).
+		quick_deaths = 1;
+		check(disc_refork_due(quick_deaths, last_fork, 0) == 1,
+			"a first quick death reforks at once - one bad attempt is not a pattern");
+		last_fork = 0;
+
+		// The replacement dies instantly too: now it is a pattern, and immediate reforking
+		// would spin a CPU forking and dying forever.
+		quick_deaths = 2;
+		check(disc_refork_due(quick_deaths, last_fork, 0) == 0,
+			"a second consecutive quick death does not refork in the same instant");
+
+		int refork_at = -1;
+		for (int now = 0; now <= 20; now++)
+		{
+			if (disc_refork_due(quick_deaths, last_fork, now)) { refork_at = now; break; }
+		}
+		check(refork_at > 0, "but it does refork eventually, once the backoff elapses");
+
+		// A helper that runs a while before dying resets the count - an unplugged drive,
+		// not a helper that can never start - so it goes straight back to "refork at once".
+		quick_deaths = 0;
+		check(disc_refork_due(quick_deaths, last_fork, refork_at) == 1,
+			"a helper that ran a while before dying is not held to the backoff");
+	}
 }
 
 /*
