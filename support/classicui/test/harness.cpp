@@ -9086,6 +9086,395 @@ static void assert_core_options_are_reachable()
 	frame(8);
 }
 
+/*
+  What the Options panel holds, said here rather than read from chome_ui.cpp: those two
+  counts are private to the front-end, and a test that shared the constant with the code
+  it is checking would agree with a wrong one. Ten rows on the shelf, eleven in a game.
+*/
+#define OPT_ROWS_MENU_T 10
+#define OPT_ROWS_GAME_T 11
+
+/*
+  The Options panel's rows, read off the screen rather than recomputed.
+
+  draw_rows_c() fills the selected row's plate in COL_BLUE and writes its label over it,
+  and the panel is drawn opaque over the shelf - so within the panel rectangle that colour
+  is the selected row and nothing else. What comes back is the band it occupies, which is
+  the only honest answer to "is that row on the screen": the arithmetic deciding which
+  rows get drawn is exactly what was wrong, so a test that recomputed it would have passed
+  on the build where Close Game had never once appeared on a 240p television.
+*/
+static int opt_sel_band(int *oy0, int *oy1)
+{
+	int x0, y0, x1, y1;
+	panel_rect(&x0, &y0, &x1, &y1);
+
+	const uint32_t *fb = harness_fb_shown();
+	int w = gfx_w(), h = gfx_h();
+	int top = -1, bot = -1;
+
+	if (oy0) *oy0 = 0;
+	if (oy1) *oy1 = 0;
+	if (!fb || w < 1 || h < 1) return 0;
+
+	if (x0 < 0) x0 = 0;
+	if (y0 < 0) y0 = 0;
+	if (x1 > w) x1 = w;
+	if (y1 > h) y1 = h;
+
+	for (int y = y0; y < y1; y++)
+	{
+		int on = 0;
+		for (int x = x0; x < x1 && !on; x++)
+			if ((fb[(size_t)y * w + x] | 0xff000000u) == COL_BLUE) on = 1;
+
+		if (!on) continue;
+		if (top < 0) top = y;
+		bot = y;
+	}
+
+	if (top < 0) return 0;
+	if (oy0) *oy0 = top;
+	if (oy1) *oy1 = bot;
+	return 1;
+}
+
+// The panel's body: the rectangle draw_panel() hands the rows, under its own title bar.
+// draw_panel_at()'s two constants, and they have to move with it.
+static void opt_body(int *bx, int *by, int *bw, int *bh)
+{
+	const chome_profile *p = theme_get();
+	int x0, y0, x1, y1;
+	panel_rect(&x0, &y0, &x1, &y1);
+
+	int hdr = 10 * p->ts_ui + 6;
+	*bx = x0;
+	*by = y0 + hdr;
+	*bw = p->panel_w;
+	*bh = p->panel_h - hdr;
+}
+
+// Ink in the scrollbar's column, which is the value column's right margin - clear of the
+// widest value the rows can hold, so anything COL_INK in it is the thumb.
+static int opt_scrollbar_ink()
+{
+	const chome_profile *p = theme_get();
+	int bx, by, bw, bh;
+	opt_body(&bx, &by, &bw, &bh);
+	return box_pixels(bx + bw - 3 * p->ts_ui, by, bx + bw - p->ts_ui, by + bh, COL_INK);
+}
+
+/*
+  The help line's own band, the way draw_options_panel() reserves it: two lines of the
+  tiny face, 20 units up from the bottom of the panel.
+
+  Inside the panel's frame rather than edge to edge. draw_panel_at() draws that frame in
+  COL_PANELLO, which is also the colour of the line being looked for - so a box taken to
+  the panel's own edges answers "there is a help line here" on every screen that has a
+  panel at all, including the shelf's, which has no such line.
+*/
+static int opt_foot_top()
+{
+	int bx, by, bw, bh;
+	opt_body(&bx, &by, &bw, &bh);
+	return by + bh - 20 * theme_get()->ts_tiny;
+}
+
+static int opt_foot_pixels(uint32_t want)
+{
+	const chome_profile *p = theme_get();
+	int bx, by, bw, bh;
+	opt_body(&bx, &by, &bw, &bh);
+
+	int s2 = p->ts_tiny;
+	return box_pixels(bx + 4 * s2, opt_foot_top(), bx + bw - 4 * s2, by + bh - 2 * s2, want);
+}
+
+/*
+  How many rows of the footer band have any of that colour in them, which is how a
+  sentence drawn on two lines is told from one cut off at the panel's edge: a line of the
+  tiny face is 8 units of ink, so one line answers about 8 and two answer about 16.
+
+  It is the check that matters for the unarmed message. gfx_clip() shortens a string that
+  will not fit and marks the cut with a '>', so "it is drawn" and "all of it is drawn" are
+  different questions, and the second is the one that was failing - at every profile, not
+  only the small one.
+*/
+static int opt_foot_ink_rows(uint32_t want)
+{
+	const chome_profile *p = theme_get();
+	int bx, by, bw, bh;
+	opt_body(&bx, &by, &bw, &bh);
+
+	int s2 = p->ts_tiny;
+	int n = 0;
+	for (int y = opt_foot_top(); y < by + bh - 2 * s2; y++)
+		if (box_pixels(bx + 4 * s2, y, bx + bw - 4 * s2, y + 1, want) > 0) n++;
+
+	return n;
+}
+
+// Walks into Options from the shelf or from a running game. Display drops out of the menu
+// bar at 240p, so Options is the first entry there and the second everywhere else.
+static void opt_open()
+{
+	press(KEY_UP, 14);
+	if (theme_get()->id != PROF_LO) press(KEY_RIGHT, 10);
+	press(KEY_ENTER, 16);
+	frame(8);
+}
+
+/*
+  In a game, at one profile: walk to the last row and look at it.
+
+  Everything here is asked of the picture. The row index is worked back out of where the
+  highlight landed, so at 720p - where all eleven rows fit - the last row has to be drawn
+  eleventh, and at 240p, where nine fit, it has to be drawn inside the window with the
+  list scrolled under it. Either way it has to be on the screen, above the help line, with
+  its label really written in it.
+*/
+static void opt_ingame_pass(const char *tag, int force, int w, int h)
+{
+	char what[160];
+
+	/*
+	  The profile is forced through cfg, not only through theme_update(): chome_handle()
+	  re-measures the canvas every frame and passes cfg.classicui_profile back in, so a
+	  profile set here alone is undone by the next frame. It cost a whole run - the "lo"
+	  pass ran at 320x240 under hd metrics, which is a real arrangement but not the one
+	  the section is named after.
+	*/
+	cfg.classicui_profile = (uint8_t)force;
+
+	harness_set_fb(w, h);
+	gfx_shutdown();
+	theme_update(w, h, force);
+	frame(6);
+
+	if (chome_ingame_active()) press(KEY_MENU, 14);
+	frame(6);
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 40 && lib_scanning(); i++) frame(2);
+	frame(12);
+
+	snprintf(what, sizeof(what), "%s: the menu is up over the running game", tag);
+	check(chome_ingame_active(), what);
+
+	opt_open();
+
+	const chome_profile *p = theme_get();
+	int s = p->ts_ui, s2 = p->ts_tiny, rowh = p->row_h;
+
+	int bx, by, bw, bh;
+	opt_body(&bx, &by, &bw, &bh);
+	int foot_y = opt_foot_top();
+
+	int a0 = 0, a1 = 0;
+	snprintf(what, sizeof(what), "%s: the Options panel is up with a row selected", tag);
+	check(opt_sel_band(&a0, &a1), what);
+
+	// The last row, reached by wrapping upwards off the first - so a row inserted
+	// anywhere above it cannot quietly move what this is about.
+	press(KEY_UP, 10);
+	frame(6);
+
+	int y0 = 0, y1 = 0;
+	int seen = opt_sel_band(&y0, &y1);
+
+	snprintf(what, sizeof(what), "%s: the last row of Options is drawn on the screen", tag);
+	check(seen, what);
+
+	snprintf(what, sizeof(what), "%s: and inside the panel, clear of the help line", tag);
+	check(seen && y0 >= by && y1 < foot_y, what);
+
+	// A plate with nothing written on it would satisfy the two above. The label is drawn
+	// in white over the selected row, so this is the row's text really being there.
+	snprintf(what, sizeof(what), "%s: with its label written in it", tag);
+	check(seen && box_pixels(bx, y0, bx + bw, y1 + 1, COL_WHITE) > 0, what);
+
+	int drawn = seen ? (y0 + 2 * s - by - 5 * s) / rowh : -1;
+	printf("  %s: panel body %dx%d at %d,%d; last row drawn %d rows down, y %d..%d, help line at %d\n",
+		tag, bw, bh, bx, by, drawn, y0, y1, foot_y);
+
+	snprintf(what, sizeof(what), "%s: it is below the row the panel opened on", tag);
+	check(seen && y0 > a0, what);
+
+	/*
+	  Eleven rows in a game. Where they all fit the last one is drawn eleventh and nothing
+	  scrolls; where they do not, the window has moved down the list and the scrollbar says
+	  so. Both are correct and which one applies is the profile's business - but a panel
+	  drawing the last row eleventh while only nine rows fit is the original bug, and one
+	  claiming to scroll when everything fits is the other way to get this wrong.
+	*/
+	int fits = (drawn == OPT_ROWS_GAME_T - 1);
+	snprintf(what, sizeof(what), "%s: %s", tag,
+		fits ? "every row fits, so nothing scrolled" : "the list scrolled to bring it into view");
+	check(seen && (fits ? opt_scrollbar_ink() == 0 : (drawn >= 0 && drawn < OPT_ROWS_GAME_T - 1
+		&& opt_scrollbar_ink() > 0)), what);
+
+	// The help line, which the rows used to be drawn straight through at 240p.
+	snprintf(what, sizeof(what), "%s: the help line is drawn under them, inside the panel", tag);
+	check(opt_foot_pixels(COL_PANELLO) > 0 && foot_y + 18 * s2 <= by + bh, what);
+
+	// ...and all of it: two lines of ink, because the sentence does not fit on one at any
+	// profile and used to be cut off mid-word with a '>' where the rest of it went.
+	printf("  %s: help line ink rows %d (one line is %d)\n", tag,
+		opt_foot_ink_rows(COL_PANELLO), 8 * s2);
+	snprintf(what, sizeof(what), "%s: and wrapped onto two lines rather than cut off", tag);
+	check(opt_foot_ink_rows(COL_PANELLO) > 10 * s2, what);
+
+	{
+		char name[64];
+		snprintf(name, sizeof(name), "options-ingame-%s-last-row", p->name);
+		dump(name);
+	}
+
+	/* ------------------------------------------------- the two-press confirm --- */
+
+	press(KEY_ENTER, 10);
+	frame(6);
+
+	snprintf(what, sizeof(what), "%s: one press does not close the game", tag);
+	check(chome_ingame_active(), what);
+
+	snprintf(what, sizeof(what), "%s: and the panel says so, in red where the help line was", tag);
+	check(opt_foot_pixels(COL_RED) > 0, what);
+
+	// Off the row and back. The timer used to keep running while the cursor was
+	// elsewhere, so this arrived back on a row that closed the game on one press.
+	press(KEY_UP, 8);
+	frame(6);
+	snprintf(what, sizeof(what), "%s: moving off it takes the warning away", tag);
+	check(opt_foot_pixels(COL_RED) == 0, what);
+
+	press(KEY_DOWN, 8);
+	frame(6);
+	snprintf(what, sizeof(what), "%s: and coming back finds it disarmed", tag);
+	check(opt_foot_pixels(COL_RED) == 0, what);
+
+	press(KEY_ENTER, 10);
+	frame(6);
+	snprintf(what, sizeof(what), "%s: so the next press arms it again rather than closing", tag);
+	check(chome_ingame_active(), what);
+
+	if (force == 3) dump("options-ingame-lo-armed");
+
+	press(KEY_UP, 8);                         // disarmed, and off the row
+	press(KEY_ESC, 10);
+	press(KEY_MENU, 16);
+	frame(6);
+}
+
+/*
+  And on the shelf, where the list is ten rows and already fitted: the same panel has to
+  be drawn exactly where it always was. Not "still readable" - the same pixels. A fix for
+  a panel that is one row too long has no business moving a panel that is not.
+*/
+static void opt_menu_pass(const char *tag, int force, int w, int h)
+{
+	char what[160];
+
+	cfg.classicui_profile = (uint8_t)force;   // see opt_ingame_pass()
+
+	harness_set_fb(w, h);
+	gfx_shutdown();
+	theme_update(w, h, force);
+	chome_leave();
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 40 && lib_scanning(); i++) frame(2);
+	frame(12);
+
+	opt_open();
+
+	const chome_profile *p = theme_get();
+	int s = p->ts_ui, rowh = p->row_h;
+
+	int bx, by, bw, bh;
+	opt_body(&bx, &by, &bw, &bh);
+
+	for (int i = 0; i < OPT_ROWS_MENU_T - 1; i++) press(KEY_DOWN, 6);
+	frame(6);
+
+	int y0 = 0, y1 = 0;
+	int seen = opt_sel_band(&y0, &y1);
+
+	// Where draw_rows_c() has always put the tenth row: 5 units of padding, nine rows
+	// above it, and the plate hung 2 units over the text row and 2 units short of it.
+	int want0 = by + 5 * s + (OPT_ROWS_MENU_T - 1) * rowh - 2 * s;
+	int want1 = want0 + rowh - 2 * s - 1;
+
+	printf("  %s: last shelf row at %d..%d, wanted %d..%d; foot ink %d/%d, bar %d\n",
+		tag, y0, y1, want0, want1, opt_foot_pixels(COL_PANELLO), opt_foot_pixels(COL_RED),
+		opt_scrollbar_ink());
+
+	{
+		char name[64];
+		snprintf(name, sizeof(name), "options-shelf-%s", p->name);
+		dump(name);
+	}
+
+	snprintf(what, sizeof(what), "%s: the shelf's tenth row is drawn where it always was", tag);
+	check(seen && y0 == want0 && y1 == want1, what);
+
+	snprintf(what, sizeof(what), "%s: and a list that fits is given no scrollbar", tag);
+	check(opt_scrollbar_ink() == 0, what);
+
+	snprintf(what, sizeof(what), "%s: nor a help line, which belongs to the in-game panel", tag);
+	check(opt_foot_pixels(COL_PANELLO) == 0 && opt_foot_pixels(COL_RED) == 0, what);
+
+	press(KEY_ESC, 10);
+	press(KEY_MENU, 16);
+	frame(6);
+}
+
+/*
+  Options has a row nobody could reach.
+
+  "We also need a close game option somewhere" - it was there all along: rows_game[] has
+  ended with Close Game for as long as the in-game menu has existed, and the cursor
+  counted to it. The panel is a fixed rectangle out of the theme and draw_rows_c() stops
+  the moment a row would cross its bottom edge, so at 240p the eleventh row was dropped
+  without a word and the help line under it was drawn through the tenth. The list scrolls
+  now, the way More Settings already did, and this section is the proof - at all three
+  profiles, by walking to the row and looking for it.
+*/
+static void assert_options_panel_scrolls()
+{
+	printf("\n== every row of Options is on the screen, at every profile ==\n");
+
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "gb\nTetris (World).gb\n"); fclose(f); }
+	}
+
+	uint8_t was_profile = cfg.classicui_profile;
+
+	harness_set_menu_core(0);
+	harness_set_fb_supported(1);
+	harness_set_confstr(1);
+	harness_set_osd_visible(0);
+	chome_handle(0);
+
+	opt_ingame_pass("hd", 1, 1280, 720);
+	opt_ingame_pass("sd", 2, 640, 480);
+	opt_ingame_pass("lo", 3, 320, 240);
+
+	harness_set_menu_core(1);
+	opt_menu_pass("shelf hd", 1, 1280, 720);
+	opt_menu_pass("shelf sd", 2, 640, 480);
+	opt_menu_pass("shelf lo", 3, 320, 240);
+
+	// Back the way this section found things: a game running, our menu shut, 720p.
+	cfg.classicui_profile = was_profile;
+	harness_set_menu_core(0);
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, cfg.classicui_profile);
+	chome_leave();
+	chome_handle(0);
+	frame(6);
+}
+
 static void assert_look_applies_to_the_running_core()
 {
 	printf("\n== a display look reaches the running core at once ==\n");
@@ -13540,6 +13929,9 @@ int main()
 	assert_per_game_core_options();
 	assert_core_option_for_all_games();
 	assert_core_options_are_reachable();
+	// Directly after it, because the two are about the same panel from opposite ends: that
+	// one counts down to Core Settings, this one walks past it to the row underneath.
+	assert_options_panel_scrolls();
 	assert_look_applies_to_the_running_core();
 	assert_forget_beats_the_stat_check();
 	assert_slot_count_follows_core();
