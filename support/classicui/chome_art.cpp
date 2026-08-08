@@ -108,6 +108,8 @@ void art_shutdown()
 }
 
 int art_cache_count() { return cache_count; }
+
+int art_pending() { return nqueue; }
 int art_cache_bytes() { return cache_bytes; }
 int art_fetch_active() { return fetch_pid > 0; }
 

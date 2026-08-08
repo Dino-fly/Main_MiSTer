@@ -127,4 +127,28 @@ int chome_ss_quiet();
 */
 const char *chome_sysicon_id(const char *sysid);
 
+#ifdef CHOME_HOST_TEST
+/*
+  Levers into the dialog disc's rotation cache, compiled out of the firmware - the same
+  arrangement as chome_rip.h's rip_test hooks and for the same reason: the property the
+  harness has to prove is that the cache is invisible in the pixels, and a cache that can
+  neither be dropped nor bypassed without moving the clock is one whose absence no test
+  could ever compare against its presence.
+
+  disc_test_rot_drop() forgets every cached frame without touching the clock or the
+  allocations. disc_test_rot_direct(1) makes every ask a direct full-angle resample, which
+  is the path a between-the-kept-angles miss takes; the harness holds its output equal,
+  byte for byte, to the quadrant-composed frames the cache serves. disc_test_rot_info()
+  reports what the budget allowed at the current diameter, so the memory claim in the
+  report is read from the code rather than recomputed beside it. disc_test_shown_step()
+  is the step the last rotated frame was built for, 0-255 - the observable the backoff
+  checks quantisation against.
+*/
+void disc_test_rot_drop();
+void disc_test_rot_direct(int on);
+int  disc_test_rot_info(int *slots, int *stride, long *bytes);
+int  disc_test_shown_step();
+int  disc_test_rot_renders();
+#endif
+
 #endif
