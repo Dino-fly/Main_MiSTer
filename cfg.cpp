@@ -14,6 +14,7 @@
 #include "user_io.h"
 #include "video.h"
 #include "support/arcade/mra_loader.h"
+#include "support/classicui/chome_cfgrec.h"
 
 cfg_t cfg;
 static FILE *orig_stdout = NULL;
@@ -491,17 +492,40 @@ static void ini_parse(int alt, const char *vmode)
 	memset(&ini_file, 0, sizeof(ini_file));
 
 	const char *name = cfg_get_name(alt);
+
+	/*
+	  Before the open, not after: a file that will not open has to produce an empty
+	  record rather than leave the previous pass's one standing. "No ini at all" and
+	  "an ini full of settings" must not read the same on the report.
+	*/
+	cfgrec_begin(name, vmode, user_io_get_core_name(1));
+
 	if (!FileOpen(&ini_file, name))	return;
 
 	ini_parser_debugf("Opened file %s with size %llu bytes.", name, ini_file.size);
 
 	ini_pt = 0;
 
+	/*
+	  The configuration check watches this loop go past (cfgrec_begin() is above).
+	  Everything it is handed is a copy; nothing below reads it back. See
+	  support/classicui/chome_cfgrec.h for what it is for and why it cannot live in the
+	  debug log instead.
+
+	  The line number is this loop's own counter and not something ini_getline() knows:
+	  one call consumes exactly one physical line, because CHAR_IS_LINEEND is '\n' alone
+	  and a comment only stops characters being kept, never the scan. So counting
+	  iterations gives the number a text editor shows, CRLF file or not - which matters,
+	  because "line 84" is the whole use anybody makes of this report.
+	*/
+	int lineno = 0;
+
 	// parse ini
 	while (1)
 	{
 		// get line
 		eof = ini_getline(line);
+		lineno++;
 		ini_parser_debugf("line(%d): \"%s\".", section, line);
 
 		if (line[0] == INI_SECTION_START)
@@ -512,6 +536,8 @@ static void ini_parse(int alt, const char *vmode)
 			{
 				memset(var_array_append, 0, sizeof(var_array_append));
 			}
+			// ini_get_section() has written a nul over the ']', so line+1 is the name.
+			cfgrec_section(line + 1, section);
 		}
 		else if (line[0] == INCL_SECTION && !section)
 		{
@@ -520,11 +546,26 @@ static void ini_parse(int alt, const char *vmode)
 			{
 				memset(var_array_append, 0, sizeof(var_array_append));
 			}
+			cfgrec_section(line + 1, section);
 		}
 		else if(section)
 		{
+			// Before ini_parse_var(), which writes a nul over the '=' in place.
+			cfgrec_line(line, lineno, 1);
+
 			// otherwise this is a variable, get it
 			ini_parse_var(line);
+		}
+		else
+		{
+			/*
+			  The line the parser has always thrown away: a setting inside a section that
+			  did not apply. Nothing above resolves anything here and nothing here
+			  resolves anything either - it is the one branch of this loop that existed
+			  only as the absence of the other three. Recording it is what makes the
+			  invisible failure visible.
+			*/
+			cfgrec_line(line, lineno, 0);
 		}
 
 		// if end of file, stop
@@ -745,6 +786,76 @@ bool cfg_check_errors(char *msg, size_t max_len)
 	}
 
 	return true;
+}
+
+/*
+  The option table, read-only, for the configuration check - see the declaration in
+  cfg.h for why it asks here rather than keeping its own list.
+
+  The formatter deliberately does not reuse cfg_print()'s switch, and the difference is
+  the point rather than an oversight: cfg_print() prints nothing at all for an empty
+  string or an empty array, which is right for a log of what is set and wrong for a
+  report that has to be able to say a value is empty. Merging them would mean changing
+  what cfg_print() puts in the debug log, which is read by people and by scripts that
+  are none of this feature's business.
+*/
+int cfg_var_count()
+{
+	return nvars;
+}
+
+const char *cfg_var_name(int i)
+{
+	if (i < 0 || i >= nvars) return "";
+	return ini_vars[i].name;
+}
+
+const char *cfg_var_text(int i, char *out, int max)
+{
+	if (max > 0) out[0] = 0;
+	if (i < 0 || i >= nvars || max <= 0) return out;
+
+	const ini_var_t *v = &ini_vars[i];
+	switch (v->type)
+	{
+	case UINT8:  snprintf(out, max, "%u", *(uint8_t*)v->var); break;
+	case UINT16: snprintf(out, max, "%u", *(uint16_t*)v->var); break;
+	case UINT32: snprintf(out, max, "%u", *(uint32_t*)v->var); break;
+	case INT8:   snprintf(out, max, "%d", *(int8_t*)v->var); break;
+	case INT16:  snprintf(out, max, "%d", *(int16_t*)v->var); break;
+	case INT32:  snprintf(out, max, "%d", *(int32_t*)v->var); break;
+	case HEX8:   snprintf(out, max, "0x%02X", *(uint8_t*)v->var); break;
+	case HEX16:  snprintf(out, max, "0x%04X", *(uint16_t*)v->var); break;
+	case HEX32:  snprintf(out, max, "0x%08X", *(uint32_t*)v->var); break;
+	case FLOAT:  snprintf(out, max, "%f", *(float*)v->var); break;
+	case STRING: snprintf(out, max, "%s", (char*)v->var); break;
+
+	case UINT32ARR:
+	case HEX32ARR:
+	{
+		uint32_t *arr = (uint32_t*)v->var;
+		int pos = 0;
+		for (uint32_t n = 0; n < arr[0] && pos < max - 1; n++)
+		{
+			pos += snprintf(out + pos, max - pos, (n ? ",%u" : "%u"), arr[n + 1]);
+		}
+		break;
+	}
+
+	case STRINGARR:
+	{
+		int pos = 0;
+		for (int n = 0; n < v->min && pos < max - 1; n++)
+		{
+			char *str = ((char*)v->var) + (n * v->max);
+			if (!strlen(str)) break;
+			pos += snprintf(out + pos, max - pos, (n ? ",%s" : "%s"), str);
+		}
+		break;
+	}
+	}
+
+	return out;
 }
 
 void cfg_print()

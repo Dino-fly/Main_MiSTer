@@ -34,6 +34,7 @@
 #include "chome_bt.h"
 #include "chome_ini.h"
 #include "chome_opt.h"
+#include "chome_cfgrec.h"
 
 #include "../../cfg.h"
 #include "../../user_io.h"
@@ -3885,9 +3886,33 @@ static void draw_options_panel(const chome_profile *p)
 	  there is no line and nothing is reserved, so a list that already fitted is drawn
 	  exactly where it always was.
 	*/
+	/*
+	  And what the boot-time configuration check found, if it found anything: a line at
+	  the foot of this panel. See support/classicui/chome_cfgrec.h for the check itself.
+
+	  Here rather than on the shelf, and this is the ruling in chome_ini.h applied rather
+	  than a new opinion: a panel of technical text about a configuration file, over
+	  somebody's cover art, before they have pressed anything, is the thing this
+	  front-end exists to remove. Options is where a player goes to look for settings and
+	  it is one press away, which is the same depth as the "Best Settings 3 To Change"
+	  notice that this front-end already considers a sufficient first-run notice.
+
+	  A line and not a row, for a reason the row above it demonstrates: the value column
+	  is right-aligned and about thirteen characters before it walks into the label - it
+	  can hold "3 To Change >" and it cannot hold a file name. A player who is told there
+	  is a problem and not told where to read about it has been given the anxiety without
+	  the fix, and the file name is the whole of the fix.
+
+	  Never while a game is up. The record describes the parse that ran for the core
+	  currently loaded, and cfg_parse() runs again per core; in a game it would be
+	  answering a question about that game, and the question this check answers is about
+	  the menu.
+	*/
+	int cc_n = ig_active ? 0 : cfgrec_problems();
+
 	int s2 = p->ts_tiny;
 	int nrows = ig_active ? OPT_ROWS_GAME : OPT_ROWS_MENU;
-	int foot = ig_active ? 22 * s2 : 0;
+	int foot = (ig_active || cc_n) ? 22 * s2 : 0;
 
 	int fit = list_fit(&b, p->row_h, foot, nrows);
 	list_track(&opt_top, opt_row, nrows, fit);
@@ -3921,6 +3946,30 @@ static void draw_options_panel(const chome_profile *p)
 		for (int i = 0; i < nl; i++)
 			gfx_text(wrapped[i], b.x + 6 * s2, fy + i * 10 * s2, s2,
 				closing ? COL_RED : COL_PANELLO, 0);
+	}
+	else if (cc_n)
+	{
+		/*
+		  Amber, which on every other screen here means "away from what this menu
+		  recommends" - and a setting the machine is silently not reading is as away from
+		  it as a setting gets. Not red: nothing is broken and nothing is about to be
+		  lost, which is what red means on the row above.
+
+		  Worded to fit two lines at 240p, where the panel holds twenty-nine characters:
+		  "MISTER.INI: 1 PROBLEM. SEE" is twenty-six and "CLASSICUI/CONFIG-REPORT.TXT" is
+		  twenty-seven, so neither is ever the wrapped-away line. wrap_text() cuts rather
+		  than hyphenates, and the half it would cut here is the file name.
+		*/
+		char msg[80];
+		snprintf(msg, sizeof(msg), "MISTER.INI: %d PROBLEM%s. SEE CLASSICUI/CONFIG-REPORT.TXT",
+			cc_n, cc_n == 1 ? "" : "S");
+
+		char wrapped[4][64];
+		int nl = wrap_text(msg, gfx_text_cols(b.w - 12 * s2, s2), wrapped, 2);
+
+		int fy = b.y + b.h - foot + 2 * s2;
+		for (int i = 0; i < nl; i++)
+			gfx_text(wrapped[i], b.x + 6 * s2, fy + i * 10 * s2, s2, COL_YELLOW, 0);
 	}
 }
 

@@ -22,6 +22,7 @@
 #include "menu.h"
 #include "snacpad.h"
 #include "support/classicui/chome.h"
+#include "support/classicui/chome_cfgrec.h"
 #include "DiskImage.h"
 #include "brightness.h"
 #include "sxmlc.h"
@@ -1469,6 +1470,24 @@ void user_io_init(const char *path, const char *xml)
 
 	cfg_parse();
 	cfg_print();
+
+	/*
+	  The configuration check, written to the card as an ordinary file - see
+	  support/classicui/chome_cfgrec.h for why it cannot be a line in the debug log.
+
+	  Unconditional on cfg.classicui by design: the case that most needs the report is
+	  the one where classicui=1 landed in a section that never applied, so the front-end
+	  is not running and has no screen to say anything on. Guarding this on the front-end
+	  being on would remove it from exactly that machine.
+
+	  Menu core only, and that is not a saving. The record describes the parse that just
+	  happened, and cfg_parse() runs again for every core the machine loads; letting each
+	  one overwrite the file would mean the report on the card described whichever game
+	  was played last, when the question it answers - "why is there no shelf?" - is a
+	  question about the menu.
+	*/
+	if (is_menu()) cfgrec_write_report();
+
 	while (cfg.waitmount[0] && !is_menu())
 	{
 		printf("> > > wait for %s mount < < <\n", cfg.waitmount);

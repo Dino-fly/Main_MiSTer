@@ -733,17 +733,39 @@ why. Note the domain too — `redump.info`; the old `redump.org` no longer answe
 
 ## If it does not work
 
-Everything the front-end decides, it prints. With `debug=2` in `MiSTer.ini`:
+**Start here, and start with the card in a PC:**
+
+```
+classicui/config-report.txt
+```
+
+Written on every boot, whether or not the shelf came up. It lists every `classicui`
+setting the parser saw, which section it came from, which line, and whether it was
+actually read — and then says in words what to do about each one it does not like.
+
+Read this one *before* `debug=2`, not after. `debug` is a setting in `MiSTer.ini` like
+any other, so a `debug=2` that landed in the wrong section produces no log at all, and
+"the wrong section" is the very thing you are most likely looking for. This report is
+never in that log; it is a plain file on the card and it does not consult `debug`.
+
+When the shelf *is* up and the report found something, the foot of **Options** says so
+in amber and names the file.
+
+---
+
+Everything the front-end decides, it prints too. With `debug=2` in `MiSTer.ini`:
 
 ```
 grep ClassicUI /tmp/debug.txt
 ```
 
 - **Stock menu instead of the shelf** — `classicui=1` missing, or the firmware did
-  not replace. `grep CLASSICUI=1 /tmp/debug.txt` says which. If the line is in your
-  `MiSTer.ini` and the log still says 0, look at what section it landed in: below a
-  `[NES]` or a `[video=...]` header it belongs to that core or that video mode and
-  nothing else. It wants to be under `[MiSTer]`.
+  not replace. `classicui/config-report.txt` answers this one outright — and it is the
+  case where the debug log cannot, because with no shelf there is nothing to say it on
+  and a misplaced `debug=` writes no log. If the line is in your `MiSTer.ini` and the
+  report still says `CLASSICUI=0`, look at what section it landed in: below a `[NES]`
+  or a `[video=...]` header it belongs to that core or that video mode and nothing
+  else. It wants to be under `[MiSTer]`.
 - **The shelf is there, but the menu button inside one game gives the classic OSD** —
   the same thing the other way round: a `classicui=0` in that core's section.
   **Options ▸ Best Settings** lists it and offers to put it right.
