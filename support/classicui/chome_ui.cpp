@@ -564,6 +564,7 @@ static int mb_idx = 0;
 static int slot_idx = 0;
 static int sort_idx = 0;
 static int opt_row = 0;
+static int opt_top = 0;                      // first Options row drawn; the list scrolls in a game
 static int look_row = 0;
 static int co_row = 0;                       // the core-options list
 static int co_tier = CO_TIER_PICTURE;
@@ -2779,6 +2780,61 @@ static void draw_rows(const panel_box *b, const char *const *rows, const char *c
 	draw_rows_c(b, rows, vals, 0, n, idx);
 }
 
+/*
+  A list longer than its panel, in the three pieces every screen with one needs: how many
+  rows fit, which row the window starts at, and the bar down the right-hand edge saying
+  where in the list that window is.
+
+  It lives here, next to draw_rows_c(), because draw_rows_c() is the reason it has to
+  exist: that loop stops as soon as a row would cross the bottom of the panel, so a list
+  handed more rows than fit simply loses the last of them - silently, and only on the
+  profile where the panel happens to be short. Options lost its eleventh row that way and
+  nobody could reach Close Game on a 240p television, while the same list on the same
+  build was complete at 480p and 720p.
+
+  Written once and used by both screens rather than copied into the second, so More
+  Settings and Options cannot drift into scrolling by different rules. `foot` is whatever
+  the caller draws under the rows and must therefore keep clear of; a screen with nothing
+  down there passes 0 and gets the whole panel, which is the arrangement that was there
+  before any of this and the reason a list that already fits is drawn exactly as it was.
+*/
+static int list_fit(const panel_box *b, int rowh, int foot, int nrows)
+{
+	int fit = (b->h - 5 * b->s - foot) / rowh;
+	if (fit < 1) fit = 1;
+	if (fit > nrows) fit = nrows;
+	return fit;
+}
+
+// Keeps the selected row inside the window, and the window inside the list.
+static void list_track(int *top, int sel, int nrows, int fit)
+{
+	if (sel < *top) *top = sel;
+	if (sel >= *top + fit) *top = sel - fit + 1;
+	if (*top > nrows - fit) *top = nrows - fit;
+	if (*top < 0) *top = 0;
+}
+
+/*
+  Where the cursor is in a list that does not fit. Inside the value column's right
+  margin, so it cannot land on a value.
+
+  Nothing at all when the list fits, which is not a nicety: a scrollbar beside a complete
+  list tells the player there is more below when there is not.
+*/
+static void list_scrollbar(const panel_box *b, int rowh, int top, int fit, int nrows)
+{
+	if (nrows <= fit) return;
+
+	int s = b->s;
+	int tx = b->x + b->w - 3 * s, ty = b->y + 3 * s, th = fit * rowh;
+	gfx_fill(tx, ty, 2 * s, th, COL_PANELLO);
+
+	int hh = th * fit / nrows;
+	if (hh < 4 * s) hh = 4 * s;
+	gfx_fill(tx, ty + (th - hh) * top / (nrows - fit), 2 * s, hh, COL_INK);
+}
+
 /* ------------------------------------------------------- lists that wait -- */
 
 /*
@@ -3720,15 +3776,58 @@ static void draw_options_panel(const chome_profile *p)
 		closing ? "Again To Confirm" : "Back To Menu"
 	};
 
-	draw_rows(&b, rows, vals, ig_active ? OPT_ROWS_GAME : OPT_ROWS_MENU, opt_row);
+	/*
+	  The list, windowed - because in a game it is one row longer than the panel at 240p
+	  can hold, and the row it lost was the last one: Close Game. draw_rows_c() stops
+	  drawing as soon as a row would cross the bottom edge, so the panel showed ten rows,
+	  a scrollbar-less list, and no way at all to put the game away on the television this
+	  front-end was written for. The count is asked of ig_active, not fixed, because the
+	  panel really is two different lists - ten rows on the shelf, eleven in a game, with
+	  the tenth changing its meaning between them.
 
+	  The room kept below is the help line's, and there are two lines of it now - see
+	  below. The rows used to run right down to the bottom edge and the line was drawn
+	  over whatever had got there first, which at 240p was the tenth row: the capture
+	  shows the sentence and Core Settings sharing three rows of pixels. On the shelf
+	  there is no line and nothing is reserved, so a list that already fitted is drawn
+	  exactly where it always was.
+	*/
+	int s2 = p->ts_tiny;
+	int nrows = ig_active ? OPT_ROWS_GAME : OPT_ROWS_MENU;
+	int foot = ig_active ? 22 * s2 : 0;
+
+	int fit = list_fit(&b, p->row_h, foot, nrows);
+	list_track(&opt_top, opt_row, nrows, fit);
+
+	draw_rows(&b, rows + opt_top, vals + opt_top, fit, opt_row - opt_top);
+	list_scrollbar(&b, p->row_h, opt_top, fit, nrows);
+
+	/*
+	  What the panel has to say about the row at the bottom of it - wrapped, rather than
+	  cut off in the middle of the word it turns on.
+
+	  It read "THE GAME STAYS LOADED UNTIL YOU CL>" on every profile, not only the small
+	  one: forty characters into a panel that holds thirty-five at 720p and twenty-nine at
+	  240p, so gfx_clip() ate the end of the one sentence explaining what the row under it
+	  costs. Wrapped the way the settings screen wraps its own help, which is where the two
+	  lines of reserved room above come from.
+
+	  Two lines are kept whether or not the armed message needs both. It is one line
+	  shorter, and reserving what the current message happens to need would grow the list
+	  by a row the moment the player armed the close and take it away again three seconds
+	  later - a list that moves under the cursor while a destructive action is armed.
+	*/
 	if (ig_active)
 	{
-		int s2 = p->ts_tiny;
-		gfx_text(gfx_clip(closing ? "UNSAVED PROGRESS WILL BE LOST"
-		                          : "THE GAME STAYS LOADED UNTIL YOU CLOSE IT",
-			s2, b.w - 12 * s2), b.x + 6 * s2, b.y + b.h - 11 * s2, s2,
-			closing ? COL_RED : COL_PANELLO, 0);
+		char wrapped[4][64];
+		int nl = wrap_text(closing ? "UNSAVED PROGRESS WILL BE LOST"
+		                           : "THE GAME STAYS LOADED UNTIL YOU CLOSE IT",
+			gfx_text_cols(b.w - 12 * s2, s2), wrapped, 2);
+
+		int fy = b.y + b.h - foot + 2 * s2;
+		for (int i = 0; i < nl; i++)
+			gfx_text(wrapped[i], b.x + 6 * s2, fy + i * 10 * s2, s2,
+				closing ? COL_RED : COL_PANELLO, 0);
 	}
 }
 
@@ -7047,16 +7146,10 @@ static void draw_settings(const chome_profile *p)
 	// Three lines are reserved at the bottom: two for the selected row's sentence, one
 	// for whatever the screen has to say about it.
 	int foot = 3 * 10 * s + 4 * s;
-	int fit = (b.h - 5 * s - foot) / rowh;
-	if (fit < 1) fit = 1;
 
 	int nrows = set_nrows();                     // the options, then Font, then Save Changes
-	if (fit > nrows) fit = nrows;
-
-	if (set_row < set_top) set_top = set_row;
-	if (set_row >= set_top + fit) set_top = set_row - fit + 1;
-	if (set_top > nrows - fit) set_top = nrows - fit;
-	if (set_top < 0) set_top = 0;
+	int fit = list_fit(&b, rowh, foot, nrows);
+	list_track(&set_top, set_row, nrows, fit);
 
 	const char *labels[OPT_MAX + 2];
 	const char *vals[OPT_MAX + 2];
@@ -7105,18 +7198,7 @@ static void draw_settings(const chome_profile *p)
 	}
 
 	draw_rows_c(&b, labels, vals, vcol, n, set_row - set_top);
-
-	// Where the cursor is in a list that does not fit. Inside the value column's right
-	// margin, so it cannot land on a value.
-	if (nrows > fit)
-	{
-		int tx = b.x + b.w - 3 * s, ty = b.y + 3 * s, th = fit * rowh;
-		gfx_fill(tx, ty, 2 * s, th, COL_PANELLO);
-
-		int hh = th * fit / nrows;
-		if (hh < 4 * s) hh = 4 * s;
-		gfx_fill(tx, ty + (th - hh) * set_top / (nrows - fit), 2 * s, hh, COL_INK);
-	}
+	list_scrollbar(&b, rowh, set_top, fit, nrows);
 
 	int fy = b.y + b.h - foot + 2 * s;
 	int cols = gfx_text_cols(b.w - 12 * s, s);
@@ -8642,7 +8724,23 @@ static void move_v(int dir)
 		break;
 
 	case SCR_OPTIONS:
-		{ int n = ig_active ? OPT_ROWS_GAME : OPT_ROWS_MENU; opt_row = (opt_row + dir + n) % n; }
+		{
+			int n = ig_active ? OPT_ROWS_GAME : OPT_ROWS_MENU;
+			opt_row = (opt_row + dir + n) % n;
+
+			/*
+			  Moving off disarms, as it does on More Settings and Online Covers:
+			  reaching for another row means the player has stopped meaning to close
+			  the game. The timer used to go on running while the cursor was elsewhere,
+			  so a press, a look down the list, and a press back on the row inside three
+			  seconds closed the game on what the player had counted as the first of two
+			  presses. The row does say "Again To Confirm" when it is returned to, but a
+			  player who has been somewhere else in between is not reading it - and now
+			  that the list scrolls, going somewhere else and coming back is what walking
+			  to the bottom of it feels like.
+			*/
+			ig_close_until = 0;
+		}
 		mark_dirty();
 		break;
 
@@ -8764,7 +8862,7 @@ static void accept()
 			go_screen(SCR_DISPLAY);
 			break;
 		}
-		case MB_OPTIONS:  opt_row = 0; go_screen(SCR_OPTIONS); break;
+		case MB_OPTIONS:  opt_row = 0; opt_top = 0; go_screen(SCR_OPTIONS); break;
 		case MB_POWER:    pwr_row = 0; pwr_arm = -1; go_screen(SCR_POWER); break;
 		case MB_ABOUT:    go_screen(SCR_ABOUT); break;
 		case MB_CORE:
