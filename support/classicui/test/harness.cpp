@@ -13345,15 +13345,25 @@ static void measure_repaint_costs(const char *canvas)
 	perf_run(150);
 	perf_row(canvas, "badge spinning");
 
-	// The dialog over it: the full-size disc, still at the slow rate.
+	/*
+	  The dialog over it: the full-size disc at 256 positions a turn, so nearly every
+	  tick paints. Two rows, because the dialog has two steady states now: the first
+	  turn after a picture arrives resamples each kept angle once as it fills the
+	  rotation cache, and every turn after that is served from it - the difference
+	  between the rows' compose columns is what the cache buys. See disc_rot().
+	*/
 	press(KEY_UP, 6);
 	press(KEY_ENTER, 6);
 	frame(4);
 	perf_run(150);
-	perf_row(canvas, "dialog disc");
+	perf_row(canvas, "dialog, first turn");
 
-	// And a rip on that dialog, which is the worst case this front-end draws: the
-	// disc at the focus rate, a new angle nearly every tick, the reveal riding it.
+	perf_run(150);
+	perf_row(canvas, "dialog disc, warm");
+
+	// And a rip on that dialog: the disc at the focus rate, a new angle every tick,
+	// the reveal riding it - and the angles backed off to the cached set, so every
+	// contended frame is a blit. See disc_step_fine().
 	rip_test_set(RIP_RUNNING, 900, 2000, 0);
 	chome_handle(KEY_ESC);
 	chome_handle(KEY_ESC | UPSTROKE);
@@ -13414,6 +13424,304 @@ static void assert_repaint_costs()
 	int flips = harness_present_count();
 	for (int i = 0; i < 100; i++) { harness_advance(16); chome_handle(0); }
 	check(harness_present_count() == flips, "an idle shelf with no disc paints nothing at all");
+}
+
+/*
+  The disc dialog at 60fps, which is the owner's ask in his own words: "i would like the
+  disc spinning animation to be as close as possible to 60FPS when disc dialog is open".
+
+  Four properties, each of which has a way to be quietly false:
+
+    distinct angles per second, counted rather than adjectived - the spin path only
+    paints when the step moved, so every page flip in a quiet dialog is a new angle;
+
+    the cache is invisible in the pixels: a frame served by quadrant composition, a
+    frame resampled directly at the full angle, and a frame from a dropped-and-refilled
+    cache are the same bytes, at the same instant, on both the generated face and a
+    scan. This is the property that lets the partial repaint stay byte-identical to a
+    full one whatever the cache happens to hold;
+
+    the cost profile: a warm turn at the sizes the cache holds whole resamples nothing,
+    and the resample counter is the only witness - the pixels are identical by design;
+
+    the backoff: under a rip the angles shown are exactly the cached set, the disc
+    never turns backwards through the transition, a contended second resamples nothing,
+    and the full count is back within a few frames of the rip ending - a disc that
+    stayed coarse after the work finished would read as a bug.
+
+  Byte-identity comparisons here lean on the same discipline as every other section
+  that does them: presses without harness_advance() do not move the clock, and both
+  step quantisations are memoised on the millisecond, so "the same instant" always
+  draws the same angle whichever path composes it.
+*/
+static unsigned long disc_smooth_fullhash()
+{
+	// A full repaint of the pinned instant: out to the tier and straight back, no
+	// clock in between - the pair the other byte-identity sections use.
+	chome_handle(KEY_ESC);
+	chome_handle(KEY_ESC | UPSTROKE);
+	chome_handle(KEY_ENTER);
+	chome_handle(KEY_ENTER | UPSTROKE);
+	return harness_fb_hash_box(0, 0, gfx_w(), gfx_h());
+}
+
+// One pinned instant, three ways: as shown, resampled directly, and through a cache
+// that was dropped and refilled. `tag` names the canvas in the failure text.
+static void disc_smooth_identity(const char *tag)
+{
+	char what[192];
+
+	check(spin_paint(), "a spin frame lands to compare");
+	unsigned long shown = harness_fb_hash_box(0, 0, gfx_w(), gfx_h());
+	int step_was = disc_test_shown_step();
+
+	disc_test_rot_direct(1);
+	unsigned long direct = disc_smooth_fullhash();
+
+	disc_test_rot_direct(0);
+	disc_test_rot_drop();
+	unsigned long refill = disc_smooth_fullhash();
+
+	snprintf(what, sizeof(what),
+		"%s step %d: the direct resample matches the cache-served frame byte for byte",
+		tag, step_was);
+	check(direct == shown, what);
+
+	snprintf(what, sizeof(what),
+		"%s step %d: and a dropped, refilled cache reproduces it again", tag, step_was);
+	check(refill == shown, what);
+}
+
+static void measure_disc_smoothness(const char *canvas, int want_dia, int want_stride)
+{
+	enum { S_HOME = 0, S_DISC = 17 };
+	char what[192];
+
+	// A PSX disc, identified, exactly as the cost table sets one up.
+	chome_leave();
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 80 && lib_scanning(); i++) frame(2);
+	frame(30);
+
+	disc_ingest_present(1);
+	static fake_disc d;
+	memset(&d, 0, sizeof(d));
+	static const char *const none[] = { "" };
+	fake_iso(&d, 0, "PLAYSTATION", "PLAYSTATION", none, 0);
+	fake_put(&d, 20, 0, "BOOT = cdrom:\\SLUS_006.26;1", 27, 100);
+	disc_set_reader(fake_read, &d);
+	disc_ingest_identify(0);
+	frame(10);
+
+	press(KEY_UP, 6);
+	press(KEY_ENTER, 6);
+	snprintf(what, sizeof(what), "%s: the dialog is up", canvas);
+	check(chome_screen_id() == S_DISC, what);
+	frame(4);
+
+	// What the budget allowed at this size, read from the code rather than recomputed.
+	int slots = 0, stride = 0;
+	long bytes = 0;
+	int dia = disc_test_rot_info(&slots, &stride, &bytes);
+
+	printf("  %-16s disc %3d px: %2d slots at stride %d, %7ld bytes of cache\n",
+		canvas, dia, slots, stride, bytes);
+
+	snprintf(what, sizeof(what), "%s: the disc is the %d px the layout table pins", canvas, want_dia);
+	check(dia == want_dia, what);
+	snprintf(what, sizeof(what), "%s: the kept angles divide the turn evenly", canvas);
+	check(slots > 0 && 64 % slots == 0 && 64 / slots == stride, what);
+	snprintf(what, sizeof(what), "%s: the stride is %d", canvas, want_stride);
+	check(stride == want_stride, what);
+	check(bytes <= 6553600L, "and the slots stay inside DISC_ROT_CACHE_BYTES");
+
+	/*
+	  Warm the cache: the quadrant index revisits every kept angle within a quarter of
+	  a turn, which at the slow rate is one second. Then the count he asked for: two
+	  exact seconds of ticks, every page flip a distinct angle by construction.
+	*/
+	frame(80);
+
+	int renders0 = disc_test_rot_renders();
+	int flips0 = harness_present_count();
+	frame(125);
+	int angles = harness_present_count() - flips0;
+	int renders = disc_test_rot_renders() - renders0;
+
+	printf("  %-16s %d distinct angles in 125 ticks (%d/s), %d resamples behind them\n",
+		canvas, angles, angles / 2, renders);
+
+	snprintf(what, sizeof(what),
+		"%s: at least 120 of 125 ticks showed a new angle - 60fps, not an adjective", canvas);
+	check(angles >= 120, what);
+
+	if (want_stride == 1)
+	{
+		snprintf(what, sizeof(what),
+			"%s: and every one was a blit - a warm turn resamples nothing", canvas);
+		check(renders == 0, what);
+	}
+	else
+	{
+		snprintf(what, sizeof(what),
+			"%s: and the kept angles were blits - fewer resamples than frames", canvas);
+		check(renders > 0 && renders < angles, what);
+	}
+
+	// The cache against the pixels, on the generated face, across all four quarters:
+	// a quarter of a turn is a second at this rate, 63 ticks.
+	for (int k = 0; k < 4; k++)
+	{
+		disc_smooth_identity(canvas);
+		frame(63);
+	}
+
+	press(KEY_ESC, 6);
+	press(KEY_ESC, 6);
+	disc_reset_reader();
+	disc_ingest_present(0);
+	(void)disc_take_dirty();
+	frame(10);
+}
+
+static void assert_disc_smoothness()
+{
+	printf("\n== the dialog disc at 60fps: angles counted, cache invisible, backoff honest ==\n");
+
+	enum { S_HOME = 0, S_DISC = 17 };
+
+	harness_set_menu_core(1);
+	cfg.classicui_disc = 1;
+	rip_test_reset();
+
+	/*
+	  The three canvases the cost table measures, with what each must get: the pinned
+	  diameter from assert_disc_dialog_size()'s table, and the stride the budget forces.
+	  At 96 and 160 px the budget holds the whole turn (stride 1); at the full-resolution
+	  288 px it holds every fourth angle, which is exactly the 64-position turn that
+	  shipped - so "backed off" can never mean "coarser than it ever was".
+	*/
+	cfg.classicui_halfres = 0;
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 0);
+	measure_disc_smoothness("1280x720", 288, 4);
+
+	cfg.classicui_halfres = 1;
+	measure_disc_smoothness("640x360 (half)", 160, 1);
+	cfg.classicui_halfres = 0;
+
+	harness_set_fb(320, 240);
+	gfx_shutdown();
+	theme_update(320, 240, 0);
+	measure_disc_smoothness("320x240", 96, 1);
+
+	/*
+	  The masked path and the backoff, on the canvas where both bite: full-resolution
+	  720p, the 288 px disc, stride 4. A scan is the picture he actually looks at once
+	  his credentials fetch art, and its mask is composited per angle - so it is the
+	  masked bytes the quadrant composition most needs checking against.
+	*/
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 0);
+	chome_leave();
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 80 && lib_scanning(); i++) frame(2);
+	frame(30);
+
+	disc_ingest_present(1);
+	static fake_disc d;
+	memset(&d, 0, sizeof(d));
+	static const char *const none[] = { "" };
+	fake_iso(&d, 0, "PLAYSTATION", "PLAYSTATION", none, 0);
+	fake_put(&d, 20, 0, "BOOT = cdrom:\\SLUS_006.26;1", 27, 100);
+	disc_set_reader(fake_read, &d);
+	disc_ingest_identify(0);
+	frame(10);
+
+	mkpath(ROOT "/classicui/discart");
+	make_cover(ROOT "/classicui/discart/SLUS-00626.png", 400, 400, 0xff20c020);
+
+	press(KEY_UP, 6);
+	press(KEY_ENTER, 6);
+	check(chome_screen_id() == S_DISC, "the dialog is up over the scan");
+	frame(12);
+
+	{
+		int cx = 0, cy = 0;
+		int sd = disc_drawn_box(&cx, &cy);
+		check(sd > 200 && box_pixels(cx - sd / 4, cy - sd / 4, cx + sd / 4, cy + sd / 4,
+			0xff20c020u) > 100, "and the scan is what it is drawing");
+	}
+
+	frame(80);                                   // a warm cache of masked frames
+	for (int k = 0; k < 4; k++)
+	{
+		disc_smooth_identity("scan");
+		frame(63);
+	}
+
+	/* ------------------------------------------------ the backoff, under a real rip --- */
+
+	{
+		rip_test_set(RIP_RUNNING, 900, 2000, 0);
+		frame(4);
+
+		int coarse_ok = 1, forward_ok = 1, prev = -1;
+		for (int i = 0; i < 12; i++)
+		{
+			if (!spin_paint()) break;
+			int s = disc_test_shown_step();
+			if (s % 4) coarse_ok = 0;
+			if (prev >= 0 && ((s - prev) & 255) >= 128) forward_ok = 0;
+			prev = s;
+		}
+		check(prev >= 0, "the rip screen is painting");
+		check(coarse_ok, "under a rip every angle shown is one the cache holds whole");
+		check(forward_ok, "and the backoff never runs the disc backwards");
+
+		/*
+		  A quarter turn of warm-up before counting resamples, because the identity block
+		  above ends by deliberately dropping the cache - so the first contended frames
+		  are legitimately refilling slots, one resample each, exactly as the first turn
+		  after a scan lands would. The claim under test is the steady state.
+		*/
+		frame(30);
+
+		int renders1 = disc_test_rot_renders();
+		int flips1 = harness_present_count();
+		frame(60);
+		printf("  contended: %d paints in 60 ticks, %d resamples\n",
+			harness_present_count() - flips1, disc_test_rot_renders() - renders1);
+		check(disc_test_rot_renders() == renders1,
+			"a contended second of spinning resamples nothing at all");
+
+		/*
+		  Recovery, which his refinement asks about by name: the moment the rip ends the
+		  count is fine again. Within a few paints, because the quantisation is per
+		  millisecond and the very next new step may land on a multiple of four honestly.
+		*/
+		rip_test_reset();
+		frame(2);
+		int fine_again = 0;
+		for (int i = 0; i < 8 && !fine_again; i++)
+		{
+			if (!spin_paint()) break;
+			if (disc_test_shown_step() % 4) fine_again = 1;
+		}
+		check(fine_again, "the full angle count is back within a few frames of the rip ending");
+	}
+
+	// And leave nothing behind: the cover, the disc, the rip state, the canvas.
+	unlink(ROOT "/classicui/discart/SLUS-00626.png");
+	press(KEY_ESC, 6);
+	press(KEY_ESC, 6);
+	rip_test_reset();
+	disc_reset_reader();
+	disc_ingest_present(0);
+	(void)disc_take_dirty();
+	frame(10);
 }
 
 static void assert_rip_screen()
@@ -16649,6 +16957,10 @@ int main()
 	// table measures the 640x360 column through the very option the section proves.
 	assert_half_canvas();
 	assert_repaint_costs();
+
+	// Straight after the cost table, because its rows are the money this section spends:
+	// the angles-per-second claim is only honest next to what each painted frame costs.
+	assert_disc_smoothness();
 
 	assert_rip_format();
 	// Directly after it, because it is the other half of the same feature and it needs the

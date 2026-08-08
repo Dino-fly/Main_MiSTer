@@ -68,6 +68,17 @@ void art_request(int item, int prio);
 // Does at most one decode and services the fetch queue. Call once per frame.
 void art_step();
 
+/*
+  How many decodes are queued for the art_step()s to come. Zero means the next pass will
+  spend nothing on covers; nonzero means each pass is about to pay for an image decode.
+
+  Exported for the disc's animation and not for the queue's own sake: a decode is
+  milliseconds, which is the scale of a whole frame, so the disc backs its rotation steps
+  off while these are pending - see disc_step_fine() in chome_ui.cpp. A depth rather than
+  a flag so a caller could weight by it, though today anything nonzero reads as "busy".
+*/
+int  art_pending();
+
 // Returns the bitmap, or 0. w/h are the decoded size.
 const uint32_t *art_get(int item, int *w, int *h);
 int  art_state(int item);

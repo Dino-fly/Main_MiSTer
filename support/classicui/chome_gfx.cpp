@@ -752,6 +752,24 @@ int gfx_disc_cover(int rad, int d2)
 	return disc_cover(rad << 8, (int)disc_isqrt(((unsigned long long)d2) << 16));
 }
 
+int gfx_disc_cover_h(int rad, int d2h)
+{
+	if (rad < 1) return d2h ? 0 : 255;
+
+	// The same two cheap answers, in half-pixel units: the ramp is still one whole
+	// pixel wide, which is two of these.
+	int in = 2 * rad - 2, out = 2 * rad + 2;
+	if (d2h <= in * in) return 255;
+	if (d2h >= out * out) return 0;
+
+	/*
+	  d2h is half-pixels squared, so scaling by 16384 = (256/2)^2 hands isqrt a value
+	  whose root is the distance in whole-pixel 8.8 - the identical arithmetic
+	  gfx_disc_face() runs on its own X and Y.
+	*/
+	return disc_cover(rad << 8, (int)disc_isqrt(((unsigned long long)d2h) << 14));
+}
+
 static uint32_t *face_buf = 0;
 static int face_dia = 0;
 static const uint32_t *face_bands = 0;
