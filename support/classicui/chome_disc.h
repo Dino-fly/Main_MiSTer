@@ -124,8 +124,9 @@
 /* ------------------------------------------------------------- the drive --- */
 
 /*
-  Start and stop watching. Cheap when there is no drive: the open fails once and is
-  not retried on every poll.
+  Start and stop watching. Cheap when there is no drive: the open is three quick
+  open() calls, gated by disc_probe_due() below so it happens on a timer rather than
+  every poll - and never again at all once one is found.
 
   Returns 1 when a drive was found. Note that a drive with no disc in it is still a
   success - "no drive" and "no disc" are different states and only the first is a
@@ -134,6 +135,42 @@
 int  disc_watch_start();
 void disc_watch_stop();
 int  disc_watching();
+
+/*
+  The probe/backoff timing behind disc_watch_start() and disc_poll(), pulled out as
+  pure functions so the harness can drive them without a device node, a fork(), or a
+  wall clock of its own.
+*/
+
+// Sentinel for "never looked yet", distinct from every real clock value.
+#define DISC_NEVER_PROBED (-1)
+
+/*
+  Whether disc_watch_start() should try opening a drive again right now.
+
+    found       a drive is already known and being watched - always false once this
+                is true, so the parent never opens a second fd racing its own helper.
+    last_probe  DISC_NEVER_PROBED before the first attempt, else the time (same
+                clock as `now`) of the previous one.
+    now         the current time, same clock as `last_probe`.
+*/
+int disc_probe_due(int found, int last_probe, int now);
+
+/*
+  Whether disc_poll() should fork a replacement helper right now, given how the
+  helper(s) have been dying.
+
+    quick_deaths  consecutive helpers that died within a couple of seconds of their
+                  own fork - see DISC_HELPER_QUICK_DEATH_S in chome_disc.cpp. 0 means
+                  either none has died yet or the last one ran a while before it did.
+    last_fork     the time the most recent fork was attempted.
+    now           the current time.
+
+  The first quick death still reforks at once; only a *second* consecutive quick
+  death - the replacement dying just as fast - triggers the backoff. See the
+  definition in chome_disc.cpp for why.
+*/
+int disc_refork_due(int quick_deaths, int last_fork, int now);
 
 /*
   Called from the front-end's idle loop, and cheap by construction: it stats one small

@@ -19,6 +19,7 @@
 #include <sys/wait.h>
 #include <signal.h>
 #include <sys/stat.h>
+#include <time.h>
 #include "../../cfg.h"
 #endif
 
@@ -514,6 +515,77 @@ void disc_ingest_identify(int lba0)
 	ddirty = 1;
 }
 
+/* --------------------------------------------------- probing and backoff ---- */
+
+/*
+  Two small decisions pulled out of disc_watch_start() and disc_poll() so they can be
+  tested without a device node, a fork(), or a wall clock: whether it is time to look
+  for a drive again, and whether it is time to fork a replacement helper. Both are
+  pure - the same three ints always give the same answer - which is what lets the
+  harness drive "no drive at boot, one appears a few seconds later" and "a helper
+  that keeps dying gets backed off" as ordinary checks instead of something that
+  needs real hardware and real time to pass.
+*/
+
+// Sentinel for "never looked yet", distinct from every real clock value.
+#define DISC_NEVER_PROBED (-1)
+
+// Seconds between retries once no drive has been found. The probe itself is three
+// open() calls that fail immediately when nothing is at the path - there is no seek
+// or spin-up to make a fast retry expensive - so this floor is for the log, not the
+// drive: "no optical drive" printed every frame would drown out everything else on
+// the console. A few seconds is short enough that a USB drive enumerating a moment
+// after the menu comes up is found well before anyone would think to reboot over it.
+#define DISC_PROBE_RETRY_S 5
+
+/*
+  Whether disc_watch_start() should try opening a drive again right now.
+
+    found       a drive is already known and being watched - always false once this
+                is true, so the parent never opens a second fd racing its own helper.
+    last_probe  DISC_NEVER_PROBED before the first attempt, else the time (same
+                clock as `now`) of the previous one.
+    now         the current time, same clock as `last_probe`.
+*/
+int disc_probe_due(int found, int last_probe, int now)
+{
+	if (found) return 0;
+	if (last_probe == DISC_NEVER_PROBED) return 1;
+	return (now - last_probe) >= DISC_PROBE_RETRY_S;
+}
+
+// A helper that dies inside this many seconds of its own fork is "instant" - too
+// fast to have done any real work, so it is almost certainly failing the same way it
+// just failed rather than hitting a fresh problem.
+#define DISC_HELPER_QUICK_DEATH_S 2
+
+// Backoff once two helpers in a row have died instantly. Long enough that a helper
+// which can never open the device - wrong permissions, a drive gone between the
+// probe and the fork - does not turn into a fork() bomb: one CPU doing nothing but
+// forking and dying, forever, behind a UI whose log never repeats itself and so
+// looks healthy.
+#define DISC_HELPER_BACKOFF_S 10
+
+/*
+  Whether disc_poll() should fork a replacement helper right now.
+
+    quick_deaths  consecutive helpers that died within DISC_HELPER_QUICK_DEATH_S
+                  seconds of their own fork. 0 means either none has died yet or the
+                  last one ran a normal while before it did.
+    last_fork     the time the most recent fork was attempted.
+    now           the current time.
+
+  The first quick death still reforks at once - one bad fork is not a pattern, and a
+  drive that was just found a moment ago is worth trying again immediately. Only a
+  *second* consecutive quick death - the replacement dying just as fast - switches to
+  the backoff above.
+*/
+int disc_refork_due(int quick_deaths, int last_fork, int now)
+{
+	if (quick_deaths <= 1) return 1;
+	return (now - last_fork) >= DISC_HELPER_BACKOFF_S;
+}
+
 #ifdef CHOME_HOST_TEST
 
 /*
@@ -563,6 +635,22 @@ void disc_reset_reader() { reader = 0; reader_ctx = 0; }
 #define DISC_POLL_SETTLED_S  30
 
 static pid_t helper_pid = -1;
+
+// When the current (or most recent) helper was forked, and the path it was forked
+// onto - kept so a refork after a death does not have to re-probe /dev/sr0 et al.,
+// and so disc_refork_due() has a clock to measure against.
+static int helper_fork_t = 0;
+static char dev_path[32] = {};
+
+// Consecutive helpers that died within DISC_HELPER_QUICK_DEATH_S of their own fork.
+// See disc_refork_due().
+static int quick_deaths = 0;
+
+// disc_watch_start()'s own retry state: the last time it looked for a drive and
+// found none, and whether "no optical drive" has already been said once. See
+// disc_probe_due().
+static int last_probe_t = DISC_NEVER_PROBED;
+static int no_drive_logged = 0;
 
 // ------------------------------------------------------------------ the helper
 
@@ -776,10 +864,47 @@ static void helper_main(const char *dev)
 
 int disc_watching() { return watching; }
 
+/*
+  Fork a helper onto dev_path (already known to open) and record when, so
+  disc_refork_due() has a clock to measure the next death against.
+
+  A fork() failure is fed into the same quick_deaths counter as a helper that opens
+  and immediately exits - to the caller both are "that attempt did not produce a
+  running helper", and both should back off the same way rather than one of them
+  retrying every frame forever.
+*/
+static int fork_helper()
+{
+	pid_t pid = fork();
+	int now = (int)time(0);
+
+	if (pid < 0)
+	{
+		quick_deaths++;
+		helper_fork_t = now;
+		helper_pid = -1;
+		return 0;
+	}
+
+	if (!pid)
+	{
+		helper_main(dev_path);
+		_exit(0);
+	}
+
+	helper_pid = pid;
+	helper_fork_t = now;
+	printf("ClassicUI: optical drive at %s, helper pid %d\n", dev_path, (int)pid);
+	return 1;
+}
+
 int disc_watch_start()
 {
 	if (watching) return helper_pid > 0;
 	if (!cfg.classicui_disc) return 0;
+
+	int now = (int)time(0);
+	if (!disc_probe_due(0, last_probe_t, now)) return 0;
 
 	static const char *const paths[] = { "/dev/sr0", "/dev/cdrom", "/dev/sr1" };
 
@@ -793,26 +918,29 @@ int disc_watch_start()
 
 	if (!dev)
 	{
-		printf("ClassicUI: no optical drive\n");
-		watching = 1;                      // looked once; do not look again every frame
+		// Looked, found nothing, and will look again in DISC_PROBE_RETRY_S rather than
+		// never - see disc_probe_due(). watching stays 0 so disc_poll() keeps calling
+		// back here every frame, but the retry timer - not this function being skipped
+		// - is what keeps that cheap and the log quiet.
+		last_probe_t = now;
+		if (!no_drive_logged)
+		{
+			printf("ClassicUI: no optical drive\n");
+			no_drive_logged = 1;
+		}
 		return 0;
 	}
 
 	unlink(DISC_STATE_FILE);
+	snprintf(dev_path, sizeof(dev_path), "%s", dev);
 
-	pid_t pid = fork();
-	if (pid < 0) { watching = 1; return 0; }
-
-	if (!pid)
-	{
-		helper_main(dev);
-		_exit(0);
-	}
-
-	helper_pid = pid;
+	// The device node itself is the thing that was "found" - watching latches here
+	// and stays latched even if the fork below fails or the helper dies later; see
+	// fork_helper() and disc_refork_due() for how those get retried without
+	// re-probing paths that are already known good.
 	watching = 1;
-	printf("ClassicUI: optical drive at %s, helper pid %d\n", dev, (int)pid);
-	return 1;
+	quick_deaths = 0;
+	return fork_helper();
 }
 
 void disc_watch_stop()
@@ -840,11 +968,43 @@ void disc_reset_reader()
 /*
   The parent's whole involvement: has that little file changed, and if so what does it
   say. No device access, so this cannot block on the drive however wedged it is.
+
+  Also where a dead helper is noticed and, subject to disc_refork_due()'s backoff,
+  replaced. Neither is a device access either: waitpid(WNOHANG) asks the kernel about
+  a process this one already owns, and fork() below re-runs the probe from the path
+  already recorded in dev_path rather than re-opening /dev/sr0 et al.
 */
 void disc_poll()
 {
 	if (!cfg.classicui_disc) return;
-	if (!watching) disc_watch_start();
+
+	if (!watching)
+	{
+		disc_watch_start();
+	}
+	else if (helper_pid > 0)
+	{
+		// Non-blocking for the same reason disc_watch_stop() reaps this way: a helper
+		// stuck in an uninterruptible ioctl has not exited, so this never waits on one.
+		int status = 0;
+		if (waitpid(helper_pid, &status, WNOHANG) == helper_pid)
+		{
+			int now = (int)time(0);
+			int ran = now - helper_fork_t;
+			quick_deaths = (ran > DISC_HELPER_QUICK_DEATH_S) ? 0 : (quick_deaths + 1);
+			helper_pid = -1;
+
+			// The helper died with the drive; whatever it last wrote to the state file no
+			// longer has anyone confirming it. Forget rather than leave a stale disc (or
+			// worse, a stale identification) on screen with nothing watching to correct it.
+			disc_forget();
+		}
+	}
+	else if (disc_refork_due(quick_deaths, helper_fork_t, (int)time(0)))
+	{
+		fork_helper();
+	}
+
 	if (helper_pid <= 0) return;
 
 	/*
