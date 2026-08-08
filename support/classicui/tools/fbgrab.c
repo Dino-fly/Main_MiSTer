@@ -1,13 +1,30 @@
 /*
   Grabs the front-end's framebuffer off the device, so a test can look at what it drew.
 
-  Usage: fbgrab <out.raw> [buffer]     buffer 0 or 1; default: both, as out.raw.0/.1
+  Usage: fbgrab <out.raw> [buffer [w h stride]]
+                                       buffer 0, 1 or 2; default: 0 and 1, as
+                                       out.raw.0/.1. Geometry defaults to the module's
+                                       parameters and can be overridden - see below.
 
   Why this exists rather than `dd if=/dev/mem`: a plain read() of /dev/mem fails with
   EFAULT here, so the frame has to be mmap'd. Geometry comes from the module's own
   parameters rather than being assumed - the canvas follows the video mode, and on this
   machine analog output makes it 320x240 rather than the 1280x720 a capture at a desk
   would suggest.
+
+  WHY THE GEOMETRY CAN BE OVERRIDDEN, AND WHEN YOU MUST
+
+  The module parameters describe the video *mode*, and the front-end does not always
+  draw a frame that size. With the analog takeover on it draws buffer 1 at 320x240 and
+  the parameters agree. With the takeover off it draws buffer 2 at half the mode -
+  640x360 inside a 1280x720 mode - and the parameters still say 1280x720. Reading
+  640x360 worth of pixels as 1280x720 does not fail: it produces a plausible-looking
+  smear of the frame repeated four times across, which reads as a rendering bug in the
+  front-end rather than as a capture that asked for the wrong rectangle. It cost an hour
+  once. The firmware's own log line is the authority:
+
+    video: mode now 1280x720, fb 2 at 640x360, takeover=0
+                               ^ buffer     ^ what to pass here
 
   Output is raw BGRA at width*height*4, no header; convert on the host.
 
@@ -67,9 +84,24 @@ static int grab(int fd, int idx, int w, int h, int stride, const char *out)
 
 int main(int argc, char **argv)
 {
-	if (argc < 2) { fprintf(stderr, "usage: fbgrab <out.raw> [buffer]\n"); return 2; }
+	if (argc < 2) { fprintf(stderr, "usage: fbgrab <out.raw> [buffer [w h stride]]\n"); return 2; }
 
 	int w = param("width", 320), h = param("height", 240), stride = param("stride", w * 4);
+
+	// An explicit rectangle wins over the module's, for the reason in the header. The
+	// stride is separate from the width because a half-size frame keeps the mode's
+	// stride: 640 pixels of content on a 5120-byte row, the rest of it untouched.
+	if (argc >= 6)
+	{
+		w = atoi(argv[3]);
+		h = atoi(argv[4]);
+		stride = atoi(argv[5]);
+		if (w <= 0 || h <= 0 || stride < w * 4)
+		{
+			fprintf(stderr, "fbgrab: %dx%d stride %d is not a frame\n", w, h, stride);
+			return 2;
+		}
+	}
 
 	int fd = open("/dev/mem", O_RDONLY);
 	if (fd < 0) { perror("/dev/mem"); return 1; }
