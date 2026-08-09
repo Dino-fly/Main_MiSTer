@@ -96,6 +96,9 @@ static int pwr_row = 0;                      // Restart / Shut Down
 static int pwr_arm = -1;                     // ...and which one is one press from happening
 static unsigned long pwr_until = 0;
 
+// Close Game / Resume. What is armed is ig_close_until above; see draw_close().
+static int cls_row = 0;
+
 /*
   Best Settings: the MiSTer.ini keys this front-end assumes, and what writing
   them would change. Read from the card when the screen that shows it is opened -
@@ -317,19 +320,29 @@ static void ref_shot_path(const char *sysid, const char *rompath, char *out, int
 */
 #define SCR_COVERS  19
 
+/*
+  Putting the game away, which is now a menu-bar entry and so needs a screen of its own to
+  ask on. See draw_close() for why it is a screen and not a press on the bar.
+*/
+#define SCR_CLOSE   20
+
 // Rows on the Options panel. Several places step over them.
 /*
-  Options has one more row inside a game than on the shelf. Both end with a way out -
-  Advanced Settings hands the shelf to the classic menu, Close Game puts the game away -
-  but in a game there is also Core Settings, which is the only route to the options that
-  belong to the core itself rather than to this front-end. A player reported that as the
-  one thing the front-end had taken away from them, and they were right: widescreen on
-  PSX, or a core's own video and audio settings, live in the classic OSD and nowhere
-  else, and the OSD is only reachable while that core is running.
+  Eleven rows either way, and only the tenth differs: in a game it is Core Settings, the
+  only route to the options belonging to the core itself rather than to this front-end,
+  and on the shelf it is Advanced Settings, which hands the shelf to the classic menu. A
+  player reported the core's own options as the one thing the front-end had taken away
+  from them, and they were right: widescreen on PSX, or a core's own video and audio
+  settings, live in the classic OSD and nowhere else, and the OSD is only reachable while
+  that core is running.
+
+  Both lists end in About. It used to have a permanent slot on the menu bar - one of five,
+  next to the things a player reaches for every session - for a panel that is read once and
+  never again. Close Game took that slot and About came down here, which is the same trade
+  in both directions: prominence for how often the thing is actually wanted.
 */
-#define OPT_ROWS_MENU 10
+#define OPT_ROWS_MENU 11
 #define OPT_ROWS_GAME 11
-#define OPT_ROWS    10
 
 /*
   Savestate slots.
@@ -375,7 +388,7 @@ static_assert(CH_SLOTS_USER == CHOME_STRIP_SLOTS,
 #define MB_DISPLAY  0
 #define MB_OPTIONS  1
 #define MB_POWER    2
-#define MB_ABOUT    3
+#define MB_CLOSE    3
 #define MB_CORE     4
 #define MB_COUNT    5
 
@@ -383,8 +396,36 @@ static_assert(CH_SLOTS_USER == CHOME_STRIP_SLOTS,
   Language and Manuals are gone. The first opened a panel with nothing behind it,
   and the second only handed the screen to the classic OSD - which is exactly what
   the front-end is not supposed to do on its own.
+
+  About is gone from here too, and Close Game has its slot. Putting a game away was the
+  eleventh row of a panel that is itself two presses in - so far down that at 240p it was
+  off the end of the list entirely until the list learned to scroll - while About, which a
+  person reads once, sat on the bar for every session after. That is the prominence of the
+  two exactly the wrong way round. About is the last row of Options now.
+
+  The count is unchanged, which is deliberate: MB_COUNT sizes mb_label[] and bounds the
+  walks in mb_count_visible() and mb_at(), and a swap rather than an addition leaves all
+  three alone.
 */
-static const char *mb_label[MB_COUNT] = { "Display", "Options", "Power", "About", "Core" };
+static const char *mb_label[MB_COUNT] = { "Display", "Options", "Power", "Close Game", "Core" };
+
+/*
+  A shorter word for a cell too narrow for the real one, and a null where there is no
+  shorter word worth having.
+
+  This is the legend's long/short pair - lp(LBL_A, "Look Again", "Scan") - applied to the
+  bar, and Close Game is what made the bar need it. In a game at 240p the bar carries four
+  entries across 320 pixels, so a cell holds about eight characters and "CLOSE GAME" is
+  ten: gfx_clip() served it as "CLOSE G>". Every other entry here is seven characters or
+  fewer and has never come close, which is why they get no second form rather than a
+  duplicate of their first.
+
+  The bar picks between them by measuring, not by profile - see draw_menubar(). With a core
+  that publishes no options there are three entries and the full phrase fits at 240p too,
+  and shortening it there on the strength of the canvas size alone would be giving up room
+  the player actually has.
+*/
+static const char *mb_short[MB_COUNT] = { 0, 0, 0, "Close", 0 };
 
 /*
   The core entry is labelled with the running system rather than the word "Core": a player
@@ -414,6 +455,14 @@ static int mb_visible(int i)
 			|| core_opts_tier_count(CO_TIER_SYSTEM)
 			|| core_opts_tier_count(CO_TIER_RISKY);
 	}
+
+	/*
+	  There is no game to close on the shelf, and an entry that did nothing there would be
+	  worse than no entry: it is the one on the bar whose name promises something
+	  destructive, so a player who found it greyed out would still have to wonder what it
+	  had been about to do. Same test as MB_CORE above.
+	*/
+	if (i == MB_CLOSE) return ig_active ? 1 : 0;
 
 	if (i != MB_DISPLAY) return 1;
 
@@ -2323,6 +2372,10 @@ static int build_legend(legend_pair *out, int max)
 		if (n < max) { out[n++] = lp(LBL_A, "Choose", "OK"); }
 		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
 		break;
+	case SCR_CLOSE:
+		if (n < max) { out[n++] = lp(LBL_A, "Choose", "OK"); }
+		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
+		break;
 	case SCR_SORT:
 		if (n < max) { out[n++] = lp(LBL_A, "Apply", "OK"); }
 		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
@@ -2656,6 +2709,18 @@ static void draw_menubar(const chome_profile *p, int focused)
 		char up[32];
 		snprintf(up, sizeof(up), "%s", mb_text(i));
 		gfx_shout(up);
+
+		/*
+		  The short form, where the long one would be served cut. Measured against exactly
+		  what gfx_clip() measures against below, so the two cannot come to disagree about
+		  whether the word fits - a test of that shape is what found "CLOSE G>" at 240p.
+		  Shouted again because the short form has not been through it yet.
+		*/
+		if (mb_short[i] && (int)strlen(up) > gfx_text_cols(cellw - 8, s))
+		{
+			snprintf(up, sizeof(up), "%s", mb_short[i]);
+			gfx_shout(up);
+		}
 
 		if (on) gfx_fill(cx - cellw / 2 + 2, y + 2, cellw - 4, h - 6, COL_BLUE);
 		gfx_text_c(gfx_clip(up, s, cellw - 8), cx, y + (h - 8 * s) / 2, s,
@@ -3805,14 +3870,12 @@ static void draw_options_panel(const chome_profile *p)
 {
 	panel_box b = draw_panel(p, "Options");
 
-	static const char *rows_menu[] = { "Cover Art", "Online Covers", "Rescan Library", "Reinstall Looks", "Menu Layout", "Controllers", "Wi-Fi", "Best Settings", "More Settings", "Advanced Settings", 0 };
-	static const char *rows_game[] = { "Cover Art", "Online Covers", "Rescan Library", "Reinstall Looks", "Menu Layout", "Controllers", "Wi-Fi", "Best Settings", "More Settings", "Core Settings", "Close Game" };
+	static const char *rows_menu[] = { "Cover Art", "Online Covers", "Rescan Library", "Reinstall Looks", "Menu Layout", "Controllers", "Wi-Fi", "Best Settings", "More Settings", "Advanced Settings", "About" };
+	static const char *rows_game[] = { "Cover Art", "Online Covers", "Rescan Library", "Reinstall Looks", "Menu Layout", "Controllers", "Wi-Fi", "Best Settings", "More Settings", "Core Settings", "About" };
 	const char *const *rows = ig_active ? rows_game : rows_menu;
 	char v1[32];
 	if (lib_scanning()) snprintf(v1, sizeof(v1), "%d...", lib_scan_progress());
 	else snprintf(v1, sizeof(v1), "%d games", lib_item_count());
-
-	int closing = (ig_active && opt_row == OPT_ROWS_GAME - 1 && !CheckTimer(ig_close_until));
 
 	// What the Wi-Fi row says without being opened: the network name is the one
 	// piece of it anybody wants to check in passing.
@@ -3867,24 +3930,16 @@ static void draw_options_panel(const chome_profile *p)
 		v4,
 		v5,
 		ig_active ? "Core Options >" : "Classic Menu >",
-		closing ? "Again To Confirm" : "Back To Menu"
+		"This Menu >"
 	};
 
 	/*
-	  The list, windowed - because in a game it is one row longer than the panel at 240p
-	  can hold, and the row it lost was the last one: Close Game. draw_rows_c() stops
-	  drawing as soon as a row would cross the bottom edge, so the panel showed ten rows,
-	  a scrollbar-less list, and no way at all to put the game away on the television this
-	  front-end was written for. The count is asked of ig_active, not fixed, because the
-	  panel really is two different lists - ten rows on the shelf, eleven in a game, with
-	  the tenth changing its meaning between them.
-
-	  The room kept below is the help line's, and there are two lines of it now - see
-	  below. The rows used to run right down to the bottom edge and the line was drawn
-	  over whatever had got there first, which at 240p was the tenth row: the capture
-	  shows the sentence and Core Settings sharing three rows of pixels. On the shelf
-	  there is no line and nothing is reserved, so a list that already fitted is drawn
-	  exactly where it always was.
+	  The list, windowed - because eleven rows are more than the panel at 240p can hold, and
+	  draw_rows_c() stops drawing as soon as a row would cross the bottom edge. That is how
+	  Close Game came to be invisible on the television this front-end was written for: the
+	  panel drew ten rows, no scrollbar, and no word about the eleventh. The window is why
+	  the last row is reachable at every profile, and it matters on the shelf now too - that
+	  list gained About and is eleven rows as well, where it used to be ten and to fit.
 	*/
 	/*
 	  And what the boot-time configuration check found, if it found anything: a line at
@@ -3912,7 +3967,15 @@ static void draw_options_panel(const chome_profile *p)
 
 	int s2 = p->ts_tiny;
 	int nrows = ig_active ? OPT_ROWS_GAME : OPT_ROWS_MENU;
-	int foot = (ig_active || cc_n) ? 22 * s2 : 0;
+	/*
+	  Room under the list only for the configuration notice now. The in-game help line went
+	  with the row it was about: "THE GAME STAYS LOADED UNTIL YOU CLOSE IT" explained Close
+	  Game, and Close Game is on the menu bar. It is said on that screen instead, where the
+	  player is actually deciding - see draw_close(). Leaving the sentence here would have
+	  cost a row of a list that is eleven rows at every profile, to caption a row that is no
+	  longer in it.
+	*/
+	int foot = cc_n ? 22 * s2 : 0;
 
 	int fit = list_fit(&b, p->row_h, foot, nrows);
 	list_track(&opt_top, opt_row, nrows, fit);
@@ -3920,40 +3983,13 @@ static void draw_options_panel(const chome_profile *p)
 	draw_rows(&b, rows + opt_top, vals + opt_top, fit, opt_row - opt_top);
 	list_scrollbar(&b, p->row_h, opt_top, fit, nrows);
 
-	/*
-	  What the panel has to say about the row at the bottom of it - wrapped, rather than
-	  cut off in the middle of the word it turns on.
-
-	  It read "THE GAME STAYS LOADED UNTIL YOU CL>" on every profile, not only the small
-	  one: forty characters into a panel that holds thirty-five at 720p and twenty-nine at
-	  240p, so gfx_clip() ate the end of the one sentence explaining what the row under it
-	  costs. Wrapped the way the settings screen wraps its own help, which is where the two
-	  lines of reserved room above come from.
-
-	  Two lines are kept whether or not the armed message needs both. It is one line
-	  shorter, and reserving what the current message happens to need would grow the list
-	  by a row the moment the player armed the close and take it away again three seconds
-	  later - a list that moves under the cursor while a destructive action is armed.
-	*/
-	if (ig_active)
-	{
-		char wrapped[4][64];
-		int nl = wrap_text(closing ? "UNSAVED PROGRESS WILL BE LOST"
-		                           : "THE GAME STAYS LOADED UNTIL YOU CLOSE IT",
-			gfx_text_cols(b.w - 12 * s2, s2), wrapped, 2);
-
-		int fy = b.y + b.h - foot + 2 * s2;
-		for (int i = 0; i < nl; i++)
-			gfx_text(wrapped[i], b.x + 6 * s2, fy + i * 10 * s2, s2,
-				closing ? COL_RED : COL_PANELLO, 0);
-	}
-	else if (cc_n)
+	if (cc_n)
 	{
 		/*
 		  Amber, which on every other screen here means "away from what this menu
 		  recommends" - and a setting the machine is silently not reading is as away from
 		  it as a setting gets. Not red: nothing is broken and nothing is about to be
-		  lost, which is what red means on the row above.
+		  lost, which is what red is kept for here - see draw_close().
 
 		  Worded to fit two lines at 240p, where the panel holds twenty-nine characters:
 		  "MISTER.INI: 1 PROBLEM. SEE" is twenty-six and "CLASSICUI/CONFIG-REPORT.TXT" is
@@ -7074,6 +7110,84 @@ static void draw_power(const chome_profile *p)
 }
 
 /*
+  Putting the game away.
+
+  A screen and not an action on the menu bar, which is the whole reason promoting it is not
+  a regression dressed as an improvement. Close Game came off the eleventh row of Options
+  because that is far too deep for something a player wants every session - but the two
+  presses it took down there were never the depth, they were the safety, and a bar entry
+  that closed the game on one press would throw away somebody's afternoon to save them a
+  press. So the bar opens this, exactly the way MB_POWER opens SCR_POWER rather than
+  restarting the machine where it stands, and the arm-then-confirm lives here.
+
+  Two rows rather than one. The second is what keeps "moving off disarms" a thing a player
+  can actually do: that rule was fixed because the timer used to run on while the cursor was
+  elsewhere, so press, look away, press again closed the game on what the player had counted
+  as the first of two presses - and on a one-row screen the rule would still be in the code
+  with nowhere to move to. It is also the way out for somebody who does not know that B goes
+  back, on a front-end whose whole point is not requiring that knowledge. "Resume" because
+  that is this front-end's word for going back into the running game, on the shelf and over
+  a disc alike.
+
+  The arm is ig_close_until, the same timer the Options row used rather than a second one
+  beside it. chome_handle() already repaints while it runs and once more when it expires,
+  and opening the menu already clears it; a parallel timer would have had to be added to
+  both, and the one that got forgotten would be the one leaving a screen saying "Again To
+  Confirm" three seconds after it stopped being true.
+*/
+#define CLS_ROWS 2
+
+static void draw_close(const chome_profile *p)
+{
+	int ps = p->ts_ui;
+	int pw = p->w - 2 * p->inset;
+	if (pw > 34 * gfx_adv(ps)) pw = 34 * gfx_adv(ps);
+	int ph = (10 * ps + 6) + CLS_ROWS * 14 * ps + 40 * ps;
+
+	panel_box b = draw_panel_ex(p, pw, ph, "Close Game");
+	int s = b.s, rowh = 14 * s, y = b.y + 6 * s;
+
+	static const char *rows[CLS_ROWS] = { "Close Game", "Resume" };
+	int armed = (cls_row == 0 && !CheckTimer(ig_close_until));
+
+	for (int i = 0; i < CLS_ROWS; i++)
+	{
+		int on = (i == cls_row);
+		int ry = y + i * rowh;
+
+		if (on) gfx_fill(b.x + 4 * s, ry - 3 * s, b.w - 8 * s, rowh - 2 * s,
+			(armed && i == 0) ? COL_RED : COL_BLUE);
+
+		gfx_text(rows[i], b.x + 10 * s, ry, s, on ? COL_WHITE : COL_INK, 0);
+	}
+
+	int ny = y + CLS_ROWS * rowh + 6 * s;
+
+	/*
+	  The two sentences the Options row carried, moved to where the decision is now made.
+	  Red for the armed one, which is the colour this front-end keeps for "something is
+	  about to be lost", and the reason the plate above turns red with it.
+
+	  Wrapped rather than written straight out: "THE GAME STAYS LOADED UNTIL YOU CLOSE IT"
+	  is forty characters into a panel holding about thirty-four at 720p and fewer at 240p,
+	  and it used to be served as "...UNTIL YOU CL>" at every profile - the one sentence
+	  explaining the cost, cut off before it reached it.
+	*/
+	char lines[4][64];
+	int nl = wrap_text(armed ? "UNSAVED PROGRESS WILL BE LOST"
+	                         : "THE GAME STAYS LOADED UNTIL YOU CLOSE IT",
+		gfx_text_cols(b.w - 16 * s, s), lines, 2);
+
+	for (int i = 0; i < nl; i++)
+		gfx_text_c(lines[i], b.x + b.w / 2, ny + i * 10 * s, s,
+			armed ? COL_RED : COL_PANELHI, 0);
+
+	if (armed)
+		btn_hint_c(b.x + b.w / 2, ny + nl * 10 * s + 2 * s, s, COL_RED,
+			"Press", LBL_A, "again to close the game");
+}
+
+/*
   Best Settings.
 
   Two levels on purpose. The left column is an outcome a player can judge - "hide the
@@ -8711,7 +8825,7 @@ static void compose()
 		screen == SCR_ABOUT || screen == SCR_WIFI || screen == SCR_PADS ||
 		screen == SCR_POWER || screen == SCR_INI || screen == SCR_PADTEST ||
 		screen == SCR_SET || screen == SCR_CORE || screen == SCR_DISC ||
-		screen == SCR_COVERS);
+		screen == SCR_COVERS || screen == SCR_CLOSE);
 	// Black over a still of the game and COL_BGDARK over the front-end's own background, for
 	// the reason spelled out at ig_build_background(): over a photograph this colour is a
 	// floor and not a dim, and it was flattening every dark scene to grey.
@@ -8730,6 +8844,7 @@ static void compose()
 	case SCR_ABOUT:   draw_about_panel(p); break;
 	case SCR_WIFI:    draw_wifi(p); break;
 	case SCR_POWER:   draw_power(p); break;
+	case SCR_CLOSE:   draw_close(p); break;
 	case SCR_DISC:    draw_disc(p); break;
 	case SCR_INI:     draw_ini(p); break;
 	case SCR_SET:     draw_settings(p); break;
@@ -9157,6 +9272,20 @@ static void move_v(int dir)
 		mark_dirty();
 		break;
 
+	/*
+	  Moving off disarms, which on this screen is not housekeeping but the point of it. The
+	  timer used to go on running while the cursor was somewhere else, so a press, a look
+	  away and a press back inside three seconds closed the game on what the player had
+	  counted as the first of two presses. Cleared on any movement rather than only on
+	  leaving row 0, because arriving back on the armed row is exactly the case that went
+	  wrong and the screen must be found disarmed.
+	*/
+	case SCR_CLOSE:
+		cls_row = (cls_row + dir + CLS_ROWS) % CLS_ROWS;
+		ig_close_until = 0;
+		mark_dirty();
+		break;
+
 	case SCR_SORT:
 		sort_idx = (sort_idx + dir + SORT_COUNT) % SORT_COUNT;
 		mark_dirty();
@@ -9363,7 +9492,14 @@ static void accept()
 		}
 		case MB_OPTIONS:  opt_row = 0; opt_top = 0; go_screen(SCR_OPTIONS); break;
 		case MB_POWER:    pwr_row = 0; pwr_arm = -1; go_screen(SCR_POWER); break;
-		case MB_ABOUT:    go_screen(SCR_ABOUT); break;
+
+		/*
+		  Opened disarmed and on the first row, the way Power is. A screen that arrived
+		  already armed - because the player had been here two seconds ago and backed out -
+		  would close the game on the first press they made on it, which is the single-press
+		  close this screen exists to prevent.
+		*/
+		case MB_CLOSE:    cls_row = 0; ig_close_until = 0; go_screen(SCR_CLOSE); break;
 		case MB_CORE:
 			core_opts_scan();
 			co_news_clear();
@@ -9504,19 +9640,16 @@ static void accept()
 			menu_key_set(KEY_F12 | UPSTROKE);
 			break;
 
-		case 10:
-			if (!ig_active) break;
+		/*
+		  About, which is the same row on both lists - the one place in this panel where
+		  the shelf and a running game agree, because what it has to say does not depend on
+		  whether anything is loaded.
 
-			// Closing the game loses unsaved progress, so it takes two presses.
-			if (!CheckTimer(ig_close_until))
-			{
-				quit_to_home(1);
-			}
-			else
-			{
-				ig_close_until = GetTimer(3000);
-				mark_dirty();
-			}
+		  This row used to be Close Game, in a game only, and the shelf's list stopped at
+		  nine. Both are eleven now and this is the eleventh of each.
+		*/
+		case 10:
+			go_screen(SCR_ABOUT);
 			break;
 		}
 		break;
@@ -9674,6 +9807,26 @@ static void accept()
 
 		pwr_arm = pwr_row;
 		pwr_until = GetTimer(3000);
+		mark_dirty();
+		break;
+
+	case SCR_CLOSE:
+		// The second row is the way back into the game, and costs nothing, so it acts at once.
+		if (cls_row != 0) { ig_close(1); break; }
+
+		/*
+		  And the first loses whatever has not been saved, so it takes two presses - the
+		  same three-second arm the Options row carried before this screen existed, moved
+		  rather than reinvented. quit_to_home(1) takes a suspend point on the way out where
+		  the core can, which is what the 1 is.
+		*/
+		if (!CheckTimer(ig_close_until))
+		{
+			quit_to_home(1);
+			break;
+		}
+
+		ig_close_until = GetTimer(3000);
 		mark_dirty();
 		break;
 
@@ -9881,8 +10034,9 @@ static void accept()
 		break;
 	}
 
+	// A dismisses it, the same as B - and back to Options, which is where it is chosen from now.
 	case SCR_ABOUT:
-		go_screen(SCR_MENUBAR);
+		go_screen(SCR_OPTIONS);
 		break;
 
 	case SCR_SUSPEND:
@@ -10016,12 +10170,24 @@ static void back()
 	case SCR_SORT:
 	case SCR_DISPLAY:
 	case SCR_OPTIONS:
-	case SCR_ABOUT:
 		go_screen(SCR_MENUBAR);
+		break;
+
+	// About is a row of Options now rather than an entry on the bar, so back from it is
+	// back to the list it was chosen from - the same way Best Settings and More Settings go.
+	case SCR_ABOUT:
+		go_screen(SCR_OPTIONS);
 		break;
 
 	case SCR_POWER:
 		if (pwr_arm >= 0) { pwr_arm = -1; mark_dirty(); break; }   // first B cancels
+		go_screen(SCR_MENUBAR);
+		break;
+
+	case SCR_CLOSE:
+		// First B cancels, as on Power: backing out of an armed close must not also be the
+		// press that leaves the screen, or a player stopping themselves overshoots.
+		if (!CheckTimer(ig_close_until)) { ig_close_until = 0; mark_dirty(); break; }
 		go_screen(SCR_MENUBAR);
 		break;
 

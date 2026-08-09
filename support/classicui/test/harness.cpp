@@ -1466,9 +1466,16 @@ static void walk_profile(const char *tag, int profile, int w, int h)
 	dump(name);
 	press(KEY_ESC, 10);
 
+	/*
+	  The entry after Options, which is Power - and was Power when this dump was named
+	  "about" too, because Display is dropped at 240p and this walk counts from wherever
+	  the bar happens to start. Named for what it captures now. About is not on the bar at
+	  all any more; it is the last row of the Options panel, and it is walked to there in
+	  the capitals section.
+	*/
 	press(KEY_RIGHT, 8);
-	press(KEY_ENTER, 20);              // About - Language and Manuals are gone
-	snprintf(name, sizeof(name), "%s-9-about", tag);
+	press(KEY_ENTER, 20);
+	snprintf(name, sizeof(name), "%s-9-bar-after-options", tag);
 	dump(name);
 	press(KEY_ESC, 10);
 	press(KEY_ESC, 10);
@@ -9334,12 +9341,13 @@ static void assert_core_options_are_reachable()
 	frame(8);
 
 	/*
-	  Core Settings is the row above Close Game. Counted downwards from the top, so a row
-	  added anywhere above it moves this count - which is exactly what happened when Online
-	  Covers was inserted under Cover Art, and the four checks after this walk are what
-	  said so. Left counting downwards on purpose: assert_ingame() reaches the last row by
-	  wrapping upwards instead, so between the two of them an inserted row is certain to
-	  break one rather than sliding quietly past both.
+	  Core Settings is the tenth row, above About - it was above Close Game until that moved
+	  to the menu bar, and the two swapped without disturbing the count. Counted downwards
+	  from the top, so a row added anywhere above it moves this count - which is exactly what
+	  happened when Online Covers was inserted under Cover Art, and the four checks after this
+	  walk are what said so. Left counting downwards on purpose: opt_ingame_pass() reaches the
+	  last row by wrapping upwards instead, so between the two of them an inserted row is
+	  certain to break one rather than sliding quietly past both.
 	*/
 	for (int i = 0; i < 9; i++) press(KEY_DOWN, 8);
 	frame(8);
@@ -9388,10 +9396,33 @@ static void assert_core_options_are_reachable()
 /*
   What the Options panel holds, said here rather than read from chome_ui.cpp: those two
   counts are private to the front-end, and a test that shared the constant with the code
-  it is checking would agree with a wrong one. Ten rows on the shelf, eleven in a game.
+  it is checking would agree with a wrong one.
+
+  Eleven rows either way now. The shelf's list was ten and gained About, which came off the
+  menu bar to make room for Close Game; the in-game list was already eleven, lost Close
+  Game to that bar and gained About in its place. So the shelf's panel is a row longer than
+  it has ever been, and whether it still reaches its last row at 240p is a live question
+  rather than a formality - which is what opt_menu_pass() below is for.
 */
-#define OPT_ROWS_MENU_T 10
+#define OPT_ROWS_MENU_T 11
 #define OPT_ROWS_GAME_T 11
+
+/*
+  The SCR_* ids these sections assert on, spelled out here for the same reason the row
+  counts are: they are private to chome_ui.cpp, and sharing the enum with the code under
+  test would make a renumbering agree with itself. The sections below use them by name so a
+  walk that lands on the wrong screen says which one it landed on.
+*/
+enum {
+	S_HOME_T    = 0,
+	S_MENUBAR_T = 1,
+	S_DISPLAY_T = 4,
+	S_OPTIONS_T = 5,
+	S_ABOUT_T   = 6,
+	S_POWER_T   = 12,
+	S_CORE_T    = 16,
+	S_CLOSE_T   = 20
+};
 
 /*
   The Options panel's rows, read off the screen rather than recomputed.
@@ -9562,7 +9593,7 @@ static void opt_ingame_pass(const char *tag, int force, int w, int h)
 	opt_open();
 
 	const chome_profile *p = theme_get();
-	int s = p->ts_ui, s2 = p->ts_tiny, rowh = p->row_h;
+	int s = p->ts_ui, rowh = p->row_h;
 
 	int bx, by, bw, bh;
 	opt_body(&bx, &by, &bw, &bh);
@@ -9583,8 +9614,8 @@ static void opt_ingame_pass(const char *tag, int force, int w, int h)
 	snprintf(what, sizeof(what), "%s: the last row of Options is drawn on the screen", tag);
 	check(seen, what);
 
-	snprintf(what, sizeof(what), "%s: and inside the panel, clear of the help line", tag);
-	check(seen && y0 >= by && y1 < foot_y, what);
+	snprintf(what, sizeof(what), "%s: and inside the panel, clear of its bottom edge", tag);
+	check(seen && y0 >= by && y1 < by + bh, what);
 
 	// A plate with nothing written on it would satisfy the two above. The label is drawn
 	// in white over the selected row, so this is the row's text really being there.
@@ -9611,16 +9642,19 @@ static void opt_ingame_pass(const char *tag, int force, int w, int h)
 	check(seen && (fits ? opt_scrollbar_ink() == 0 : (drawn >= 0 && drawn < OPT_ROWS_GAME_T - 1
 		&& opt_scrollbar_ink() > 0)), what);
 
-	// The help line, which the rows used to be drawn straight through at 240p.
-	snprintf(what, sizeof(what), "%s: the help line is drawn under them, inside the panel", tag);
-	check(opt_foot_pixels(COL_PANELLO) > 0 && foot_y + 18 * s2 <= by + bh, what);
+	/*
+	  And no help line under them any more, at any profile.
 
-	// ...and all of it: two lines of ink, because the sentence does not fit on one at any
-	// profile and used to be cut off mid-word with a '>' where the rest of it went.
-	printf("  %s: help line ink rows %d (one line is %d)\n", tag,
-		opt_foot_ink_rows(COL_PANELLO), 8 * s2);
-	snprintf(what, sizeof(what), "%s: and wrapped onto two lines rather than cut off", tag);
-	check(opt_foot_ink_rows(COL_PANELLO) > 10 * s2, what);
+	  There used to be one, and it was about Close Game: "THE GAME STAYS LOADED UNTIL YOU
+	  CLOSE IT", with "UNSAVED PROGRESS WILL BE LOST" in red once the row was armed. Close
+	  Game is on the menu bar now and the sentences went with it - they are checked on the
+	  screen that carries them, in assert_close_game_on_the_bar(). What is checked here is
+	  that the room they took was given back to the list rather than left as a reserved band
+	  captioning a row that is no longer in the panel.
+	*/
+	snprintf(what, sizeof(what), "%s: and no help line under them, now the row it captioned has gone", tag);
+	check(opt_foot_pixels(COL_PANELLO) == 0 && opt_foot_pixels(COL_RED) == 0, what);
+	(void)foot_y;
 
 	{
 		char name[64];
@@ -9628,46 +9662,37 @@ static void opt_ingame_pass(const char *tag, int force, int w, int h)
 		dump(name);
 	}
 
-	/* ------------------------------------------------- the two-press confirm --- */
+	/*
+	  And the last row is About, asked of the front-end by opening it rather than by reading
+	  the label: what matters is where the row goes. This is also half of "About left the bar
+	  and became a row" - the other half, that no bar entry opens it, is checked on the bar.
+	*/
+	press(KEY_ENTER, 14);
+	frame(8);
+	snprintf(what, sizeof(what), "%s: and it is About, which opens its panel", tag);
+	check(chome_screen_id() == S_ABOUT_T, what);
 
-	press(KEY_ENTER, 10);
+	// Back to the row it was chosen from, not out to the bar: About is a row of this list now.
+	press(KEY_ESC, 12);
 	frame(6);
+	snprintf(what, sizeof(what), "%s: and backing out of it returns to Options", tag);
+	check(chome_screen_id() == S_OPTIONS_T, what);
 
-	snprintf(what, sizeof(what), "%s: one press does not close the game", tag);
-	check(chome_ingame_active(), what);
-
-	snprintf(what, sizeof(what), "%s: and the panel says so, in red where the help line was", tag);
-	check(opt_foot_pixels(COL_RED) > 0, what);
-
-	// Off the row and back. The timer used to keep running while the cursor was
-	// elsewhere, so this arrived back on a row that closed the game on one press.
-	press(KEY_UP, 8);
-	frame(6);
-	snprintf(what, sizeof(what), "%s: moving off it takes the warning away", tag);
-	check(opt_foot_pixels(COL_RED) == 0, what);
-
-	press(KEY_DOWN, 8);
-	frame(6);
-	snprintf(what, sizeof(what), "%s: and coming back finds it disarmed", tag);
-	check(opt_foot_pixels(COL_RED) == 0, what);
-
-	press(KEY_ENTER, 10);
-	frame(6);
-	snprintf(what, sizeof(what), "%s: so the next press arms it again rather than closing", tag);
-	check(chome_ingame_active(), what);
-
-	if (force == 3) dump("options-ingame-lo-armed");
-
-	press(KEY_UP, 8);                         // disarmed, and off the row
 	press(KEY_ESC, 10);
 	press(KEY_MENU, 16);
 	frame(6);
 }
 
 /*
-  And on the shelf, where the list is ten rows and already fitted: the same panel has to
-  be drawn exactly where it always was. Not "still readable" - the same pixels. A fix for
-  a panel that is one row too long has no business moving a panel that is not.
+  And on the shelf, where the list used to be ten rows and to fit.
+
+  It is eleven now - About came down off the menu bar - so this is no longer the "a fix for
+  a panel that is one row too long has no business moving a panel that is not" pass it was
+  written as. The shelf's panel is now exactly the shape the in-game one was when Close Game
+  was invisible on a television: one row longer than 240p can hold. So it is checked the
+  same way, by walking to the last row and looking for it on the screen, and the "drawn
+  where it always was" arithmetic is gone because where it always was is no longer where it
+  belongs.
 */
 static void opt_menu_pass(const char *tag, int force, int w, int h)
 {
@@ -9691,20 +9716,20 @@ static void opt_menu_pass(const char *tag, int force, int w, int h)
 	int bx, by, bw, bh;
 	opt_body(&bx, &by, &bw, &bh);
 
-	for (int i = 0; i < OPT_ROWS_MENU_T - 1; i++) press(KEY_DOWN, 6);
+	// The last row, reached by wrapping upwards off the first - so a row inserted anywhere
+	// above it cannot quietly move what this is about.
+	press(KEY_UP, 10);
 	frame(6);
 
 	int y0 = 0, y1 = 0;
 	int seen = opt_sel_band(&y0, &y1);
 
-	// Where draw_rows_c() has always put the tenth row: 5 units of padding, nine rows
-	// above it, and the plate hung 2 units over the text row and 2 units short of it.
-	int want0 = by + 5 * s + (OPT_ROWS_MENU_T - 1) * rowh - 2 * s;
-	int want1 = want0 + rowh - 2 * s - 1;
+	int drawn = seen ? (y0 + 2 * s - by - 5 * s) / rowh : -1;
 
-	printf("  %s: last shelf row at %d..%d, wanted %d..%d; foot ink %d/%d, bar %d\n",
-		tag, y0, y1, want0, want1, opt_foot_pixels(COL_PANELLO), opt_foot_pixels(COL_RED),
-		opt_scrollbar_ink());
+	printf("  %s: panel body %dx%d at %d,%d; last shelf row drawn %d rows down, y %d..%d; "
+		"foot ink %d/%d, bar %d\n",
+		tag, bw, bh, bx, by, drawn, y0, y1,
+		opt_foot_pixels(COL_PANELLO), opt_foot_pixels(COL_RED), opt_scrollbar_ink());
 
 	{
 		char name[64];
@@ -9712,14 +9737,40 @@ static void opt_menu_pass(const char *tag, int force, int w, int h)
 		dump(name);
 	}
 
-	snprintf(what, sizeof(what), "%s: the shelf's tenth row is drawn where it always was", tag);
-	check(seen && y0 == want0 && y1 == want1, what);
+	snprintf(what, sizeof(what), "%s: the last row of Options is drawn on the screen", tag);
+	check(seen, what);
 
-	snprintf(what, sizeof(what), "%s: and a list that fits is given no scrollbar", tag);
-	check(opt_scrollbar_ink() == 0, what);
+	snprintf(what, sizeof(what), "%s: and inside the panel, clear of its bottom edge", tag);
+	check(seen && y0 >= by && y1 < by + bh, what);
 
-	snprintf(what, sizeof(what), "%s: nor a help line, which belongs to the in-game panel", tag);
+	// A plate with nothing written on it would satisfy the two above.
+	snprintf(what, sizeof(what), "%s: with its label written in it", tag);
+	check(seen && box_pixels(bx, y0, bx + bw, y1 + 1, COL_WHITE) > 0, what);
+
+	/*
+	  Eleven rows on the shelf too. Where they fit, the last is drawn eleventh and nothing
+	  scrolls; where they do not - 240p, which is the case this whole section exists for -
+	  the window has moved down the list and the scrollbar says so.
+	*/
+	int fits = (drawn == OPT_ROWS_MENU_T - 1);
+	snprintf(what, sizeof(what), "%s: %s", tag,
+		fits ? "every row fits, so nothing scrolled" : "the list scrolled to bring it into view");
+	check(seen && (fits ? opt_scrollbar_ink() == 0 : (drawn >= 0 && drawn < OPT_ROWS_MENU_T - 1
+		&& opt_scrollbar_ink() > 0)), what);
+
+	snprintf(what, sizeof(what), "%s: and no help line, which no panel carries any more", tag);
 	check(opt_foot_pixels(COL_PANELLO) == 0 && opt_foot_pixels(COL_RED) == 0, what);
+
+	// And the shelf's last row is About as well - the one row the two lists share.
+	press(KEY_ENTER, 14);
+	frame(8);
+	snprintf(what, sizeof(what), "%s: and it is About here too", tag);
+	check(chome_screen_id() == S_ABOUT_T, what);
+
+	press(KEY_ESC, 12);
+	frame(6);
+	snprintf(what, sizeof(what), "%s: returning to Options rather than out to the bar", tag);
+	check(chome_screen_id() == S_OPTIONS_T, what);
 
 	press(KEY_ESC, 10);
 	press(KEY_MENU, 16);
@@ -9729,11 +9780,16 @@ static void opt_menu_pass(const char *tag, int force, int w, int h)
 /*
   Options has a row nobody could reach.
 
-  "We also need a close game option somewhere" - it was there all along: rows_game[] has
-  ended with Close Game for as long as the in-game menu has existed, and the cursor
+  "We also need a close game option somewhere" - it was there all along: rows_game[] had
+  ended with Close Game for as long as the in-game menu had existed, and the cursor
   counted to it. The panel is a fixed rectangle out of the theme and draw_rows_c() stops
   the moment a row would cross its bottom edge, so at 240p the eleventh row was dropped
-  without a word and the help line under it was drawn through the tenth. The list scrolls
+  without a word and the help line under it was drawn through the tenth.
+
+  Close Game has since been promoted to the menu bar and About has come down into its
+  place, which does not retire this section - it doubles it. The in-game list is still
+  eleven rows, and the shelf's, which used to be ten and to fit, is eleven now too. Both
+  are walked below. The list scrolls
   now, the way More Settings already did, and this section is the proof - at all three
   profiles, by walking to the row and looking for it.
 */
@@ -9766,6 +9822,298 @@ static void assert_options_panel_scrolls()
 	// Back the way this section found things: a game running, our menu shut, 720p.
 	cfg.classicui_profile = was_profile;
 	harness_set_menu_core(0);
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, cfg.classicui_profile);
+	chome_leave();
+	chome_handle(0);
+	frame(6);
+}
+
+/* ------------------------------------------- Close Game, up on the menu bar --- */
+
+/*
+  Which screen a menu-bar entry opens, found by walking the bar rather than by asking the
+  front-end what is on it.
+
+  There is no accessor for the entries and there should not need to be one: what a player
+  can reach is the claim, and walking is what a player does. mb_idx survives leaving the
+  bar, so every walk starts by pressing hard against the left-hand stop - move_h() nudges
+  rather than wrapping at both ends, which is what makes eight presses a reliable "as far
+  as it goes" in either direction.
+
+  Left on whatever it opened. The caller reads the id and puts the screen back, because
+  what "back" means differs per entry and doing it here would hide that.
+*/
+static int bar_slot_opens(int slot)
+{
+	press(KEY_UP, 14);                        // the menu bar
+	for (int i = 0; i < 8; i++) press(KEY_LEFT, 5);
+	for (int i = 0; i < slot; i++) press(KEY_RIGHT, 5);
+	press(KEY_ENTER, 16);
+	frame(8);
+	return chome_screen_id();
+}
+
+// Back out to the shelf from wherever the walk above landed, without pressing B on the
+// shelf itself - that is a navigation key there and would jump the selection to the left.
+static void bar_walk_home()
+{
+	for (int i = 0; i < 5 && chome_screen_id() != S_HOME_T; i++) press(KEY_ESC, 10);
+	frame(6);
+}
+
+// Defined with the typography section, which is the other place that reads a particular
+// letter off the screen rather than counting ink.
+static int glyph_seen(int x, int y, int s, unsigned char code, uint32_t col);
+
+/*
+  Is any label on the menu bar cut off?
+
+  gfx_clip() shortens a string that will not fit its cell and marks the cut with a '>', so
+  the question "is CLOSE GAME drawn on the bar" and "is CLOSE G> drawn on the bar" have the
+  same answer to anything that only looks for ink. This looks for the marker itself, in the
+  one row of the canvas the bar draws its words in - scanned across rather than computed per
+  cell, because the cell a label lands in depends on how many entries are visible.
+
+  The bar has to be fully out for this: draw_menubar() slides it in from above and its text
+  row is only at safe_y once bar_y has settled at 1.
+*/
+static int bar_label_clipped(uint32_t col)
+{
+	const chome_profile *p = theme_get();
+	int s = (p->id == PROF_HD) ? 2 : 1;
+	int gy = p->safe_y + (p->bar_h - 8 * s) / 2;
+
+	for (int x = 0; x + 8 * s <= p->w; x++)
+		if (glyph_seen(x, gy, s, '>', col)) return 1;
+
+	return 0;
+}
+
+/*
+  Closing a game was the eleventh row of the Options panel - two presses in, at the bottom
+  of a list that until this week did not even draw its last row at 240p. About, which a
+  person reads once and never again, had a permanent slot on the menu bar. That is the two
+  of them exactly the wrong way round, and this section is the swap.
+
+  The half that matters is not the promotion but what came with it. The row it replaced had
+  a two-press confirm on a three-second timer, and a bar entry that closed the game on one
+  press would have been a regression dressed as an improvement: unsaved progress, gone, to
+  save somebody a press. So the entry opens a screen and the confirm lives there, the way
+  MB_POWER has always opened SCR_POWER rather than restarting the machine where it stands.
+
+  Everything below is asked of the front-end by pressing keys at it and reading what came
+  back - the screen it landed on, the pixels in the panel, whether a core was loaded.
+*/
+static void assert_close_game_on_the_bar()
+{
+	printf("\n== Close Game is on the menu bar, and About is not ==\n");
+
+	uint8_t was_profile = cfg.classicui_profile;
+
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "gb\nTetris (World).gb\n"); fclose(f); }
+	}
+
+	harness_set_fb_supported(1);
+	harness_set_confstr(1);
+	harness_set_osd_visible(0);
+
+	/* --------------------------------------------------------- on the shelf --- */
+
+	/*
+	  Nothing is running, so there is nothing to close and the entry is not there at all -
+	  not drawn and refusing, which would leave a player wondering what the destructive-
+	  sounding thing on their menu bar had been about to do.
+	*/
+	harness_set_menu_core(1);
+	cfg.classicui_profile = 1;
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+	chome_leave();
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 40 && lib_scanning(); i++) frame(2);
+	frame(12);
+
+	{
+		int seen_close = 0, seen_about = 0, ids[6];
+
+		for (int slot = 0; slot < 6; slot++)
+		{
+			ids[slot] = bar_slot_opens(slot);
+			if (ids[slot] == S_CLOSE_T) seen_close = 1;
+			if (ids[slot] == S_ABOUT_T) seen_about = 1;
+			bar_walk_home();
+		}
+
+		printf("  shelf bar opens: %d %d %d %d %d %d (close=%d about=%d)\n",
+			ids[0], ids[1], ids[2], ids[3], ids[4], ids[5], S_CLOSE_T, S_ABOUT_T);
+
+		check(ids[0] == S_DISPLAY_T && ids[1] == S_OPTIONS_T && ids[2] == S_POWER_T,
+			"the shelf's bar is Display, Options, Power");
+
+		/*
+		  And stops there. Walking past the end nudges rather than wrapping, so slots 3, 4
+		  and 5 all land back on Power - which is the same statement as "there is no fourth
+		  entry", made without an accessor for how many there are.
+		*/
+		check(ids[3] == S_POWER_T && ids[4] == S_POWER_T && ids[5] == S_POWER_T,
+			"and stops there: walking past the end stays on Power");
+
+		check(!seen_close, "Close Game is not on the shelf's bar, where there is nothing to close");
+		check(!seen_about, "and About is not on it either, at any slot");
+	}
+
+	{
+		press(KEY_UP, 16);
+		frame(8);
+		dump("closegame-1-bar-shelf");
+		check(!bar_label_clipped(COL_INK) && !bar_label_clipped(COL_WHITE),
+			"and every word the shelf's bar does carry is drawn in full");
+		bar_walk_home();
+	}
+
+	/* ------------------------------------------------------------- in a game --- */
+
+	harness_set_menu_core(0);
+	harness_set_core_name("GAMEBOY");
+	chome_handle(0);
+	if (chome_ingame_active()) press(KEY_MENU, 14);
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 40 && lib_scanning(); i++) frame(2);
+	frame(12);
+	check(chome_ingame_active(), "and with a game up, the menu is over it");
+
+	{
+		int seen_close = 0, seen_about = 0, ids[6];
+
+		for (int slot = 0; slot < 6; slot++)
+		{
+			ids[slot] = bar_slot_opens(slot);
+			if (ids[slot] == S_CLOSE_T) seen_close = 1;
+			if (ids[slot] == S_ABOUT_T) seen_about = 1;
+			bar_walk_home();
+		}
+
+		printf("  in-game bar opens: %d %d %d %d %d %d\n",
+			ids[0], ids[1], ids[2], ids[3], ids[4], ids[5]);
+
+		check(ids[0] == S_DISPLAY_T && ids[1] == S_OPTIONS_T && ids[2] == S_POWER_T
+			&& ids[3] == S_CLOSE_T,
+			"in a game the bar is Display, Options, Power, Close Game");
+
+		check(seen_close, "so Close Game is one press from the game, not eleven rows down");
+		check(!seen_about, "and About is still not on the bar");
+	}
+
+	/* ------------------------------ the confirm, at 240p where the row was lost --- */
+
+	/*
+	  240p on purpose. This is the television the front-end was written for and the canvas
+	  the old row was invisible on, so it is the one worth proving the replacement legible
+	  and reachable on - and the bar is at its most crowded there, where Display is dropped
+	  and "CLOSE GAME" is the longest word on it.
+	*/
+	cfg.classicui_profile = 3;
+	harness_set_fb(320, 240);
+	gfx_shutdown();
+	theme_update(320, 240, 3);
+	if (chome_ingame_active()) press(KEY_MENU, 14);
+	press(KEY_MENU, 20);
+	frame(12);
+
+	press(KEY_UP, 16);
+	frame(8);
+	dump("closegame-2-bar-240p");
+	check(!bar_label_clipped(COL_INK) && !bar_label_clipped(COL_WHITE),
+		"at 240p the bar still spells Close Game out rather than cutting it short");
+
+	// Display is dropped at 240p, so Close Game is the third entry here and not the fourth.
+	for (int i = 0; i < 8; i++) press(KEY_LEFT, 5);
+	press(KEY_RIGHT, 6);
+	press(KEY_RIGHT, 6);
+	press(KEY_ENTER, 16);
+	frame(8);
+	check(chome_screen_id() == S_CLOSE_T, "and Close Game opens from it at 240p too");
+
+	{
+		int x0, y0, x1, y1;
+		panel_rect(&x0, &y0, &x1, &y1);
+
+		dump("closegame-3-unarmed");
+
+		/*
+		  Nothing red before a press. The panel is opened by the bar entry and the entry is
+		  named after a destructive act, so a screen that arrived already armed would close
+		  the game on the first press made on it.
+		*/
+		check(box_pixels(x0, y0, x1, y1, COL_RED) == 0,
+			"the screen opens disarmed, with nothing red on it");
+
+		// And it says what closing costs, before the player has committed to anything.
+		check(box_pixels(x0, y0, x1, y1, COL_PANELHI) > 0,
+			"and carries the sentence about the game staying loaded");
+
+		/*
+		  The core loaded before any of this, kept so "nothing was loaded" can be said as
+		  "the same thing is loaded as before". harness_clear_launch() would not do: it
+		  empties the launch record and leaves last_rbf holding whatever a previous section
+		  loaded, so an emptiness check on it asserts about that section and not this one.
+		*/
+		char rbf_before[256];
+		snprintf(rbf_before, sizeof(rbf_before), "%s", harness_last_rbf());
+		harness_clear_launch();
+
+		press(KEY_ENTER, 12);
+		frame(8);
+		dump("closegame-4-armed");
+
+		check(chome_ingame_active(), "one press does not close the game");
+		check(!strcmp(harness_last_rbf(), rbf_before), "and loads nothing");
+		check(box_pixels(x0, y0, x1, y1, COL_RED) > 0,
+			"it arms instead, and says so in red");
+
+		/*
+		  Moving off disarms, which is the behaviour this screen inherited rather than the
+		  one it invented: the timer used to run on while the cursor was elsewhere, so a
+		  press, a look away and a press back inside three seconds closed the game on what
+		  the player had counted as the first of two.
+		*/
+		press(KEY_DOWN, 10);
+		frame(8);
+		check(box_pixels(x0, y0, x1, y1, COL_RED) == 0, "moving off it disarms it");
+
+		press(KEY_UP, 10);
+		frame(8);
+		check(box_pixels(x0, y0, x1, y1, COL_RED) == 0, "and coming back finds it disarmed");
+
+		press(KEY_ENTER, 12);
+		frame(8);
+		check(chome_ingame_active(),
+			"so the press after that arms it again rather than closing the game");
+		check(!strcmp(harness_last_rbf(), rbf_before), "with still nothing loaded");
+
+		// B cancels the arm before it leaves the screen, the same way Power does.
+		press(KEY_ESC, 10);
+		frame(8);
+		check(chome_screen_id() == S_CLOSE_T && box_pixels(x0, y0, x1, y1, COL_RED) == 0,
+			"and B cancels the arming before it leaves the screen");
+
+		// Two deliberate presses, with nothing in between. This one has to work.
+		press(KEY_ENTER, 12);
+		press(KEY_ENTER, 12);
+		frame(10);
+		printf("  loaded rbf: %s\n", harness_last_rbf());
+		check(strstr(harness_last_rbf(), "menu.rbf") != 0,
+			"and two deliberate presses do close the game");
+	}
+
+	// Back the way this section found things: the shelf, our menu shut, 720p.
+	cfg.classicui_profile = was_profile;
+	harness_set_menu_core(1);
 	harness_set_fb(1280, 720);
 	gfx_shutdown();
 	theme_update(1280, 720, cfg.classicui_profile);
@@ -11173,17 +11521,31 @@ static void assert_ingame()
 	check(harness_mute_changes() == 0, "with the volume register left untouched");
 	harness_set_muted(0);
 
-	// Close Game: Options, last row, two presses. Reached by wrapping upwards off the
-	// first row, so adding a row to the panel does not silently point this somewhere
-	// else - which is exactly what happened when Wi-Fi was added.
+	/*
+	  Close Game: the menu bar, then two presses on the screen it opens.
+
+	  It was the eleventh row of Options, reached here by wrapping upwards off the first.
+	  Reached from the bar now - walked to from the left-hand stop rather than counted from
+	  Options, so an entry inserted anywhere in the bar breaks this rather than moving it
+	  quietly onto whatever took its place. Which is the menu-bar version of exactly what
+	  happened to this walk when Wi-Fi was added to the panel.
+	*/
 	press(KEY_MENU, 20);
-	press(KEY_UP, 14);
-	press(KEY_RIGHT, 10);
-	press(KEY_ENTER, 16);                     // Options
-	press(KEY_UP, 8);
-	press(KEY_ENTER, 8);
+	press(KEY_UP, 14);                        // the menu bar
+	for (int i = 0; i < 8; i++) press(KEY_LEFT, 6);
+	press(KEY_RIGHT, 8);                      // Options
+	press(KEY_RIGHT, 8);                      // Power
+	press(KEY_RIGHT, 8);                      // Close Game
+	press(KEY_ENTER, 16);
+	frame(8);
+	check(chome_screen_id() == S_CLOSE_T, "Close Game is on the bar and opens its own screen");
+	check(chome_ingame_active(), "and opening it has not closed anything");
+
+	press(KEY_ENTER, 10);
+	frame(6);
 	dump("ingame-5-close-armed");
 	check(chome_ingame_active(), "one press does not close the game");
+
 	press(KEY_ENTER, 8);
 	printf("  loaded rbf: %s\n", harness_last_rbf());
 	check(strstr(harness_last_rbf(), "menu.rbf") != 0, "second press returns to the menu core");
@@ -12481,8 +12843,10 @@ static void assert_typography()
 		frame(8);
 		press(KEY_UP, 10);                    // the menu bar, on Display
 		press(KEY_RIGHT, 10);                 // Options
-		press(KEY_RIGHT, 10);                 // Power
-		press(KEY_RIGHT, 10);                 // About
+		press(KEY_ENTER, 14);
+		// About is the last row of Options now rather than the fourth entry on the bar,
+		// so it is reached by wrapping upwards off the first row.
+		press(KEY_UP, 10);
 		press(KEY_ENTER, 14);
 		frame(8);
 		check(chome_screen_id() == S_ABOUT, "the About panel is up, which has a header to read");
@@ -12527,6 +12891,8 @@ static void assert_typography()
 		check(panel_hash() == on_hash,
 			"and putting the switch back reproduces the frame bit for bit");
 
+		// Two now rather than one: About backs out to Options, and Options to the bar.
+		press(KEY_ESC, 10);
 		press(KEY_ESC, 10);
 		frame(6);
 	}
@@ -12593,7 +12959,8 @@ static void assert_typography()
 		press(KEY_UP, 10);                    // the menu bar
 		press(KEY_RIGHT, 10);                 // Options
 		press(KEY_ENTER, 14);
-		press(KEY_UP, 8);                     // wrap to the last row
+		press(KEY_UP, 8);                     // wrap to the last row, which is About now
+		press(KEY_UP, 8);                     // Advanced Settings
 		press(KEY_UP, 8);                     // More Settings
 		press(KEY_ENTER, 14);
 		frame(8);
@@ -15254,6 +15621,9 @@ int main()
 	// Directly after it, because the two are about the same panel from opposite ends: that
 	// one counts down to Core Settings, this one walks past it to the row underneath.
 	assert_options_panel_scrolls();
+	// And directly after that, because it is the other end of the same move: that section
+	// walks the panel Close Game left, this one walks the bar it arrived on.
+	assert_close_game_on_the_bar();
 	assert_look_applies_to_the_running_core();
 	assert_forget_beats_the_stat_check();
 	assert_slot_count_follows_core();
@@ -15656,7 +16026,8 @@ int main()
 		press(KEY_UP, 10);                    // the menu bar
 		press(KEY_RIGHT, 10);                 // Options
 		press(KEY_ENTER, 14);
-		press(KEY_UP, 8);                     // wrap to the last row
+		press(KEY_UP, 8);                     // wrap to the last row, which is About now
+		press(KEY_UP, 8);                     // Advanced Settings
 		press(KEY_UP, 8);                     // More Settings
 		press(KEY_UP, 8);                     // Best Settings
 		press(KEY_UP, 8);                     // Wi-Fi
@@ -16012,7 +16383,8 @@ int main()
 		press(KEY_UP, 10);                    // the menu bar
 		press(KEY_RIGHT, 10);                 // Options
 		press(KEY_ENTER, 14);
-		press(KEY_UP, 8);                     // wrap to the last row
+		press(KEY_UP, 8);                     // wrap to the last row, which is About now
+		press(KEY_UP, 8);                     // Advanced Settings
 		press(KEY_UP, 8);                     // More Settings
 		press(KEY_UP, 8);                     // Best Settings
 		press(KEY_UP, 8);                     // and up to Wi-Fi
@@ -16119,7 +16491,8 @@ int main()
 		press(KEY_UP, 10);                    // the menu bar
 		press(KEY_RIGHT, 10);                 // Options
 		press(KEY_ENTER, 14);
-		press(KEY_UP, 8);                     // wrap to the last row
+		press(KEY_UP, 8);                     // wrap to the last row, which is About now
+		press(KEY_UP, 8);                     // Advanced Settings
 		press(KEY_UP, 8);                     // More Settings
 		press(KEY_UP, 8);                     // Best Settings
 		press(KEY_UP, 8);                     // and up to Wi-Fi
@@ -16253,6 +16626,7 @@ int main()
 		*/
 		press(KEY_UP, 10);
 		press(KEY_ENTER, 14);
+		press(KEY_UP, 8);                     // wrap to About, the last row
 		press(KEY_UP, 8);
 		press(KEY_UP, 8);
 		press(KEY_UP, 8);
@@ -16474,7 +16848,8 @@ int main()
 		press(KEY_UP, 10);                    // the menu bar
 		press(KEY_RIGHT, 10);                 // Options
 		press(KEY_ENTER, 14);
-		press(KEY_UP, 8);                     // wrap to the last row
+		press(KEY_UP, 8);                     // wrap to the last row, which is About now
+		press(KEY_UP, 8);                     // Advanced Settings
 		press(KEY_UP, 8);                     // More Settings
 		press(KEY_UP, 8);                     // Best Settings
 		frame(6);
@@ -16861,7 +17236,8 @@ int main()
 		press(KEY_UP, 10);                    // the menu bar
 		press(KEY_RIGHT, 10);                 // Options
 		press(KEY_ENTER, 14);
-		press(KEY_UP, 8);                     // wrap to the last row
+		press(KEY_UP, 8);                     // wrap to the last row, which is About now
+		press(KEY_UP, 8);                     // Advanced Settings
 		press(KEY_UP, 8);                     // More Settings
 		frame(6);
 		dump("set-1-options-row");
@@ -16884,8 +17260,9 @@ int main()
 		press(KEY_UP, 10);
 		press(KEY_RIGHT, 10);
 		press(KEY_ENTER, 14);
-		press(KEY_UP, 8);
-		press(KEY_UP, 8);
+		press(KEY_UP, 8);                     // About, the last row
+		press(KEY_UP, 8);                     // Advanced Settings
+		press(KEY_UP, 8);                     // More Settings
 		press(KEY_ENTER, 14);
 		frame(8);
 		dump("set-3-all-default");
@@ -16973,8 +17350,9 @@ int main()
 		frame(12);
 		press(KEY_UP, 10);                    // Display is dropped at 240p: Options is first
 		press(KEY_ENTER, 14);
-		press(KEY_UP, 8);
-		press(KEY_UP, 8);
+		press(KEY_UP, 8);                     // About, the last row
+		press(KEY_UP, 8);                     // Advanced Settings
+		press(KEY_UP, 8);                     // More Settings
 		press(KEY_ENTER, 14);
 		frame(8);
 		dump("set-8-240p");
