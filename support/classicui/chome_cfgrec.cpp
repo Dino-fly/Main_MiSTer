@@ -7,6 +7,7 @@
 #include <sys/stat.h>
 
 #include "chome_cfgrec.h"
+#include "chome_ini.h"
 
 #include "../../cfg.h"
 #include "../../file_io.h"
@@ -487,8 +488,22 @@ int cfgrec_report(char *out, int max)
 		if (rec[i].kind == CFGREC_SEC_NONE) snprintf(where, sizeof(where), "(no section)");
 		else snprintf(where, sizeof(where), "[%s]", rec[i].section);
 
+		/*
+		  Through ini_loggable(), the same redaction the resolved-values table below
+		  uses and the same one the debug log uses.
+
+		  This line prints what the file literally says, which is exactly why it has to
+		  ask: one of the keys we record is classicui_ss_pass, and a file written to the
+		  card on every boot - the file we tell people to send us when something is
+		  wrong - is the worst possible place to repeat a password. Measured on a real
+		  card before this call was here: the resolved-values table said `***` while this
+		  one printed the password in full, three lines apart. Redacting in one printer
+		  and not the other is not a smaller bug than not redacting at all; it is the
+		  same bug with a witness.
+		*/
 		pos = put(out, max, pos, "  line %5d  %-22s %s=%s  %s\n",
-			rec[i].lineno, where, rec[i].key, rec[i].value,
+			rec[i].lineno, where, rec[i].key,
+			ini_loggable(rec[i].key, rec[i].value),
 			rec[i].applied ? "read" : "SKIPPED");
 	}
 

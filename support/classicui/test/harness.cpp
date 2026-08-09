@@ -14560,6 +14560,33 @@ static void assert_config_check()
 			"and that it did not consult debug, which is the reason it exists");
 	}
 
+	/* ------------------------------------------------- and never the player's password --- */
+
+	/*
+	  Read off a real card before this section existed: the resolved-values table printed
+	  `***` while the file-order table three lines above it printed the password in full.
+	  Both are printers of the same record, and only one of them asked ini_loggable().
+
+	  This file is written to the card on every boot and is the file we ask people to send
+	  us when something is wrong, so a password in it travels further than one in a log.
+	  The check is on the *whole report* rather than on either table, because the next
+	  printer somebody adds will be a third place to forget.
+	*/
+	{
+		cfgrec_begin("MiSTer.ini", "1280x720@60.0", "MENU");
+		cfgrec_section("MiSTer", 1);
+		cfgrec_line("classicui_ss_user=dune", 5, 1);
+		cfgrec_line("classicui_ss_pass=hunt3rSecret", 6, 1);
+		cc_build();
+
+		check(strstr(cc_buf, "hunt3rSecret") == 0,
+			"the password is nowhere in the report, in any of its tables");
+		check(strstr(cc_buf, "classicui_ss_pass=***") != 0,
+			"the line is still listed, with the value replaced rather than the line dropped");
+		check(strstr(cc_buf, "classicui_ss_user=dune") != 0,
+			"while the login, which is not a secret, is still printed as itself");
+	}
+
 	/* ------------------------------------------------------------ and on the screen --- */
 
 	{
