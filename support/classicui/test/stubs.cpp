@@ -153,6 +153,62 @@ int FileLoad(const char *name, void *buf, int size)
 uint16_t altcfg(int) { return 0; }
 const char *cfg_get_name(uint8_t) { return "MiSTer.ini"; }
 
+/*
+  cfg.cpp's option table, as much of it as the configuration check asks about.
+
+  The check reads the real table through these three accessors precisely so that it
+  never keeps a list of option names of its own - see cfg.h. The harness has no cfg.cpp
+  to read, so this is a fixture standing in for it, and it is deliberately a *short*
+  one: only the classicui rows and debug, because those are the only rows the report
+  prints and the only ones "is this a real option?" is ever asked about.
+
+  What it therefore does not prove is that the shipped list is complete - that is
+  structural, because in the firmware these functions are the table rather than a copy
+  of it. What it does prove is the analysis: that a name in the table is accepted, a
+  name outside it is called a typo, and every resolved value is printed.
+*/
+static const struct { const char *name; char kind; void *var; } stub_vars[] =
+{
+	{ "DEBUG",                   'u', &cfg.debug },
+	{ "CLASSICUI",               'u', &cfg.classicui },
+	{ "CLASSICUI_PROFILE",       'u', &cfg.classicui_profile },
+	{ "CLASSICUI_OVERSCAN",      'u', &cfg.classicui_overscan },
+	{ "CLASSICUI_HALFRES",       'u', &cfg.classicui_halfres },
+	{ "CLASSICUI_TRACKING",      'i', &cfg.classicui_tracking },
+	{ "CLASSICUI_CAPS",          'u', &cfg.classicui_caps },
+	{ "CLASSICUI_ARTDIR",        's', cfg.classicui_artdir },
+	{ "CLASSICUI_ARTFETCH",      'u', &cfg.classicui_artfetch },
+	{ "CLASSICUI_GAMELIST",      'u', &cfg.classicui_gamelist },
+	{ "CLASSICUI_FREEZE",        'u', &cfg.classicui_freeze },
+	{ "CLASSICUI_ARTURL",        's', cfg.classicui_arturl },
+	{ "CLASSICUI_SCREENSCRAPER", 'u', &cfg.classicui_screenscraper },
+	{ "CLASSICUI_DISC",          'u', &cfg.classicui_disc },
+	{ "CLASSICUI_SS_USER",       's', cfg.classicui_ss_user },
+	{ "CLASSICUI_SS_PASS",       's', cfg.classicui_ss_pass },
+};
+
+int cfg_var_count() { return (int)(sizeof(stub_vars) / sizeof(stub_vars[0])); }
+
+const char *cfg_var_name(int i)
+{
+	if (i < 0 || i >= cfg_var_count()) return "";
+	return stub_vars[i].name;
+}
+
+const char *cfg_var_text(int i, char *out, int max)
+{
+	if (max > 0) out[0] = 0;
+	if (i < 0 || i >= cfg_var_count() || max <= 0) return out;
+
+	switch (stub_vars[i].kind)
+	{
+	case 'u': snprintf(out, max, "%u", *(uint8_t*)stub_vars[i].var); break;
+	case 'i': snprintf(out, max, "%d", *(int8_t*)stub_vars[i].var); break;
+	default:  snprintf(out, max, "%s", (char*)stub_vars[i].var); break;
+	}
+	return out;
+}
+
 /* ---------------------------------------------------- fake framebuffers --- */
 
 static int fb_supported = 1;

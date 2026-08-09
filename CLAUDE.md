@@ -57,6 +57,62 @@ tests of a different binary. Quote the md5 of the build you actually tested.
 Everything else under `disc-*`, `snac-wave*`, `worktree-agent-*` is a merged feature branch or
 an agent's scratch worktree and can go.
 
+## `MiSTer.ini` is sectioned, and that is the most expensive trap in this project
+
+A setting only takes effect if the parser is inside a section that applies
+(`cfg.cpp:470-533`, `ini_get_section()` at `:229`). Appending a line to the end of the file
+puts it in whatever section happens to be last, where it is silently ignored. There is no
+error, and the option simply reads as its default.
+
+Two things make it worse than it sounds:
+
+- **`[video=1280x720]`-style sections** (`cfg.cpp:277-284`) match the core's *actual output
+  mode*, and the ini is re-parsed on a video change **only when a core is running, never in
+  the menu** (`video.cpp:3344`). So a block of settings under a `[video=...]` header can be
+  live inside games and dead on the shelf - which looks exactly like a front-end bug.
+- **`debug` is handled while its line is parsed** (`cfg.cpp:456-464`). A `debug=2` in the
+  wrong section produces no `/tmp/debug.txt` at all. **The diagnostic fails the same way the
+  bug does**, so "send me your log" gets you nothing from precisely the person who needs help.
+
+This has now cost us three internal bugs and one user's day. When anyone reports a setting
+"not working", ask for `grep -n "^\[" MiSTer.ini` before anything else - it is one line and
+it settles it. When writing a setting programmatically, emit a fresh `[MiSTer]` header rather
+than appending to whatever is there; the settings screen already does this.
+
+## Never send a user upstream while they are running our firmware
+
+Turning a Classic Home option off does **not** put the user on stock MiSTer. `classicui_disc=0`
+disables our disc support; `classicui=0` disables the front-end; both still run *our* binary,
+with our SNAC pad handling, our analog takeover, and every other change we have made compiled
+in and partly live. A symptom that survives an option being switched off has been narrowed to
+"not that feature" - not to "not us".
+
+So a report can only be called upstream's after the user has reproduced it on the **official**
+MiSTer binary. Anything less and we are asking upstream maintainers to debug a binary that is
+not theirs, on our say-so. That wastes their time and it is a bad way to behave as a fork.
+
+The install instructions already tell people to keep the official firmware as `MiSTer.backup`
+before installing ours, so most users have it on the card. Swapping that back in and
+reproducing is the whole test, and it is the only thing that makes "please report this
+upstream" an honest thing to say.
+
+This rule exists because it was broken once: a reporter was told to take a sound problem
+upstream on the strength of `classicui_disc=0` alone.
+
+## Don't publish a hypothesis as a conclusion
+
+Reproducing *a* cause of a symptom is not confirming *the* cause. On 2026-08-08 I reproduced
+the exact shape of a user's bug - disc missing on the shelf, present in the F12 menu - fixed
+the defect I had found, and told the reporter their `video_mode` theory was a red herring.
+Their next message (a `debug=2` that produced no file) pointed straight at the ini-scope
+explanation I had ranked second and dismissed, and I had to walk the claim back in public.
+
+The analysis I was working from had explicitly said it could not distinguish its hypotheses
+and had listed the device evidence that would separate them. I published one of them as
+settled anyway, because I had a reproduction that matched. **A shape match is not an identity
+match.** When an analysis says "I cannot tell these apart", the honest report says that too -
+especially to a third party who will act on it.
+
 ## `make clean` after touching a header
 
 Incremental make in this tree does not reliably rebuild after a header changes or after a

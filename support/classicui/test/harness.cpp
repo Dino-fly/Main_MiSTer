@@ -48,6 +48,7 @@
 #include "../chome_net.h"
 #include "../chome_bt.h"
 #include "../chome_ini.h"
+#include "../chome_cfgrec.h"
 #include "../chome_opt.h"
 #include "../chome_icons32.h"
 #include "../chome_btn12.h"
@@ -14192,6 +14193,437 @@ static void assert_rip_screen()
 	frame(6);
 }
 
+/*
+  The boot-time configuration check - support/classicui/chome_cfgrec.h.
+
+  Driven through the recording calls themselves rather than through a fake ini, and that
+  is the point rather than a shortcut: those three functions are exactly what cfg.cpp's
+  parser calls, in the order it calls them, so a record built here is the record a real
+  file produces. Building one from a parser of the harness's own would prove that the
+  second parser agrees with the analysis and say nothing at all about the first.
+
+  Everything below asserts the *wording*. The product here is a paragraph read by
+  somebody who has already lost an evening, on a card in a PC, with no idea what a
+  section is; "1 problem found" would be a check that passes while the file remains
+  useless. So the checks are for the sentences.
+*/
+static char cc_buf[8192];
+
+static int cc_has(const char *s) { return strstr(cc_buf, s) != 0; }
+
+static void cc_build()
+{
+	cfgrec_report(cc_buf, sizeof(cc_buf));
+}
+
+static void assert_config_check()
+{
+	printf("\n== the boot-time configuration check ==\n");
+
+	/* --------------------------------------------------- a config with nothing wrong --- */
+
+	{
+		cfgrec_begin("MiSTer.ini", "1280x720@60.0", "MENU");
+		cfgrec_section("MiSTer", 1);
+		cfgrec_line("classicui=1", 4, 1);
+		cfgrec_line("classicui_disc=1", 5, 1);
+		cfgrec_line("video_mode=8", 6, 1);          // not ours: dropped without a word
+		cfg.classicui = 1;
+		cc_build();
+
+		check(cfgrec_problems() == 0, "a clean config has nothing to report");
+		check(cc_has("PROBLEMS: none"), "and the report says so in the heading");
+		check(cc_has("Every classicui setting was read from [MiSTer], spelled correctly and set"),
+			"and in a sentence under it, so the heading is not the only place to look");
+		check(!cc_has("SKIPPED"), "with nothing marked skipped");
+		check(cc_has("  line     4  [MiSTer]") && cc_has("classicui=1  read"),
+			"the file-order list gives the line, the section, the assignment and the outcome");
+		check(!cc_has("video_mode"),
+			"an upstream option is not listed at all - this check has no opinion about those");
+		check(cc_has("Only classicui* settings and debug are checked."),
+			"and the report says out loud that it looked at nothing else");
+	}
+
+	/* ------------------------------------------------------------------- the header --- */
+
+	{
+		check(cc_has("ini file read    : MiSTer.ini"), "the header names the ini that was read");
+		check(cc_has("parsed for core  : MENU"), "and the core it was parsed for");
+		check(cc_has("[video=...] matched against : 1280x720@60.0"),
+			"and what a video section would have been matched against");
+		check(!cc_has("0x0 means no core video"),
+			"with no note about zeros when there was a real mode");
+
+		cfgrec_begin("MiSTer_Alt_1.ini", "0x0@0.0", "MENU");
+		cfgrec_section("MiSTer", 1);
+		cfgrec_line("classicui=1", 4, 1);
+		cc_build();
+
+		check(cc_has("ini file read    : MiSTer_Alt_1.ini"),
+			"an alt ini is named as the alt ini, because altcfg() decides which file this is about");
+		check(cc_has("0x0 means no core video had been measured yet, so on this pass no"),
+			"and a zero video mode is explained rather than printed and left");
+	}
+
+	/* -------------------------------------------------- a key in a core section --- */
+
+	{
+		cfgrec_begin("MiSTer.ini", "1280x720@60.0", "MENU");
+		cfgrec_section("MiSTer", 1);
+		cfgrec_line("classicui_caps=1", 4, 1);
+		cfgrec_section("Gameboy", 0);
+		cfgrec_line("classicui=1", 41, 0);
+		cc_build();
+
+		check(cfgrec_problems() == 1, "a classicui key in a core section is one problem");
+		check(cc_has("1. classicui=1  -  line 41, section [Gameboy]"),
+			"named with its value, its line and the section it was found in");
+		check(cc_has("Read from a core section, so it applies only while that core is loaded."),
+			"and told what a core section does");
+		check(cc_has("The shelf is the menu core, so the front-end never sees this setting."),
+			"and why that means the front-end never gets it");
+		check(cc_has("It was NOT read: this pass skipped that section entirely, so the value"),
+			"and that this particular line was skipped, not merely could be");
+		check(cc_has("Fix: move the line into the [MiSTer] section at the top of MiSTer.ini."),
+			"and what to do about it, in one sentence with the section named");
+		check(cc_has("  line    41  [Gameboy]") && cc_has("classicui=1  SKIPPED"),
+			"with the same line marked SKIPPED in the file-order list");
+		check(cc_has("  line     4  [MiSTer]") && cc_has("classicui_caps=1  read"),
+			"and the [MiSTer] line beside it marked read, so the two can be compared");
+	}
+
+	/* ----------------------------------------------- the same key, section applied --- */
+
+	{
+		cfgrec_begin("MiSTer.ini", "1280x720@60.0", "Gameboy");
+		cfgrec_section("Gameboy", 1);
+		cfgrec_line("classicui=1", 41, 1);
+		cc_build();
+
+		check(cfgrec_problems() == 1,
+			"a core-section key is still a problem when that core is the one running");
+		check(cc_has("It WAS read this time, because this pass parsed for that section."),
+			"but the report says it was read, rather than claiming a skip that did not happen");
+		check(!cc_has("It was NOT read"), "and does not say both");
+	}
+
+	/* --------------------------------------------------------- a [video=...] key --- */
+
+	{
+		cfgrec_begin("MiSTer.ini", "0x0@0.0", "MENU");
+		cfgrec_section("video=1920x1080", 0);
+		cfgrec_line("classicui=1", 84, 0);
+		cc_build();
+
+		check(cfgrec_problems() == 1, "a classicui key in a video section is one problem");
+		check(cc_has("1. classicui=1  -  line 84, section [video=1920x1080]"),
+			"named with the video section it was found in");
+		check(cc_has("live inside") && cc_has("games and dead in the menu"),
+			"and told the failure mode in those words: live inside games, dead in the menu");
+		check(cc_has("MiSTer.ini is re-read on a video change only"),
+			"with the reason - the ini is only re-read on a video change");
+		check(cc_has("while a core is running, never in the menu"),
+			"and never in the menu, which is where the front-end lives");
+		check(cc_has("matched against the resolution the CORE is"),
+			"and that the match is on the core's output, not on what the television is doing");
+		check(cc_has("Fix: move the line into the [MiSTer] section at the top of MiSTer.ini."),
+			"and the same one-sentence fix");
+	}
+
+	/*
+	  A malformed video header. ini_get_section() compares only as far as the '=', so the
+	  parser treats this as a video section - and so must the report, or the one header
+	  most likely to be typed by hand would get the wrong explanation.
+	*/
+	{
+		cfgrec_begin("MiSTer.ini", "0x0@0.0", "MENU");
+		cfgrec_section("vid=1920x1080", 0);
+		cfgrec_line("classicui=1", 84, 0);
+		cc_build();
+
+		check(cc_has("games and dead in the menu"),
+			"[vid=...] gets the video explanation, because that is what the parser calls it");
+	}
+
+	/*
+	  Several keys under one bad header, which is the common shape of this mistake:
+	  somebody pastes a block in. The explanation is given once and pointed at after
+	  that - a page that says the same five lines four times is a page nobody finishes.
+	*/
+	{
+		cfgrec_begin("MiSTer.ini", "0x0@0.0", "MENU");
+		cfgrec_section("video=1920x1080", 0);
+		cfgrec_line("classicui=1", 84, 0);
+		cfgrec_line("classicui_profile=2", 85, 0);
+		cfgrec_line("classicui_caps=0", 86, 0);
+		cc_build();
+
+		check(cfgrec_problems() == 3, "three keys under one bad header are three problems");
+
+		const char *para = "A [video=...] section is matched against the resolution";
+		const char *first = strstr(cc_buf, para);
+		check(first && !strstr(first + 1, para),
+			"but the long explanation is written once, not once per key");
+		check(cc_has("The same [video=1920x1080] section as problem 1: live inside games,"),
+			"the second key points back at the first by number, and repeats the failure mode");
+		check(cc_has("It was NOT read either."),
+			"and says it was skipped too, without repeating why a skip matters");
+		check(cc_has("2. classicui_profile=2  -  line 85, section [video=1920x1080]") &&
+			cc_has("3. classicui_caps=0  -  line 86, section [video=1920x1080]"),
+			"while every one of them still gets its own numbered entry with its own line");
+	}
+
+	/* ------------------------------------------------- a key above every section --- */
+
+	{
+		cfgrec_begin("MiSTer.ini", "1280x720@60.0", "MENU");
+		cfgrec_line("classicui=1", 1, 0);
+		cfgrec_section("MiSTer", 1);
+		cc_build();
+
+		check(cfgrec_problems() == 1, "a key above the first section header is one problem");
+		check(cc_has("1. classicui=1  -  line 1, before any [section] header"),
+			"and is placed by saying there is no section rather than by naming one");
+		check(cc_has("[section] header is read for no core at all."),
+			"and told that such a line is read for no core at all");
+		check(cc_has("Fix: put a line reading [MiSTer] above it."),
+			"with a different fix, because moving it is not what this one needs");
+		check(cc_has("  line     1  (no section)"),
+			"and the file-order list says (no section) rather than an empty pair of brackets");
+	}
+
+	/* ------------------------------------------------------------------ duplicates --- */
+
+	{
+		cfgrec_begin("MiSTer.ini", "1280x720@60.0", "MENU");
+		cfgrec_section("MiSTer", 1);
+		cfgrec_line("classicui_profile=1", 5, 1);
+		cfgrec_line("classicui_profile=2", 9, 1);
+		cc_build();
+
+		check(cfgrec_problems() == 1, "the same key twice is one problem, not two");
+		check(cc_has("1. classicui_profile is assigned 2 times  -  lines 5, 9"),
+			"reported once, with every line it appears on");
+		check(cc_has("The last assignment the parser reaches wins, silently"),
+			"and told which one the parser keeps");
+		check(cc_has("Line 9 won, with classicui_profile=2."),
+			"and which line that is here, with the value it won with");
+	}
+
+	{
+		cfgrec_begin("MiSTer.ini", "1280x720@60.0", "MENU");
+		cfgrec_section("Gameboy", 0);
+		cfgrec_line("classicui_profile=1", 5, 0);
+		cfgrec_line("classicui_profile=2", 9, 0);
+		cc_build();
+
+		check(cc_has("None of them won: every one is in a section this pass skipped, so the"),
+			"and when every copy was skipped it says none of them won, rather than naming a winner");
+	}
+
+	/* ------------------------------------------------------------- an unknown key --- */
+
+	{
+		cfgrec_begin("MiSTer.ini", "1280x720@60.0", "MENU");
+		cfgrec_section("MiSTer", 1);
+		cfgrec_line("classicui_dsic=1", 12, 1);
+		cc_build();
+
+		check(cfgrec_problems() == 1, "a misspelled classicui key is one problem");
+		check(cc_has("1. classicui_dsic=1  -  line 12, section [MiSTer]"),
+			"named with the spelling that was actually in the file");
+		check(cc_has("Not an option this firmware has."),
+			"and told it is not an option this firmware has");
+		check(cc_has("recognise without a word, so a typo looks exactly like a setting that does"),
+			"and why nothing said so at the time");
+		check(cc_has("Fix: check the spelling against the resolved values at the bottom of this"),
+			"and pointed at the list of real ones in this same file");
+	}
+
+	{
+		cfgrec_begin("MiSTer.ini", "1280x720@60.0", "MENU");
+		cfgrec_section("Gameboy", 0);
+		cfgrec_line("classicui_dsic=1", 12, 0);
+		cc_build();
+
+		check(cfgrec_problems() == 1,
+			"a misspelled key in the wrong section is one problem, because one line gets one fix");
+		check(cc_has("And even spelled correctly it would not be read here: [Gameboy] is"),
+			"and both faults are said in that one entry, not split across two");
+		check(cc_has("this file, and move the line into the [MiSTer] section at the top."),
+			"with a fix that does both, so doing only the half you read first is not possible");
+		check(!cc_has("Read from a core section, so it applies only while that core is loaded."),
+			"and it is not also reported as a placement problem - the fix there would be to "
+			"carefully relocate a line that does nothing wherever it goes");
+	}
+
+	/* ----------------------------------------------------------- resolved values --- */
+
+	{
+		uint8_t was_ss = cfg.classicui_screenscraper;
+		char was_pass[64];
+		snprintf(was_pass, sizeof(was_pass), "%s", cfg.classicui_ss_pass);
+
+		cfg.classicui = 1;
+		cfg.classicui_overscan = 6;
+		cfg.classicui_screenscraper = 1;
+		snprintf(cfg.classicui_ss_pass, sizeof(cfg.classicui_ss_pass), "hunter2");
+
+		cfgrec_begin("MiSTer.ini", "1280x720@60.0", "MENU");
+		cfgrec_section("MiSTer", 1);
+		cfgrec_line("classicui=1", 4, 1);
+		cc_build();
+
+		check(cc_has("RESOLVED VALUES - what the front-end is really using"),
+			"the report ends with what every option actually resolved to");
+		check(cc_has("  CLASSICUI=1"), "including the switch the whole front-end hangs off");
+		check(cc_has("  CLASSICUI_OVERSCAN=6"), "and the ones nobody wrote a line for");
+		check(cc_has("  CLASSICUI_SCREENSCRAPER=1"), "and the ones somebody did");
+		check(cc_has("  CLASSICUI_SS_PASS=***") && !cc_has("hunter2"),
+			"and the ScreenScraper password as three stars - this file gets posted to forums");
+		check(cc_has("  DEBUG="),
+			"and debug, because it is checked here for the same reason it cannot be trusted to log");
+
+		cfg.classicui_screenscraper = was_ss;
+		snprintf(cfg.classicui_ss_pass, sizeof(cfg.classicui_ss_pass), "%s", was_pass);
+	}
+
+	/* ------------------------------------------------------------------ and debug --- */
+
+	{
+		cfgrec_begin("MiSTer.ini", "1280x720@60.0", "MENU");
+		cfgrec_section("Gameboy", 0);
+		cfgrec_line("debug=2", 77, 0);
+		cc_build();
+
+		check(cfgrec_problems() == 1, "debug in the wrong section is a problem too");
+		check(cc_has("And debug is the setting that hides its own failure:"),
+			"and is the one key that gets a second paragraph");
+		check(cc_has("no log to look in. That is why this report is a file on the card and not"),
+			"which says why this report is a file rather than a line in the log it would have written");
+	}
+
+	{
+		cfgrec_begin("MiSTer.ini", "1280x720@60.0", "MENU");
+		cfgrec_section("MiSTer", 1);
+		cfgrec_line("debug=2", 3, 1);
+		cc_build();
+
+		check(cfgrec_problems() == 0, "and debug in [MiSTer] is not");
+	}
+
+	/* ------------------------------------------------------------- an empty file --- */
+
+	{
+		cfgrec_begin("MiSTer.ini", "1280x720@60.0", "MENU");
+		cc_build();
+
+		check(cfgrec_problems() == 0, "an ini with no classicui line in it reports no problem");
+		check(cc_has("(none - the file has no classicui setting in it at all)"),
+			"and says the file had none, which is the answer for a card that was never set up");
+	}
+
+	/* ---------------------------------------------------------------- the ceiling --- */
+
+	{
+		cfgrec_begin("MiSTer.ini", "1280x720@60.0", "MENU");
+		cfgrec_section("MiSTer", 1);
+		for (int i = 0; i < CFGREC_MAX + 5; i++) cfgrec_line("classicui_caps=1", i + 1, 1);
+		cc_build();
+
+		check(cc_has("classicui/debug lines seen  : 37"),
+			"every line is counted even past the cap, so the total is the file's and not the buffer's");
+		check(cc_has("5 of them were past this check's 32-line limit and are NOT below."),
+			"and the ones that did not fit are said out loud - a cut record must not read as a clean one");
+	}
+
+	/* ------------------------------------------------------- the file on the card --- */
+
+	{
+		cfgrec_begin("MiSTer.ini", "1280x720@60.0", "MENU");
+		cfgrec_section("Gameboy", 0);
+		cfgrec_line("classicui=1", 41, 0);
+		cc_build();
+
+		cfgrec_write_report();
+
+		check(!strcmp(cfgrec_report_path(), ROOT "/classicui/config-report.txt"),
+			"the report goes to classicui/config-report.txt on the card");
+
+		static char onfile[8192];
+		int n = slurp_file(cfgrec_report_path(), onfile, sizeof(onfile));
+		check(n > 0, "and is really there after a boot with a broken config");
+		check(n > 0 && !strcmp(onfile, cc_buf), "byte for byte the report the analysis built");
+		check(strstr(onfile, "Written on every boot, whether or not the front-end is switched on, and without") != 0,
+			"and it opens by saying it is written whether or not the front-end is on");
+		check(strstr(onfile, "consulting debug=") != 0,
+			"and that it did not consult debug, which is the reason it exists");
+	}
+
+	/* ------------------------------------------------------------ and on the screen --- */
+
+	{
+		int was_prof = cfg.classicui_profile;
+
+		cfg.classicui_profile = 0;
+		harness_set_fb(1280, 720);
+		gfx_shutdown();
+		theme_update(1280, 720, 0);
+		frame(8);
+
+		// Clean first, so the amber below is the difference and not the decor. The record
+		// is set before the panel opens, so nothing here needs a forced repaint.
+		cfgrec_begin("MiSTer.ini", "1280x720@60.0", "MENU");
+		cfgrec_section("MiSTer", 1);
+		cfgrec_line("classicui=1", 4, 1);
+
+		opt_open();
+		frame(6);
+		check(opt_foot_ink_rows(COL_YELLOW) == 0,
+			"a machine with nothing wrong is told nothing: the Options panel has no notice on it");
+
+		unsigned long clean = harness_fb_hash(0, 720);
+
+		for (int i = 0; i < 4 && chome_screen_id() != 0; i++) press(KEY_ESC, 10);
+		press(KEY_DOWN, 14);
+		frame(6);
+
+		cfgrec_begin("MiSTer.ini", "1280x720@60.0", "MENU");
+		cfgrec_section("Gameboy", 0);
+		cfgrec_line("classicui=1", 41, 0);
+
+		/*
+		  Not on the shelf, and this is the design rule in chome_ini.h rather than an
+		  omission: a panel of technical text about a configuration file, over somebody's
+		  cover art, before they have pressed anything, is the thing this front-end exists
+		  to remove. So the notice is checked for on the shelf too, and its absence there
+		  is the assertion.
+		*/
+		check(chome_screen_id() == 0, "the shelf is back up with a broken config recorded");
+		check(opt_foot_ink_rows(COL_YELLOW) == 0, "and carries no notice of its own");
+
+		opt_open();
+		frame(6);
+
+		check(harness_fb_hash(0, 720) != clean, "and a machine with a misplaced setting is told");
+		check(opt_foot_ink_rows(COL_YELLOW) >= 12,
+			"in amber at the foot of Options, on two lines - the count and the file name");
+
+		dump("config-check-options");
+
+		cfg.classicui_profile = (uint8_t)was_prof;
+		frame(6);
+	}
+
+	/*
+	  Left clean. Every other section draws the Options panel, and a record with a problem
+	  in it would put a notice at the foot of all of them.
+	*/
+	cfgrec_begin("MiSTer.ini", "1280x720@60.0", "MENU");
+	cfgrec_section("MiSTer", 1);
+	cfgrec_line("classicui=1", 4, 1);
+}
+
 int main()
 {
 	printf("Classic Home host harness\n\n");
@@ -17068,6 +17500,8 @@ int main()
 	// Directly after it, because it is the other half of the same feature and it needs the
 	// state that one leaves: no rip in flight and the games folders back as they were.
 	assert_rip_screen();
+
+	assert_config_check();
 
 	// Last, because it changes text rendering globally. Anything measuring a width after
 	// this runs would be measuring whatever tracking the section left behind.

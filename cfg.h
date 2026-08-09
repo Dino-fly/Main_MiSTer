@@ -164,6 +164,24 @@ bool cfg_has_video_sections();
 void cfg_error(const char *fmt, ...);
 bool cfg_check_errors(char *msg, size_t max_len);
 
+/*
+  Read-only access to the option table itself, so that code outside this file can ask
+  "is this a real option?" and "what did it end up as?" without keeping a second list
+  of option names beside cfg.cpp's. The configuration check in
+  support/classicui/chome_cfgrec.h needs both, and a hand-copied list there would be
+  wrong the day an option is added - reporting a brand new setting as a typo.
+
+  cfg_var_count() is the length of the table; cfg_var_name(i) is the name as the table
+  spells it (upper case, matched case-insensitively against the file);
+  cfg_var_text(i, ...) formats the value the variable currently holds, always - unlike
+  cfg_print(), which suppresses empty strings and empty arrays. A report has to be able
+  to say that classicui_ss_user is empty, so it cannot use a printer that says nothing
+  in that case. Returns out.
+*/
+int cfg_var_count();
+const char *cfg_var_name(int i);
+const char *cfg_var_text(int i, char *out, int max);
+
 struct yc_mode
 {
 	char key[64];
