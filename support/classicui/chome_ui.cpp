@@ -5314,7 +5314,9 @@ static void disc_dlg_from_rip(disc_dlg *d)
 		break;
 
 	case RIP_EXISTS:
-		snprintf(d->sub, sizeof(d->sub), "That folder is already there");
+		// This disc and not this game: another disc of the same game is added beside it,
+		// so the only thing that gets this far is a copy of the disc in the drive.
+		snprintf(d->sub, sizeof(d->sub), "This disc is already copied");
 		break;
 
 	default:
@@ -5610,7 +5612,7 @@ static void disc_build_rows()
 		*/
 		if (rip_over_arm && !CheckTimer(rip_over_until))
 			snprintf(disc_rowtext[disc_nrows], sizeof(disc_rowtext[0]),
-				"Replace it? Press again");
+				"Replace this disc? Press again");
 		else
 			snprintf(disc_rowtext[disc_nrows], sizeof(disc_rowtext[0]),
 				"Copy to %s", sc ? sc->name : "the card");
@@ -6834,7 +6836,9 @@ static void draw_disc_picker(const chome_profile *p, const disc_dlg *d)
 
 		// And the copy row, armed, is red under the cursor: the same colour the suspend
 		// strip gives a slot that is one press from being deleted, for the same reason -
-		// this press is about to replace a folder of somebody's games.
+		// this press is about to replace a copy of a disc that is already on the card.
+		// Only a re-rip of the same serial ever arms it; another disc of the same game is
+		// added without asking, because there is nothing to lose by adding it.
 		int armed = (disc_rowact[i] == DACT_RIP && rip_over_arm && !CheckTimer(rip_over_until));
 
 		if (on) gfx_fill(x - 4 * s, yy - 3 * s, tw + 8 * s, rowh - 2 * s, armed ? COL_RED : COL_BLUE);
@@ -8556,28 +8560,50 @@ static void disc_rip_begin(const disc_dlg *d, int sysidx, int overwrite)
 	}
 
 	/*
-	  The folder is named for the disc, by the same name the dialog is showing - which is
-	  the title table's answer where there is one, else the volume label, else the serial.
-	  That order is not this function's invention: it is disc_display_name()'s, and it is
-	  what makes the finished card read "Metal Gear Solid" instead of "SLES-01506".
+	  The folder is the GAME and the sheet inside it is the DISC.
+
+	  Both are built from the name the dialog is showing - the title table's answer where
+	  there is one, else the volume label, else the serial, which is disc_display_name()'s
+	  order and what makes the finished card read "Metal Gear Solid" instead of
+	  "SLES-01506" - and from d->key, which is the serial when the disc carries one.
+
+	  The serial is what makes disc 2 a different thing from disc 1. Both discs of the PAL
+	  Metal Gear Solid are titled "Metal Gear Solid" in the shipped table, so the title
+	  alone cannot tell them apart and the folder named from it collides. See the naming
+	  notes in chome_rip.h for why the name says SLES-11506 and not "Disc 2".
 	*/
-	char name[96];
-	if (!rip_folder_name(d->title[0] ? d->title : d->key, name, sizeof(name)))
+	const char *disc_name = d->title[0] ? d->title : d->key;
+
+	char name[96], base[160];
+	if (!rip_target_folder(games, disc_name, d->key, name, sizeof(name))
+		|| !rip_disc_base(disc_name, d->key, base, sizeof(base)))
 	{
 		printf("ClassicUI: rip: nothing here is a usable folder name\n");
 		nudge();
 		return;
 	}
 
-	// Already there, and this is the first press. The row says what the second one does.
-	if (!overwrite && rip_folder_exists(games, name))
+	/*
+	  This exact disc is already there, and this is the first press: the row says what the
+	  second one does.
+
+	  Deliberately rip_disc_present() and not rip_folder_exists(). A folder holding disc 1
+	  is a game to add disc 2 to, and the replace prompt is reserved for a re-rip of the
+	  same serial - offering to replace a game because another of its discs is already
+	  copied is what would have destroyed disc 1.
+	*/
+	if (!overwrite && rip_disc_present(games, name, base))
 	{
 		rip_over_arm = 1;
 		rip_over_until = GetTimer(3000);
-		printf("ClassicUI: rip: %s/%s exists, asking before replacing it\n", games, name);
+		printf("ClassicUI: rip: %s/%s/%s.cue exists, asking before replacing it\n",
+			games, name, base);
 		mark_dirty();
 		return;
 	}
+
+	if (rip_folder_exists(games, name))
+		printf("ClassicUI: rip: adding %s to the %s already on the card\n", base, name);
 
 	snprintf(rip_title, sizeof(rip_title), "%s", d->title);
 	snprintf(rip_key, sizeof(rip_key), "%s", d->key);
@@ -8585,7 +8611,7 @@ static void disc_rip_begin(const disc_dlg *d, int sysidx, int overwrite)
 
 	disc_watch_stop();
 
-	if (!rip_start(games, name, d->title, rt->mode1_only, overwrite))
+	if (!rip_start(games, name, base, d->title, rt->mode1_only, overwrite))
 	{
 		printf("ClassicUI: rip: could not start the helper\n");
 		nudge();

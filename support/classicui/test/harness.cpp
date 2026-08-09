@@ -13176,6 +13176,219 @@ static void assert_rip_format()
 	snprintf(path, sizeof(path), "%s/%s.cue", edir, ename);
 	check(file_bytes(path) > 0, "and the new sheet is in its place");
 
+	/* ------------------------------------------- disc 2 of a game is not a replacement --- */
+
+	/*
+	  The bug this section exists for, in the shape it was reported in.
+
+	  The owner ripped disc 1 of the PAL Metal Gear Solid, put disc 2 in the drive, and was
+	  offered the chance to REPLACE what was on the card. Both discs are titled "Metal Gear
+	  Solid" in the shipped table - SLES-01506 and SLES-11506 return the byte-identical
+	  string - so a folder named from the title alone collided, and saying yes would have
+	  destroyed disc 1.
+
+	  What tells them apart is the serial, and the naming is checked first because every
+	  other property here rests on it.
+	*/
+	{
+		char reg[16];
+		check(rip_region_of("SLES-01506", reg, sizeof(reg)) && !strcmp(reg, "Europe"),
+			"an SLES serial is a European disc");
+		check(rip_region_of("SLUS-00594", reg, sizeof(reg)) && !strcmp(reg, "USA"),
+			"an SLUS one is American");
+		check(rip_region_of("SLPS-00123", reg, sizeof(reg)) && !strcmp(reg, "Japan"),
+			"and an SLPS one Japanese");
+
+		// A prefix whose territory is not settled says nothing rather than guessing, and a
+		// volume label is not a serial at all.
+		check(!rip_region_of("PCPX-96001", reg, sizeof(reg)),
+			"a promo prefix this cannot place is left unplaced");
+		check(!rip_region_of("PLAYSTATION", reg, sizeof(reg)),
+			"and a volume label is not a serial");
+
+		char b1[160], b2[160], f1[96];
+		check(rip_disc_base("Metal Gear Solid", "SLES-01506", b1, sizeof(b1))
+			&& !strcmp(b1, "Metal Gear Solid (Europe) (SLES-01506)"),
+			"disc 1 is named by its serial");
+		check(rip_disc_base("Metal Gear Solid", "SLES-11506", b2, sizeof(b2))
+			&& !strcmp(b2, "Metal Gear Solid (Europe) (SLES-11506)"),
+			"and disc 2 by its own, which is what makes them two things");
+		check(strcmp(b1, b2), "so the two discs of one game do not share a name");
+
+		check(rip_game_folder("Metal Gear Solid", "SLES-11506", f1, sizeof(f1))
+			&& !strcmp(f1, "Metal Gear Solid (Europe)"),
+			"while the folder is the game, and the same for both");
+
+		// No disc number anywhere in it: nothing at rip time knows which disc this is, and
+		// the header says at length why a guess would be worse than the serial.
+		check(!strstr(b2, "Disc") && !strstr(b2, "disc"),
+			"and nothing in the name claims to know which disc it is");
+
+		// A disc with no serial keeps exactly the single-disc shape rips had before any of
+		// this - PC Engine and Neo Geo discs carry no serial to tell copies apart with.
+		char nb[160];
+		check(rip_disc_base("Sonic CD", "", nb, sizeof(nb)) && !strcmp(nb, "Sonic CD"),
+			"a disc with no serial is still named by its title alone");
+	}
+
+	{
+		const char *mgs_t = "Metal Gear Solid";
+		const char *d1 = "SLES-01506", *d2 = "SLES-11506";
+
+		char gdir[1024], b1[160], b2[160], fold[96];
+		rip_disc_base(mgs_t, d1, b1, sizeof(b1));
+		rip_disc_base(mgs_t, d2, b2, sizeof(b2));
+		rip_game_folder(mgs_t, d1, fold, sizeof(fold));
+		snprintf(gdir, sizeof(gdir), "%s/%s", psx, fold);
+		rip_rmdir_flat(gdir);
+
+		char t1[1024], t2[1024], c1[1024], c2[1024];
+		snprintf(c1, sizeof(c1), "%s/%s.cue", gdir, b1);
+		snprintf(c2, sizeof(c2), "%s/%s.cue", gdir, b2);
+		snprintf(t1, sizeof(t1), "%s/%s - Track 01.bin", gdir, b1);
+		snprintf(t2, sizeof(t2), "%s/%s - Track 01.bin", gdir, b2);
+
+		// Disc 1, into a folder that is not there yet.
+		fk.cancel_after = -1;
+		fk.reads = 0;
+		check(rip_perform_disc(&plan, psx, fold, b1, 0, 0, &io, &bad) == RIP_DONE,
+			"disc 1 copies into a folder named for the game");
+		check(file_bytes(c1) > 0, "its sheet is there");
+		check(file_bytes(t1) > 0, "and its tracks are named after it, not just Track 01");
+
+		long long d1_cue = file_bytes(c1), d1_trk = file_bytes(t1);
+
+		/*
+		  And now the disc that was offered as a replacement. It must be ADDED, and the
+		  refusal that guards the replace prompt must not fire: same game, different disc.
+		*/
+		fk.reads = 0;
+		check(rip_perform_disc(&plan, psx, fold, b2, 0, 0, &io, &bad) == RIP_DONE,
+			"disc 2 of the same game copies in beside it without being told to overwrite");
+		check(file_bytes(c2) > 0, "disc 2 has its own sheet");
+		check(file_bytes(t2) > 0, "and its own tracks");
+		check(file_bytes(c1) == d1_cue && file_bytes(t1) == d1_trk,
+			"and disc 1 is still there, byte for byte - which is the bug this is about");
+
+		// Both sheets in one folder is what psx.cpp's same-directory compare needs to swap
+		// discs without resetting the console or switching memory card.
+		check(dir_is_there(gdir), "both discs are in the one folder the core swaps within");
+
+		/*
+		  A re-rip of the SAME disc is the one case that IS a replacement, and it still asks.
+		  Same serial, so same base, so the sheet it would write is already there.
+		*/
+		fk.reads = 0;
+		check(rip_perform_disc(&plan, psx, fold, b2, 0, 0, &io, &bad) == RIP_EXISTS,
+			"re-ripping the same serial refuses until it is confirmed");
+		check(fk.reads == 0, "without reading a sector");
+		check(file_bytes(c1) == d1_cue,
+			"and the refusal costs the other disc nothing either");
+
+		// Confirmed, it replaces that disc and leaves its sibling alone.
+		fk.reads = 0;
+		check(rip_perform_disc(&plan, psx, fold, b2, 0, 1, &io, &bad) == RIP_DONE,
+			"a confirmed re-rip of that disc goes ahead");
+		check(file_bytes(c2) > 0, "the disc it was about is back");
+		check(file_bytes(c1) == d1_cue && file_bytes(t1) == d1_trk,
+			"and the disc it was NOT about was never touched");
+
+		/*
+		  A PAL copy and an NTSC copy of one title are different games with different saves,
+		  and the region in the folder name is what keeps them apart. Before this they were
+		  one folder called "Metal Gear Solid" and the second one ripped replaced the first.
+		*/
+		char ufold[96], ub[160], udir[1024], ucue[1024];
+		rip_game_folder(mgs_t, "SLUS-00594", ufold, sizeof(ufold));
+		rip_disc_base(mgs_t, "SLUS-00594", ub, sizeof(ub));
+		check(strcmp(ufold, fold), "the USA copy of a title is a different folder to the PAL one");
+
+		snprintf(udir, sizeof(udir), "%s/%s", psx, ufold);
+		snprintf(ucue, sizeof(ucue), "%s/%s.cue", udir, ub);
+		rip_rmdir_flat(udir);
+
+		fk.reads = 0;
+		check(rip_perform_disc(&plan, psx, ufold, ub, 0, 0, &io, &bad) == RIP_DONE,
+			"so the NTSC copy rips without being offered the PAL one to replace");
+		check(file_bytes(ucue) > 0, "it has its own sheet");
+		check(file_bytes(c1) == d1_cue, "and the PAL copy is untouched");
+
+		/*
+		  The sheet a per-disc rip writes is the same sheet in every respect the six cue
+		  parsers in this tree care about - uppercase keywords, space indent, one FILE per
+		  track, the same mode tokens and INDEX lines. The only difference is the filename
+		  each FILE names, which is the whole point.
+		*/
+		{
+			// Built the same way cue_true is, so the two can be read side by side: every
+			// line is identical except the name inside each FILE.
+			char want[8192];
+			snprintf(want, sizeof(want),
+				"FILE \"%s - Track 01.bin\" BINARY\n"
+				"  TRACK 01 MODE2/2352\n"
+				"    INDEX 01 00:00:00\n"
+				"FILE \"%s - Track 02.bin\" BINARY\n"
+				"  TRACK 02 AUDIO\n"
+				"    INDEX 00 00:00:00\n"
+				"    INDEX 01 00:02:00\n"
+				"FILE \"%s - Track 03.bin\" BINARY\n"
+				"  TRACK 03 AUDIO\n"
+				"    INDEX 01 00:00:00\n", b2, b2, b2);
+
+			char got[8192];
+			check(slurp(c2, got, sizeof(got)) && !strcmp(got, want),
+				"disc 2's sheet is the format the six parsers accept, naming its own tracks");
+			check(!strstr(got, "FILE \"Track 01.bin\""),
+				"and names none of the bare track files that would be disc 1's");
+
+			/*
+			  And the sheet of a single-disc rip is byte for byte what it always was: the
+			  format tests above pin cue_true, and rip_cue_text() still produces it.
+			*/
+			char plain[8192];
+			check(rip_cue_text(&plan, 0, plain, sizeof(plain)) && !strcmp(plain, cue_true),
+				"and a single-disc sheet is unchanged, byte for byte");
+		}
+
+		/*
+		  A folder ripped before any of this existed is adopted rather than orphaned.
+
+		  This is the owner's actual card: disc 1 sitting in "Metal Gear Solid/" under the
+		  bare title. Disc 2 has to join it, because two folders would defeat the
+		  same-directory compare psx.cpp swaps on.
+		*/
+		char legacy[1024], picked[96];
+		snprintf(legacy, sizeof(legacy), "%s/%s", psx, mgs_t);
+		rip_rmdir_flat(gdir);
+		rip_rmdir_flat(legacy);
+		mkpath(legacy);
+		touch(legacy, "Metal Gear Solid.cue", 20);
+
+		check(rip_target_folder(psx, mgs_t, d2, picked, sizeof(picked))
+			&& !strcmp(picked, mgs_t),
+			"a disc whose game is already on the card under the bare title joins it");
+
+		fk.reads = 0;
+		check(rip_perform_disc(&plan, psx, picked, b2, 0, 0, &io, &bad) == RIP_DONE,
+			"and copying into it adds a disc rather than replacing the folder");
+
+		char lkeep[1024], lnew[1024];
+		snprintf(lkeep, sizeof(lkeep), "%s/Metal Gear Solid.cue", legacy);
+		snprintf(lnew, sizeof(lnew), "%s/%s.cue", legacy, b2);
+		check(file_bytes(lkeep) == 20, "the rip that was already there is exactly as it was");
+		check(file_bytes(lnew) > 0, "with the new disc beside it");
+
+		// And with the game's folder gone again, the region-qualified name is what a fresh
+		// rip creates - the legacy name is adopted, never invented.
+		rip_rmdir_flat(legacy);
+		check(rip_target_folder(psx, mgs_t, d2, picked, sizeof(picked))
+			&& !strcmp(picked, "Metal Gear Solid (Europe)"),
+			"but with nothing on the card, a fresh rip gets the region-qualified folder");
+
+		rip_rmdir_flat(gdir);
+		rip_rmdir_flat(udir);
+	}
+
 	/* -------------------------------- what the other three cores' folders DO get now --- */
 
 	/*
@@ -14074,9 +14287,25 @@ static void assert_rip_screen()
 	check(rip_test_starts() == 1, "pressing the copy row starts a rip");
 	check(!strcmp(rip_test_last_dir(), ROOT "/games/PSX"),
 		"into the PlayStation games folder, which is where the shelf looks for PlayStation games");
-	check(!strcmp(rip_test_last_name(), "Ridge Racer") ||
-		!strcmp(rip_test_last_name(), "SLUS-00626"),
-		"in a folder named for the disc by the best name anything knows it by");
+	/*
+	  The folder is the game and the region it came from, and the sheet inside it is named
+	  by the serial. Asserted by shape rather than by a literal title: whether the disc
+	  resolves to "Ridge Racer" depends on whether the title table is installed at this
+	  point, and the naming rule is the thing under test.
+	*/
+	{
+		const char *nm = rip_test_last_name();
+		const char *bs = rip_test_last_base();
+		int nlen = (int)strlen(nm);
+
+		check(nlen > 6 && !strcmp(nm + nlen - 6, " (USA)"),
+			"in a folder named for the game and the region its serial places it in");
+
+		char want_base[256];
+		snprintf(want_base, sizeof(want_base), "%s (SLUS-00626)", nm);
+		check(!strcmp(bs, want_base),
+			"and the sheet inside it carries the serial, so another disc of the set cannot collide");
+	}
 	check(rip_test_last_mode1() == 0,
 		"and told that this core's parser understands MODE2/2352, so the sheet may say it");
 	check(rip_test_last_overwrite() == 0, "with nothing to replace, so no confirmation was needed");

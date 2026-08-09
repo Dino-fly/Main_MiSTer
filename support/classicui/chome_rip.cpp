@@ -134,6 +134,141 @@ int rip_folder_name(const char *title, char *out, int outsz)
 	return (int)strlen(out);
 }
 
+/* ------------------------------------------------------- naming a disc apart --- */
+
+/*
+  Sony's prefixes, and only the ones whose region is not in doubt.
+
+  disc_serial_at() recognises sixteen; these eleven are the ones with a settled territory.
+  SCZS and the PAPX/PCPX/PEPX/PUPX promo codes are left out rather than guessed at - they
+  are rare, and a disc with no region in its name is still uniquely named by its serial,
+  whereas a disc with the WRONG region in its name is a folder that will never be found
+  again by the disc that belongs in it.
+*/
+int rip_region_of(const char *serial, char *out, int outsz)
+{
+	if (!out || outsz < 2) return 0;
+	out[0] = 0;
+	if (!serial) return 0;
+
+	static const struct { const char *pfx; const char *region; } tbl[] =
+	{
+		{ "SCES", "Europe" }, { "SLES", "Europe" }, { "SCED", "Europe" }, { "SLED", "Europe" },
+		{ "SCUS", "USA"    }, { "SLUS", "USA"    },
+		{ "SCPS", "Japan"  }, { "SLPS", "Japan"  }, { "SLPM", "Japan"  }, { "SCPM", "Japan"  },
+		{ "SIPS", "Japan"  },
+	};
+
+	// Upper-cased on the way in: the serial arrives from disc_serial_at() in capitals, but
+	// a key that came from a volume label has whatever the mastering engineer typed.
+	char pfx[5];
+	int n = 0;
+	for (const char *q = serial; *q && n < 4; q++)
+	{
+		unsigned char c = (unsigned char)*q;
+		if (c >= 'a' && c <= 'z') c = (unsigned char)(c - 'a' + 'A');
+		pfx[n++] = (char)c;
+	}
+	pfx[n] = 0;
+	if (n < 4) return 0;
+
+	for (size_t i = 0; i < sizeof(tbl) / sizeof(tbl[0]); i++)
+	{
+		if (strcmp(pfx, tbl[i].pfx)) continue;
+		snprintf(out, outsz, "%s", tbl[i].region);
+		return (int)strlen(out);
+	}
+
+	return 0;
+}
+
+/*
+  Whether a key is a serial at all.
+
+  disc_dlg.key is the serial when the disc has one and the volume label when it does not,
+  and a label is not a disc identity - "PLAYSTATION" is on thousands of discs. Only a key
+  this places as a Sony serial is allowed to name a disc apart from its siblings; anything
+  else falls back to the single-disc shape, where the folder is the game and the game has
+  one disc.
+*/
+static int rip_serial_ok(const char *serial)
+{
+	char region[16];
+	return serial && serial[0] && rip_region_of(serial, region, sizeof(region));
+}
+
+int rip_game_folder(const char *title, const char *serial, char *out, int outsz)
+{
+	if (!out || outsz < 2) return 0;
+	out[0] = 0;
+
+	char region[16];
+	if (!rip_serial_ok(serial) || !rip_region_of(serial, region, sizeof(region)))
+		return rip_folder_name(title, out, outsz);
+
+	char joined[256];
+	snprintf(joined, sizeof(joined), "%s (%s)", title ? title : "", region);
+	return rip_folder_name(joined, out, outsz);
+}
+
+int rip_disc_base(const char *title, const char *serial, char *out, int outsz)
+{
+	if (!out || outsz < 2) return 0;
+	out[0] = 0;
+
+	if (!rip_serial_ok(serial)) return rip_folder_name(title, out, outsz);
+
+	char region[16];
+	rip_region_of(serial, region, sizeof(region));
+
+	char joined[256];
+	snprintf(joined, sizeof(joined), "%s (%s) (%s)", title ? title : "", region, serial);
+	return rip_folder_name(joined, out, outsz);
+}
+
+int rip_target_folder(const char *games_dir, const char *title, const char *serial,
+	char *out, int outsz)
+{
+	if (!out || outsz < 2) return 0;
+	out[0] = 0;
+
+	if (!rip_game_folder(title, serial, out, outsz)) return 0;
+	if (!games_dir) return (int)strlen(out);
+
+	// The region-qualified folder already holds this game: that is the answer.
+	if (rip_folder_exists(games_dir, out)) return (int)strlen(out);
+
+	/*
+	  Otherwise a folder under the bare title, if there is one, is this game ripped before
+	  any of this existed - one disc, named for the title alone. Adopt it. Starting a
+	  second, better-named folder beside it would leave disc 1 stranded in the old one and
+	  hand psx.cpp two directories, which is exactly the reset-between-discs it compares
+	  parent paths to avoid.
+	*/
+	char legacy[256];
+	if (rip_folder_name(title, legacy, sizeof(legacy)) && strcmp(legacy, out)
+		&& rip_folder_exists(games_dir, legacy))
+	{
+		snprintf(out, outsz, "%s", legacy);
+		return (int)strlen(out);
+	}
+
+	return (int)strlen(out);
+}
+
+int rip_disc_present(const char *games_dir, const char *folder, const char *base)
+{
+	if (!games_dir || !folder || !base || !base[0]) return 0;
+
+	char path[1024];
+	snprintf(path, sizeof(path), "%s/%s/%s.cue", games_dir, folder, base);
+
+	// The sheet and not the tracks, because the sheet is written last: a folder holding
+	// <base>.cue holds a disc that finished copying.
+	struct stat st;
+	return !stat(path, &st);
+}
+
 /* ------------------------------------------------------------------ the plan --- */
 
 /*
@@ -239,7 +374,33 @@ void rip_track_file(int num, char *out, int outsz)
 	snprintf(out, outsz, "Track %02d.bin", num);
 }
 
+void rip_track_file_for(const char *base, int num, char *out, int outsz)
+{
+	// No base is the single-disc case and gets the bare name, so a folder ripped before
+	// multi-disc sets existed keeps looking exactly like one.
+	if (!base || !base[0]) { rip_track_file(num, out, outsz); return; }
+
+	snprintf(out, outsz, "%s - Track %02d.bin", base, num);
+}
+
+/*
+  The sheet, naming this disc's own track files.
+
+  `base` is null or empty for a single-disc rip, which reproduces the bare "Track NN.bin"
+  the previous shape wrote; rip_cue_text() is exactly that call. Everything else about the
+  sheet - the uppercase keywords, the space indent, the mode tokens, the INDEX lines - is
+  untouched, because six separate cue parsers in this tree depend on all of it.
+*/
+static int rip_cue_text_for(const rip_plan *p, const char *base, int mode1_only,
+	char *out, int outsz);
+
 int rip_cue_text(const rip_plan *p, int mode1_only, char *out, int outsz)
+{
+	return rip_cue_text_for(p, 0, mode1_only, out, outsz);
+}
+
+static int rip_cue_text_for(const rip_plan *p, const char *base, int mode1_only,
+	char *out, int outsz)
 {
 	if (!out || outsz < 2) return 0;
 	out[0] = 0;
@@ -253,10 +414,10 @@ int rip_cue_text(const rip_plan *p, int mode1_only, char *out, int outsz)
 	{
 		const rip_track *t = &p->t[i];
 
-		char file[64];
-		rip_track_file(t->num, file, sizeof(file));
+		char file[224];
+		rip_track_file_for(base, t->num, file, sizeof(file));
 
-		char blk[256];
+		char blk[512];
 		int b = 0;
 
 		/*
@@ -376,27 +537,55 @@ static int rip_read_insist(const rip_io *io, int lba, uint8_t *dst)
 	}
 }
 
+/*
+  The copy, with the sheet's name and the tracks' name held apart.
+
+  `cue_base` names the sheet and `track_base` qualifies the track files, or is null for
+  the bare "Track NN.bin" of a single-disc rip. They are two arguments rather than one
+  because the folder-per-game layout needs the tracks qualified while rip_run()'s own
+  contract - unchanged, and what the format tests pin - does not.
+*/
+static int rip_run_disc(const rip_plan *p, const char *dir, const char *cue_base,
+	const char *track_base, int mode1_only, const rip_io *io, int *bad);
+
 int rip_run(const rip_plan *p, const char *dir, const char *base, int mode1_only,
 	const rip_io *io, int *bad)
 {
+	return rip_run_disc(p, dir, base, 0, mode1_only, io, bad);
+}
+
+static int rip_run_disc(const rip_plan *p, const char *dir, const char *cue_base,
+	const char *track_base, int mode1_only, const rip_io *io, int *bad)
+{
+	const char *base = cue_base;
+
 	if (bad) *bad = 0;
 	if (!p || !dir || !base || !io || !io->read) return RIP_FAILED;
 
 	int done = 0;
 	int nbad = 0;
 
-	// What did not read, recorded as it happens rather than reconstructed afterwards, and
-	// left in the folder. See RIP_BADFILE.
-	char badpath[1024];
-	snprintf(badpath, sizeof(badpath), "%s/%s", dir, RIP_BADFILE);
+	/*
+	  What did not read, recorded as it happens rather than reconstructed afterwards, and
+	  left in the folder. See RIP_BADFILE.
+
+	  Qualified by the disc where a folder can hold several, for the same reason the tracks
+	  are: two discs of one game would otherwise write the same filename and the second
+	  would erase the first's account of what went wrong with it.
+	*/
+	char badpath[1400];
+	if (track_base && track_base[0])
+		snprintf(badpath, sizeof(badpath), "%s/%s - %s", dir, track_base, RIP_BADFILE);
+	else
+		snprintf(badpath, sizeof(badpath), "%s/%s", dir, RIP_BADFILE);
 	FILE *bf = 0;
 
 	for (int i = 0; i < p->n; i++)
 	{
 		const rip_track *t = &p->t[i];
 
-		char file[64], path[1024];
-		rip_track_file(t->num, file, sizeof(file));
+		char file[224], path[1400];
+		rip_track_file_for(track_base, t->num, file, sizeof(file));
 		snprintf(path, sizeof(path), "%s/%s", dir, file);
 
 		FILE *f = fopen(path, "wb");
@@ -467,10 +656,10 @@ int rip_run(const rip_plan *p, const char *dir, const char *base, int mode1_only
 	  complete - which is the second guard behind the staging folder, and the one that
 	  still holds if somebody moves a staging folder into place by hand.
 	*/
-	char cue[16 * 1024];
-	if (!rip_cue_text(p, mode1_only, cue, sizeof(cue))) return RIP_FAILED;
+	char cue[32 * 1024];
+	if (!rip_cue_text_for(p, track_base, mode1_only, cue, sizeof(cue))) return RIP_FAILED;
 
-	char cuepath[1024];
+	char cuepath[1400];
 	snprintf(cuepath, sizeof(cuepath), "%s/%s.cue", dir, base);
 
 	size_t len = strlen(cue);
@@ -483,21 +672,122 @@ int rip_run(const rip_plan *p, const char *dir, const char *base, int mode1_only
 	return RIP_DONE;
 }
 
+/*
+  Remove one disc's files from a folder that may hold others.
+
+  Exact names and never a prefix scan. "Metal Gear Solid" is a prefix of
+  "Metal Gear Solid (Europe) (SLES-01506)", so a prefix sweep asked to clear a legacy
+  single-disc rip would take the discs added beside it - which is the data loss this whole
+  change is about, reintroduced by the cleanup path. So the sheet and the ninety-nine
+  possible track names this disc could own are unlinked by name, and nothing else is
+  touched.
+*/
+static void rip_disc_remove(const char *dir, const char *cue_base, const char *track_base)
+{
+	char path[1400];
+
+	snprintf(path, sizeof(path), "%s/%s.cue", dir, cue_base);
+	unlink(path);
+
+	for (int n = 1; n <= RIP_TRACK_MAX; n++)
+	{
+		char file[224];
+		rip_track_file_for(track_base, n, file, sizeof(file));
+		snprintf(path, sizeof(path), "%s/%s", dir, file);
+		unlink(path);
+	}
+
+	if (track_base && track_base[0])
+	{
+		snprintf(path, sizeof(path), "%s/%s - %s", dir, track_base, RIP_BADFILE);
+		unlink(path);
+	}
+}
+
+/*
+  Move a finished staged disc into a folder that already exists, sheet last.
+
+  One rename(2) per file within the same filesystem, so each is atomic; the ordering is
+  what carries the invariant. Until the .cue lands the new disc is a set of .bin files
+  that no sheet names, and the scanner's ext_is_part() rule already ignores loose bin
+  files beside a cue - so an add interrupted here leaves stray tracks and no new card,
+  never a card that does not load.
+*/
+static int rip_publish_into(const char *stage, const char *final_dir, const char *cue_base)
+{
+	DIR *d = opendir(stage);
+	if (!d) return RIP_FAILED;
+
+	char cue_name[224];
+	snprintf(cue_name, sizeof(cue_name), "%s.cue", cue_base);
+
+	int failed = 0;
+	struct dirent *de;
+	while ((de = readdir(d)))
+	{
+		if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
+		if (!strcmp(de->d_name, cue_name)) continue;          // last, below
+
+		char from[1400], to[1400];
+		snprintf(from, sizeof(from), "%s/%s", stage, de->d_name);
+		snprintf(to, sizeof(to), "%s/%s", final_dir, de->d_name);
+		if (rename(from, to)) failed = 1;
+	}
+	closedir(d);
+
+	if (failed) return RIP_FAILED;
+
+	char from[1400], to[1400];
+	snprintf(from, sizeof(from), "%s/%s", stage, cue_name);
+	snprintf(to, sizeof(to), "%s/%s", final_dir, cue_name);
+	if (rename(from, to)) return RIP_FAILED;
+
+	return RIP_DONE;
+}
+
 int rip_perform(const rip_plan *p, const char *games_dir, const char *name, int mode1_only,
 	int overwrite, const rip_io *io, int *bad)
 {
-	if (bad) *bad = 0;
-	if (!p || !games_dir || !name || !name[0] || p->n < 1) return RIP_FAILED;
+	return rip_perform_disc(p, games_dir, name, name, mode1_only, overwrite, io, bad);
+}
 
-	// Never over the top of a finished rip without having been told to. The confirmation is
-	// the front-end's; this is the guard behind it, and it also covers the case where the
-	// folder turned up between the player being asked and the child getting here.
-	if (!overwrite && rip_folder_exists(games_dir, name)) return RIP_EXISTS;
+int rip_perform_disc(const rip_plan *p, const char *games_dir, const char *folder,
+	const char *base, int mode1_only, int overwrite, const rip_io *io, int *bad)
+{
+	if (bad) *bad = 0;
+	if (!p || !games_dir || !folder || !folder[0] || !base || !base[0] || p->n < 1)
+		return RIP_FAILED;
+
+	/*
+	  Is this a single-disc rip in the old shape, or one disc of a game?
+
+	  The two are told apart by whether the sheet is named after the folder. When they are
+	  equal there is one disc and its tracks keep the bare "Track NN.bin" every rip written
+	  before this had; when they differ the tracks are qualified, because two discs in one
+	  folder both have a track 1 and the bare name can only belong to one of them.
+	*/
+	int per_disc = strcmp(folder, base) != 0;
+	const char *track_base = per_disc ? base : 0;
+
+	int folder_there = rip_folder_exists(games_dir, folder);
+
+	/*
+	  What "already there" means, and the whole point of the split.
+
+	  For a single-disc rip it is the folder, exactly as before. For one disc of a game it
+	  is THIS disc - same base, so same serial - because a folder holding disc 1 is a game
+	  to add disc 2 to and offering to replace it is the bug. Only a genuine re-rip of the
+	  same disc reaches the confirmation.
+	*/
+	int already = per_disc ? rip_disc_present(games_dir, folder, base)
+		: folder_there;
+
+	if (!overwrite && already) return RIP_EXISTS;
 
 	if (!rip_space_ok(rip_bytes_needed(p), rip_free_bytes(games_dir))) return RIP_NOSPACE;
 
 	char stage[1024];
-	rip_stage_path(games_dir, name, stage, sizeof(stage));
+	rip_stage_path(games_dir, base, stage, sizeof(stage));
 
 	/*
 	  A staging folder left by an earlier attempt that did not get to clean up - a power
@@ -509,36 +799,74 @@ int rip_perform(const rip_plan *p, const char *games_dir, const char *name, int 
 
 	if (mkdir(stage, 0777) && errno != EEXIST) return RIP_FAILED;
 
-	int st = rip_run(p, stage, name, mode1_only, io, bad);
+	int st = rip_run_disc(p, stage, base, track_base, mode1_only, io, bad);
 	if (st != RIP_DONE) { rip_rmdir_flat(stage); return st; }
 
 	char final_dir[1024];
-	snprintf(final_dir, sizeof(final_dir), "%s/%s", games_dir, name);
+	snprintf(final_dir, sizeof(final_dir), "%s/%s", games_dir, folder);
 
 	/*
-	  The old copy goes now and not earlier, which is the whole value of the staging folder.
-	  Up to this line a cancelled or failed overwrite has left what the player already had
-	  untouched; from here there is a finished replacement ready to take its place.
+	  A folder that is not there yet is published whole, by one rename.
+
+	  This is the original path and it keeps the original guarantee: rename(2) within a
+	  directory is atomic, so the name the scanner looks at either does not exist or holds a
+	  complete rip, with no instant in between.
+
+	  `overwrite` here means the whole folder is being replaced, which is only ever a
+	  single-disc rip - the per-disc case cannot reach this branch with a folder to replace,
+	  because a folder that exists sends it to the merge below. The old copy goes now and
+	  not earlier, so a confirmed replacement that was then cancelled has cost nothing.
 
 	  Flat, and deliberately not recursive: a rip's folder is a sheet and its tracks and
 	  nothing else, so a folder with a subdirectory in it is not one this wrote. rmdir then
-	  refuses it, which fails the rename below and leaves both copies rather than deleting
+	  refuses it, which fails the rename and leaves both copies rather than deleting
 	  something this has no business deleting.
 	*/
-	if (overwrite) rip_rmdir_flat(final_dir);
-
-	/*
-	  And into place in one step. rename(2) within a directory is atomic, so there is no
-	  instant at which the shelf can see a partly built folder: the name the scanner looks
-	  at either does not exist or holds a complete rip.
-	*/
-	if (rename(stage, final_dir))
+	if (!folder_there)
 	{
-		rip_rmdir_flat(stage);
-		return RIP_FAILED;
+		if (rename(stage, final_dir))
+		{
+			rip_rmdir_flat(stage);
+			return RIP_FAILED;
+		}
+		return RIP_DONE;
 	}
 
-	return RIP_DONE;
+	if (!per_disc)
+	{
+		if (overwrite) rip_rmdir_flat(final_dir);
+
+		if (rename(stage, final_dir))
+		{
+			rip_rmdir_flat(stage);
+			return RIP_FAILED;
+		}
+		return RIP_DONE;
+	}
+
+	/*
+	  Otherwise the folder is a game that already holds discs, and it cannot be renamed over
+	  without taking them with it. The staged files move in one at a time instead.
+
+	  A confirmed re-rip of the same disc clears that disc's own files first - by exact name,
+	  never by prefix, so its siblings are not touched. Adding a new disc clears nothing,
+	  which is the case this whole change exists for: disc 2 arrives beside disc 1 and
+	  nothing is destroyed to make room for it.
+	*/
+	if (overwrite) rip_disc_remove(final_dir, base, track_base);
+
+	st = rip_publish_into(stage, final_dir, base);
+
+	/*
+	  A move that failed part way leaves this disc's tracks in the game's folder with no
+	  sheet naming them. The scanner already ignores them, but they are this function's
+	  litter and it has the exact names to sweep - and only those, so the discs that were
+	  in the folder before are not at risk from the cleanup.
+	*/
+	if (st != RIP_DONE) rip_disc_remove(final_dir, base, track_base);
+
+	rip_rmdir_flat(stage);
+	return st;
 }
 
 /* ------------------------------------------------------------------ the helper --- */
@@ -563,16 +891,20 @@ static int rip_test_state = RIP_IDLE;
 static int rip_test_nstarts = 0;
 static char rip_test_dir[1024];
 static char rip_test_name[96];
+static char rip_test_base[160];
 static int rip_test_mode1, rip_test_over;
 
-int rip_start(const char *games_dir, const char *name, const char *title,
+int rip_start(const char *games_dir, const char *name, const char *base, const char *title,
 	int mode1_only, int overwrite)
 {
 	(void)title;
 	if (!games_dir || !name || !name[0]) return 0;
 
+	const char *base_use = (base && base[0]) ? base : name;
+
 	snprintf(rip_test_dir, sizeof(rip_test_dir), "%s", games_dir);
 	snprintf(rip_test_name, sizeof(rip_test_name), "%s", name);
+	snprintf(rip_test_base, sizeof(rip_test_base), "%s", base_use);
 	rip_test_mode1 = mode1_only;
 	rip_test_over = overwrite;
 	rip_test_nstarts++;
@@ -582,6 +914,7 @@ int rip_start(const char *games_dir, const char *name, const char *title,
 	memset(&rst, 0, sizeof(rst));
 	rst.state = RIP_RUNNING;
 	snprintf(rst.name, sizeof(rst.name), "%s", name);
+	snprintf(rst.base, sizeof(rst.base), "%s", base_use);
 	rip_test_state = RIP_RUNNING;
 	return 1;
 }
@@ -623,12 +956,14 @@ void rip_test_reset()
 	rip_test_nstarts = 0;
 	rip_test_dir[0] = 0;
 	rip_test_name[0] = 0;
+	rip_test_base[0] = 0;
 	rip_test_mode1 = rip_test_over = 0;
 }
 
 int  rip_test_starts() { return rip_test_nstarts; }
 const char *rip_test_last_dir() { return rip_test_dir; }
 const char *rip_test_last_name() { return rip_test_name; }
+const char *rip_test_last_base() { return rip_test_base; }
 int  rip_test_last_mode1() { return rip_test_mode1; }
 int  rip_test_last_overwrite() { return rip_test_over; }
 
@@ -706,7 +1041,8 @@ static int child_cancelled(void *ctx)
 	return !stat(RIP_CANCEL_FILE, &st);
 }
 
-static void child_main(const char *games_dir, const char *name, int mode1_only, int overwrite)
+static void child_main(const char *games_dir, const char *name, const char *base,
+	int mode1_only, int overwrite)
 {
 	snprintf(child_name, sizeof(child_name), "%s", name);
 	child_publish(RIP_RUNNING, 0, 0, 0, 0);
@@ -797,7 +1133,7 @@ static void child_main(const char *games_dir, const char *name, int mode1_only, 
 	io.cancelled = child_cancelled;
 
 	int nbad = 0;
-	int st = rip_perform(&plan, games_dir, name, mode1_only, overwrite, &io, &nbad);
+	int st = rip_perform_disc(&plan, games_dir, name, base, mode1_only, overwrite, &io, &nbad);
 
 	printf("ClassicUI: rip: finished state %d, %d unreadable sectors\n", st, nbad);
 	child_publish(st, (st == RIP_DONE) ? plan.sectors : cc.done, plan.sectors, nbad, plan.n);
@@ -808,11 +1144,15 @@ static void child_main(const char *games_dir, const char *name, int mode1_only, 
 
 // ------------------------------------------------------------------ the parent
 
-int rip_start(const char *games_dir, const char *name, const char *title,
+int rip_start(const char *games_dir, const char *name, const char *base, const char *title,
 	int mode1_only, int overwrite)
 {
 	if (rip_pid > 0) return 0;
 	if (!games_dir || !name || !name[0]) return 0;
+
+	// No base is a single-disc rip: the sheet is named after the folder, which is the shape
+	// every rip written before multi-disc sets existed has.
+	const char *base_use = (base && base[0]) ? base : name;
 
 	snprintf(rip_games_dir, sizeof(rip_games_dir), "%s", games_dir);
 
@@ -826,19 +1166,20 @@ int rip_start(const char *games_dir, const char *name, const char *title,
 	memset(&rst, 0, sizeof(rst));
 	rst.state = RIP_RUNNING;
 	snprintf(rst.name, sizeof(rst.name), "%s", name);
+	snprintf(rst.base, sizeof(rst.base), "%s", base_use);
 
 	pid_t pid = fork();
 	if (pid < 0) { rst.state = RIP_FAILED; return 0; }
 
 	if (!pid)
 	{
-		child_main(games_dir, name, mode1_only, overwrite);
+		child_main(games_dir, name, base_use, mode1_only, overwrite);
 		_exit(0);
 	}
 
 	rip_pid = pid;
-	printf("ClassicUI: ripping \"%s\" to %s/%s, helper pid %d\n",
-		title ? title : name, games_dir, name, (int)pid);
+	printf("ClassicUI: ripping \"%s\" to %s/%s/%s.cue, helper pid %d\n",
+		title ? title : name, games_dir, name, base_use, (int)pid);
 	return 1;
 }
 
@@ -908,10 +1249,13 @@ int rip_poll()
 		*/
 		if (rst.state == RIP_RUNNING || rst.state == RIP_IDLE) rst.state = RIP_FAILED;
 
-		if (rst.state != RIP_DONE && rst.name[0])
+		// The staging folder is named for the DISC, not for the game's folder - see
+		// rip_perform_disc(). rst.base is the parent's own copy and is never overwritten by
+		// the child's line, so it is still right here however the child died.
+		if (rst.state != RIP_DONE && rst.base[0])
 		{
 			char stage[1024];
-			rip_stage_path(rip_games_dir, rst.name, stage, sizeof(stage));
+			rip_stage_path(rip_games_dir, rst.base, stage, sizeof(stage));
 			rip_rmdir_flat(stage);
 		}
 
@@ -944,10 +1288,10 @@ void rip_cancel()
 	waitpid(rip_pid, 0, WNOHANG);            // never blocking: it may be stuck in an ioctl
 	rip_pid = -1;
 
-	if (rst.name[0])
+	if (rst.base[0])
 	{
 		char stage[1024];
-		rip_stage_path(rip_games_dir, rst.name, stage, sizeof(stage));
+		rip_stage_path(rip_games_dir, rst.base, stage, sizeof(stage));
 		rip_rmdir_flat(stage);
 	}
 
