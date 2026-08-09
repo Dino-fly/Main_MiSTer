@@ -12,6 +12,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <strings.h>                       // strcasecmp, for the clipped-copy allow-list
+#include <dirent.h>                        // and reading our own source back, for the same
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <time.h>
@@ -15335,6 +15337,322 @@ static void assert_config_check()
 	cfgrec_line("classicui=1", 4, 1);
 }
 
+/* ================================================================= clipped copy ===
+
+  Text cut off on screen, as a class rather than one sentence at a time.
+
+  gfx_clip() is the only thing in the front-end that knows a string did not fit, and it
+  used to keep that to itself - it wrote a '>' over the last character and returned. Three
+  cut sentences were found by eye in a single day, one of them the only line explaining
+  what a menu does ("THE GAME STAYS LOADED UNTIL YOU CL>"), which is a poor way to find
+  out. Under CHOME_HOST_TEST it now records every truncation (chome_gfx.h), and this
+  section reads the record the whole suite left behind.
+
+  ------------------------------------------------- what counts as a bug -------------
+
+  Not every clip is one. gfx_clip() exists because a game called "Super Mario World 2 -
+  Yoshi's Island" does not fit on a card, and cutting it there is the right answer - the
+  player knows what the game is called, the card is the size the artwork makes it, and
+  nothing is being explained. What is never right is cutting a sentence *we* wrote: those
+  lines are the only explanation anybody gets, and half of one is worse than none.
+
+  So the line drawn here is between a name that came off the card and words we chose:
+
+    - Words we chose are in our own source. text_is_ours() looks the string up in
+      support/classicui/chome_*.{cpp,h} - the string as handed to gfx_clip(), which is
+      how "Everything this menu wants is already set." is found, and failing that its
+      longest run of leading words, which is how a line assembled with snprintf() -
+      "Old file kept as MiSTer.ini.bak" out of "Old file kept as %s" - is found too.
+      Nothing has to be registered anywhere: a sentence added to the front-end tomorrow
+      is covered the moment it is written, which is the entire point of the exercise.
+
+    - A game title, a file name, a network name, an account name, the label a player
+      typed - none of those are in our source, so they are data, and clipping them is
+      gfx_clip() doing its job. They are counted and reported, never failed on.
+
+  The one thing the source lookup cannot tell apart is our own wording drawn *as* data -
+  a shelf's name on a shelf card, a system's name on a card. Those clip by design, since
+  a card is sized by its artwork and not by its label. They are the allow-list below, and
+  it is (site, text) pairs rather than whole functions on purpose: exempting draw_card
+  wholesale would also exempt whatever sentence gets added to a card next year.
+
+  Calls the harness makes itself are skipped - assert_typography() sweeps gfx_clip()
+  across two hundred widths to test the function, and those are measurements, not screens.
+*/
+
+static char *clipsrc = 0;                  // our own source, uppercased, concatenated
+static long  clipsrc_n = 0;
+
+static void clipsrc_load()
+{
+	if (clipsrc) return;
+
+	long cap = 4 * 1024 * 1024;
+	clipsrc = (char *)malloc(cap);
+	clipsrc_n = 0;
+	if (!clipsrc) return;
+
+	DIR *d = opendir("support/classicui");
+	if (!d) { printf("  cannot open support/classicui - is the harness running from /mister?\n"); clipsrc[0] = 0; return; }
+
+	struct dirent *e;
+	while ((e = readdir(d)))
+	{
+		const char *n = e->d_name;
+		int len = (int)strlen(n);
+		if (strncmp(n, "chome", 5)) continue;
+		int cpp = (len > 4 && !strcmp(n + len - 4, ".cpp"));
+		int hdr = (len > 2 && !strcmp(n + len - 2, ".h"));
+		if (!cpp && !hdr) continue;
+
+		char p[512];
+		snprintf(p, sizeof(p), "support/classicui/%s", n);
+		FILE *f = fopen(p, "rb");
+		if (!f) continue;
+		size_t got = fread(clipsrc + clipsrc_n, 1, (size_t)(cap - clipsrc_n - 2), f);
+		fclose(f);
+		clipsrc_n += (long)got;
+		clipsrc[clipsrc_n++] = '\n';
+	}
+	closedir(d);
+
+	clipsrc[clipsrc_n] = 0;
+	for (long i = 0; i < clipsrc_n; i++) clipsrc[i] = (char)toupper((unsigned char)clipsrc[i]);
+}
+
+/*
+  Is this string words we wrote, or a name that came off the card?
+
+  Uppercased on both sides because gfx_shout() shouts nearly everything on its way to the
+  screen, so the string gfx_clip() is handed is rarely spelled the way the source spells
+  it. Twelve characters is the floor for a partial match: shorter than that and a run of
+  leading words stops being evidence of anything - "SUPER" is in our source, and it is
+  also the first word of half the fixtures.
+*/
+static int text_is_ours(const char *t)
+{
+	clipsrc_load();
+	if (!clipsrc || !clipsrc_n) return 0;
+
+	char up[256];
+	snprintf(up, sizeof(up), "%s", t);
+	for (char *q = up; *q; q++) *q = (char)toupper((unsigned char)*q);
+
+	int n = (int)strlen(up);
+	if (n < 4) return 0;
+	if (strstr(clipsrc, up)) return 1;
+
+	// The longest run of leading words that is still long enough to mean something. A
+	// format string contributes its literal head, which is where a composed line matches.
+	for (int i = n - 1; i >= 12; i--)
+	{
+		if (up[i] != ' ') continue;
+		up[i] = 0;
+		if (strstr(clipsrc, up)) return 1;
+		up[i] = ' ';
+	}
+	return 0;
+}
+
+/*
+  Our own wording that is allowed to be cut, with the reason. See the section note: these
+  are words of ours drawn where a name belongs, on a surface sized by something other than
+  the text. Anything added here should be a sentence somebody has looked at on a screen.
+*/
+struct clip_allowed_t { const char *site; const char *text; const char *why; };
+static const clip_allowed_t clip_allowed[] = {
+	{ "draw_card",          "RECENTLY PLAYED",  "a shelf's name on a card, which is sized by its artwork" },
+	{ "draw_card",          "RECENTLY ADDED",   "the same" },
+	{ "draw_card",          "FAVOURITES",       "the same" },
+	{ "draw_card",          0,                  "every other card label is a system's name or a game's" },
+	{ "draw_fallback_card", 0,                  "a game's name on a card with no artwork" },
+	{ "draw_title_block",   0,                  "the hero's title and the file it came from" },
+	{ 0, 0, 0 }
+};
+
+static const char *clip_allowance(const gfx_clip_rec *r)
+{
+	for (int i = 0; clip_allowed[i].site; i++)
+	{
+		if (strcmp(clip_allowed[i].site, r->site)) continue;
+		if (!clip_allowed[i].text) return clip_allowed[i].why;
+		if (!strcasecmp(clip_allowed[i].text, r->text)) return clip_allowed[i].why;
+	}
+	return 0;
+}
+
+/*
+  The screens the rest of the suite does not put through gfx_clip() in every profile.
+
+  Most of what this section reads was recorded by the sections above it - between them
+  they open every panel, and at 720p and 240p both. Two gaps are left, and both are where
+  a cut sentence would land hardest:
+
+    - The 480p profile. One harness_set_fb(640, 480) exists in the whole file, so "sd" is
+      a layout almost nothing has been drawn at, and its panels are narrower than hd's.
+
+    - Best Settings with nothing to change. Every section that opens it opens it on a
+      plan, and the sentence that is only drawn when there is no plan - the one this task
+      started from - had never been composed by anything.
+*/
+static void sweep_screens()
+{
+	const int was_prof = cfg.classicui_profile;
+
+	/*
+	  Nothing here is timing-dependent or state-dependent on purpose. The scaler is
+	  declared visible so the Display entry is on the bar at hd and sd and off it at lo
+	  (draw_menubar drops it at 240p), which is what makes "Options is the second slot,
+	  or the first at 240p" true rather than hopeful.
+	*/
+	harness_set_scaler_visible(1);
+
+	/*
+	  And an ini with nothing left to fix, which is the state Best Settings had never been
+	  drawn in. Put back byte for byte afterwards - the sections that follow read this
+	  file, and one of them compares it against what it wrote.
+	*/
+	char inipath[1024];
+	snprintf(inipath, sizeof(inipath), "%s/MiSTer.ini", ROOT);
+	static char ini_was[65536];
+	int ini_had = slurp_file(inipath, ini_was, sizeof(ini_was));
+	ini_apply(inipath);
+
+	struct { int w, h, force; const char *name; int display; } canv[] = {
+		{ 1280, 720, 1, "hd", 1 },
+		{  640, 480, 2, "sd", 1 },
+		{  320, 240, 3, "lo", 0 },
+	};
+
+	for (int c = 0; c < 3; c++)
+	{
+		cfg.classicui_profile = (uint8_t)canv[c].force;
+		harness_set_fb(canv[c].w, canv[c].h);
+		gfx_shutdown();
+		theme_update(canv[c].w, canv[c].h, canv[c].force);
+
+		harness_set_menu_core(1);
+		chome_leave();
+		press(KEY_MENU, 20);
+		frame(8);
+
+		/*
+		  The menu bar, and every entry on it. RIGHT clamps at the last entry rather than
+		  wrapping, so five presses reach the end of a bar of any length and the extra
+		  ones cost a nudge; ESC from any of these panels comes back to the bar.
+		*/
+		press(KEY_UP, 10);
+		for (int e = 0; e < 5; e++)
+		{
+			press(KEY_ENTER, 14);
+			frame(6);
+			char nm[64];
+			snprintf(nm, sizeof(nm), "clipsweep-%s-bar%d", canv[c].name, e);
+			dump(nm);
+			press(KEY_ESC, 10);
+			press(KEY_RIGHT, 6);
+		}
+
+		/*
+		  And the Options rows that open a panel of their own, counted down from the top -
+		  Online Covers, Controllers, Wi-Fi, Best Settings, More Settings. Counted from
+		  the top because opening Options puts the cursor back on row 0 every time, and
+		  because the rows that come and go with a running game are all below these.
+
+		  Nothing between Rescan Library and Menu Layout is opened on purpose: those act
+		  rather than open, and this section is here to compose screens, not to rescan the
+		  card underneath the sections that follow.
+		*/
+		for (int i = 0; i < 5; i++) press(KEY_LEFT, 6);       // the first slot
+		if (canv[c].display) press(KEY_RIGHT, 8);             // Options
+
+		static const int rows[] = { 1, 5, 6, 7, 8 };
+		static const char *rowname[] = { "covers", "pads", "wifi", "best", "more" };
+		for (int r = 0; r < 5; r++)
+		{
+			press(KEY_ENTER, 14);                             // Options, cursor on row 0
+			for (int i = 0; i < rows[r]; i++) press(KEY_DOWN, 4);
+			press(KEY_ENTER, 14);
+			frame(8);
+
+			char nm[64];
+			snprintf(nm, sizeof(nm), "clipsweep-%s-%s", canv[c].name, rowname[r]);
+			dump(nm);
+
+			press(KEY_ESC, 10);                               // back to Options
+			press(KEY_ESC, 10);                               // back to the bar
+		}
+
+		// And the save/suspend strip, which is reached from the shelf rather than the bar.
+		press(KEY_ESC, 10);
+		frame(6);
+		press(KEY_DOWN, 12);
+		frame(8);
+		char nm[64];
+		snprintf(nm, sizeof(nm), "clipsweep-%s-suspend", canv[c].name);
+		dump(nm);
+		press(KEY_ESC, 10);
+		frame(6);
+	}
+
+	if (ini_had > 0) put_file(inipath, ini_was);
+
+	cfg.classicui_profile = (uint8_t)was_prof;
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, was_prof);
+	chome_leave();
+	press(KEY_MENU, 20);
+	frame(8);
+}
+
+static void assert_no_clipped_copy()
+{
+	printf("\n== clipped copy ==\n");
+
+	sweep_screens();
+
+	int ours = 0, data = 0, allowed = 0, skipped = 0;
+	int n = gfx_clip_log_n();
+
+	printf("  %d distinct truncations recorded\n", n);
+
+	for (int i = 0; i < n; i++)
+	{
+		const gfx_clip_rec *r = gfx_clip_log(i);
+
+		// The harness testing gfx_clip() itself, not a screen drawing text.
+		if (!strncmp(r->site, "assert_", 7)) { skipped++; continue; }
+
+		/*
+		  Printed rather than counted, because this is where the section could go wrong
+		  quietly: a sentence of ours that text_is_ours() failed to recognise would be
+		  waved through as a game's name, and the only way anybody would notice is by
+		  reading the list. It is short - these are names off the card.
+		*/
+		if (!text_is_ours(r->text))
+		{
+			data++;
+			printf("  name  %dx%d  %-20s s%d  %3dpx (-%d)  \"%s\"\n",
+				r->cw, r->ch, r->site, r->scale, r->maxpx, r->lost, r->text);
+			continue;
+		}
+
+		const char *why = clip_allowance(r);
+		if (why) { allowed++; continue; }
+
+		ours++;
+		printf("  CUT   %dx%d  %-20s s%d  %3dpx (-%d)  \"%s\"\n",
+			r->cw, r->ch, r->site, r->scale, r->maxpx, r->lost, r->text);
+	}
+
+	printf("  %d data, %d allowed, %d harness, %d of our own words cut\n",
+		data, allowed, skipped, ours);
+
+	check(ours == 0, "no sentence of ours is cut off on any screen at any profile");
+	check(n < 4000, "the clip log did not overflow, so nothing went unexamined");
+}
+
 int main()
 {
 	printf("Classic Home host harness\n\n");
@@ -18217,6 +18535,14 @@ int main()
 	assert_rip_screen();
 
 	assert_config_check();
+
+	/*
+	  Second to last: it reads the truncations every section above it recorded, so it has
+	  to run after all of them - and before assert_typography(), which shifts the advance
+	  the whole front-end draws at and then sweeps gfx_clip() across two hundred widths
+	  of its own.
+	*/
+	assert_no_clipped_copy();
 
 	// Last, because it changes text rendering globally. Anything measuring a width after
 	// this runs would be measuring whatever tracking the section left behind.

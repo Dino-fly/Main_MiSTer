@@ -391,6 +391,50 @@ int  gfx_text_w(const char *s, int scale);
 // Truncate to fit maxpx, appending '>' when clipped. Returns a static buffer.
 const char *gfx_clip(const char *s, int scale, int maxpx);
 
+#ifdef CHOME_HOST_TEST
+/*
+  The clip log - the host harness only, and absent from every shipped build.
+
+  gfx_clip() is the one place in the front-end that knows a string did not fit, and until
+  this existed it kept that to itself: it wrote a '>' over the last character and returned,
+  and the only way anyone learned that a sentence had been cut in half was to read it off a
+  television. Three were found that way in one day, one of them the single line explaining
+  what a menu does.
+
+  So the moment it truncates is recorded here - the whole string it was handed, the width it
+  had, the scale, how many characters it lost, and the function that asked. The drawing is
+  not touched: the same characters go to the same pixels whether anything is listening or
+  not, which is what makes this safe to leave switched on for the whole suite.
+
+  The caller's name comes from __func__ through the macro below rather than from a new
+  argument at sixty call sites, and it is what lets the sweep tell a sentence we wrote from
+  a game title that is simply longer than its card. Line numbers would have done the same
+  job and then rotted the first time a function moved; a name survives edits.
+
+  Records are unique on (text, site, width): a screen redrawn sixty times a second would
+  otherwise fill the ring with one sentence, and the count of how often it happened is not
+  what anybody needs to know.
+*/
+struct gfx_clip_rec
+{
+	char text[256];       // the string as handed in, before truncation
+	char site[64];        // __func__ of the caller
+	int  scale;
+	int  maxpx;
+	int  lost;            // characters that did not fit
+	int  hits;            // times this same clip happened
+	int  cw, ch;          // the canvas it happened on - which profile, in one glance
+};
+
+int  gfx_clip_log_n();
+const gfx_clip_rec *gfx_clip_log(int i);
+void gfx_clip_log_clear();
+
+// Records the caller for the log. See the note above; the shipped build has neither.
+const char *gfx_clip_at(const char *s, int scale, int maxpx, const char *site);
+#define gfx_clip(s, scale, maxpx) gfx_clip_at((s), (scale), (maxpx), __func__)
+#endif
+
 // Nearest-neighbour blit of an ARGB source. No filtering: at these scales
 // integer-ish nearest keeps pixel art crisp and costs almost nothing.
 void gfx_blit(const uint32_t *src, int sw, int sh, int dx, int dy, int dw, int dh);

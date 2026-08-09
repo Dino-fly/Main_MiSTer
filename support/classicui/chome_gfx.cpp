@@ -1091,7 +1091,47 @@ void gfx_text_c(const char *s, int cx, int y, int scale, uint32_t col, uint32_t 
 	gfx_text(s, cx - gfx_text_w(s, scale) / 2, y, scale, col, shadow);
 }
 
+#ifdef CHOME_HOST_TEST
+/*
+  The clip log. Host harness only - see the note in chome_gfx.h. Nothing below this point
+  exists in a shipped build, and gfx_clip() itself is byte-for-byte what it always was.
+*/
+#define CLIPLOG_MAX 4096
+static gfx_clip_rec cliplog[CLIPLOG_MAX];
+static int cliplog_n = 0;
+
+int gfx_clip_log_n() { return cliplog_n; }
+const gfx_clip_rec *gfx_clip_log(int i) { return (i >= 0 && i < cliplog_n) ? &cliplog[i] : 0; }
+void gfx_clip_log_clear() { cliplog_n = 0; }
+
+static void cliplog_add(const char *s, const char *site, int scale, int maxpx, int lost)
+{
+	if (!site) site = "?";
+	for (int i = 0; i < cliplog_n; i++)
+	{
+		if (cliplog[i].maxpx == maxpx && cliplog[i].scale == scale &&
+			!strcmp(cliplog[i].site, site) && !strcmp(cliplog[i].text, s))
+		{
+			cliplog[i].hits++;
+			return;
+		}
+	}
+	if (cliplog_n >= CLIPLOG_MAX) return;
+	gfx_clip_rec *r = &cliplog[cliplog_n++];
+	snprintf(r->text, sizeof(r->text), "%s", s);
+	snprintf(r->site, sizeof(r->site), "%s", site);
+	r->scale = scale;
+	r->maxpx = maxpx;
+	r->lost  = lost;
+	r->hits  = 1;
+	r->cw    = cw;
+	r->ch    = ch;
+}
+
+const char *gfx_clip_at(const char *s, int scale, int maxpx, const char *site)
+#else
 const char *gfx_clip(const char *s, int scale, int maxpx)
+#endif
 {
 	static char buf[256];
 	if (!s) return "";
@@ -1106,6 +1146,10 @@ const char *gfx_clip(const char *s, int scale, int maxpx)
 		snprintf(buf, sizeof(buf), "%s", s);
 		return buf;
 	}
+
+#ifdef CHOME_HOST_TEST
+	cliplog_add(s, site, scale, maxpx, len - max);
+#endif
 
 	memcpy(buf, s, max);
 	buf[max] = 0;

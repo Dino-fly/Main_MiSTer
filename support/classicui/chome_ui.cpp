@@ -320,7 +320,7 @@ static void ref_shot_path(const char *sysid, const char *rompath, char *out, int
 // Rows on the Options panel. Several places step over them.
 /*
   Options has one more row inside a game than on the shelf. Both end with a way out -
-  Advanced Settings hands the shelf to the classic menu, Close Game puts the game away -
+  Advanced hands the shelf to the classic menu, Close Game puts the game away -
   but in a game there is also Core Settings, which is the only route to the options that
   belong to the core itself rather than to this front-end. A player reported that as the
   one thing the front-end had taken away from them, and they were right: widescreen on
@@ -2762,14 +2762,38 @@ static void draw_rows_c(const panel_box *b, const char *const *rows, const char 
 		char up[64];
 		snprintf(up, sizeof(up), "%s", rows[i]);
 		gfx_shout(up);
-		gfx_text(gfx_clip(up, b->s, b->w / 2), b->x + 6 * b->s, y, b->s, on ? COL_WHITE : COL_INK, 0);
 
+		char v[48];
+		v[0] = 0;
+		int vw = 0;
 		if (vals && vals[i])
 		{
-			char v[48];
 			snprintf(v, sizeof(v), "%s", vals[i]);
 			gfx_shout(v);
-			int vw = gfx_text_w(v, b->s);
+			vw = gfx_text_w(v, b->s);
+		}
+
+		/*
+		  What the label may use: everything the value does not want, or half the row -
+		  whichever is more.
+
+		  Half the row flat was the rule here, and it cut labels that had room to spare.
+		  "RESCAN LIBRARY" came out "RESCAN LIBRAR>" beside a value reading "52 GAMES"
+		  with a third of the row empty between them, and a list with no value column at
+		  all - the sort panel - lost the ends of "RECENTLY PLAYED" and "RECENTLY ADDED"
+		  to a half it was never sharing with anything.
+
+		  Never less than half, so no row is narrower than it was: a value long enough to
+		  eat the label is a value that should be shortened, and taking the label's room
+		  away to make space for it would be the wrong end to give.
+		*/
+		int lw = b->w - 12 * b->s - vw;
+		if (lw < b->w / 2) lw = b->w / 2;
+
+		gfx_text(gfx_clip(up, b->s, lw), b->x + 6 * b->s, y, b->s, on ? COL_WHITE : COL_INK, 0);
+
+		if (v[0])
+		{
 			uint32_t col = (vcol && vcol[i]) ? vcol[i] : (on ? COL_WHITE : COL_PANELLO);
 			gfx_text(v, b->x + b->w - 6 * b->s - vw, y, b->s, col, 0);
 		}
@@ -3788,9 +3812,10 @@ static void draw_display_screen(const chome_profile *p)
   check all five. See chome_covers_state() at the bottom of this file.
 
   Every phrase is short on purpose. draw_rows_c() right-aligns the value column without
-  clipping it, so at 240p a long one walks left into the label: the panel is 249 px, the
-  label ends at 110 and the widest of these ("Not Available", 13 characters) starts at
-  174. "Not In This Build" was the first wording and it overlapped by three pixels.
+  clipping it and gives the label whatever is left, so at 240p a long one takes the
+  label's room away: the panel is 249 px and the widest of these ("Not Available", 13
+  characters) leaves 125 for "ONLINE COVERS", which is exactly the thirteen it needs.
+  "Not In This Build" was the first wording, and it left room for nine.
 */
 static const char *cov_state_of(int avail, int on, const char *user, int has_pass)
 {
@@ -3805,7 +3830,14 @@ static void draw_options_panel(const chome_profile *p)
 {
 	panel_box b = draw_panel(p, "Options");
 
-	static const char *rows_menu[] = { "Cover Art", "Online Covers", "Rescan Library", "Reinstall Looks", "Menu Layout", "Controllers", "Wi-Fi", "Best Settings", "More Settings", "Advanced Settings", 0 };
+	/*
+	  "Advanced" and not "Advanced Settings": seventeen characters beside a value reading
+	  "Classic Menu >" is the one pair in this list that cannot share a row, and it came
+	  out "ADVANCED SETTING>" at 240p and "ADVANCED SETT>" on a halved 1080p canvas. The
+	  value names where the row goes, so the label only has to say what kind of thing is
+	  behind it - and this is the row nobody should be looking for by name anyway.
+	*/
+	static const char *rows_menu[] = { "Cover Art", "Online Covers", "Rescan Library", "Reinstall Looks", "Menu Layout", "Controllers", "Wi-Fi", "Best Settings", "More Settings", "Advanced", 0 };
 	static const char *rows_game[] = { "Cover Art", "Online Covers", "Rescan Library", "Reinstall Looks", "Menu Layout", "Controllers", "Wi-Fi", "Best Settings", "More Settings", "Core Settings", "Close Game" };
 	const char *const *rows = ig_active ? rows_game : rows_menu;
 	char v1[32];
@@ -7075,7 +7107,17 @@ static void draw_power(const chome_profile *p)
 	int ps = p->ts_ui;
 	int pw = p->w - 2 * p->inset;
 	if (pw > 34 * gfx_adv(ps)) pw = 34 * gfx_adv(ps);
-	int ph = (10 * ps + 6) + PWR_ROWS * 14 * ps + 30 * ps;
+
+	/*
+	  36 and not 30: the line underneath is two lines at every profile - the panel is 34
+	  characters wide at its widest and the sentence is fifty - and 30 left room for the
+	  second one to the pixel, so its bottom row landed exactly on the panel's own edge
+	  and the border drew through "than pulling the plug."
+
+	  The same cut sentence as everywhere else, arriving the other way round: gfx_clip()
+	  never saw this one, because nothing was too wide. It was too tall.
+	*/
+	int ph = (10 * ps + 6) + PWR_ROWS * 14 * ps + 36 * ps;
 
 	panel_box b = draw_panel_ex(p, pw, ph, "Power");
 	int s = b.s, rowh = 14 * s, y = b.y + 6 * s;
@@ -7195,8 +7237,21 @@ static void draw_ini(const chome_profile *p)
 			if (facts & bit) an[nan++] = bit;
 	}
 
+	/*
+	  The whole of what this screen says when there is nothing to do - wrapped, because it
+	  is forty-two characters and the panel holds thirty-three at 240p. It read
+	  "Everything this menu wants is al>" on the television, which reads as a screen that
+	  has broken off mid-thought rather than as one with good news.
+
+	  Wrapped rather than shortened: it is one plain sentence already, and the panel it
+	  sits in is sized from these very lines, so a second one costs nothing but a row.
+	*/
+	char okmsg[4][64];
+	int nok = wrap_text("Everything this menu wants is already set.",
+		gfx_text_cols(avail, s), okmsg, 2);
+
 	// Sized for its content, like Power, rather than taking the default panel.
-	int lines = done ? 3 : (ini_n ? ini_n * (stacked ? 2 : 1) : 1);
+	int lines = done ? 3 : (ini_n ? ini_n * (stacked ? 2 : 1) : nok);
 	char note[4][64];
 	int nnote = done ? 0 : (ini_n ? wrap_text(INI_NOTE, gfx_text_cols(avail, s), note, 3) : 0);
 
@@ -7241,9 +7296,9 @@ static void draw_ini(const chome_profile *p)
 
 	if (!ini_n)
 	{
-		gfx_text_c(gfx_clip("Everything this menu wants is already set.", s, avail),
-			b.x + b.w / 2, y, s, COL_INK, 0);
-		draw_ini_analog(b, s, avail, y + rowh + 6 * s, an, nan);
+		for (int i = 0; i < nok; i++)
+			gfx_text_c(okmsg[i], b.x + b.w / 2, y + i * rowh, s, COL_INK, 0);
+		draw_ini_analog(b, s, avail, y + nok * rowh + 6 * s, an, nan);
 		btn_hint_c(b.x + b.w / 2, b.y + b.h - 11 * s, s, COL_INK, "Press", LBL_B, "to close");
 		return;
 	}
