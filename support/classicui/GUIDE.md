@@ -595,13 +595,17 @@ answer: do it once, and afterwards the game loads like everything else on the sh
 Open the disc dialog, move to **Options**, and the last entry is **Copy to
 PlayStation** — or to whichever console the disc was recognised as, or whichever one you
 picked from the list above it. It goes into that console's own games folder, in a folder
-named after the disc:
+named after the game:
 
 ```
-/media/fat/games/PSX/Metal Gear Solid/Metal Gear Solid.cue
-/media/fat/games/PSX/Metal Gear Solid/Track 01.bin
-/media/fat/games/PSX/Metal Gear Solid/Track 02.bin
+/media/fat/games/PSX/Metal Gear Solid (Europe)/Metal Gear Solid (Europe) (SLES-01506).cue
+/media/fat/games/PSX/Metal Gear Solid (Europe)/Metal Gear Solid (Europe) (SLES-01506) - Track 01.bin
+/media/fat/games/PSX/Metal Gear Solid (Europe)/Metal Gear Solid (Europe) (SLES-01506) - Track 02.bin
 ```
+
+A disc that carries no serial — PC Engine CD and Neo Geo CD discs do not — keeps the
+simpler shape it always had, `Metal Gear Solid/Metal Gear Solid.cue` beside
+`Track 01.bin`, because there is nothing to tell two copies of it apart with.
 
 A Mega CD, PC Engine CD or Neo Geo CD disc goes into that console's **CD** folder rather
 than its cartridge one — `games/MegaCD`, `games/TGFX16-CD` and `games/NeoGeo-CD`, which
@@ -612,7 +616,29 @@ before you press it.
 The name is the same one the shelf shows for the disc — the title table's answer if you
 have one, otherwise the disc's label or its serial. The copy appears on the shelf as one
 card under that name as soon as it finishes; the tracks are not listed as games of their
-own.
+own, and neither the region nor the serial in the filenames shows on the card.
+
+**Every disc of a game goes in the one folder.** Copy disc 1 of Metal Gear Solid, then
+put disc 2 in and copy that, and both land side by side in
+`Metal Gear Solid (Europe)/`. They appear as a single card, and **X** cycles between the
+discs the same way it cycles any other set of versions. That layout is not tidiness: the
+PlayStation core decides whether a disc you load is a swap or a new game by looking at
+the folder it came from, so two discs in one folder swap without resetting the console
+and keep the same memory card, and two discs in two folders do not. There is no `.m3u`
+and none is needed — nothing here reads one.
+
+The region in the folder name comes from the serial: `SLES` and `SCES` are European,
+`SLUS` and `SCUS` American, `SLPS` and `SLPM` Japanese. It is there so that a PAL copy
+and an NTSC copy of the same game are two folders with two memory cards, instead of one
+landing on top of the other.
+
+**The filename says the serial, not "Disc 2".** Nothing the console can read at copy
+time says which disc of a set it is holding — the disc carries a serial and no disc
+number, and the title table gives both Metal Gear Solid discs the same name. Guessing
+from the serial works for some sets and not others (the two American discs are
+`SLUS-00594` and `SLUS-00776`), so the copy is filed under the serial, which is always
+right, rather than a disc number that would sometimes be wrong. Discs of a set do
+generally sort into disc order anyway, so the cycle usually runs 1, 2, 3.
 
 **What you see while it runs.** The disc spins fast and fills in from twelve o'clock as
 it is copied, with the percentage under it. That fraction is the sectors actually
@@ -623,10 +649,12 @@ it, and a stopped copy leaves nothing behind at all: it is built in a hidden fol
 only put in place, in one step, once every byte is written. The same is true if the
 power goes.
 
-**It will not quietly overwrite anything.** If a folder of that name is already there
-the entry changes to *Replace it? Press again*, the way deleting a suspend point does.
-Even then the copy you already have is untouched until the new one is complete, so
-changing your mind costs nothing. Free space is checked before the drive is touched, and
+**It will not quietly overwrite anything.** If you have already copied *this disc* — the
+same serial — the entry changes to *Replace this disc? Press again*, the way deleting a
+suspend point does. Another disc of a game you have already started is simply added, with
+nothing to confirm, because adding it costs you nothing. Even a confirmed replacement
+leaves the copy you already have untouched until the new one is complete, and only that
+disc's own files are replaced; the others in the folder are not touched. Free space is checked before the drive is touched, and
 a card without room refuses with the two numbers rather than filling up.
 
 **A scratched disc still copies, and says so.** A sector that will not read after four
@@ -635,7 +663,9 @@ length the cue sheet says and nothing after the bad spot slips out of place. The
 then reports *Copied, but N sectors would not read* instead of *Copied*, and the folder
 carries an `unreadable-sectors.txt` listing them with the track each was in. A zeroed
 audio frame is a click; a zeroed data sector may stop the game loading, which is why you
-are told rather than left to find out from the core. A drive that disappears mid-copy —
+are told rather than left to find out from the core. In a folder holding more than one
+disc the list is named after the disc it belongs to, so one disc's account of what went
+wrong is not overwritten by the next. A drive that disappears mid-copy —
 a USB reset, which this dock does — is waited out rather than treated as an error, and
 the percentage stops moving while that happens.
 

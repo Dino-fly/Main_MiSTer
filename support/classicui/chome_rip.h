@@ -54,12 +54,71 @@
   ------------------------------------------------------------------ the format ---
 
   A rip is only worth having if the target core loads it, so the layout is not a choice
-  this file gets to make freely. What it emits:
+  this file gets to make freely. What it emits, for a disc whose serial we know:
 
-    <games>/<Title>/<Title>.cue      the sheet
-    <games>/<Title>/Track 01.bin     one file per track, raw 2352-byte sectors
-    <games>/<Title>/Track 02.bin
+    <games>/<Game>/<Disc>.cue             the sheet
+    <games>/<Game>/<Disc> - Track 01.bin  one file per track, raw 2352-byte sectors
+    <games>/<Game>/<Disc> - Track 02.bin
     ...
+
+  where <Game> is "Metal Gear Solid (Europe)" and <Disc> is
+  "Metal Gear Solid (Europe) (SLES-01506)". For a disc with no serial - PC Engine CD and
+  Neo Geo CD carry none - both collapse to the bare title and the shape is what it always
+  was: <games>/<Title>/<Title>.cue beside Track 01.bin.
+
+  ------------------------------------------------------- one folder, every disc ---
+
+  A game is a folder and a *disc* is a sheet inside it. That is not a filing preference;
+  three separate mechanisms already require it and one forbids the alternative.
+
+    psx.cpp:824 decides whether a mount is a disc swap or a new game by comparing the
+    cue's parent directory against the last one, string against string. Same folder means
+    same_game: no reset, and psx_mount_save() keeps the memory card that is already
+    mounted. Two discs in two folders reset the console between them and give the game a
+    different memory card per disc, which is the failure this layout exists to avoid.
+
+    chome_lib.cpp's scanner emits one item per .cue and hides the tracks beside them -
+    dir_has_playlist() is a per-directory boolean and ext_is_part() matches on the
+    *extension*, so N sheets in one folder are N items and no track is ever a card.
+
+    clean_title() strips everything from the first '(' and group_key() is
+    system|extension|cleaned-title, so those N items collapse into ONE shelf card that X
+    cycles through. The serial and region live entirely inside parentheses precisely so
+    that the card still reads "Metal Gear Solid".
+
+  And no .m3u. Nothing in this tree reads one: psx.cpp:400 loads .cue, .chd or the
+  physical-disc sentinel and nothing else, and the scanner's only interest in the
+  extension is as a second trigger for the same "this folder is a rip" boolean. A
+  playlist here would be a file written for no reader, so none is written.
+
+  ------------------------------------------------------ which disc this one is ---
+
+  It is named by its serial and NOT by a disc number, and the distinction is deliberate.
+
+  Nothing available at rip time says "this is disc 2". The disc's own filesystem carries
+  a serial and no disc index; the shipped title table maps serial -> title and is
+  explicitly not a ROM database - SLES-01506 and SLES-11506 both return the bare string
+  "Metal Gear Solid", because tools/disctitles.py deletes everything from the first '('
+  and Redump's "(Disc 1)" goes with it. And only one disc is in the drive, so there is
+  nothing to count against.
+
+  The serial-digit convention - SLES-01506, SLES-11506, SLES-21506 - is real for many PAL
+  sets and does not hold generally: Metal Gear Solid's two USA discs are SLUS-00594 and
+  SLUS-00776, which no arithmetic turns into 1 and 2. A number derived that way would be
+  right often enough to be trusted and wrong often enough to matter, so it is not
+  derived. The serial is a unique key and it is the truth, so it is what the name says.
+
+  One thing does fall out for free: push_game_grouped() orders a card's variants by
+  strcasecmp on the path, and serials within a set sort in disc order for every set
+  checked (SLES-01506 < SLES-11506, SCES-00867 < SCES-10867 < SCES-20867, and
+  SLUS-00594 < SLUS-00776). So the cycle tends to run disc 1, disc 2, disc 3 without
+  anything having claimed to know which is which.
+
+  Region comes from the serial's prefix, which is the one piece of metadata that IS
+  derivable: SCES/SLES/SCED/SLED are Europe, SCUS/SLUS are USA, SCPS/SLPS/SLPM/SCPM/SIPS
+  are Japan. The rest of Sony's prefixes are promo and demo codes this does not claim to
+  place, and a disc it cannot place simply has no region in its name - the serial still
+  makes it unique. That is what stops a PAL copy landing on top of an NTSC one.
 
   One FILE per track rather than one big .bin. Three reasons, in the order of how much
   they cost to get wrong:
@@ -291,6 +350,20 @@ int rip_cue_text(const rip_plan *p, int mode1_only, char *out, int outsz);
 // part of a game rather than as a game of its own.
 void rip_track_file(int num, char *out, int outsz);
 
+/*
+  The same, qualified by the disc it belongs to: "<Disc> - Track 01.bin".
+
+  Two discs in one folder both have a track 1, so the bare name can only belong to one of
+  them; this is the half of the collision that would have overwritten bytes rather than
+  merely offered to. An empty or null `base` gives the bare name, which is the single-disc
+  case and what every rip written before this looked like.
+
+  Still hidden from the shelf, and by the extension rather than the wording: the scanner
+  suppresses bin/iso/wav/raw beside a .cue (ext_is_part), so the "Track NN" in the middle
+  is for a human reading the folder rather than for dir_has_playlist().
+*/
+void rip_track_file_for(const char *base, int num, char *out, int outsz);
+
 // What the finished folder will occupy, tracks and sheet together.
 long long rip_bytes_needed(const rip_plan *p);
 
@@ -323,6 +396,50 @@ void rip_msf(int sectors, int *m, int *s, int *f);
 */
 int rip_folder_name(const char *title, char *out, int outsz);
 
+/*
+  The region a Sony serial places a disc in - "Europe", "USA", "Japan" - or "" for a
+  prefix this does not claim to know and for a key that is not a serial at all.
+
+  Returns the length, so 0 reads as "no region" at a call site that does not care why.
+  The unplaced prefixes (SCZS and the PAPX/PCPX/PEPX/PUPX promo codes) are left blank on
+  purpose rather than guessed at: a wrong region in a folder name is a wrong folder.
+*/
+int rip_region_of(const char *serial, char *out, int outsz);
+
+/*
+  The folder that holds every disc of one game: "<Title> (<Region>)", or the bare title
+  where the region is unknown. Sanitised exactly as rip_folder_name() sanitises.
+*/
+int rip_game_folder(const char *title, const char *serial, char *out, int outsz);
+
+/*
+  The base name for one disc's sheet and tracks inside that folder:
+  "<Title> (<Region>) (<SERIAL>)", or the bare title where there is no serial - which is
+  the single-disc shape this wrote before multi-disc sets were handled at all.
+*/
+int rip_disc_base(const char *title, const char *serial, char *out, int outsz);
+
+/*
+  Which folder in `games_dir` this disc actually belongs in.
+
+  The region-qualified name when that folder is already there, else a bare-title folder
+  when THAT is there, else the region-qualified name. The middle case is what keeps a
+  card ripped before this existed working: disc 1 sitting in "Metal Gear Solid/" is
+  adopted, so disc 2 joins it rather than starting a rival folder that would defeat
+  psx.cpp's same-directory swap. Nothing already on the card is ever renamed.
+*/
+int rip_target_folder(const char *games_dir, const char *title, const char *serial,
+	char *out, int outsz);
+
+/*
+  Whether THIS disc - this exact base name - is already in that folder.
+
+  This is the question the replace prompt is about, and it is deliberately not
+  rip_folder_exists(): a folder holding disc 1 is a game to add disc 2 to, and offering
+  to replace it is the data loss this pair of functions was split to stop.
+*/
+int rip_disc_present(const char *games_dir, const char *folder, const char *base);
+
 /* ----------------------------------------------------------------- the work --- */
 
 /*
@@ -351,6 +468,29 @@ int rip_run(const rip_plan *p, const char *dir, const char *base, int mode1_only
 */
 int rip_perform(const rip_plan *p, const char *games_dir, const char *name, int mode1_only,
 	int overwrite, const rip_io *io, int *bad);
+
+/*
+  The same, for one disc of a game that may have others: `folder` is the game and `base`
+  names this disc's sheet and tracks within it. rip_perform() is this with the two equal,
+  which is the single-disc shape and byte for byte what it always wrote.
+
+  RIP_EXISTS now means "this disc is already in that folder" - same base, so same serial -
+  and not "that folder is not empty". A folder holding other discs is added to.
+
+  Publishing differs between the two cases, and both keep the rule that a folder the shelf
+  can see is a folder whose sheet is real:
+
+    the folder does not exist yet - the staged copy is renamed into place whole, exactly as
+    before, so there is no instant at which a partly-built game is visible.
+
+    the folder is already there and holds other discs - it cannot be replaced by a rename
+    without taking them with it, so the staged files are moved in one at a time and the
+    SHEET GOES LAST. Until that final move the new disc is a set of .bin files with no cue
+    naming them, which the scanner already ignores; the moment the cue lands, the disc is
+    complete. An interrupted add leaves stray tracks and no card, never a broken one.
+*/
+int rip_perform_disc(const rip_plan *p, const char *games_dir, const char *folder,
+	const char *base, int mode1_only, int overwrite, const rip_io *io, int *bad);
 
 // Whether <games_dir>/<name> is already there, which is what the confirmation is about.
 int rip_folder_exists(const char *games_dir, const char *name);
@@ -389,7 +529,8 @@ struct rip_status
 	int tracks;
 	int need_mb;        // what the rip wanted, and...
 	int free_mb;        // ...what the card had. Both only for the refusal's wording.
-	char name[96];      // the folder, so the finished message can say where it went
+	char name[96];      // the game's folder, so the finished message can say where it went
+	char base[160];     // this disc's sheet within it; equal to name for a single-disc rip
 };
 
 /*
@@ -415,7 +556,7 @@ int rip_percent(const rip_status *st);
   rip_poll(), the refusals included - whether the card has room is a question only the
   child can answer, because answering it means stat-ing a filesystem the drive is on.
 */
-int rip_start(const char *games_dir, const char *name, const char *title,
+int rip_start(const char *games_dir, const char *name, const char *base, const char *title,
 	int mode1_only, int overwrite);
 
 // Called from the idle loop. Reads the one line and nothing else, so it cannot block on a
@@ -467,6 +608,7 @@ void rip_test_reset();
 int  rip_test_starts();
 const char *rip_test_last_dir();
 const char *rip_test_last_name();
+const char *rip_test_last_base();
 int  rip_test_last_mode1();
 int  rip_test_last_overwrite();
 #endif
