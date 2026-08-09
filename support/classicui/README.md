@@ -313,7 +313,16 @@ Saturn has no `.sv` in this tree, so its slot comes from the code that consumes 
 index 0 is the disc and index 1 is the backup RAM. `saturn_set_image()` ignores the number
 it is passed, which means a wrong index here mounts a disc as a save file rather than
 failing loudly. It also has no `disc_playables` entry - `saturncdd.cpp` has not been taught
-to stream from a drive - so a pressed Saturn disc is still identified, named and refused.
+to stream from a drive - so a pressed Saturn disc is identified, named, and refused a
+**Play** row.
+
+It is not refused a **Copy** row, and the difference is the point: writing a cue sheet and
+its tracks into `games/Saturn` is this front-end's own work, and the core reads them back
+off the card like any other image, so no daemon is involved and none of its limits apply.
+That is why `disc_console_id()` and `disc_system_id()` are two functions - the first
+answers which console a disc belongs to, the second which one can be handed the spinning
+drive, and only the second is allowed to say no to Saturn. Tying the copy to the play
+answer is what used to leave an identified Saturn disc with nothing on the screen to do.
 
 The folder names are the official MiSTer Distribution's, and two of them are fixed in the
 firmware rather than chosen here: `PCECD_DIR` in `support/pcecd/pcecd.h` and `NEOCD_DIR` in

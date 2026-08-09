@@ -341,41 +341,63 @@ const char *disc_type_name(int type)
 }
 
 /*
-  Which of our shelf systems can load this - meaning the *pressed disc*, which is not the
-  same question as which system reads an image of it off the card.
+  Which shelf system this disc BELONGS to - asked of the disc, and answered whether or
+  not anything in this firmware can play the pressed disc.
 
-  Several deliberately answer nothing. 3DO and CD-i have no entry in the shelf's system
-  table at all, so "we identified it" and "we can launch it" are different questions and
-  the caller has to ask both - that is exactly the case where the player gets asked to pick
-  a core instead. Audio CDs answer nothing because no core plays them; that is a job for
-  the firmware, not a shelf card.
+  This is the plain "what console is this" question, and it is the one every question
+  about *the card* is asked through: which folder a copy is filed in, which core reads
+  it back afterwards. None of that involves the drive, so none of it may be gated on
+  whether a daemon can stream sectors off one.
 
-  Saturn answers nothing for a different reason and it is worth being precise about, since
-  the obvious reading is now wrong: Saturn IS a shelf system, and a .cue or .chd in
-  games/Saturn is a card that launches the Saturn core. What it has no entry in is
-  disc_playables - saturncdd.cpp has not been taught to stream sectors from a drive, the
-  way megacdd and pcecdd have - so there is no core to hand the *drive* to, and claiming
-  one here would offer a Play that could only fail.
+  Nothing answers here that is not a system in chome_lib's table. 3DO and CD-i are
+  identified by the sector parser but have no shelf entry at all, so there is no folder
+  to name and no core to name it for; an audio CD is nobody's game. Those three, and
+  UNKNOWN, are the cases where "we identified it" and "we have somewhere to put it" are
+  genuinely different answers, and the caller has to ask both.
 
-  Nor is this table what the shelf entries changed. Mega CD still answers "md", because
-  the Mega Drive row is where a player looks for Sega and its launch already overrides the
-  rbf to the MegaCD core; that route is hardware-verified and had no reason to move. Where
-  a *copy* of the disc goes is a separate question with a separate answer - see
-  rip_target::dest in chome_ui.cpp - because a folder of tracks in games/Genesis is not a
-  Mega Drive game and never became a card.
+  Mega CD answers "md", and that is the console rather than the destination: the Mega
+  Drive row is where a player looks for Sega, and its launch already overrides the rbf
+  to the MegaCD core. Where a *copy* of an md disc goes is one more step on from here
+  and is answered in exactly one place - rip_target::dest in chome_ui.cpp - because a
+  folder of tracks in games/Genesis is not a Mega Drive game and never became a card.
+  PC Engine CD and Neo Geo CD are the same shape.
 */
-const char *disc_system_id(int type)
+const char *disc_console_id(int type)
 {
 	switch (type)
 	{
 	case DISC_T_PSX:    return "psx";
 	case DISC_T_MEGACD: return "md";      // the Mega Drive core loads Mega CD
+	case DISC_T_SATURN: return "saturn";
 	case DISC_T_PCECD:  return "tg16";
 	case DISC_T_NEOGEO: return "neogeo";
 	case DISC_T_MDPLUS: return "md";
 	case DISC_T_SNES:   return "snes";
 	}
 	return 0;
+}
+
+/*
+  Which of our shelf systems can be handed the *pressed disc* - which is the console
+  above, less the one console whose daemon cannot read a drive.
+
+  Saturn is that one, and it is worth being precise about since the obvious reading is
+  wrong: Saturn IS a shelf system, and a .cue or .chd in games/Saturn is a card that
+  launches the Saturn core. What it has no entry in is disc_playables - saturncdd.cpp
+  has not been taught to stream sectors from a drive the way megacdd and pcecdd have -
+  so there is no core to hand the *drive* to, and offering a Play here could only fail.
+
+  Subtracting from disc_console_id() rather than listing a second table is the point of
+  the split. The two questions had one answer for as long as they agreed, and what that
+  cost was a Saturn disc the shelf could read, name and file, and offered no Copy for -
+  because the copy was being asked which core could play it. This function is the only
+  place the drive's limits are allowed to narrow the answer, and the narrowing is one
+  line long and says why.
+*/
+const char *disc_system_id(int type)
+{
+	if (type == DISC_T_SATURN) return 0;
+	return disc_console_id(type);
 }
 
 int disc_capable_systems(const char **out, int max)

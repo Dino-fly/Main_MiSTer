@@ -192,11 +192,27 @@ int  disc_take_dirty();
 const char *disc_type_name(int type);        // "PlayStation", "Mega CD", ...
 
 /*
-  The system id in chome_lib's table ("psx", "md", "tg16", ...) that can load this
-  disc, or 0 when we have none for it. 0 for AUDIO and UNKNOWN, and also for types
-  whose core this firmware has no shelf entry for - which is why the caller must
-  handle "identified but unplayable here" rather than assuming a type implies a
-  core.
+  The system id in chome_lib's table ("psx", "md", "tg16", "saturn", ...) that this
+  disc BELONGS to, or 0 when this firmware has no shelf entry for it - 3DO, CD-i, an
+  audio CD, an unidentified one. Asked of the disc and nothing else: it answers for
+  every console the shelf carries, including the ones no core here can be handed the
+  drive for.
+
+  This is the one to ask about anything that happens on the CARD - which folder a copy
+  is filed in, which core reads it back. Ask disc_system_id() below only about playing
+  the pressed disc.
+*/
+const char *disc_console_id(int type);
+
+/*
+  The system id that can be handed this *pressed disc*, or 0 when none can. That is
+  disc_console_id() less Saturn, whose daemon cannot read a drive; plus the same 0 for
+  AUDIO, UNKNOWN and the types with no shelf entry. Which is why the caller must handle
+  "identified but unplayable here" rather than assuming a type implies a core.
+
+  Not the question to ask about copying a disc to the card. Reading sectors is this
+  front-end's own job and the answer here says nothing about it - see the note over
+  disc_system_id() in chome_disc.cpp.
 */
 const char *disc_system_id(int type);
 

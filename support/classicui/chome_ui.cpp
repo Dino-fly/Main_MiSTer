@@ -4941,10 +4941,11 @@ static int disc_sys_by_id(const char *id)
 /*
   Which shelf systems a rip can be *for*, and how their cue parser has to be spoken to.
 
-  Not every system that can be handed a physical disc can be handed a folder of one. This
-  table is the set whose core loads a .cue and its tracks off the card, which is the four
-  CD cores this firmware has shelf entries for, and the flag is the one thing about them
-  that differs in what the sheet may say:
+  This table is the set whose core loads a .cue and its tracks OFF THE CARD - which is a
+  different set from the ones that can be handed the pressed disc, and deliberately so.
+  Reading the sectors is this front-end's own work; the row a system gets here depends on
+  nothing but whether its core can read back what we would write. The flag is the one
+  thing about them that differs in what the sheet may say:
 
     psx      MODE1/2352 and MODE2/2352 are both understood and both map to 2352
              (psx.cpp:250), so the sheet says whichever mode the sectors actually are.
@@ -4955,14 +4956,25 @@ static int disc_sys_by_id(const char *id)
     tg16     PC Engine CD's is the same two tokens, per track (pcecdd.cpp:157-174).
     neogeo   has no parser of its own: neocd_set_image() calls Mega CD's cdd_t
              (neogeocd.cpp:192), so it is md's rules exactly.
+    saturn   reads MODE1/2048, MODE1/2352 and MODE2/2352, per track and per track's own
+             sector size (saturncdd.cpp:169-192), so it is psx's rules and not Mega CD's -
+             measured from that parser rather than assumed from the console's neighbours,
+             because a Saturn disc's second session is where a wrong token would show.
 
-  A system that is not in this table gets no Rip row, and that is a real answer rather than
-  laziness: an MSU-1 SNES disc's core wants the .sfc off the disc and not a copy of the
-  disc, so a cue sheet in SNES/ would be a folder that never loads.
+  Saturn is here even though no core here can play a Saturn disc from the drive, and that
+  is the whole point of the split described over disc_console_id(): a copy is written by
+  us and read back by a core off the card, so saturncdd.cpp not being able to stream the
+  drive is not a fact about copying. games/Saturn is a shelf system with a folder and a
+  cue reader; that is everything a copy needs.
+
+  A system that is not in this table still gets no Rip row, and that is a real answer
+  rather than laziness: an MSU-1 SNES disc's core wants the .sfc off the disc and not a
+  copy of the disc, so a cue sheet in SNES/ would be a folder that never loads. 3DO and
+  CD-i have no shelf entry at all - no folder, so nowhere to put it.
 
   Where the rip goes is a games folder - lib_sys_games_dir(), the same directory the
   scanner walks - because a copy that the shelf cannot see is not worth making. For
-  PlayStation that is the system's own folder and `dest` is empty.
+  PlayStation and Saturn that is the system's own folder and `dest` is empty.
 
   For the other three it is not, and that is what `dest` is for. The row the dialog
   settles on for a Mega CD disc is "md", because Mega Drive is where a player looks for
@@ -4989,6 +5001,7 @@ struct rip_target
 static const rip_target rip_targets[] =
 {
 	{ "psx",      0, 0          },
+	{ "saturn",   0, 0          },
 	{ "md",       1, "megacd"   },
 	{ "megacd",   1, 0          },
 	{ "tg16",     1, "pcecd"    },
@@ -5588,32 +5601,38 @@ static void disc_build_rows()
 	/*
 	  And "copy it to the card", for the console the disc belongs to.
 
-	  One row rather than one per system, and it targets whatever the dialog has settled on
-	  - the console the disc was identified as, or the one the player picked by hand through
-	  the rows above. A rip has to go into some system's games folder in some core's format,
-	  and this screen already has an answer to which; offering the same rip four times so
-	  the player can pick the wrong folder is not a choice worth giving them.
+	  One row rather than one per system, and it targets the console the disc was identified
+	  as - or the one the player picked by hand through the rows above. A rip has to go into
+	  some system's games folder in some core's format, and this screen already has an
+	  answer to which; offering the same rip once per console so the player can pick the
+	  wrong folder is not a choice worth giving them.
 
-	  Absent rather than dim where there is no answer, which is an unrecognised disc and a
-	  Saturn one. A dim row says "this could work and does not"; here there is nothing for
-	  the row to be about, and the rows above already say so.
+	  Which console the copy is for is asked of the DISC - disc_console_id() - and not of
+	  the rows above, which answer a different question: whether a core here can be handed
+	  the spinning drive. Those two used to be the same call, and the cost was a Saturn
+	  disc. It is identified, games/Saturn is a shelf system, saturncdd.cpp reads the sheet
+	  we would write - and the screen offered no Copy, because the copy was being asked
+	  which core could play it. Copying is our own helper reading sectors and writing a cue
+	  and some .bins; no daemon is involved and none of its limits belong here. A Saturn
+	  disc now gets no Play row and a Copy row, which is not a contradiction: it is the two
+	  questions giving their own answers.
 
-	  Saturn is worth spelling out because the reason has changed and the old one - "nowhere
-	  to put it and no format to put it in" - is no longer true. There is a folder now, and
-	  saturncdd.cpp reads the same sheet the others do. What there is not is anything that
-	  settles on Saturn: disc_system_id() answers nothing for a Saturn disc and Saturn is
-	  absent from disc_capable_systems(), both because its daemon cannot read the drive, so
-	  neither the identification nor a hand-picked core can name it. Offering a copy of a
-	  disc whose Play row does not exist would be the only place on this screen that
-	  promised something about a core it had just refused.
+	  disc_chosen_sys stays as an override, so a player who picked a core by hand for an
+	  unidentified disc copies it into that console's folder rather than nowhere.
 
-	  The row names the folder's console and not the disc's, which for three of the four is
+	  Absent rather than dim where there is still no answer, which is an unrecognised disc,
+	  a disc whose console has no row in rip_targets, and one whose destination system is
+	  missing from this card. A dim row says "this could work and does not"; here there is
+	  nowhere to put the copy at all, so there is nothing for the row to be about and the
+	  rows above already say so.
+
+	  The row names the folder's console and not the disc's, which for three of the five is
 	  not the same word: a Mega CD disc plays on the Mega Drive row above and copies into
 	  Mega CD. Saying "Copy to Mega CD" is what tells the player where the card will turn
 	  up, which is the only thing about the destination they can act on. rip_dest_sys().
 	*/
 	int rip_sx = rip_dest_sys((disc_chosen_sys >= 0) ? disc_chosen_sys
-		: disc_sys_by_id(disc_system_id(disc_type())));
+		: disc_sys_by_id(disc_console_id(disc_type())));
 
 	const rip_target *rt = rip_target_for(rip_sx);
 
