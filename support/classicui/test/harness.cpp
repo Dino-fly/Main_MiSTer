@@ -3202,11 +3202,182 @@ static void assert_disc_titles()
 		check(secs < 5.0, "and gives up rather than searching it a line-buffer at a time");
 	}
 
+	/* --------------------------------------- settling the verdict up front --- */
+
+	/*
+	  disc_titles_preload() asks "is there a table on this card at all?" when the drive
+	  is found, rather than on the frame a serial first needs an answer. In the firmware
+	  the caller is disc_watch_start(), which is stubbed here - so the function is driven
+	  directly, which is the only part of it that is not plumbing anyway.
+
+	  What has to be shown is that it genuinely *settles* the verdict, because that is
+	  the whole of its effect: it caches no answers and reads no rows, and a version that
+	  quietly did nothing would look identical from every other angle. So the verdict is
+	  settled against a card with no table, a table is then put back, and the lookup must
+	  still find nothing - which is only possible if the question had already been
+	  answered. The stickiness itself is not new and is checked further up; what is new
+	  is that preload is what can now do the sticking.
+	*/
+	unlink(path);
+	disc_titles_forget();
+	disc_titles_preload();
+
+	{
+		FILE *f = fopen(path, "wb");
+		if (f)
+		{
+			fprintf(f, "#classicui-disctitles 1\n");
+			fprintf(f, "SLES01506\tMetal Gear Solid\n");
+			fclose(f);
+		}
+	}
+
+	check(disc_title_for("SLES-01506") == 0,
+		"preloading settles the verdict, so a table arriving after it is not picked up");
+
+	disc_titles_forget();
+	check(disc_title_for("SLES-01506") != 0, "and forgetting the verdict is what picks it up");
+
+	/*
+	  The other order, which is the one that actually ships: a table that is already on
+	  the card when the drive is found. Preload must leave it perfectly readable - a
+	  verdict settled as "good" is the case where nothing may change.
+	*/
+	disc_titles_forget();
+	disc_titles_preload();
+	{
+		const char *t = disc_title_for("SLES-01506");
+		check(t && !strcmp(t, "Metal Gear Solid"),
+			"while preloading a table that is there leaves every lookup working");
+	}
+
 	/*
 	  Restore. Every section after this one draws or logs a disc name, so a table left
 	  on the card would change what they see - and the two disc sections that assert on
 	  disc_display_name() would fail a long way from here.
 	*/
+	unlink(path);
+	disc_titles_forget();
+	disc_ingest_present(0);
+	(void)disc_take_dirty();
+	disc_reset_reader();
+}
+
+/*
+  What the disc dialog actually says, at each of the three ends a disc can come to.
+
+  The complaint this answers: a disc went in, the front-end showed "PlayStation" and no
+  game name, and it did not read as a machine that was working - it read as one that had
+  finished and had nothing to say. The dialog's own words are the only place that
+  distinction lives, and until this section they were checked by dumping the canvas,
+  which cannot tell a sentence from a different sentence.
+
+  Three states, and the third is the one that matters most. A disc still being read must
+  say so; an identified disc must show the name a player recognises; and a disc that is
+  never going to be identified must *stop* saying it is reading and admit it. A reading
+  state that no disc ever leaves is worse than a wrong answer, because the player waits
+  for it.
+
+  Driven through disc_ingest_present()/disc_ingest_identify() rather than through the
+  drive, which is the split chome_disc.h exists for: the whole drive layer is stubbed
+  here, so every one of these is reachable without a disc, a drive, or a fork.
+
+  Its own table, installed and removed, exactly as assert_disc_titles() above does - and
+  it leaves the same state that one does, so it sits between that section and the next
+  without moving anything either of them depends on.
+*/
+static void assert_disc_dialog_words()
+{
+	printf("\n== physical disc: what the dialog says at each end ==\n");
+
+	const char *path = ROOT "/classicui/disctitles.txt";
+	const int L = 0;
+
+	mkpath(ROOT "/classicui");
+	{
+		FILE *f = fopen(path, "wb");
+		if (f)
+		{
+			fprintf(f, "#classicui-disctitles 1\n");
+			fprintf(f, "SLES01506\tMetal Gear Solid\n");
+			fclose(f);
+		}
+	}
+	disc_titles_forget();
+
+	char t[DISC_TITLE_LEN], s[64];
+
+	/* ------------------------------------- present, and not yet identified --- */
+
+	/*
+	  No reader is installed and no identify is ingested, which is exactly the helper's
+	  first write: "there is a disc" published before the slow read starts, so the
+	  front-end has something to show while the drive seeks. On a dual-layer PAL disc
+	  that window is seconds long.
+	*/
+	disc_ingest_present(1);
+	check(disc_state() == DISC_SPINNING, "a disc that has arrived is being read");
+
+	disc_test_dlg_text(t, sizeof(t), s, sizeof(s));
+	check(!strcmp(t, "Reading the disc"), "and the dialog says so in its largest line");
+	check(t[0] != 0, "which is never blank, whatever else is or is not known");
+
+	/* -------------------------------------------- identified, and in the table --- */
+
+	{
+		fake_disc d; memset(&d, 0, sizeof(d));
+		static const char *const none[] = { "" };
+		fake_iso(&d, L, "PLAYSTATION", "PLAYSTATION", none, 0);
+		fake_put(&d, L + 20, 0, "BOOT = cdrom:\\SLES_015.06;1", 27, 100);
+		disc_set_reader(fake_read, &d);
+
+		disc_ingest_identify(L);
+		check(disc_state() == DISC_READY, "reading it finishes");
+
+		disc_test_dlg_text(t, sizeof(t), s, sizeof(s));
+		check(!strcmp(t, "Metal Gear Solid"), "and the dialog shows the name, not the serial");
+		check(strcmp(t, "Reading the disc"),
+			"the reading state is left behind rather than lingering under a known disc");
+		check(!strcmp(s, "PlayStation"), "with the console named underneath it");
+
+		disc_reset_reader();
+		disc_ingest_present(0);
+		(void)disc_take_dirty();
+	}
+
+	/* ------------------------------------------ read, and recognised as nothing --- */
+
+	/*
+	  The one that must not hang. A reader that answers every sector with bytes matching
+	  no signature is a disc this firmware genuinely cannot place - and the required
+	  behaviour is that identification *completes* and says so. If this ever comes back
+	  "Reading the disc", the front-end has a spinner with no exit, which is the failure
+	  the player would sit in front of rather than one they would report.
+	*/
+	{
+		fake_disc d; memset(&d, 0, sizeof(d));
+		static const char *const none[] = { "" };
+		fake_iso(&d, L, "NOT A CONSOLE", 0, none, 0);
+		disc_set_reader(fake_read, &d);
+
+		disc_ingest_present(1);
+		disc_ingest_identify(L);
+
+		check(disc_state() == DISC_UNKNOWN, "a disc matching no signature is identified as unknown");
+		check(!disc_identify_due(), "and identification is finished, not still pending");
+
+		disc_test_dlg_text(t, sizeof(t), s, sizeof(s));
+		check(strcmp(t, "Reading the disc") && strcmp(s, "Reading the disc"),
+			"so the dialog stops saying it is reading");
+		check(!strcmp(t, "Unrecognised disc") || !strcmp(s, "Unrecognised disc"),
+			"and says the disc was not recognised instead");
+
+		disc_reset_reader();
+		disc_ingest_present(0);
+		(void)disc_take_dirty();
+	}
+
+	// Restore, exactly as assert_disc_titles() does: no table, empty drive, no reader.
 	unlink(path);
 	disc_titles_forget();
 	disc_ingest_present(0);
@@ -4686,6 +4857,30 @@ static void assert_disc_dialog()
 	press(KEY_UP);
 	press(KEY_ENTER);
 	check(chome_screen_id() == S_DISC, "its dialog opens before anything knows what it is");
+
+	/*
+	  And what it says while it is there, which is the complaint this section grew out of.
+
+	  A disc that is in the drive and not yet identified used to be describable only as a
+	  picture: the dump below proved something was drawn, not that it said anything. It
+	  has to read as work in progress rather than as an answer, so all three of these are
+	  failures - a blank largest line, the console's name on its own, and "Unrecognised
+	  disc", which is the finished verdict and the opposite of this state.
+
+	  disc_display_name() has nothing to offer here - no serial, no label, and
+	  disc_type_name(DISC_T_NONE) is empty - so what lands in the title is the subtitle,
+	  promoted by disc_dlg_get() precisely so that this line is never drawn blank.
+	*/
+	{
+		char t[DISC_TITLE_LEN] = {}, s[64] = {};
+		disc_test_dlg_text(t, sizeof(t), s, sizeof(s));
+
+		check(t[0] != 0, "and its largest line is not left blank while the drive is still reading");
+		check(!strcmp(t, "Reading the disc"), "it says the disc is being read");
+		check(strcmp(t, "Unrecognised disc") && strcmp(s, "Unrecognised disc"),
+			"and does not deliver a verdict it has not reached yet");
+	}
+
 	dump("disc-8b-dialog-reading");
 	press(KEY_ESC);
 	press(KEY_ESC);
@@ -14721,6 +14916,10 @@ int main()
 	// table on the card and takes it away again, and anything running in between would
 	// see disc_display_name() answer differently. See its own comment.
 	assert_disc_titles();
+	// Directly after it, because it does the same thing: installs a title table, drives the
+	// same state machine with the same fake discs, and takes the table away again, leaving
+	// the empty drive and the reset reader that one leaves.
+	assert_disc_dialog_words();
 	assert_disc_ui();
 	// Directly after it: it leaves the same state that one does - the shelf, an empty drive
 	// and the HD canvas - and it puts the badge back under the same fake disc.

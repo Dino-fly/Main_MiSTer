@@ -934,6 +934,16 @@ int disc_watch_start()
 	unlink(DISC_STATE_FILE);
 	snprintf(dev_path, sizeof(dev_path), "%s", dev);
 
+	/*
+	  There is a drive, so there will be discs, so there will be lookups. Settle whether
+	  the card has a title table now rather than on the first frame after a serial turns
+	  up - see disc_titles_preload().
+
+	  Here, and not at start-up, is the whole point: this line is only reached once a
+	  device node has opened, so a machine with no optical drive never touches the file.
+	*/
+	disc_titles_preload();
+
 	// The device node itself is the thing that was "found" - watching latches here
 	// and stays latched even if the fork below fails or the helper dies later; see
 	// fork_helper() and disc_refork_due() for how those get retried without

@@ -149,6 +149,13 @@ void disc_test_rot_direct(int on);
 int  disc_test_rot_info(int *slots, int *stride, long *bytes);
 int  disc_test_shown_step();
 int  disc_test_rot_renders();
+
+/*
+  The disc dialog's two lines of text, straight out of the disc_dlg_get() the drawing
+  uses. See the definition in chome_ui.cpp for why this one screen is checked as
+  sentences rather than as pixels.
+*/
+void disc_test_dlg_text(char *title, int tsz, char *sub, int ssz);
 #endif
 
 #endif

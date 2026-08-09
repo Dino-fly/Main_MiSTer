@@ -5443,6 +5443,31 @@ static void disc_dlg_get(disc_dlg *d)
 		d->title[0] ? d->title : d->key);
 }
 
+#ifdef CHOME_HOST_TEST
+/*
+  The two lines the disc dialog puts on screen, for the harness. Compiled out of the
+  firmware, like the rotation hooks further up.
+
+  Everything else about this dialog is checked by dumping the canvas and comparing
+  pixels, which is the right test for a layout and the wrong one for a sentence: a
+  picture cannot say whether a disc still being read says so or merely says nothing,
+  and that distinction - "Reading the disc" against a bare console name against
+  "Unrecognised disc" - is the one thing about this screen the player complained
+  about. So the strings are read as strings.
+
+  Not a second derivation of them either: it calls the same disc_dlg_get() the drawing
+  does, so a check here cannot pass while the screen says something else.
+*/
+void disc_test_dlg_text(char *title, int tsz, char *sub, int ssz)
+{
+	disc_dlg d;
+	disc_dlg_get(&d);
+
+	if (title && tsz > 0) snprintf(title, (size_t)tsz, "%s", d.title);
+	if (sub && ssz > 0) snprintf(sub, (size_t)ssz, "%s", d.sub);
+}
+#endif
+
 /*
   Ask for the disc's scan as soon as the disc is known, rather than when the dialog opens.
 
