@@ -5470,7 +5470,26 @@ static void disc_dlg_get(disc_dlg *d)
 	  running disc, whose key comes from the mount rather than the drive and which the
 	  prefetch never sees at all.
 	*/
-	if (d->key[0]) disc_art_request(d->key, lib_sys(d->sysidx) ? lib_sys(d->sysidx)->id : 0,
+	/*
+	  The console the disc BELONGS to, not the one that would load it.
+
+	  d->sysidx is the launch answer, and for a Saturn disc there is no launch answer -
+	  saturncdd cannot stream from a drive, so the Play row is refused and sysidx is -1.
+	  Asking for artwork through it therefore handed disc_art_request() a null system,
+	  ss_system_id() returned nothing, and the request returned without so much as a log
+	  line. A Sega Rally disc named itself correctly on screen and never asked anyone for
+	  its picture; the owner reported it as "no art", which is exactly what it looked like.
+
+	  Artwork is a question about which game this is. Whether a core can read the drive
+	  has nothing to do with it, and the two answers were only ever the same by accident.
+	  A disc the player has pointed at a core by hand still wins, because that is a
+	  statement about what the disc IS.
+	*/
+	int art_sx = (disc_chosen_sys >= 0) ? disc_chosen_sys
+		: (d->running ? d->sysidx : disc_sys_by_id(disc_console_id(disc_type())));
+	if (art_sx < 0) art_sx = d->sysidx;
+
+	if (d->key[0]) disc_art_request(d->key, lib_sys(art_sx) ? lib_sys(art_sx)->id : 0,
 		d->title[0] ? d->title : d->key);
 }
 
