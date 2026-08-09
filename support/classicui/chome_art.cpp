@@ -8,6 +8,7 @@
 #include <sys/wait.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <time.h>
 
 #include "chome_art.h"
 #include "chome_lib.h"
@@ -60,6 +61,341 @@ static pid_t fetch_pid = -1;
 static int fetch_item = -1;
 static char fetch_tmp[1024];
 static char fetch_dst[1024];
+
+/* ------------------------------------- the misses we remember across boots --- */
+
+/*
+  See the long note on art_ss_miss_known() in chome_art.h for why this exists at all. What
+  is here is the shape of it, and the two decisions that are not obvious from the header.
+
+  ---------------------------------------------------------------------------
+  One: matched on a hash, readable as text.
+  ---------------------------------------------------------------------------
+
+  A record holds a 64-bit hash of the full query key and a truncated copy of that key for
+  human eyes. Matching is on the hash only.
+
+  That split is not decoration. The obvious design - store the key text and strcmp it -
+  has to pick a field width, and a shelf has ROM names past any width worth putting in an
+  array 4096 long ("Legend of Zelda, The - A Link to the Past (Europe) (Rev 1).sfc" is 62
+  characters and is nowhere near the worst). Two names that agree up to a truncation point
+  would then share a record, and one real game would be written off for a week because
+  another game with a similar name had no cover. Hashing the *whole* key cannot do that:
+  at 4096 entries the odds of a 64-bit collision are about one in two million million.
+
+  Keeping the readable half is worth its 80 bytes because the alternative is a file of hex
+  that nobody - including us, on the device, with a player asking why a game will not
+  scrape - can read. It is never compared against, so truncating it is free.
+
+  ---------------------------------------------------------------------------
+  Two: appended to, not rewritten.
+  ---------------------------------------------------------------------------
+
+  Recording a miss appends one line. A first scan of a shelf that misses on most of it is
+  1469 appends of ~60 bytes rather than 1469 rewrites of a file growing to 90 KB, which is
+  the difference between a card that shrugs and a card that has been asked to write 60 MB
+  for no reason.
+
+  The file is compacted on load instead, which is the one moment its whole contents are in
+  hand anyway: expired entries are dropped, a key that appears twice keeps its latest day,
+  and the file is rewritten only when that actually changed something. So a shelf that is
+  scraped once and then left alone rewrites the file once a week, when things start
+  expiring, and never otherwise.
+
+  Corruption fails safe in the only direction that is safe: a line that does not parse is
+  skipped, and a skipped line means the game it described gets asked about again. Losing
+  the whole file costs one shelf's worth of requests; trusting a mangled one could write
+  off a game forever.
+*/
+
+struct ss_miss_rec
+{
+	uint64_t key;      // hash of the whole "<systemeid>/<name>" query key. What is matched.
+	uint32_t day;      // days since the epoch, when we asked
+	char what[80];     // the same key, truncated, for a human reading the file
+};
+
+static ss_miss_rec *ss_miss = 0;   // sorted by key, so a lookup is a binary search
+static int ss_nmiss = 0;
+static int ss_miss_loaded = 0;
+
+// The store is consulted from art_source_for(), which the shelf calls for every card it
+// draws. Kept sorted so that is 12 comparisons rather than 4096; inserting is a memmove of
+// at most 4096 * 96 bytes, which happens once per miss and never in a draw.
+#define SS_MISS_REC_BYTES ((int)sizeof(ss_miss_rec))
+
+static uint64_t ss_miss_hash(const char *s)
+{
+	// FNV-1a, 64-bit. Chosen because the tree already uses the 32-bit form for chome_item
+	// keys, so there is one hash idiom here rather than two.
+	uint64_t h = 1469598103934665603ull;
+	for (const unsigned char *p = (const unsigned char*)s; *p; p++)
+	{
+		h ^= (uint64_t)*p;
+		h *= 1099511628211ull;
+	}
+	return h;
+}
+
+/*
+  The query key, which is what was actually asked and not what the shelf calls the game.
+
+  systemeid rather than the MiSTer system id, because that is the half that goes into the
+  URL - and because .gb and .gbc, or .sms and .gg, share a shelf but are different
+  platforms to the API. Keying on the shelf's system would merge two of them.
+*/
+static void ss_miss_key(const char *systemeid, const char *name, char *out, int len)
+{
+	snprintf(out, len, "%s/%s", systemeid ? systemeid : "?", name ? name : "?");
+}
+
+static uint32_t ss_miss_today()
+{
+	return (uint32_t)(time(0) / 86400);
+}
+
+const char *art_ss_miss_path()
+{
+	static char p[1024];
+	snprintf(p, sizeof(p), "%s/classicui/ss-misses.txt", getRootDir());
+	return p;
+}
+
+// Where in the sorted array this key is, or where it would go. Returns 1 when it is
+// actually there.
+static int ss_miss_find(uint64_t key, int *at)
+{
+	int lo = 0, hi = ss_nmiss;
+	while (lo < hi)
+	{
+		int mid = lo + (hi - lo) / 2;
+		if (ss_miss[mid].key < key) lo = mid + 1;
+		else hi = mid;
+	}
+
+	*at = lo;
+	return (lo < ss_nmiss && ss_miss[lo].key == key) ? 1 : 0;
+}
+
+// Insert or update in place. Returns 1 when the store changed.
+static int ss_miss_put(uint64_t key, uint32_t day, const char *what)
+{
+	if (!ss_miss) return 0;
+
+	int at = 0;
+	if (ss_miss_find(key, &at))
+	{
+		// Already known. Keep the later day: the file is append-only, so the same key
+		// appearing twice is a re-ask after an expiry and the second line is the truth.
+		if (ss_miss[at].day >= day) return 0;
+		ss_miss[at].day = day;
+		return 1;
+	}
+
+	if (ss_nmiss >= ART_SS_MISS_MAX)
+	{
+		/*
+		  Full. Drop the oldest, then re-find the insertion point - dropping shifts
+		  everything after it, so `at` computed above is stale by one for half the array
+		  and would put the new record out of order. An out-of-order array breaks the
+		  binary search silently, which is the worst way for this to fail: it would answer
+		  "not remembered" for games that are, and the whole shelf would be re-asked.
+		*/
+		int oldest = 0;
+		for (int i = 1; i < ss_nmiss; i++) if (ss_miss[i].day < ss_miss[oldest].day) oldest = i;
+
+		memmove(&ss_miss[oldest], &ss_miss[oldest + 1],
+			(size_t)(ss_nmiss - oldest - 1) * (size_t)SS_MISS_REC_BYTES);
+		ss_nmiss--;
+
+		ss_miss_find(key, &at);
+	}
+
+	memmove(&ss_miss[at + 1], &ss_miss[at], (size_t)(ss_nmiss - at) * (size_t)SS_MISS_REC_BYTES);
+
+	memset(&ss_miss[at], 0, sizeof(ss_miss_rec));
+	ss_miss[at].key = key;
+	ss_miss[at].day = day;
+	snprintf(ss_miss[at].what, sizeof(ss_miss[at].what), "%s", what ? what : "");
+	ss_nmiss++;
+	return 1;
+}
+
+static void ss_miss_write_all()
+{
+	char dir[1024];
+	snprintf(dir, sizeof(dir), "%s/classicui", getRootDir());
+	mkdir(dir, 0777);
+
+	// Through a temporary and a rename, so that a firmware killed mid-write - which is
+	// what a core change does - cannot leave a half-file behind. A half-file would parse:
+	// every line in it is well formed, it is simply missing the rest, and the misses it
+	// lost would quietly become requests.
+	char tmp[1100];
+	snprintf(tmp, sizeof(tmp), "%s.new", art_ss_miss_path());
+
+	FILE *f = fopen(tmp, "wt");
+	if (!f) return;
+
+	fprintf(f,
+		"# ClassicUI: games ScreenScraper answered about and had no cover for.\n"
+		"# Delete this file to ask it about all of them again.\n"
+		"# <day since epoch> <key> <what was asked - for reading, not for matching>\n");
+
+	int ok = 1;
+	for (int i = 0; i < ss_nmiss && ok; i++)
+	{
+		ok = (fprintf(f, "%u %016llx %s\n", ss_miss[i].day,
+			(unsigned long long)ss_miss[i].key, ss_miss[i].what) > 0);
+	}
+
+	if (fclose(f) || !ok) { unlink(tmp); return; }
+	if (rename(tmp, art_ss_miss_path())) unlink(tmp);
+}
+
+static void ss_miss_load()
+{
+	if (ss_miss_loaded) return;
+	ss_miss_loaded = 1;
+
+	if (!ss_miss)
+	{
+		ss_miss = (ss_miss_rec*)calloc(ART_SS_MISS_MAX, sizeof(ss_miss_rec));
+		if (!ss_miss) return;
+	}
+
+	ss_nmiss = 0;
+
+	FILE *f = fopen(art_ss_miss_path(), "rt");
+	if (!f) return;
+
+	uint32_t today = ss_miss_today();
+	int lines = 0, dropped = 0, bad = 0;
+
+	char line[256];
+	while (fgets(line, sizeof(line), f))
+	{
+		if (line[0] == '#' || line[0] == '\n' || line[0] == '\r') continue;
+		lines++;
+
+		unsigned long day = 0;
+		unsigned long long key = 0;
+		char what[80];
+		what[0] = 0;
+
+		/*
+		  Three fields, and the third is allowed to be missing or to contain anything at
+		  all - it is never matched against, so a name with a space, a quote or a stray
+		  byte in it is not a reason to throw the record away. The first two are what has
+		  to parse, and %n tells us the scan actually consumed them rather than trusting a
+		  return count that %n-less sscanf would give for a partial hex field.
+		*/
+		int used = 0;
+		if (sscanf(line, "%lu %llx %n", &day, &key, &used) < 2 || !used || !key) { bad++; continue; }
+
+		const char *rest = line + used;
+		snprintf(what, sizeof(what), "%s", rest);
+		for (char *p = what; *p; p++) if (*p == '\n' || *p == '\r') { *p = 0; break; }
+
+		/*
+		  Expiry, and the guard for a day in the future.
+
+		  A card with no RTC - which is every MiSTer - boots with whatever the last
+		  timestamp was until NTP catches up, so a file written after a successful sync
+		  can genuinely be dated ahead of `today`. Treating that as "not yet expired" is
+		  right; what would be wrong is the unsigned subtraction underflowing into a
+		  gigantic age and expiring the whole file, which is the bug this branch is here
+		  to not have.
+		*/
+		if (day <= today && (today - day) >= (uint32_t)ART_SS_MISS_DAYS) { dropped++; continue; }
+
+		ss_miss_put((uint64_t)key, (uint32_t)day, what);
+	}
+
+	fclose(f);
+
+	/*
+	  Rewrite only when reading it changed something: an expiry, a line that did not parse,
+	  a duplicate key, or a file over the cap. A store that is simply read back unchanged -
+	  the common case, every boot - touches the card not at all.
+
+	  Compared against what is *held* rather than against what ss_miss_put() reported. Once
+	  the store is full every put still succeeds, by evicting something first, so counting
+	  successful puts would say a 5000-line file was read back intact - and the 900 records
+	  the cap dropped would be written to the card again on the next boot, and the one after
+	  that, for ever. ss_nmiss is what is actually there.
+	*/
+	if (dropped || bad || ss_nmiss != lines) ss_miss_write_all();
+
+	if (dropped || bad)
+	{
+		printf("ClassicUI: %d remembered ScreenScraper misses (%d expired, %d unreadable)\n",
+			ss_nmiss, dropped, bad);
+	}
+	else if (ss_nmiss)
+	{
+		printf("ClassicUI: %d remembered ScreenScraper misses\n", ss_nmiss);
+	}
+}
+
+int art_ss_miss_known(const char *systemeid, const char *name)
+{
+	if (!systemeid || !systemeid[0] || !name || !name[0]) return 0;
+
+	ss_miss_load();
+	if (!ss_miss) return 0;
+
+	char key[CH_PATH_LEN + 32];
+	ss_miss_key(systemeid, name, key, sizeof(key));
+
+	int at = 0;
+	return ss_miss_find(ss_miss_hash(key), &at);
+}
+
+void art_ss_miss_record(const char *systemeid, const char *name)
+{
+	if (!systemeid || !systemeid[0] || !name || !name[0]) return;
+
+	ss_miss_load();
+	if (!ss_miss) return;
+
+	char key[CH_PATH_LEN + 32];
+	ss_miss_key(systemeid, name, key, sizeof(key));
+
+	uint32_t today = ss_miss_today();
+	if (!ss_miss_put(ss_miss_hash(key), today, key)) return;
+
+	/*
+	  Appended, not rewritten - except when the insert had to evict something to fit, in
+	  which case appending would leave the evicted line in the file and the next load would
+	  read it straight back in. That is the one case where the file has to be re-stated in
+	  full, and on a shelf under the cap it never happens.
+	*/
+	if (ss_nmiss >= ART_SS_MISS_MAX) { ss_miss_write_all(); return; }
+
+	char dir[1024];
+	snprintf(dir, sizeof(dir), "%s/classicui", getRootDir());
+	mkdir(dir, 0777);
+
+	FILE *f = fopen(art_ss_miss_path(), "at");
+	if (!f) return;
+
+	fprintf(f, "%u %016llx %s\n", today, (unsigned long long)ss_miss_hash(key), key);
+	fclose(f);
+}
+
+void art_ss_miss_reload()
+{
+	ss_miss_loaded = 0;
+	ss_nmiss = 0;
+	ss_miss_load();
+}
+
+int art_ss_miss_count()
+{
+	ss_miss_load();
+	return ss_nmiss;
+}
 
 void art_init(int cw, int chh)
 {
@@ -1012,6 +1348,24 @@ static int   ssf_item = -1;
 */
 static uint32_t ssf_item_key = 0;
 
+/*
+  And the query itself - the API's platform id and the name asked under - because that is
+  what the on-card miss store is keyed on, and the store has to be written at the *end* of
+  a fetch from what was asked at the *start* of it.
+
+  Kept here rather than recomputed in ssf_settle() for the same reason ssf_item_key is
+  kept: recomputing means deriving it from a library that may have been renumbered since,
+  and a miss written under a key derived from the wrong game is a real game written off
+  for a week. What was asked is a fact about the request, so it travels with the request.
+*/
+static char  ssf_systemeid[16];
+static char  ssf_romnom[CH_PATH_LEN];
+
+// Defined down with the ladder, where the rest of "what would we ask about this game"
+// lives. Declared here because art_ss_settle() - the harness's way in, with no fetch
+// behind it - has to reconstruct the query that a real fetch would have remembered.
+static const char *ss_cover_query(const chome_item *it, char *name, int len);
+
 // The media URL the reply named, kept from the settle to the download stage. Never
 // printed: it carries devid, devpassword, ssid and sspassword. See ss_redact_url().
 static char  ssf_media[SS_URL_LEN];
@@ -1177,6 +1531,8 @@ static void ssf_reset()
 	ssf_kind = SS_KIND_DISC;
 	ssf_item = -1;
 	ssf_item_key = 0;
+	ssf_systemeid[0] = 0;
+	ssf_romnom[0] = 0;
 
 	// The media URL goes with the rest of it. It is the one field here that is a
 	// credential, and leaving a spent one in a static for the rest of the session would be
@@ -1256,13 +1612,38 @@ int disc_art_request(const char *key, const char *sysid, const char *romnom)
 	  every pass of its draw and an unconditional guard is the only thing that stops a
 	  transport failure becoming a fork per frame. The asymmetry is deliberate, it is
 	  bounded at eight keys, and a core change clears it.
+
+	  SS_ASK_DELIBERATE, which is the whole of the difference between this rung and the
+	  shelf's. A player has put a disc in the drive and is watching a dialog for the scan
+	  of it; the shelf is filling in covers nobody asked for. When the unmatched allowance
+	  is down to its last tenth, that tenth is this caller's - see SS_KO_SPECULATIVE_PCT.
+
+	  ss_may_ask_now() rather than ss_may_request_for(), because unlike the shelf ladder
+	  this *is* the spawn site, so the minimum gap belongs here. Held above the tried-list
+	  for the same reason the hold is: a disc refused by the gap has not been asked about,
+	  and must not spend its one attempt on a request that was never made. The dialog calls
+	  this again on its next frame and the gap will have passed.
 	*/
-	if (!ss_may_request()) return 0;
+	if (!ss_may_ask_now(SS_ASK_DELIBERATE)) return 0;
 	if (fetch_pid > 0) return 0;
-	if (disc_already_tried(key)) return 0;
 
 	const char *systemeid = ss_system_id(sysid, 0);
 	if (!systemeid) return 0;
+
+	/*
+	  Named before the tried-list is consulted, because the name is half of the miss key and
+	  the miss store is the thing that has to answer first.
+
+	  This is the disc path's share of the fix. Its own tried-list is eight entries in RAM,
+	  cleared by every core change - so a disc the database has never heard of was re-asked
+	  about on every session, which for a physical-disc user is every time they put that
+	  disc in. The store below is the same one the shelf uses and it is on the card.
+	*/
+	char discnom[256];
+	snprintf(discnom, sizeof(discnom), "%s", (romnom && romnom[0]) ? romnom : key);
+
+	if (art_ss_miss_known(systemeid, discnom)) return 0;
+	if (disc_already_tried(key)) return 0;
 
 	/*
 	  What to ask the database for.
@@ -1277,9 +1658,11 @@ int disc_art_request(const char *key, const char *sysid, const char *romnom)
 	  The proper answer is jeuRecherche.php, or the serial search the API grew later.
 	  Neither can be tried until there is a credential to try it with, and guessing at a
 	  second endpoint we cannot test would be two unknowns instead of one.
+
+	  Composed above, as discnom, because the miss store had to be consulted before we got
+	  this far. This is that same name.
 	*/
-	char name[256];
-	snprintf(name, sizeof(name), "%s", (romnom && romnom[0]) ? romnom : key);
+	const char *name = discnom;
 
 	ss_query q;
 	memset(&q, 0, sizeof(q));
@@ -1296,12 +1679,18 @@ int disc_art_request(const char *key, const char *sysid, const char *romnom)
 	ssf_tmp[0] = 0;
 	ssf_kind = SS_KIND_DISC;
 	ssf_item = -1;
+	snprintf(ssf_systemeid, sizeof(ssf_systemeid), "%s", systemeid);
+	snprintf(ssf_romnom, sizeof(ssf_romnom), "%s", name);
 
 	ssf_make_reply_private(ssf_reply);
 
 	// 1: this URL carries devid, devpassword, ssid and sspassword. Down a pipe, not argv.
 	ssf_pid = curl_spawn(url, ssf_reply, 1, ssf_status);
 	if (ssf_pid < 0) { ssf_reset(); return 0; }
+
+	// The gap is stamped at the fork, not at the reply: it measures how often we knock on
+	// their door, not how long they take to answer.
+	ss_note_request();
 
 	ssf_state = SSF_QUERY;
 	disc_mark_tried(key);
@@ -1647,25 +2036,41 @@ static int ssf_settle(const char *reply_path, long long got)
 	/*
 	  And the one decision this function exists to make.
 
-	  Only when the reply was the database answering about the game, and only for a cover -
-	  a disc has no shelf slot to record it in and uses the tried-list instead, see
-	  disc_art_request(). "Answered and named nothing we can use" covers both halves of a
-	  real miss: the game is not in there at all, and the game is in there with media but
-	  no cover among them. Neither will change by tomorrow, so neither is worth a second
-	  request.
+	  Only when the reply was the database answering about the game. "Answered and named
+	  nothing we can use" covers both halves of a real miss: the game is not in there at
+	  all, and the game is in there with media but no cover among them. Neither will change
+	  by tomorrow, so neither is worth a second request.
 
 	  Everything else falls through here untouched, which is the entire point. A quota, a
-	  429, a closed API, a dropped connection: the game is left exactly as unasked as it was
-	  before, and ss_note_result() above has already held the module off so that the next
-	  game does not spend a request discovering the same thing.
+	  429, a closed API, the unmatched allowance gone, a dropped connection: the game is
+	  left exactly as unasked as it was before, and ss_note_result() above has already held
+	  the module off so that the next game does not spend a request discovering the same
+	  thing.
+
+	  Two places record it, for two different lifetimes, and they are both under this one
+	  guard rather than at their own call sites:
+
+	    the slot     covers only, this session only, and only while the shelf keeps the
+	                 same numbering. It is what art_source_for() reads on every drawn card.
+	    the card     both kinds, for ART_SS_MISS_DAYS. This is the one that stops the whole
+	                 bill being run up again on the next boot, which is what it was doing
+	                 until now - see the note on art_ss_miss_known() in chome_art.h.
+
+	  The card store is keyed on what was asked rather than on which game it was, so it is
+	  written for a disc as well: the disc dialog's own tried-list is eight entries cleared
+	  by every core change, and a disc the database has never heard of was being re-asked
+	  about every time the player put it in.
 	*/
 	int cover_item = ssf_cover_item();
 
-	if (!m && ss_verdict(e) && cover_item >= 0)
+	if (!m && ss_verdict(e))
 	{
-		slots[cover_item].ss_absent = 1;
-		printf("ClassicUI: ScreenScraper has no cover for %s, falling back to the pack\n",
-			ssf_key);
+		if (cover_item >= 0) slots[cover_item].ss_absent = 1;
+
+		art_ss_miss_record(ssf_systemeid, ssf_romnom);
+
+		printf("ClassicUI: ScreenScraper has no %s for %s, and will not be asked again for %d days\n",
+			ssf_what(), ssf_key, ART_SS_MISS_DAYS);
 	}
 
 	return m ? 1 : 0;
@@ -1684,6 +2089,27 @@ int art_ss_settle(int item, const char *reply_path)
 	ssf_item = item;
 	ssf_item_key = it ? it->key : 0;
 	snprintf(ssf_key, sizeof(ssf_key), "%s", it ? it->title : "?");
+
+	/*
+	  And the query this reply is the answer to, reconstructed rather than remembered -
+	  which is safe here and only here. This entry point exists for the host harness, where
+	  a reply is a fixture handed straight in with no fetch behind it, so there is nothing
+	  to have remembered. cover_ss_start() sets these at the request instead, because on the
+	  device the library can be renumbered between asking and answering.
+	*/
+	ssf_systemeid[0] = 0;
+	ssf_romnom[0] = 0;
+
+	if (it)
+	{
+		char name[CH_PATH_LEN];
+		const char *systemeid = ss_cover_query(it, name, sizeof(name));
+		if (systemeid)
+		{
+			snprintf(ssf_systemeid, sizeof(ssf_systemeid), "%s", systemeid);
+			snprintf(ssf_romnom, sizeof(ssf_romnom), "%s", name);
+		}
+	}
 
 	return ssf_settle(reply_path, ssf_file_size(reply_path));
 }
@@ -1974,7 +2400,9 @@ static void rom_filename(const chome_item *it, char *out, int len)
 }
 
 /*
-  Whether a ScreenScraper query for this game can be built at all.
+  Whether a ScreenScraper query for this game can be built at all, and if so what it is:
+  the API's systemeid returned, the ROM file name written into `name`. 0 when the game
+  cannot be asked about.
 
   Asked in the ladder rather than discovered inside the request, so that a game we cannot
   ask about drops straight to the libretro pack instead of being reported as a rung that
@@ -1987,19 +2415,37 @@ static void rom_filename(const chome_item *it, char *out, int len)
     no artdir path  art_cache_path() needs the system's libretro name to build one, and
                     without it a downloaded cover has nowhere to live. The libretro rung
                     needs the same thing, so such a system has no network art at all.
+
+  Returns the query rather than a bare yes/no because three callers now want the same two
+  strings - the ladder to look the game up in the miss store, art_ss_settle() to key a miss
+  it is about to write, and cover_ss_start() to build the URL - and three copies of "work
+  out the systemeid and the file name" is three chances for one of them to key the store
+  differently from the one that wrote it.
 */
-static int ss_can_ask(const chome_item *it)
+static const char *ss_cover_query(const chome_item *it, char *name, int len)
 {
+	if (name && len) name[0] = 0;
+
 	const chome_sys *s = lib_sys(it->sysidx);
 	if (!s) return 0;
 
 	char dst[1024];
 	if (!art_cache_path(it, dst, sizeof(dst))) return 0;
 
-	char name[CH_PATH_LEN];
-	rom_filename(it, name, sizeof(name));
+	char work[CH_PATH_LEN];
+	rom_filename(it, work, sizeof(work));
 
-	return ss_system_id(s->id, name) ? 1 : 0;
+	const char *systemeid = ss_system_id(s->id, work);
+	if (!systemeid) return 0;
+
+	if (name && len) snprintf(name, len, "%s", work);
+	return systemeid;
+}
+
+static int ss_can_ask(const chome_item *it)
+{
+	char name[CH_PATH_LEN];
+	return ss_cover_query(it, name, sizeof(name)) ? 1 : 0;
 }
 
 /*
@@ -2034,8 +2480,31 @@ static int art_source_for(int item, char *local, int len)
 	     decides whether this game comes back to this rung later: a game the database has no
 	     cover for never returns, a game passed over while the quota was gone returns the
 	     moment the hold does.
+
+	     And now a third: the miss the *card* remembers, which is the same per-game answer
+	     as ss_absent, surviving the reboot that used to throw it away. It is asked last of
+	     the three because it is the only one that can touch the filesystem - the first
+	     question loads the store, every one after it is a binary search over at most 4096
+	     entries - and the two cheap flags in front of it answer for most cards without
+	     getting that far.
+
+	     ss_may_request() and not ss_may_ask_now(): the minimum gap must not be consulted
+	     here. This function's answer decides which rung a game is on, and a game drawn
+	     300 ms after the last request would be diverted to the libretro pack over a timer
+	     and keep whatever cover the pack has. The gap belongs at the spawn, in
+	     cover_ss_start(), where art_step() can simply put the item back for the next frame.
+
+	     ss_may_request() is also the *speculative* form, which is the other half of the ko
+	     reserve: when the unmatched allowance is into its last tenth this rung stops being
+	     offered at all and the shelf quietly uses the pack, while the disc dialog - which
+	     asks deliberately - carries on. See SS_KO_SPECULATIVE_PCT.
 	*/
-	if (!s->ss_absent && ss_may_request() && ss_can_ask(it)) return ART_SRC_SS;
+	if (!s->ss_absent && ss_may_request() && ss_can_ask(it))
+	{
+		char name[CH_PATH_LEN];
+		const char *systemeid = ss_cover_query(it, name, sizeof(name));
+		if (!art_ss_miss_known(systemeid, name)) return ART_SRC_SS;
+	}
 
 	// 3. the libretro pack. Needs the system's libretro name, the same as rung two does.
 	const chome_sys *sys = lib_sys(it->sysidx);
@@ -2068,7 +2537,18 @@ static int cover_ss_start(int item)
 
 	if (ss_fetch_active() || fetch_pid > 0) return 0;
 	if (!cfg.classicui_artfetch) return 0;
-	if (!ss_may_request()) return 0;
+
+	/*
+	  This is the spawn, so this is where the minimum gap is asked about - and speculatively,
+	  because a cover for a card the shelf happens to be drawing is the definition of a
+	  request nobody asked for.
+
+	  Refusing here is cheap and reversible in a way refusing in the ladder would not be:
+	  art_step() puts the item back as ART_NONE and the shelf asks again on the next frame,
+	  so a game held off by the gap is delayed by about a second rather than diverted to
+	  another source. See the note on ss_may_ask_now() in chome_ss.h.
+	*/
+	if (!ss_may_ask_now(SS_ASK_SPECULATIVE)) return 0;
 
 	chome_item *it = lib_item(item);
 	if (!it) return 0;
@@ -2080,10 +2560,19 @@ static int cover_ss_start(int item)
 	if (!art_cache_path(it, dst, sizeof(dst))) return 0;
 
 	char name[CH_PATH_LEN];
-	rom_filename(it, name, sizeof(name));
-
-	const char *systemeid = ss_system_id(sys->id, name);
+	const char *systemeid = ss_cover_query(it, name, sizeof(name));
 	if (!systemeid) return 0;
+
+	/*
+	  And the store, asked once more at the spawn rather than trusted from the ladder.
+
+	  The ladder's answer is computed for one card and acted on some frames later, by which
+	  time another reply may have landed and recorded this very query - two cards for the
+	  same game across an archive, or a rescan re-queueing one that was already answered.
+	  This is the last gate before a request leaves the box, so it is the one that has to be
+	  right; a redundant binary search once per fetch costs nothing at all.
+	*/
+	if (art_ss_miss_known(systemeid, name)) return 0;
 
 	/*
 	  Name and size, and deliberately no hash.
@@ -2137,12 +2626,17 @@ static int cover_ss_start(int item)
 	ssf_kind = SS_KIND_COVER;
 	ssf_item = item;
 	ssf_item_key = it->key;
+	snprintf(ssf_systemeid, sizeof(ssf_systemeid), "%s", systemeid);
+	snprintf(ssf_romnom, sizeof(ssf_romnom), "%s", name);
 
 	ssf_make_reply_private(ssf_reply);
 
 	// 1: this URL carries devid, devpassword, ssid and sspassword. Down a pipe, not argv.
 	ssf_pid = curl_spawn(url, ssf_reply, 1, ssf_status);
 	if (ssf_pid < 0) { ssf_reset(); return 0; }
+
+	// The gap is stamped at the fork, not at the reply - see ss_note_request().
+	ss_note_request();
 
 	ssf_state = SSF_QUERY;
 	slots[item].state = ART_FETCHING;

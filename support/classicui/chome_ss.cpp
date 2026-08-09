@@ -3,6 +3,7 @@
 #include <string.h>
 #include <strings.h>
 #include <ctype.h>
+#include <time.h>
 
 #include "chome_ss.h"
 #include "../../cfg.h"
@@ -350,12 +351,20 @@ int ss_http_class(int http_code)
 	case 430: return SS_ERR_QUOTA;
 
 	/*
-	  431 is "too many ROMs the server could not recognise". It is a throttle aimed
-	  at clients that fling nonsense at the database, not a permanent ban - but the
-	  right response is the same as a ban: stop, and let a human look at why our
-	  match rate is bad.
+	  431 is "too many ROMs the server could not recognise" - the ko allowance spent.
+
+	  This used to answer SS_ERR_BLACKLISTED, on the reasoning that the *response* is
+	  the same as a ban: stop. The response is indeed the same, and still is, because
+	  SS_ERR_UNMATCHED stands the module down exactly as a quota does. What was wrong
+	  was the word: this is not a ban, it lifts by itself at midnight, and a log line
+	  reading "our softname is banned" sent whoever read it looking for a problem with
+	  the application when the problem was a shelf full of ROMs the matcher misses on.
+
+	  Now that the same condition arrives by a second route - the "repassez demain"
+	  body, see ss_body_class() - giving it its own code is also what keeps the two
+	  routes saying one thing.
 	*/
-	case 431: return SS_ERR_BLACKLISTED;
+	case 431: return SS_ERR_UNMATCHED;
 
 	case 423: return SS_ERR_CLOSED;
 	}
@@ -396,6 +405,28 @@ int ss_body_class(const char *body)
 	if (ci_has(body, "blacklist"))            return SS_ERR_BLACKLISTED;
 	if (ci_has(body, "quota de scrape"))      return SS_ERR_QUOTA;
 	if (ci_has(body, "totalement ferm"))      return SS_ERR_CLOSED;
+
+	/*
+	  The unmatched throttle, and it is checked *above* "non trouv" on purpose.
+
+	  Read on 2026-08-05, in full, as the entire body of a reply:
+
+	      Faite du tri dans vos fichiers roms et repassez demain !
+
+	  Two fragments are matched because the sentence has two halves that could each be
+	  reworded without the other: "repassez demain" is the instruction and "tri dans vos
+	  fichiers" is the complaint. Both are accent-free, as the rule at the top of this
+	  function requires, and neither can occur in a reply about a game.
+
+	  Ordered above "non trouv" because the cost of getting this one wrong is asymmetric.
+	  Should the server ever put both in one body, reading it as a per-game miss would
+	  write off a game the database very likely holds - and the miss store on the card
+	  would keep that wrong answer for a week, over a condition that was never about the
+	  game at all. Reading a genuine miss as a throttle costs one session of scraping.
+	*/
+	if (ci_has(body, "repassez demain"))      return SS_ERR_UNMATCHED;
+	if (ci_has(body, "tri dans vos fichiers")) return SS_ERR_UNMATCHED;
+
 	if (ci_has(body, "non trouv"))            return SS_ERR_NOTFOUND;
 	if (ci_has(body, "erreur de login"))      return SS_ERR_CREDENTIALS;
 	if (ci_has(body, "verifiez vos identifiants")) return SS_ERR_CREDENTIALS;
@@ -429,6 +460,7 @@ const char *ss_why(int err)
 	case SS_ERR_THREADS:     return "too many requests at once for this account";
 	case SS_ERR_MALFORMED:   return "the reply did not parse";
 	case SS_ERR_TRANSPORT:   return "the request never completed";
+	case SS_ERR_UNMATCHED:   return "too many searches today that matched nothing";
 	}
 	return "an answer this build does not know";
 }
@@ -446,21 +478,106 @@ const char *ss_why(int err)
 */
 static int ss_hold = SS_OK;
 
+/*
+  And the soft half, which is a different thing and is kept in a different variable for
+  that reason.
+
+  ss_hold is "the server has refused us and will go on refusing us". This is "the server
+  has not refused anything, but the counters it sent say we are close enough to the
+  unmatched ceiling that the shelf should stop hoovering". It does not make
+  ss_hold_reason() non-zero, because nothing has gone wrong; it does not block a
+  deliberate request, because holding those back is not what it is for; and it is cleared
+  by the same ss_forget_state() as the hard hold, which is what lets it lift when a later
+  reply's counters say the day has rolled over.
+
+  See SS_KO_SPECULATIVE_PCT in the header for the fraction and why that fraction.
+*/
+static int ss_ko_low = 0;
+
 int ss_hold_reason()
 {
 	return ss_hold;
 }
 
-int ss_may_request()
+int ss_ko_reserved()
+{
+	return ss_ko_low;
+}
+
+int ss_may_request_for(int intent)
 {
 	if (!ss_enabled()) return 0;
 	if (ss_hold != SS_OK) return 0;
+
+	// The reserve holds back the shelf and nothing else. A player watching a disc dialog
+	// gets the last of the unmatched allowance; a background sweep of 1469 cards does not.
+	if (ss_ko_low && intent != SS_ASK_DELIBERATE) return 0;
+
+	return 1;
+}
+
+int ss_may_request()
+{
+	return ss_may_request_for(SS_ASK_SPECULATIVE);
+}
+
+/* ---------------------------------------------------- the minimum gap ------- */
+
+/*
+  A monotonic millisecond clock, local to this file.
+
+  Deliberately not GetTimer()/CheckTimer() from the firmware, which is what the rest of
+  the tree uses. chome_ss.cpp is also linked on its own into the gate binary - see
+  test/gate.cpp - against nothing but a cfg definition, and pulling a firmware symbol in
+  here would break that build. The one property the gap needs is monotonicity, and
+  CLOCK_MONOTONIC is that with no dependencies at all.
+*/
+static unsigned long ss_now_ms()
+{
+	struct timespec tp;
+	if (clock_gettime(CLOCK_MONOTONIC, &tp)) return 0;
+	return (unsigned long)tp.tv_sec * 1000ul + (unsigned long)(tp.tv_nsec / 1000000l);
+}
+
+// 0 means "nothing has been asked yet in this process", which is why the stamp is offset
+// by one: a genuine clock reading of 0 would otherwise read as never-asked and let the
+// very first pair of requests go out back to back.
+static unsigned long ss_last_ask = 0;
+
+void ss_note_request()
+{
+	ss_last_ask = ss_now_ms() + 1;
+}
+
+int ss_gap_wait_ms()
+{
+	if (!ss_last_ask) return 0;
+
+	unsigned long now = ss_now_ms() + 1;
+
+	// The clock going backwards is not something CLOCK_MONOTONIC does, but a failed
+	// clock_gettime() returning 0 is - and the safe reading of "I cannot tell how long it
+	// has been" is that the gap is clear rather than that it never expires.
+	if (now < ss_last_ask) return 0;
+
+	unsigned long since = now - ss_last_ask;
+	if (since >= (unsigned long)SS_MIN_REQUEST_GAP_MS) return 0;
+
+	return (int)((unsigned long)SS_MIN_REQUEST_GAP_MS - since);
+}
+
+int ss_may_ask_now(int intent)
+{
+	if (!ss_may_request_for(intent)) return 0;
+	if (ss_gap_wait_ms()) return 0;
 	return 1;
 }
 
 void ss_forget_state()
 {
 	ss_hold = SS_OK;
+	ss_ko_low = 0;
+	ss_last_ask = 0;
 }
 
 int ss_verdict(int err)
@@ -510,15 +627,56 @@ void ss_note_result(int err, const ss_result *r)
 		  And the ko allowance, which is the one worth standing down on early. Every
 		  request for a game the database cannot match counts against it, a shelf of
 		  homebrew and hacks can spend it without a single successful scrape, and the
-		  server's answer past it is 431 - which this client is obliged to treat as a
-		  ban needing a human. Stopping here is stopping one step before that.
+		  server's answer past it is a 431 or the "repassez demain" sentence - the whole
+		  day gone, for everything, including the disc the player is holding.
+
+		  Two levels, because there are two things worth preventing and they are not the
+		  same thing. The hard one at the ceiling is the module refusing to provoke a
+		  refusal it can see coming. The soft one below it is the shelf getting out of the
+		  way early so that the deliberate path still has somewhere to go - see
+		  SS_KO_SPECULATIVE_PCT, and note that it raises no hold: nothing has gone wrong,
+		  and a reply tomorrow whose counters have reset clears it on its own.
 		*/
-		if (r->max_requests_ko_day > 0 && r->requests_ko_today >= r->max_requests_ko_day)
+		if (r->max_requests_ko_day > 0)
 		{
-			char d[96];
-			snprintf(d, sizeof(d), "%d of %d unmatched requests used today",
-				r->requests_ko_today, r->max_requests_ko_day);
-			ss_hold_off(SS_ERR_QUOTA, d);
+			if (r->requests_ko_today >= r->max_requests_ko_day)
+			{
+				char d[96];
+				snprintf(d, sizeof(d), "%d of %d unmatched requests used today",
+					r->requests_ko_today, r->max_requests_ko_day);
+				ss_hold_off(SS_ERR_UNMATCHED, d);
+			}
+			else
+			{
+				/*
+				  long long, and the multiply before the divide. maxrequestskoperday is an
+				  int off the wire and this is the one arithmetic here that could overflow
+				  on a value we do not control; dividing first would instead lose the
+				  fraction entirely for any small ceiling.
+				*/
+				long long floor_ko =
+					((long long)r->max_requests_ko_day * SS_KO_SPECULATIVE_PCT) / 100;
+
+				int low = (r->requests_ko_today >= floor_ko) ? 1 : 0;
+
+				// Printed on the edge only, not on every reply past it: the shelf keeps
+				// walking cards and consulting this, and a line per card is a log nobody
+				// reads.
+				if (low && !ss_ko_low)
+				{
+					printf("ClassicUI: ScreenScraper unmatched allowance is at %d of %d - "
+						"the shelf stops scraping speculatively, the disc dialog does not\n",
+						r->requests_ko_today, r->max_requests_ko_day);
+				}
+				else if (!low && ss_ko_low)
+				{
+					printf("ClassicUI: ScreenScraper unmatched allowance is back to %d of %d - "
+						"the shelf may scrape again\n",
+						r->requests_ko_today, r->max_requests_ko_day);
+				}
+
+				ss_ko_low = low;
+			}
 		}
 	}
 
@@ -545,6 +703,21 @@ void ss_note_result(int err, const ss_result *r)
 	case SS_ERR_QUOTA:
 	case SS_ERR_THREADS:
 	case SS_ERR_CLOSED:
+		ss_hold_off(err, 0);
+		break;
+
+	/*
+	  The unmatched allowance, arrived at rather than foreseen - a 431, or the sentence
+	  the owner's account answered with on 2026-08-05.
+
+	  Held for the session like a quota, and it belongs in this group rather than in the
+	  one above only because of what it is *not*: it is not a verdict. ss_verdict() is
+	  false for it, so the game that was in flight when it arrived is left exactly as
+	  unasked as it was - which is the entire reason it needed its own code. Before it
+	  existed, the nearest reading of that sentence was "non trouv", and one of these
+	  would have written a real game off the shelf for a week.
+	*/
+	case SS_ERR_UNMATCHED:
 		ss_hold_off(err, 0);
 		break;
 

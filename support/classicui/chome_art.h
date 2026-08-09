@@ -116,6 +116,93 @@ int art_next_source(int item);
 */
 int art_ss_absent(int item);
 
+/*
+  The same answer, remembered on the card instead of in a slot.
+
+  ---------------------------------------------------------------------------
+  The bug this exists to fix, because it is not visible from the code.
+  ---------------------------------------------------------------------------
+
+  art_ss_absent() above is a field on an in-memory slot. It is correct, it is guarded by
+  ss_verdict(), and it is thrown away by every core change - which on this device is
+  every time the player launches a game. So on the owner's 1469-game shelf the front-end
+  asked the database about every coverless game, learned that it had no cover, and then
+  asked again on the next boot, and the next, and the next. Nothing was ever written
+  down.
+
+  What that costs is not the daily request budget - 200 of 20000 used on 2026-08-05, not
+  close - but the *unmatched* one, which is a tenth the size and which a filename matcher
+  against regional variants, hacks and homebrew spends far faster. Spent, the account is
+  refused for the rest of the day: "Faite du tri dans vos fichiers roms et repassez
+  demain". That is what one request from this machine got on 2026-08-05, and this store
+  is why it will not get it again.
+
+  ---------------------------------------------------------------------------
+
+  Keyed on the *query* rather than on the item, deliberately: "<systemeid>/<rom name>" is
+  what was actually asked, so it survives a rescan renumbering the shelf, it is stable
+  across the two callers, and the disc dialog - which has no shelf slot at all and whose
+  in-RAM tried-list is eight entries cleared by every core change - can use the same
+  store as the shelf.
+
+  Only ever record where ss_verdict() is true. Everything in the note on art_ss_absent()
+  applies here and harder: a session flag set wrongly costs a session, a line in this file
+  set wrongly costs a week.
+*/
+
+/*
+  How long a remembered miss stands, in days.
+
+  A week rather than forever, and rather than a day. Forever is wrong because
+  ScreenScraper is a live database that people add to - a game with no cover today may
+  have one next month, and a store with no expiry would mean this front-end never found
+  out. A day is wrong because it would put us back to re-asking about the whole shelf
+  every week's worth of boots, which is the bill this exists to stop paying.
+
+  Seven days is the owner's call and it prices out sensibly: 1469 unmatched games asked
+  once a week is ~210 a day against a 2000-a-day unmatched allowance, and that is only if
+  the whole shelf misses and the whole shelf is scrolled.
+*/
+#define ART_SS_MISS_DAYS 7
+
+/*
+  And the ceiling on the store, which is a real one rather than a formality.
+
+  4096 is comfortably past the owner's 1469 and past any shelf this front-end indexes
+  (the library index itself is bounded well below it). Full, the oldest entry is dropped
+  to make room - oldest rather than newest, because the oldest is the one closest to
+  expiring anyway and the newest is the one we just paid a request to learn.
+
+  A dropped entry costs one request, once, at some point in the next week. It is not a
+  correctness problem, which is why the cap can be a plain number rather than a policy.
+*/
+#define ART_SS_MISS_MAX 4096
+
+/*
+  1 when the database has been asked this exact query inside the window and had nothing.
+  systemeid and name are the two the query is built from; either missing is 0.
+*/
+int art_ss_miss_known(const char *systemeid, const char *name);
+
+/*
+  Write one down. Appends to the card immediately rather than at shutdown: the firmware is
+  killed rather than exited on every core change, so anything held for a tidy save at the
+  end is a save that never happens.
+*/
+void art_ss_miss_record(const char *systemeid, const char *name);
+
+/*
+  Drop the in-memory copy so the next question re-reads the card. This is how the harness
+  simulates a restart, which is the only thing about this store worth testing and the only
+  thing the old code got wrong.
+*/
+void art_ss_miss_reload();
+
+// How many live entries are held, and where the file is. For the harness and for anyone
+// diagnosing a shelf that has stopped scraping.
+int art_ss_miss_count();
+const char *art_ss_miss_path();
+
 // How many times the cover ladder has reached its ScreenScraper rung this session,
 // refusals included. The same shape and the same reason as disc_art_asks(): no request is
 // ever made in the harness, and whether the rung is reached at all - and in what order

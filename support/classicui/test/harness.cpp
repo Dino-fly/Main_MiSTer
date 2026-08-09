@@ -7082,7 +7082,11 @@ static void assert_screenscraper()
 	check(ss_http_class(403) == SS_ERR_CREDENTIALS, "403 is our credentials");
 	check(ss_http_class(429) == SS_ERR_THREADS, "429 is too many at once");
 	check(ss_http_class(430) == SS_ERR_QUOTA, "430 is the daily quota");
-	check(ss_http_class(431) == SS_ERR_BLACKLISTED, "431 is too many unmatched roms");
+	// 431 used to answer SS_ERR_BLACKLISTED, on the reasoning that the response is the same
+	// as a ban. The response still is - SS_ERR_UNMATCHED stands the module down for the
+	// session - but the word was wrong: this lifts at midnight and is caused by our match
+	// rate, not by our softname. See ss_http_class().
+	check(ss_http_class(431) == SS_ERR_UNMATCHED, "431 is too many unmatched roms");
 	check(ss_http_class(401) == SS_ERR_CLOSED, "401 is the API shut off under load");
 	check(ss_http_class(503) == SS_ERR_TRANSPORT, "a 5xx is transport, not a verdict");
 	check(ss_http_class(0) == SS_ERR_TRANSPORT, "and so is no response at all");
@@ -7991,6 +7995,460 @@ static void assert_art_ladder()
 	art_redo();
 	check(art_state(metroid) == ART_READY, "and the shelf is decoded again for whatever comes next");
 	check(art_ss_absent(ddragon) == 0, "with nothing remembered from the fixtures above");
+
+	/*
+	  And the card store the fixtures above wrote into, which the section below owns and
+	  starts from empty. This is not tidiness for its own sake: the two settles above are
+	  genuine misses and are now genuinely written down, so leaving the file behind would
+	  make the next section's "nothing is remembered yet" a lie that happened to pass.
+	*/
+	unlink(art_ss_miss_path());
+	art_ss_miss_reload();
+}
+
+/*
+  ==========================================================================
+  Not burning somebody's ScreenScraper allowance, and not getting them banned.
+  ==========================================================================
+
+  What this is about, because none of it is visible from the code it guards.
+
+  On 2026-08-05 one request from the owner's machine came back with
+
+      Faite du tri dans vos fichiers roms et repassez demain !
+
+  which is not "no such game" - it is the server refusing the account for the rest of the
+  day because too many of the day's searches had matched nothing. His counters that
+  morning read "200 of 20000 requests today, 60 of 2000 unmatched": the ordinary budget
+  was barely touched, and the unmatched one is the one this front-end spends.
+
+  It was spending it in a loop. art_ss_absent() is a field on an in-memory slot, and this
+  device restarts the firmware on every core change, so every boot asked the database
+  about every coverless game again - 1469 of them on his card, through a matcher that
+  misses often. The answer never changed and was never written down.
+
+  Four things come out of that, and this section is the four of them:
+
+    a miss is remembered on the card, for a week, and survives a restart
+    the throttle sentence is classified as a refusal and NEVER as a per-game miss
+    the shelf stands down before the unmatched ceiling, leaving the last of it for the
+      disc dialog, which is the one a player is actually watching
+    requests have a floor on how often they leave the box
+
+  The load-bearing pair is the first two together, and they are checked against each
+  other for the same reason the crux in the section above is: a client that remembers
+  every outcome passes "a miss is remembered", and a client that remembers none passes "a
+  throttle is not a miss". Only both at once say the two are told apart - and here the
+  cost of getting it backwards is a week rather than a session, because the wrong answer
+  is now on the card.
+
+  Every reply below is a fixture. Nothing here contacts ScreenScraper; the account was in
+  the penalty box when this was written, and a probe would have made it worse.
+*/
+
+// The ssuser block again, with the two ko counters exposed - which put_ssuser_reply()
+// above pins at 3 of 4000 because nothing up there varies them. Everything about the
+// reserve is a question about those two numbers.
+static void put_ss_ko_reply(const char *path, int ko_today, int ko_max)
+{
+	char xml[1024];
+	snprintf(xml, sizeof(xml),
+		"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+		"<Data>\n"
+		"  <ssuser><id>" FIX_SSID "</id><maxthreads>1</maxthreads>"
+		"<requeststoday>200</requeststoday><maxrequestsperday>20000</maxrequestsperday>"
+		"<requestskotoday>%d</requestskotoday><maxrequestskoperday>%d</maxrequestskoperday>"
+		"</ssuser>\n"
+		"  <jeu id=\"991\">\n"
+		"    <noms><nom region=\"wor\">Reserve Fixture</nom></noms>\n"
+		"    <medias>\n"
+		"      <media type=\"box-2D\" region=\"eu\" format=\"png\" size=\"1\">"
+		FIX_HOST "/box-2D-eu.png</media>\n"
+		"    </medias>\n"
+		"  </jeu>\n"
+		"</Data>\n", ko_today, ko_max);
+
+	put_file(path, xml);
+}
+
+/*
+  Move every entry in the miss store `days` further into the past, by rewriting the file.
+
+  The window is measured in days and there is no clock to wind forward, so the only honest
+  way to test an expiry is to age the evidence rather than the observer. It edits the day
+  field and nothing else - the key each record is matched on is untouched - so what comes
+  back is the same set of misses, recorded earlier.
+
+  Returns how many record lines it re-dated.
+*/
+static int miss_backdate(int days)
+{
+	FILE *in = fopen(art_ss_miss_path(), "rt");
+	if (!in) return -1;
+
+	char out[64 * 1024];
+	int pos = 0, n = 0;
+	char line[256];
+
+	while (fgets(line, sizeof(line), in))
+	{
+		unsigned long day = 0;
+		int used = 0;
+
+		if (line[0] == '#' || sscanf(line, "%lu %n", &day, &used) < 1 || !used)
+		{
+			pos += snprintf(out + pos, sizeof(out) - (size_t)pos, "%s", line);
+			continue;
+		}
+
+		unsigned long aged = (day > (unsigned long)days) ? day - (unsigned long)days : 0;
+		pos += snprintf(out + pos, sizeof(out) - (size_t)pos, "%lu %s", aged, line + used);
+		n++;
+	}
+
+	fclose(in);
+	put_file(art_ss_miss_path(), out);
+	return n;
+}
+
+// Record lines in the store file, ignoring the comment header. The bound is a property of
+// the file as well as of the array, so both are counted.
+static int miss_file_records()
+{
+	FILE *f = fopen(art_ss_miss_path(), "rt");
+	if (!f) return -1;
+
+	int n = 0;
+	char line[256];
+	while (fgets(line, sizeof(line), f)) if (line[0] != '#' && line[0] != '\n') n++;
+
+	fclose(f);
+	return n;
+}
+
+static void assert_ss_throttle()
+{
+	printf("\n== ScreenScraper: a miss remembered for a week, and a throttle honoured ==\n");
+
+	int ddragon = item_by_path("Genesis", "Double Dragon (Europe).bin");
+	int smwjp   = item_by_path("SNES", "Super Mario World (Japan).sfc");
+	int fusion  = item_by_path("GBA", "Metroid Fusion (Europe).gba");
+	check(ddragon >= 0 && smwjp >= 0 && fusion >= 0, "the three games this section needs are indexed");
+
+	// What the shelf would actually ask about that game: the API's platform id and the ROM
+	// file name. Taken from the same tables the fetcher reads rather than written out here,
+	// so a test that passed against a hand-typed key while the fetcher used a different one
+	// is not a thing that can happen.
+	chome_item *dd = lib_item(ddragon);
+	const chome_sys *ddsys = lib_sys(dd->sysidx);
+	const char *dd_sys = ss_system_id(ddsys->id, "Double Dragon (Europe).bin");
+	check(dd_sys != 0, "and the Mega Drive has a systemeid, so its games can be asked about at all");
+
+	/* -------------------------------------------------- a clean card, first --- */
+
+	unlink(art_ss_miss_path());
+	art_ss_miss_reload();
+	check(art_ss_miss_count() == 0, "the miss store starts empty");
+
+	cfg.classicui_artfetch = 1;
+	cfg.classicui_screenscraper = 1;
+	strcpy(cfg.classicui_ss_user, FIX_SSID);
+	strcpy(cfg.classicui_ss_pass, FIX_SSPASS);
+	ss_forget_state();
+
+	check(ss_enabled() == 1, "with the option on and an account, ScreenScraper is enabled");
+	check(art_next_source(ddragon) == ART_SRC_SS,
+		"and a coverless game with nothing remembered against it is on the ScreenScraper rung");
+
+	/* --------------------------------- a miss, remembered across a restart --- */
+
+	/*
+	  The defect, in one block. A well-formed reply naming no game is the database saying
+	  it has never heard of this one, which is the answer it will give tomorrow as well.
+	*/
+	put_file("/tmp/chome_miss_nogame.xml",
+		"<Data><ssuser><id>" FIX_SSID "</id><maxthreads>1</maxthreads>"
+		"<requeststoday>201</requeststoday><maxrequestsperday>20000</maxrequestsperday>"
+		"<requestskotoday>61</requestskotoday><maxrequestskoperday>2000</maxrequestskoperday>"
+		"</ssuser></Data>\n");
+
+	check(art_ss_settle(ddragon, "/tmp/chome_miss_nogame.xml") == 0, "a reply naming no game yields no cover");
+	check(art_ss_absent(ddragon) == 1, "the slot remembers it, as it always did");
+	check(art_ss_miss_count() == 1, "and now the card remembers it too");
+	check(art_ss_miss_known(dd_sys, "Double Dragon (Europe).bin") == 1,
+		"under the query that was actually asked, not under the shelf's index");
+	check(miss_file_records() == 1, "with one record written to the file");
+
+	/*
+	  And the restart, which is the whole point. A core change kills this firmware and the
+	  next one starts with empty slots and a re-read of the card - so the slot flag is gone
+	  and only the file can answer.
+
+	  art_redo() with the fetch off first: it walks the ladder for every item, and walking
+	  it with ScreenScraper enabled would fork a curl at a live API. Nothing in this suite
+	  is allowed to do that.
+	*/
+	cfg.classicui_artfetch = 0;
+	art_redo();
+	cfg.classicui_artfetch = 1;
+	ss_forget_state();
+	art_ss_miss_reload();
+
+	check(art_ss_absent(ddragon) == 0, "after a restart the slot has forgotten, as it must");
+	check(art_ss_miss_count() == 1, "but the card has not");
+	check(art_next_source(ddragon) == ART_SRC_LIBRETRO,
+		"so the game is NOT asked about again - which is the bug this whole section is about");
+	check(art_next_source(smwjp) == ART_SRC_SS,
+		"while a game nothing was ever learnt about is still on the rung");
+
+	/* ------------------------------------------------ and it expires, later --- */
+
+	check(miss_backdate(ART_SS_MISS_DAYS - 1) == 1, "age that record to one day inside the window");
+	art_ss_miss_reload();
+	check(art_ss_miss_count() == 1, "a miss inside the window is still remembered");
+	check(art_next_source(ddragon) == ART_SRC_LIBRETRO, "and the game is still not asked about");
+
+	check(miss_backdate(1) == 1, "age it one more day, to the edge of the window");
+	art_ss_miss_reload();
+	check(art_ss_miss_count() == 0, "and it is gone");
+	check(miss_file_records() == 0, "the file having been rewritten without it");
+	check(art_next_source(ddragon) == ART_SRC_SS,
+		"so the game is asked about again - a database people add to is worth re-asking");
+
+	/* ------------- THE CRUX: the throttle is a refusal, not a verdict --- */
+
+	/*
+	  The sentence the owner's account actually got, as the entire body of a reply. It is
+	  not XML, which is a thing this API does.
+
+	  Read as a per-game miss it would be the worst bug this file has: the game in flight
+	  when it arrives is written off, on the card, for a week, over a condition that was
+	  never about that game. And it would arrive for every game the shelf touched for the
+	  rest of the day.
+	*/
+	const char *throttle = "Faite du tri dans vos fichiers roms et repassez demain !\n";
+
+	check(ss_body_class(throttle) == SS_ERR_UNMATCHED,
+		"the throttle sentence classifies as the unmatched allowance being gone");
+	check(ss_body_class(throttle) != SS_ERR_NOTFOUND,
+		"and specifically NOT as this game not being in the database");
+	check(ss_verdict(SS_ERR_UNMATCHED) == 0, "it is not a verdict about any game");
+	check(ss_http_class(431) == SS_ERR_UNMATCHED, "and 431 is the same condition by status");
+
+	put_file("/tmp/chome_miss_throttle.txt", throttle);
+	ss_forget_state();
+	art_ss_miss_reload();
+
+	int before = art_ss_miss_count();
+	check(art_next_source(smwjp) == ART_SRC_SS, "a game with nothing against it is on the rung");
+	check(art_ss_settle(smwjp, "/tmp/chome_miss_throttle.txt") == 0, "the throttle reply yields no cover");
+
+	check(art_ss_absent(smwjp) == 0, "and the game is not written off in the slot");
+	check(art_ss_miss_count() == before, "nor on the card - the store is untouched");
+	check(art_ss_miss_known(ss_system_id(lib_sys(lib_item(smwjp)->sysidx)->id,
+		"Super Mario World (Japan).sfc"), "Super Mario World (Japan).sfc") == 0,
+		"that game is left exactly as unasked as it was found");
+	check(ss_hold_reason() == SS_ERR_UNMATCHED, "the module is what stands down, for the session");
+	check(ss_may_request() == 0, "so nothing asks again until something restarts us");
+
+	/* ---------------------------- nor does a quota, nor a dropped request --- */
+
+	ss_forget_state();
+	before = art_ss_miss_count();
+
+	put_file("/tmp/chome_miss_quota.txt", "Erreur : Votre quota de scrape est ecoule pour aujourd'hui !\n");
+	check(art_ss_settle(fusion, "/tmp/chome_miss_quota.txt") == 0, "a quota refusal yields no cover");
+	check(art_ss_miss_count() == before, "and writes nothing to the card");
+	check(ss_hold_reason() == SS_ERR_QUOTA, "it holds the module, as it always did");
+
+	ss_forget_state();
+	ss_note_result(SS_ERR_TRANSPORT, 0);
+	check(art_ss_miss_count() == before, "a dropped request writes nothing to the card either");
+	check(ss_hold_reason() == SS_OK, "and does not even hold the module");
+
+	/* ------------------------------------------ a corrupt file fails safe --- */
+
+	/*
+	  Fail safe means ask again. The opposite failure - trusting a mangled record - would
+	  write a real game off for a week on the strength of a byte that got flipped on a card
+	  that was pulled out mid-write, and there would be nothing to see.
+	*/
+	art_ss_miss_record(dd_sys, "Double Dragon (Europe).bin");
+	check(art_ss_miss_count() == 1, "one good record, to have something to corrupt");
+
+	/*
+	  Today's date in every fixture below, not a date typed out here. A hardcoded day would
+	  expire, and an expired record is dropped for the *right* reason - so this whole block
+	  would go on passing while testing nothing about corruption at all. That is exactly
+	  what it did on its first run.
+
+	  No embedded NUL either, tempting as one is: put_file() writes strlen() bytes, so a NUL
+	  in the middle of the fixture silently truncates the rest of it away.
+	*/
+	char today[16];
+	snprintf(today, sizeof(today), "%lu", (unsigned long)(time(0) / 86400));
+
+	char rubbish[512];
+	snprintf(rubbish, sizeof(rubbish),
+		"# ClassicUI: games ScreenScraper had no cover for\n"
+		"this is not a record at all\n"
+		"\xff\xfe\x01 binary rubbish\n"
+		"%s\n"
+		"notanumber deadbeefdeadbeef 57/Something.bin\n"
+		"%s 0000000000000000 57/A zero key is not a key\n", today, today);
+
+	put_file(art_ss_miss_path(), rubbish);
+
+	art_ss_miss_reload();
+	check(art_ss_miss_count() == 0, "a file of nonsense yields no remembered misses rather than a crash");
+	check(miss_file_records() == 0, "and it is rewritten without any of it");
+	check(art_next_source(ddragon) == ART_SRC_SS,
+		"so every game it should have covered is asked about again, which is the safe direction");
+
+	// Truncation is the other shape of corruption, and the one a card pulled mid-write
+	// actually produces: well-formed records, and then the file simply stops - here in the
+	// middle of the third field, with no newline after it.
+	char cut[128];
+	snprintf(cut, sizeof(cut), "%s 1122334455667788 57/Half A Rec", today);
+	put_file(art_ss_miss_path(), cut);
+
+	art_ss_miss_reload();
+	check(art_ss_miss_count() == 1,
+		"a file that stops mid-line keeps what parsed and does not run off the end of it");
+	check(art_ss_miss_known(dd_sys, "Double Dragon (Europe).bin") == 0,
+		"and a half-written record cannot write off a real game");
+
+	/* --------------------------------------------- and it stays bounded --- */
+
+	{
+		/*
+		  More records than the store may hold, all valid. A shelf cannot produce this - the
+		  library index is bounded well below ART_SS_MISS_MAX - but a file that has been
+		  concatenated, edited or shared between cards can, and "it cannot happen" is not a
+		  bound.
+		*/
+		FILE *f = fopen(art_ss_miss_path(), "wt");
+		check(f != 0, "a store file can be written by hand");
+		if (f)
+		{
+			unsigned long today = (unsigned long)(time(0) / 86400);
+			for (int i = 0; i < ART_SS_MISS_MAX + 500; i++)
+				fprintf(f, "%lu %016llx 57/Overflow %d.bin\n", today, (unsigned long long)(i + 1), i);
+			fclose(f);
+		}
+
+		art_ss_miss_reload();
+		check(art_ss_miss_count() == ART_SS_MISS_MAX,
+			"a store of more than the cap is held at the cap rather than growing");
+		check(miss_file_records() == ART_SS_MISS_MAX,
+			"and the file is rewritten down to it, so it does not grow again on the next load");
+
+		// One more on top of a full store: it fits, by dropping the oldest, and the store is
+		// still the size it was. An out-of-order insert here would break the binary search
+		// silently and answer "not remembered" for everything - see ss_miss_put().
+		art_ss_miss_record(dd_sys, "Double Dragon (Europe).bin");
+		check(art_ss_miss_count() == ART_SS_MISS_MAX, "recording into a full store does not grow it");
+		check(art_ss_miss_known(dd_sys, "Double Dragon (Europe).bin") == 1,
+			"and the record that was just paid for is the one that is kept");
+	}
+
+	/* -------------------- the reserve: the shelf stands down, the dialog does not --- */
+
+	/*
+	  The unmatched allowance is the one that runs out, and the disc dialog is the only
+	  caller a player is actually watching. So the last tenth of it is the dialog's.
+
+	  Read from a *successful* reply's counters, which is what makes this free: the moment
+	  the allowance gets low is knowable without spending a request to discover it.
+	*/
+	unlink(art_ss_miss_path());
+	art_ss_miss_reload();
+	ss_forget_state();
+
+	put_ss_ko_reply("/tmp/chome_miss_ko_ok.xml", 60, 2000);
+	check(art_ss_settle(fusion, "/tmp/chome_miss_ko_ok.xml") == 1, "60 of 2000 unmatched: a normal reply");
+	check(ss_ko_reserved() == 0, "nothing is held back");
+	check(ss_may_request() == 1, "the shelf may scrape");
+	check(ss_may_request_for(SS_ASK_DELIBERATE) == 1, "and so may the disc dialog");
+
+	put_ss_ko_reply("/tmp/chome_miss_ko_low.xml", 1900, 2000);
+	check(art_ss_settle(fusion, "/tmp/chome_miss_ko_low.xml") == 1, "1900 of 2000 unmatched: still a good reply");
+	check(ss_ko_reserved() == 1, "but past the 90% mark, so the reserve is on");
+	check(ss_hold_reason() == SS_OK, "nothing has gone wrong, so nothing is held off");
+	check(ss_may_request() == 0, "the shelf stops scraping speculatively");
+	check(ss_may_request_for(SS_ASK_DELIBERATE) == 1,
+		"while the disc dialog - which a player is watching - still may");
+	check(art_next_source(smwjp) == ART_SRC_LIBRETRO,
+		"so the shelf quietly uses the pack instead of spending the last of the allowance");
+
+	// And it lifts by itself when a later reply says the day has rolled over, without a
+	// restart and without anyone having to notice.
+	put_ss_ko_reply("/tmp/chome_miss_ko_reset.xml", 4, 2000);
+	check(art_ss_settle(fusion, "/tmp/chome_miss_ko_reset.xml") == 1, "tomorrow's first reply arrives");
+	check(ss_ko_reserved() == 0, "the reserve lifts on its own");
+	check(ss_may_request() == 1, "and the shelf may scrape again");
+
+	// The hard stop is still underneath it.
+	put_ss_ko_reply("/tmp/chome_miss_ko_spent.xml", 2000, 2000);
+	check(art_ss_settle(fusion, "/tmp/chome_miss_ko_spent.xml") == 1, "a reply whose counters say the ko allowance is gone");
+	check(ss_hold_reason() == SS_ERR_UNMATCHED, "stands the module down outright");
+	check(ss_may_request_for(SS_ASK_DELIBERATE) == 0, "for the deliberate caller as well as the shelf");
+	check(art_ss_miss_count() == 0, "and none of those replies wrote a miss to the card");
+
+	/* ---------------------------------------- a floor between requests --- */
+
+	/*
+	  maxthreads is 1 for an ordinary account and this module already serialises, so nothing
+	  can overlap. What it could still do is fire a request the instant the last one lands,
+	  for as long as somebody holds the stick on an unscraped shelf.
+
+	  The gap is deliberately not part of ss_may_request(): the ladder's answer decides which
+	  rung a game sits on, so a game drawn 300 ms after a request would be diverted to the
+	  libretro pack over a timer. That pair of checks is the interesting one here.
+	*/
+	ss_forget_state();
+	check(ss_gap_wait_ms() == 0, "with nothing asked yet there is nothing to wait for");
+	check(ss_may_ask_now(SS_ASK_SPECULATIVE) == 1, "and a request may go out now");
+
+	ss_note_request();
+	int wait = ss_gap_wait_ms();
+	check(wait > 0 && wait <= SS_MIN_REQUEST_GAP_MS,
+		"immediately after one, there is a wait, and it is inside the gap");
+	check(ss_may_ask_now(SS_ASK_SPECULATIVE) == 0, "so the shelf may not ask again yet");
+	check(ss_may_ask_now(SS_ASK_DELIBERATE) == 0, "and nor may the disc dialog - the floor is about their server");
+
+	check(ss_may_request() == 1,
+		"but the ladder's own question is unaffected, so no game is diverted to the pack over a timer");
+	check(art_next_source(smwjp) == ART_SRC_SS, "and that game stays on the ScreenScraper rung");
+
+	ss_forget_state();
+	check(ss_gap_wait_ms() == 0, "and a restart clears the gap with everything else");
+
+	/* ------------------------------------------------------------- and out --- */
+
+	check(art_fetch_active() == 0, "no pack fetch was started anywhere in this section");
+	check(disc_art_active() == 0, "and no ScreenScraper download either");
+
+	ss_forget_state();
+	cfg.classicui_artfetch = 0;
+	cfg.classicui_screenscraper = 0;
+	cfg.classicui_ss_user[0] = 0;
+	cfg.classicui_ss_pass[0] = 0;
+
+	unlink("/tmp/chome_miss_nogame.xml");
+	unlink("/tmp/chome_miss_throttle.txt");
+	unlink("/tmp/chome_miss_quota.txt");
+	unlink("/tmp/chome_miss_ko_ok.xml");
+	unlink("/tmp/chome_miss_ko_low.xml");
+	unlink("/tmp/chome_miss_ko_reset.xml");
+	unlink("/tmp/chome_miss_ko_spent.xml");
+
+	unlink(art_ss_miss_path());
+	art_ss_miss_reload();
+	check(art_ss_miss_count() == 0, "and the card is left with nothing remembered on it");
+
+	art_redo();
+	check(art_ss_absent(ddragon) == 0, "with the slots back the way the section above left them");
 }
 
 static int count_lines(const char *rel, int *bad_sum, int *maxlen)
@@ -16084,6 +16542,13 @@ int main()
 	  does, and calls art_redo() on the way out so the slots go back untouched.
 	*/
 	assert_art_ladder();
+	/*
+	  Directly after it, because it starts from the shelf that one leaves and its whole
+	  subject is the same module's two refusals - told apart now against a store on the card
+	  rather than against a flag that a core change threw away. It leaves the same three
+	  settings off, deletes the store it wrote, and calls art_redo() on its way out.
+	*/
+	assert_ss_throttle();
 	assert_physical_disc();
 	// Directly after it, because it drives the same state machine with the same fake
 	// discs, and before every section that draws or logs a disc name: it puts a title
