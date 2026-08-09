@@ -151,4 +151,25 @@ const char *disc_title_for(const char *key);
 */
 void disc_titles_forget();
 
+/*
+  Settle the verdict on the file now, rather than on the frame a disc is identified.
+
+  Pure housekeeping: it opens the table, checks the magic, and closes it again. No
+  answer is cached and no row is read, because there is no key to look one up by yet -
+  what it removes is the *first* lookup having to discover whether there is a file at
+  all, on the thread that draws, at the moment the player is already waiting.
+
+  Two reasons it is worth the one open(). The verdict is sticky by design - see
+  disc_titles_forget() - so the question is asked once per process either way, and this
+  only moves when. And the "disc titles from ..." line it produces then lands at the
+  point the drive is found instead of minutes later beside the first disc, which is
+  what makes a log answer "was the table ever seen?" without a disc having to be in
+  the machine to ask it.
+
+  Called from disc_watch_start() once a drive has actually been found, so a card with
+  no optical drive on it never opens the file - the same gate the rest of the disc
+  layer sits behind.
+*/
+void disc_titles_preload();
+
 #endif

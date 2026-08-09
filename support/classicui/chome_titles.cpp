@@ -383,6 +383,18 @@ static FILE *tdb_open(long *size)
 	return f;
 }
 
+/*
+  Ask the question early, so the answer is not being discovered on the frame it is
+  wanted. See chome_titles.h for why this is worth an open() and what it deliberately
+  does not do - which is cache anything, because there is no key yet to cache against.
+*/
+void disc_titles_preload()
+{
+	long size = 0;
+	FILE *f = tdb_open(&size);
+	if (f) fclose(f);
+}
+
 /* ------------------------------------------------------------- the lookup --- */
 
 const char *disc_title_for(const char *key)
