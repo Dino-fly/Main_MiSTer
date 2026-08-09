@@ -578,7 +578,9 @@ your own is all you need.
 including the SuperDock's slot loader. A disc is recognised when you put it in, and
 four cores play it straight from the drive with no image on the card: PC Engine CD,
 PlayStation, Mega CD and Neo Geo CD. Any other disc is identified and named, with
-nothing to boot it into. It is off by default and that is not caution for its own sake:
+nothing to boot it into — a Saturn disc is the one worth knowing about: it cannot be
+played from the drive, and it can still be copied onto the card and played from there.
+It is off by default and that is not caution for its own sake:
 every command sent to the drive queues behind whatever the drive is already doing, and
 a drive that stops answering used to take the whole front-end down with it. See
 [The disc title table](#the-disc-title-table) for where the name on the shelf comes
@@ -612,6 +614,19 @@ than its cartridge one — `games/MegaCD`, `games/TGFX16-CD` and `games/NeoGeo-C
 are the folders those cores read their discs and their BIOS out of, and the ones a
 downloaded set lands in. The row says which, so you can see where the card will turn up
 before you press it.
+
+**A Saturn disc can be copied even though it cannot be played from the drive.** Those are
+two different things: playing from the drive needs the Saturn core to be fed sectors while
+the game runs, which it cannot yet do, while copying is the front-end reading the disc and
+writing `games/Saturn/<game>/<game>.cue` — which the Saturn core loads exactly like any
+other Saturn image you already have. So a Saturn disc shows **Play** greyed out and **Copy
+to Saturn** in the Options list, and once the copy finishes it is a card like any other.
+
+What still gets no copy row is a disc there is nowhere to put: 3DO and CD-i, which this
+firmware has no shelf system for at all, an MSU-1 SNES disc, whose core wants the `.sfc`
+off the disc rather than a copy of the disc, an audio CD, and a disc nothing recognised.
+For those the dialog says what it found and offers no copy, rather than a greyed-out row
+that could never work.
 
 The name is the same one the shelf shows for the disc — the title table's answer if you
 have one, otherwise the disc's label or its serial. The copy appears on the shelf as one

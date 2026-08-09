@@ -2737,6 +2737,47 @@ static void assert_physical_disc()
 		"a Saturn disc is identified, and no core here can read it off the drive");
 	check(disc_system_id(DISC_T_CDI) == 0, "nor a CD-i disc");
 	check(disc_system_id(DISC_T_AUDIO) == 0, "and an audio CD is nobody's game");
+
+	/*
+	  And the other half of that split, which is the question everything about the CARD is
+	  asked through: which console the disc BELONGS to. It answers for Saturn, because the
+	  drive has nothing to do with writing a cue sheet and some .bins into games/Saturn and
+	  reading them back with the Saturn core.
+
+	  These two agreeing for every other type is the point rather than a coincidence -
+	  disc_system_id() is this function less the one console whose daemon cannot read a
+	  drive - so the check that matters is the single place they differ, and the checks
+	  below it that the difference is exactly one console wide.
+	*/
+	check(disc_console_id(DISC_T_SATURN) && !strcmp(disc_console_id(DISC_T_SATURN), "saturn"),
+		"...and it still belongs to the Saturn shelf, which is what a copy of it is filed under");
+
+	for (int t = DISC_T_NONE; t <= DISC_T_UNKNOWN; t++)
+	{
+		if (t == DISC_T_SATURN) continue;
+		const char *c = disc_console_id(t), *s = disc_system_id(t);
+		char what[128];
+		snprintf(what, sizeof(what), "disc type %d gives the same answer to both questions", t);
+		check((!c && !s) || (c && s && !strcmp(c, s)), what);
+	}
+
+	check(disc_console_id(DISC_T_3DO) == 0 && disc_console_id(DISC_T_CDI) == 0,
+		"3DO and CD-i belong to no shelf system at all - identified, and nowhere to put a copy");
+	check(disc_console_id(DISC_T_AUDIO) == 0 && disc_console_id(DISC_T_UNKNOWN) == 0,
+		"and neither an audio CD nor an unidentified disc names a console");
+
+	/*
+	  disc_capable_systems() is the Play list and is built from disc_system_id(), so adding
+	  the console answer must not have leaked Saturn into it: a Saturn row there would be a
+	  Play this firmware cannot honour.
+	*/
+	{
+		const char *ids[16];
+		int n = disc_capable_systems(ids, 16);
+		int has_sat = 0;
+		for (int i = 0; i < n; i++) if (!strcasecmp(ids[i], "saturn")) has_sat = 1;
+		check(!has_sat, "and the \"pick a core\" list still does not offer Saturn");
+	}
 	check(disc_type_name(DISC_T_PSX) && disc_type_name(DISC_T_PSX)[0],
 		"every type we can report has a name to show");
 
@@ -12949,6 +12990,20 @@ static void assert_rip_format()
 	check(rip_cue_text(&plan, 1, cue, sizeof(cue)) && !strcmp(cue, cue_m1),
 		"and for a parser with no MODE2 token the data track is written MODE1/2352");
 
+	/*
+	  Saturn is the other kind, and it is worth pinning because the guess goes the wrong way.
+	  Its neighbours in the table are the three Sega/NEC/SNK parsers that read MODE1 only, so
+	  copying the Mega CD row would have looked reasonable and written MODE1/2352 over a
+	  MODE2 track. saturncdd.cpp:169-192 reads MODE1/2048, MODE1/2352 AND MODE2/2352, per
+	  track, keeping each track's sector size - so it takes the measured mode, exactly like
+	  psx.cpp, and the sheet a Saturn rip writes is the true one.
+
+	  Asserted against cue_true rather than against a Saturn-shaped copy of it: if these two
+	  ever stop being the same string, the table's saturn row is wrong.
+	*/
+	check(rip_cue_text(&plan, 0, cue, sizeof(cue)) && !strcmp(cue, cue_true),
+		"a Saturn sheet keeps the measured MODE2/2352, which is what saturncdd.cpp reads");
+
 	check(!rip_cue_text(&plan, 0, cue, 40),
 		"a sheet that will not fit its buffer is refused, not truncated into an unparseable one");
 
@@ -13493,6 +13548,49 @@ static void assert_rip_format()
 
 			rip_rmdir_flat(gdir);
 		}
+	}
+
+	/*
+	  And Saturn, which is the one that used to be refused.
+
+	  It is the only destination in the table whose core cannot be handed the pressed disc,
+	  so this is the block that says the copy does not care: the same helper reads the same
+	  sectors, writes the sheet in the form saturncdd.cpp parses, and games/Saturn turns it
+	  into a card like any other folder the scanner walks. The sheet is checked here rather
+	  than only in the rip_cue_text() block above because the mode flag reaches it through
+	  the rip_targets row, and a wrong row there would still produce a valid-looking sheet.
+	*/
+	{
+		const char *gname = "Saturn Test Disc";
+		char gdir[1024];
+		snprintf(gdir, sizeof(gdir), "%s/%s", ROOT "/games/Saturn", gname);
+		rip_rmdir_flat(gdir);
+
+		fk.reads = 0;
+		check(rip_perform(&plan, ROOT "/games/Saturn", gname, 0, 0, &io, &bad) == RIP_DONE,
+			"a Saturn rip writes its folder");
+
+		snprintf(path, sizeof(path), "%s/%s.cue", gdir, gname);
+		{
+			char got[4096];
+			check(slurp(path, got, sizeof(got)) && !strcmp(got, cue_true),
+				"with the measured mode in it, which Saturn's parser reads and Mega CD's does not");
+		}
+
+		lib_rescan();
+		for (int i = 0; i < 400 && lib_scanning(); i++) frame(2);
+		frame(10);
+
+		char rel[256];
+		snprintf(rel, sizeof(rel), "%s/%s.cue", gname, gname);
+		check(item_at("saturn", rel) >= 0,
+			"and the copy is a card on the Saturn shelf - the disc we cannot play from the "
+			"drive plays from the card");
+
+		snprintf(rel, sizeof(rel), "%s/Track 01.bin", gname);
+		check(item_at("saturn", rel) < 0, "with its tracks hidden rather than listed as games");
+
+		rip_rmdir_flat(gdir);
 	}
 
 	/* ------------------------------------------------------------------ tidy up --- */
@@ -14626,6 +14724,121 @@ static void assert_rip_screen()
 		"MegaCD core - not games/Genesis, where the card would never have appeared");
 	check(rip_test_last_mode1() == 1,
 		"and told MODE1 only, which is all megacdd's parser reads");
+
+	/* ------------------------------- a disc we cannot play, and can still copy --- */
+
+	/*
+	  The Saturn disc, which is the case this screen used to get wrong.
+
+	  The owner put SEGARALLY CHAMPIONSHIP in the drive. It was identified - the log said so
+	  - and the dialog offered no way to copy it, because the copy row was derived from the
+	  console the *Play* rows had settled on and there is no Play row for Saturn. Those are
+	  different questions: no core here can be handed the spinning drive, and none needs to
+	  be, because the copy is our own helper reading sectors into games/Saturn where the
+	  Saturn core reads them back off the card.
+
+	  So both halves are asserted together, and the order matters - the refusal first, so a
+	  Copy row that only appeared because something had quietly started claiming Saturn could
+	  play would fail here rather than pass.
+	*/
+	rip_test_reset();
+	disc_reset_reader();
+	disc_ingest_present(0);
+	(void)disc_take_dirty();
+	chome_leave();
+	press(KEY_MENU, 20);
+	frame(10);
+
+	disc_ingest_present(1);
+	fake_disc dsa; memset(&dsa, 0, sizeof(dsa));
+	fake_put(&dsa, 0, 0, "SEGA SEGASATURN", 15, 0);
+	disc_set_reader(fake_read, &dsa);
+	disc_ingest_identify(0);
+	frame(6);
+	check(disc_type() == DISC_T_SATURN, "a Saturn disc is in the drive, and identified");
+
+	press(KEY_UP);
+	press(KEY_ENTER);
+	check(chome_screen_id() == S_DISC, "and its dialog is up");
+	dump("rip-13-saturn");
+
+	/*
+	  Play, pressed on purpose.
+
+	  LEFT first, and it is not decoration: disc_dlg_enter() opens the cursor on the first
+	  button that is NOT dim, so over a Saturn disc the dialog comes up on Options - see
+	  rip-13-saturn.png - and a bare press here would open the Options list and prove
+	  nothing about Play at all. LEFT clamps at button 0 rather than wrapping, so after it
+	  the cursor is on Play whichever button it opened on, and nothing else has been
+	  pressed that could have opened anything.
+	*/
+	harness_clear_launch();
+	press(KEY_LEFT);
+	press(KEY_ENTER, 4);
+	frame(80);
+	check(harness_last_launch()[0] == 0,
+		"Play refuses it, because saturncdd.cpp cannot read the drive");
+	check(chome_screen_id() == S_DISC, "and the dialog stays put rather than pretending");
+
+	press(KEY_RIGHT);
+	press(KEY_ENTER);
+	for (int i = 0; i < 8; i++) press(KEY_DOWN, 6);
+	dump("rip-14-saturn-options");
+
+	press(KEY_ENTER, 8);
+	check(rip_test_starts() == 1, "and the copy row is there anyway, and starts a rip");
+	check(!strcmp(rip_test_last_dir(), ROOT "/games/Saturn"),
+		"into games/Saturn, the shelf system that reads .cue and launches the Saturn core");
+	check(rip_test_last_mode1() == 0,
+		"and told the measured mode may be written, which is what saturncdd.cpp parses");
+
+	/* -------------------------- ...and a disc with nowhere to put a copy, still not --- */
+
+	/*
+	  The other half of the rule, which widening the first one must not have broken. An
+	  MSU-1 SNES disc is identified and its console IS a shelf system, so the loosened test
+	  would offer a copy if it asked nothing more - but the sfc the core wants is a file on
+	  the disc, not a folder of tracks, and a cue sheet in games/SNES is a folder that never
+	  loads. There is no snes row in rip_targets and so there is no Copy row.
+
+	  Pressed on the LAST row of the Options list, which is the row the two blocks above
+	  used to start a rip. Here it is the "(not yet)" snes row, and it starts nothing and
+	  launches nothing.
+	*/
+	rip_test_reset();
+	disc_reset_reader();
+	disc_ingest_present(0);
+	(void)disc_take_dirty();
+	chome_leave();
+	press(KEY_MENU, 20);
+	frame(10);
+
+	disc_ingest_present(1);
+	fake_disc dsn; memset(&dsn, 0, sizeof(dsn));
+	static const char *const sfc_only[] = { "GAME.SFC;1" };
+	fake_iso(&dsn, 0, "MSU1", 0, sfc_only, 1);
+	disc_set_reader(fake_read, &dsn);
+	disc_ingest_identify(0);
+	frame(6);
+	check(disc_type() == DISC_T_SNES, "an MSU-1 SNES disc is in the drive");
+
+	press(KEY_UP);
+	press(KEY_ENTER);
+	check(chome_screen_id() == S_DISC, "and its dialog is up");
+
+	press(KEY_RIGHT);
+	press(KEY_ENTER);
+	for (int i = 0; i < 8; i++) press(KEY_DOWN, 6);
+	dump("rip-15-msu1-options");
+
+	harness_clear_launch();
+	press(KEY_ENTER, 8);
+	frame(20);
+	check(rip_test_starts() == 0,
+		"a disc whose console has no cue reader gets no copy row, so the last row starts nothing");
+	check(harness_last_launch()[0] == 0, "and launches nothing either");
+	check(chome_screen_id() == S_DISC, "the list stays up rather than pretending");
+	press(KEY_ESC);
 
 	/* ------------------------------------------------------------------ tidy up --- */
 
