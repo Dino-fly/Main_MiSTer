@@ -119,7 +119,7 @@ build_one() {
 	w "docker rm -f $JOB" >/dev/null 2>&1
 	say "create container on VINNIEPC"
 	cp "$TOOLS/win_container_build.sh" "$WORK/$REPO/build.sh"
-	w "docker create --name $JOB --cpus $NPROC -e NPROC=$NPROC raetro/quartus:17.0 bash /work/build.sh" >>"$LOG" 2>&1
+	w "docker create --name $JOB --cpus $NPROC -e NPROC=$NPROC -e CORE=$NAME raetro/quartus:17.0 bash /work/build.sh" >>"$LOG" 2>&1
 
 	say "stream source to VINNIEPC"
 	# docker cp will not create a missing destination directory, so the tar

@@ -50,11 +50,44 @@ import records
 import stale
 
 
-def revision(tree):
-    """The .qpf the container script will pick: first non-Q13, sorted."""
+DUAL_SUFFIXES = ("_dualsdram", "_dualsdr", "_ds")
+
+
+def _norm(name):
+    return "".join(c for c in name.lower() if c.isalnum())
+
+
+def revision(tree, core=None):
+    """The .qpf the container script will pick.
+
+    This has to agree with win_container_build.sh exactly. It used to say "first
+    non-Q13, sorted", which was true and was the bug: sorting picked
+    PSX_DualSDRAM.qpf over PSX.qpf inside the container's UTF-8 locale, and picked
+    Atari5200.qpf over Atari800.qpf under every locale. Five released cores were
+    built from the wrong project, two of them a different machine entirely.
+
+    Same rules as the shell now: never a dual-SDRAM revision, then the one whose
+    name matches the core, and only fall back to the single remaining candidate
+    when there is nothing to choose between. Returns None where the shell would
+    exit AMBIGUOUS_QPF, so the caller stops rather than naming a guess.
+    """
     qpfs = sorted(f for f in os.listdir(tree)
                   if f.endswith(".qpf") and "Q13" not in f)
-    return qpfs[0][:-4] if qpfs else None
+
+    cands = [f for f in qpfs
+             if not any(f[:-4].lower().endswith(sfx) for sfx in DUAL_SUFFIXES)]
+    if not cands:
+        cands = qpfs
+    if not cands:
+        return None
+
+    if core:
+        want = _norm(core)
+        for f in cands:
+            if _norm(f[:-4]) == want:
+                return f[:-4]
+
+    return cands[0][:-4] if len(cands) == 1 else None
 
 
 def main():
@@ -67,7 +100,7 @@ def main():
                     choices=["name", "revision", "datecode", "basename"])
     a = ap.parse_args()
 
-    rev = revision(a.tree)
+    rev = revision(a.tree, a.core)
     if not rev:
         print("no non-Q13 .qpf in " + a.tree, file=sys.stderr)
         return 4                      # same code the container uses for NO_QPF
