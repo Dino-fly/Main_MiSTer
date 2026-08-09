@@ -1294,6 +1294,23 @@ no new table.
   ([batocera-emulationstation#1090](https://github.com/batocera-linux/batocera-emulationstation/issues/1090),
   [Skyscraper's screenscraper.cpp](https://github.com/muldjord/skyscraper/blob/master/src/screenscraper.cpp)).
 
+  That last one turned out to be the binding constraint, and not the part of it anyone
+  watches. On 2026-08-05 one request from Dinofly's machine came back with `Faite du tri
+  dans vos fichiers roms et repassez demain !` while his counters read *200 of 20000
+  requests today, 60 of 2000 unmatched*: the ordinary budget was untouched and the
+  **unmatched** one - every search the database cannot match - was what had been spent.
+  It was being spent in a loop, because the "no cover for this game" answer lived in an
+  in-memory slot and this device restarts the firmware on every core change, so all 1469
+  coverless games were asked about again on every boot. Four things now: the answer is
+  written to `classicui/ss-misses.txt` and honoured for a week; the throttle message and
+  HTTP 431 classify as `SS_ERR_UNMATCHED`, which stands the module down and is explicitly
+  *not* a verdict about the game in flight; the shelf stops scraping speculatively at 90%
+  of the unmatched allowance and leaves the rest for the disc dialog, which is the caller
+  a player is watching; and requests are at least 1.2 s apart. All of it is asserted
+  against synthetic replies in `assert_ss_throttle()` - a store that survives a simulated
+  restart, expires, refuses to record a refusal, fails safe when corrupt, and stays
+  bounded.
+
   Until a `devid` is issued, the gamelist reader is the same outcome by a better
   route: scrape on a PC with Skraper or Skyscraper, which already hold registered keys
   and already hash properly, and the result works here untouched.

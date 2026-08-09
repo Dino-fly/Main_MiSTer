@@ -69,9 +69,12 @@
   its two kinds of "no" stops being theoretical and starts being somebody's library:
 
     the database answered, and has no art for this game
-        A verdict. It will say the same thing tomorrow, so the miss is remembered and
-        that game is never asked about again this session. Recording it is what stops
-        a shelf of unknown ROMs costing one request per card per scroll.
+        A verdict. It will say the same thing tomorrow, so the miss is remembered - on
+        the card, for a week, not merely for this session. Recording it is what stops a
+        shelf of unknown ROMs costing one request per card per scroll, and *persisting*
+        it is what stops that whole bill being run up again on the next boot. See
+        art_ss_miss_*() in chome_art.h: the store is the caller's, because remembering
+        a miss requires knowing what a game is and this module deliberately does not.
 
     the database did not answer
         Quota gone, rate limited, API closed under load, no network. Says nothing
@@ -202,6 +205,29 @@
     SS_ERR_MALFORMED    a reply we could not parse. Treat as transport, not as a
                         verdict on the game.
     SS_ERR_TRANSPORT    curl failed, no network, timeout.
+    SS_ERR_UNMATCHED    the *unmatched* allowance is gone: too many searches today
+                        that the database could not match to anything. Stop until
+                        tomorrow, and it says nothing about the game in flight.
+
+  That last one is the one this client is most likely to provoke and was the last one
+  it learned to recognise, so it is worth spelling out what it is not.
+
+  On 2026-08-05 a single request from this machine came back with
+
+      Faite du tri dans vos fichiers roms et repassez demain !
+
+  ("sort your rom files out and come back tomorrow"). The daily *request* budget was
+  barely touched - 200 of 20000 - so nothing about the ordinary quota explained it.
+  It is the ko allowance: every search the database cannot match counts against
+  maxrequestskoperday, a shelf of 1469 games through a filename matcher misses often,
+  and past the ceiling the server refuses everything for the rest of the day.
+
+  The trap, and the reason this is its own code rather than SS_ERR_NOTFOUND: that
+  sentence arrives *in place of* an answer about whatever game happened to be in
+  flight. Read as a per-game miss it would write off a game the database may well hold
+  - and, once the miss is remembered on the card, write it off for a week. So it is a
+  refusal, ss_verdict() is false for it, and it stands the module down for the session
+  the way a quota does.
 */
 enum
 {
@@ -213,7 +239,8 @@ enum
 	SS_ERR_QUOTA,
 	SS_ERR_THREADS,
 	SS_ERR_MALFORMED,
-	SS_ERR_TRANSPORT
+	SS_ERR_TRANSPORT,
+	SS_ERR_UNMATCHED
 };
 
 struct ss_media
@@ -237,10 +264,11 @@ struct ss_result
 
 	  The ko pair is the other quota, and it is here because running it out is worse
 	  than running the ordinary one out. It counts requests the database could not
-	  match to anything; past maxrequestskoperday the server starts answering 431,
-	  which ss_http_class() maps to SS_ERR_BLACKLISTED because the response has to be
-	  the same - stop, and fetch a human. Reading the ko counters means standing down
-	  before provoking that rather than after.
+	  match to anything; past maxrequestskoperday the server starts answering 431 and
+	  the "repassez demain" sentence, both of which ss_classify as SS_ERR_UNMATCHED.
+	  Reading the ko counters means standing down before provoking that rather than
+	  after - see SS_KO_SPECULATIVE_PCT, which stands the speculative half down at 90%
+	  of the ceiling rather than at it.
 	*/
 	int requests_today;
 	int max_requests_day;
@@ -368,23 +396,121 @@ int ss_verdict(int err);
 void ss_note_result(int err, const ss_result *r);
 
 /*
+  Why a request is being made, which decides how much of the allowance it may spend.
+
+    SS_ASK_SPECULATIVE  the shelf hoovering up covers for games nobody asked about.
+                        On this owner's card that is 1469 requests nobody is waiting
+                        for, and every one of them that misses is charged to the ko
+                        allowance.
+    SS_ASK_DELIBERATE   the player opened the disc dialog with a disc in their hand and
+                        is watching for the scan of that disc to appear.
+
+  The distinction earns its keep because the two are wildly different in volume and in
+  what a refusal costs. A speculative miss is a card that shows the libretro cover
+  instead, which the player will not notice; a deliberate one is the feature visibly not
+  working while somebody watches. And they are already separate call sites - the shelf
+  ladder and disc_art_request() - so telling them apart costs one argument rather than
+  any new plumbing. See SS_KO_SPECULATIVE_PCT for what is actually done with it.
+*/
+#define SS_ASK_SPECULATIVE 0
+#define SS_ASK_DELIBERATE  1
+
+/*
+  Where speculative asking stops, as a percentage of the *unmatched* allowance.
+
+  Not the ordinary one. Measured on the owner's account on 2026-08-05: 200 of 20000
+  requests used, 60 of 2000 unmatched. The daily request budget is not the binding
+  constraint and never has been - the ko budget is, because a filename matcher against a
+  shelf of regional variants, hacks and homebrew misses far more often than it hits, and
+  the punishment for exhausting it is the server refusing everything for the day.
+
+  So the shelf stands down at 90% and leaves the last tenth for the disc dialog. The
+  fraction is picked to be large enough to matter and small enough to be free: 10% of
+  2000 is 200 deliberate requests held back, which is more discs than anyone opens a
+  dialog over in a day, while the 1800 the shelf still gets is more speculative scraping
+  than a single session will do anyway. The shelf loses nothing it will not get tomorrow;
+  the dialog never hits a wall the player did not cause.
+
+  This is a *soft* stand-down: ss_hold_reason() stays SS_OK, deliberate requests still go
+  out, and it lifts by itself when the counters in the next reply say the day has rolled.
+  The hard stop at 100% is still there underneath it.
+*/
+#define SS_KO_SPECULATIVE_PCT 90
+
+/*
+  The floor on how often a request may leave this box, in milliseconds.
+
+  An ordinary ScreenScraper account is maxthreads 1 and this module already serialises,
+  so nothing here can overlap two requests. What it could still do is issue them
+  back-to-back as fast as they complete: the shelf asks for a cover for every card it
+  draws, and a fast scroll across an unscraped shelf is a request per completed round
+  trip for as long as the player holds the stick. Serialised, but a machine gun.
+
+  1200 ms is above the ~1 s a jeuInfos round trip takes on this device's Wi-Fi, so in
+  practice it rarely bites at all - it is a floor under the pathological case rather than
+  a throttle on the normal one. It is deliberately not derived from maxthreads: threads
+  are about concurrency, this is about rate, and the API documents no rate.
+*/
+#define SS_MIN_REQUEST_GAP_MS 1200
+
+/*
   0 when no request may be made right now, and ss_hold_reason() says why - SS_OK when
   nothing is holding it and the answer is simply that ss_enabled() is false.
 
   Every hold is for the rest of the session rather than for a measured interval, and that
-  is a deliberate simplification rather than an oversight. There is no clock in this
-  module, the quota resets on a day boundary this code cannot see, and the firmware is
-  restarted by every core change - so "until something restarts us" is both the honest
-  granularity and, on this device, a wait measured in minutes rather than hours.
+  is a deliberate simplification rather than an oversight. The quota resets on a day
+  boundary this code cannot see, and the firmware is restarted by every core change - so
+  "until something restarts us" is both the honest granularity and, on this device, a wait
+  measured in minutes rather than hours.
+
+  ss_may_request() is the speculative form, because that is what the shelf ladder asks and
+  because a predicate whose bare form is the *permissive* one is the wrong way round for
+  something that spends somebody's allowance.
 */
+int ss_may_request_for(int intent);
 int ss_may_request();
 int ss_hold_reason();
 
 /*
-  Drop the hold and the counters. A new process starts clear anyway, so this exists for
-  the harness - which has to be able to prove that a game refused over quota is asked
-  about again once the quota is not the reason any more, and cannot restart the process to
-  do it.
+  1 when the unmatched allowance is into the reserve SS_KO_SPECULATIVE_PCT leaves - so
+  speculative asking has stopped while deliberate asking has not. Exposed for the log line
+  and for the harness; nothing has to consult it to behave correctly, since
+  ss_may_request_for() already accounts for it.
+*/
+int ss_ko_reserved();
+
+/*
+  The same question as ss_may_request_for(), plus the minimum gap: 0 when a request would
+  be too soon after the last one. Asked at the two places that actually fork a curl, and
+  deliberately *not* by the shelf ladder.
+
+  That split is the whole subtlety of the gap. art_source_for() reads "ScreenScraper will
+  not answer for this game" as "use the libretro pack instead", permanently for the
+  session - so a ladder that consulted the gap would divert a game to the pack because it
+  happened to be drawn 300 ms after the last request, which is a wrong cover on the card
+  over a timer. The ladder asks the session-level question; the spawn site asks the
+  moment-level one, and art_step() puts the item back for the next frame when it says no.
+*/
+int ss_may_ask_now(int intent);
+
+/*
+  Milliseconds still to wait, 0 when the gap is clear. For the harness, which cannot sleep
+  through a real one, and for anything that wants to say why it did not ask.
+*/
+int ss_gap_wait_ms();
+
+/*
+  Stamp the clock. Called once by whoever actually spawns a request, immediately after the
+  fork succeeds - at the fork rather than at the reply, because the gap is about how often
+  we knock on their door and not about how long they take to answer.
+*/
+void ss_note_request();
+
+/*
+  Drop the hold, the counters, the ko reserve and the gap. A new process starts clear
+  anyway, so this exists for the harness - which has to be able to prove that a game
+  refused over quota is asked about again once the quota is not the reason any more, and
+  cannot restart the process to do it.
 */
 void ss_forget_state();
 

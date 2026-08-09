@@ -392,6 +392,30 @@ cover is written to the card and then never looked for again — so whichever so
 first is the one you are stuck with. Anything ScreenScraper has no cover for falls through
 to the pack, and so does everything if your daily quota runs out.
 
+### Your ScreenScraper allowance, and how it is looked after
+
+A ScreenScraper account has two daily budgets, and the smaller one is the one a shelf
+spends: alongside the ordinary request limit there is a limit on *unmatched* searches —
+games the database could not find. A shelf of regional variants, hacks and homebrew misses
+often, and if that budget runs out the server refuses your account for the rest of the day
+with `Faite du tri dans vos fichiers roms et repassez demain !` — nothing to do with the
+game you asked about.
+
+Four things keep that from happening.
+
+- **A game with no cover is asked about once a week, not once a boot.** The answer is
+  written to `classicui/ss-misses.txt` on your card and honoured for seven days. Seven
+  rather than forever because ScreenScraper is a live database and a game with no cover
+  today may have one next month. Delete the file to ask about everything again.
+- **Only a real answer is remembered.** A quota, a rate limit, a lost connection or the
+  message above leave every game exactly as unasked as they found it, so one bad afternoon
+  cannot blank your shelf.
+- **The shelf stops scraping at 90% of the unmatched budget**, leaving the rest for the
+  physical-disc dialog — the one place you are actually waiting for a picture. Covers fall
+  back to the libretro pack, and the shelf starts again the next day by itself.
+- **Requests are at least 1.2 seconds apart**, so scrolling fast cannot machine-gun their
+  server.
+
 ## Installing
 
 **From a release, which is what most people want.** The archive unzips to a folder called
