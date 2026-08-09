@@ -14339,6 +14339,30 @@ static void assert_rip_screen()
 	rip_test_set(RIP_DONE, 2000, 2000, 0);
 	check(rip_percent(rip_state()) == 100, "and only a finished rip is 100%");
 
+	/*
+	  And what the panel actually SAYS while it copies, read back through the same
+	  disc_dlg_get() the drawing calls.
+
+	  The owner saw "Copying to the cardc" on a real 240p screen at the start of a rip -
+	  a stray character after "card" where the percentage should be. The format string in
+	  the binary is right and rip_percent() is bounded 0..99, so whatever produces that
+	  is between the snprintf and the glyphs. These read the line itself, so the next
+	  person does not have to photograph a television to find out what it said.
+	*/
+	{
+		char t[128], sub[128];
+
+		rip_test_set(RIP_RUNNING, 0, 2000, 0);
+		disc_test_dlg_text(t, sizeof(t), sub, sizeof(sub));
+		check((int)strlen(sub) <= 20, "the copying line fits the narrow panel, so it cannot be cut");
+		check(strstr(sub, "0%") != 0, "it carries the percentage it is at");
+
+		rip_test_set(RIP_RUNNING, 320, 2000, 0);
+		disc_test_dlg_text(t, sizeof(t), sub, sizeof(sub));
+		check(strstr(sub, "16%") != 0, "and follows it up");
+		check((int)strlen(sub) <= 20, "and still fits once it is under way");
+	}
+
 	/* ------------------------------------------------------------------- the pie --- */
 
 	/*

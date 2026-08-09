@@ -5284,10 +5284,26 @@ static void disc_dlg_from_rip(disc_dlg *d)
 		  line under the title rather than on the disc: the pie is the shape of the answer
 		  and the number is the answer, and the disc has no room for text at 240p.
 		*/
-		if (st->bad) snprintf(d->sub, sizeof(d->sub), "Copying %d%% - %d unreadable so far",
+		/*
+		  Short enough that it cannot be clipped, which is why it no longer says where
+		  it is copying to.
+
+		  "Copying to the card - 0%" is twenty-four characters, and the owner
+		  photographed it on a 240p television reading "Copying to the cardc" - the
+		  line cut with gfx_clip()'s marker on the end. The odd part is that the LONGER
+		  "Copying to the card - 16%" rendered whole a moment later, so the panel is
+		  narrower in the first frames than it settles at, and a line that fits the
+		  finished dialog can still be cut while it is arriving. Rather than chase which
+		  frame, both of these now fit the narrow case: twenty characters, worst values
+		  included.
+		  The other one was worse and nobody had hit it yet: "Copying 45% - 7 unreadable
+		  so far" is thirty-five characters and would have been cut on every profile.
+		  The pie says what is being copied and where; these say how far along.
+		*/
+		if (st->bad) snprintf(d->sub, sizeof(d->sub), "%d%% - %d unreadable",
 			rip_percent(st), st->bad);
 		else if (!st->total) snprintf(d->sub, sizeof(d->sub), "Reading the disc");
-		else snprintf(d->sub, sizeof(d->sub), "Copying to the card - %d%%", rip_percent(st));
+		else snprintf(d->sub, sizeof(d->sub), "Copying - %d%%", rip_percent(st));
 		return;
 	}
 
