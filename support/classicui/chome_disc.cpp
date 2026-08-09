@@ -631,6 +631,13 @@ void disc_reset_reader() { reader = 0; reader_ctx = 0; }
   Poll intervals, in seconds. Both are status queries; neither reads the disc. See the
   comment in helper_main() for why the settled one is as long as it is.
 */
+// How many times to read a disc that came back without a name, and how long to wait
+// between tries. Three reads a second apart covers a drive that is merely slow to come
+// up to speed, without leaving a genuinely unreadable disc spinning in "Reading the
+// disc" for longer than a person will wait.
+#define DISC_ID_TRIES        3
+#define DISC_ID_RETRY_S      1
+
 #define DISC_POLL_EMPTY_S    1
 #define DISC_POLL_SETTLED_S  30
 
@@ -807,13 +814,50 @@ static void helper_main(const char *dev)
 				// can start its spinning icon while the drive is still seeking.
 				helper_write(DISC_SPINNING, DISC_T_NONE, "", "");
 
-				int lba0 = find_data_track();
-				int t = disc_identify_at(lba0);
+				/*
+				  Read it more than once when the first read came back nameless.
 
+				  disc_serial_at() walks sectors 16 to 64 and silently skips any it
+				  cannot read, so a drive still coming up to speed can return nothing
+				  and still look like a completed answer. Combined with the once-per
+				  -insertion rule above, that made a transient spin-up failure
+				  permanent for as long as the disc stayed in the tray: the panel said
+				  "PlayStation" and nothing else, for ever, while the very same disc
+				  named itself correctly after a reboot because the reboot re-read it.
+
+				  That is what the owner hit with disc 2 of a PAL Metal Gear Solid, and
+				  it is the third bug of this shape in this file - the drive probe, the
+				  dead helper, and now this. The lesson is the same each time: on a
+				  spinning disc, one look is a sample, not an answer.
+
+				  Only a *nameless* result is retried, and only a few times. A disc that
+				  is genuinely unidentifiable must still settle on DISC_UNKNOWN quickly
+				  rather than sit in "Reading the disc" for ever - a spinner that never
+				  resolves is worse than a wrong answer. A disc that named itself on the
+				  first read costs nothing: the loop runs once.
+				*/
+				int lba0 = 0, t = DISC_T_UNKNOWN;
 				char ser[DISC_SERIAL_LEN] = {};
 				char lbl[DISC_LABEL_LEN] = {};
-				disc_serial_at(lba0, ser, sizeof(ser));
-				disc_label_at(lba0, lbl, sizeof(lbl));
+
+				for (int try_n = 0; try_n < DISC_ID_TRIES; try_n++)
+				{
+					if (try_n) sleep(DISC_ID_RETRY_S);
+
+					lba0 = find_data_track();
+					t = disc_identify_at(lba0);
+
+					ser[0] = 0;
+					lbl[0] = 0;
+					disc_serial_at(lba0, ser, sizeof(ser));
+					disc_label_at(lba0, lbl, sizeof(lbl));
+
+					// Named, or nothing there to name: either way the answer is in.
+					if (ser[0] || lbl[0] || t == DISC_T_UNKNOWN) break;
+
+					printf("ClassicUI: disc read %d gave a %s with no name, reading again\n",
+						try_n + 1, disc_type_name(t));
+				}
 
 				helper_write(t == DISC_T_UNKNOWN ? DISC_UNKNOWN : DISC_READY, t, ser, lbl);
 			}
