@@ -12800,7 +12800,19 @@ int chome_handle(uint32_t key)
 			{
 				int i = sel;
 				while (i + 1 < n && jump_initial(i + 1) == cur) i++;
-				next = (i + 1 < n) ? i + 1 : sel;
+
+				/*
+				  Past the last letter there is no next letter, so the press lands on the
+				  last entry instead of doing nothing. Standing in the middle of Z and
+				  pressing right used to refuse, which reads as a dead button rather than
+				  as the end of the alphabet - and the end of the list is plainly what was
+				  being asked for. Only once actually on the final entry does it decline.
+
+				  Left already does the mirror of this without being asked: walking back
+				  from the first letter settles on entry 0, because the step-into-the-
+				  previous-letter branch is guarded by i > 0.
+				*/
+				next = (i + 1 < n) ? i + 1 : (n - 1);
 			}
 			else
 			{

@@ -4307,6 +4307,29 @@ static void assert_letter_jump()
 	check(bad_prev == 0, "and on the FIRST entry of that letter, not into the middle of it");
 
 	/*
+	  And what the right shoulder does once there is no next letter.
+
+	  It used to refuse, which from the sofa reads as a dead button rather than as the end
+	  of the alphabet - and the end of the list is plainly what the press was asking for.
+	  Driven all the way to the end rather than computed, because the answer depends on the
+	  view's real contents: leading folders are in curated order and the last entry is
+	  whatever the shelf actually finishes with.
+	*/
+	{
+		int last = lib_view_count() - 1;
+
+		for (int i = 0; i < 80 && chome_sel_index() != last; i++) press(KEY_EQUAL, 3);
+		check(chome_sel_index() == last,
+			"pressing right past the last letter lands on the last entry");
+
+		press(KEY_EQUAL, 3);
+		check(chome_sel_index() == last, "and pressing it again there stays put");
+
+		for (int i = 0; i < 80 && chome_sel_index() != 0; i++) press(KEY_MINUS, 3);
+		check(chome_sel_index() == 0, "left still walks back to the first entry");
+	}
+
+	/*
 	  Monotonic: the shelf is sorted, so the letters a forward jump visits must not go
 	  backwards. A jump that overshoots and wraps would satisfy every check above.
 	*/
