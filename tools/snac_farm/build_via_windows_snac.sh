@@ -137,7 +137,26 @@ build_one() {
 	# Liveness from container state alone: the per-poll `docker exec` was half
 	# the API traffic that wedged the engine. A hung build is caught by HARD_CAP.
 	start=$SECONDS; verdict=running
-	while [ -n "$(w "docker ps -q -f name=$JOB" | tr -d '[:space:]')" ]; do
+	#
+	# One empty answer is not proof the container stopped. The query goes over ssh to
+	# a Docker engine this script is deliberately gentle with, and a transient failure
+	# returns empty exactly like a finished build does - at which point the code below
+	# finds no RBF_OK and calls a running compile BUILD_FAIL. That happened to PSX on
+	# 2026-08-09: declared failed at 19m while the container was still in register
+	# packing, and it went on to finish. A false failure is worse than a slow build,
+	# because it sends you looking for a bug in the source.
+	#
+	# So an empty result has to repeat, with a gap, before it is believed.
+	misses=0
+	while :; do
+		if [ -n "$(w "docker ps -q -f name=$JOB" | tr -d '[:space:]')" ]; then
+			misses=0
+		else
+			misses=$((misses + 1))
+			[ $misses -ge 3 ] && break
+			sleep 20
+			continue
+		fi
 		[ $((SECONDS-start)) -gt $HARD_CAP ] && { verdict=overran; break; }
 		sleep 120
 	done
