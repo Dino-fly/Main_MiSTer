@@ -69,6 +69,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "str_util.h"
 #include "autofire.h"
 #include "support/classicui/chome.h"
+#include "support/classicui/chome_proc.h"
 
 /*menu states*/
 enum MENU
@@ -1319,6 +1320,18 @@ void HandleUI(void)
 		// get user control codes
 		c = menu_key_get();
 	}
+
+	/*
+	  Collects the children Classic Home has stopped: the disc detection helper, the disc
+	  copier, the pairing agent. One non-blocking waitpid per outstanding pid, and one
+	  integer test when there are none, which is almost always.
+
+	  Here rather than in any of chome's own polls because each of those three is switched
+	  off by the very action that stops its child - see chome_proc.h. This is the one place
+	  that runs in every core, on every frame, whatever the front-end is doing and whether
+	  it is enabled at all.
+	*/
+	chome_child_reap();
 
 	// Applies a video look that Classic Home armed before launching this core, and
 	// grabs one reference frame for its look previews.
