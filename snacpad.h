@@ -9,4 +9,10 @@
 void snacpad_init();
 void snacpad_poll();
 
+#ifdef CHOME_HOST_TEST
+// See the note at the foot of snacpad.cpp. Recorded as the poll runs; changes nothing.
+int snacpad_test_enabled();
+int snacpad_test_present(int idx);
+#endif
+
 #endif

@@ -25,6 +25,14 @@ const char *harness_last_pulse_opt();
 const char *harness_last_rbf();
 int harness_status_pulses();
 int harness_pulses_on(const char *opt);
+void harness_set_confstr_table(const char **tbl);
+
+// The modelled SNAC pad reader - see the note above harness_set_snac_reader() in stubs.cpp.
+void harness_set_snac_reader(int present);
+void harness_set_snac_pad(int port, int present, uint8_t id, uint16_t btns);
+int  harness_snac_last_want();
+void harness_reset_snac();
+
 uint32_t harness_pause_val();
 /*
   ex defaults to 0, which is right for every "O"-form and bracket-form spec - almost all

@@ -33,6 +33,7 @@
 // The glyph table itself, for the font section: it checks that a loaded .pf really replaces
 // charfont[] and that restoring the built-in puts back every one of the 2048 bytes.
 #include "../../../charrom.h"
+#include "../../../snacpad.h"
 #include "../chome.h"
 #include "../chome_lib.h"
 #include "../chome_core.h"
@@ -9781,6 +9782,225 @@ static int sysidx_of(const char *id)
 }
 
 /*
+  Who owns the SNAC port, which is now derived from the core's own options rather than set.
+
+  The rule: our reader drives the port only when the running core has not claimed it. That
+  is the whole arbitration, and it has to be right for two quite different reasons. Get it
+  wrong towards "we own it" and two readers drive the same pins at once - the one outcome
+  here that can damage hardware, since our reader actively drives clock, command and
+  attention at 250 kHz and another console's adapter maps those pins somewhere else. Get it
+  wrong towards "the core owns it" and a player merely loses a pad until they look at the
+  option, which is why that is the direction to fail in.
+
+  All six SNAC-capable cores are modelled below because they spell it two different ways
+  and a table of core names was the thing worth avoiding. PSX/N64/SMS name SNAC in the
+  *value*; NES/Mega Drive/SNES make the option itself the switch. Note every one of them
+  defaults to its first value, which is never SNAC - so the no-configuration case is
+  "our reader owns the port", which is exactly what makes a PlayStation pad work in every
+  core without the player setting anything.
+
+  The ID check is here too. The reader in the fabric accepts any answer that is not 0xFF
+  and never checks the 0x5A a real pad sends, and the buttons reach us inverted - so a
+  device answering with zeroes would arrive as a pad with every button held down for ever,
+  driving the menu. That is what another console's adapter on the same port can look like.
+
+  What this cannot reach: whether the fabric and a real pad agree. snacpad.cpp is in this
+  build now, but the reader it talks to is modelled here, and on this project a
+  keyboard-driven host test has already proved nothing about a pad once. The arbitration is
+  covered; the electrical half still wants the device.
+*/
+/*
+  One SNAC poll, with the clock moved past both of the poll's own back-offs.
+
+  snacpad_poll() rate-limits itself - SNAC_POLL_MS while it is reading pads, SNAC_RETRY_MS
+  once it wants nothing - so two calls in the same millisecond are one poll and a silent
+  no-op. Advancing past the longer of the two is what makes each call below mean a poll.
+*/
+static void snac_tick()
+{
+	harness_advance(1100);
+	snacpad_poll();
+}
+
+static void assert_snac_ownership()
+{
+	printf("\n== who owns the SNAC port ==\n");
+
+	// A core publishing each of the two idioms, alongside settings that must not match.
+	static const char *snac_psx[] =
+	{
+		"PSX", "FS1,BIN,Load ROM",
+		"D8O[48:45],Pad1,Dualshock,Off,Digital,Analog,GunCon,NeGcon,Wheel-NegCon,"
+			"Wheel-Analog,Mouse,Justifier,SNAC-port1,Analog Joystick,Popn",
+		"D8h0O[66],SNAC MemCard,Virtual,Real",
+		0
+	};
+	static const char *snac_nes[] =
+	{
+		"NES", "FS1,BIN,Load ROM",
+		"P2oJK,SNAC,Off,Controllers,Zapper,3D Glasses",
+		0
+	};
+	static const char *snac_n64[] =
+	{
+		"N64", "FS1,BIN,Load ROM",
+		"O[51:49],Pad 1 Type,N64Pad,None,ControllerPak,RumblePak,SNAC,TransferPak,Keyboard",
+		"P3O[91],SNAC Compare,Off,On",
+		0
+	};
+	static const char *snac_sms[] =
+	{
+		"SMS", "FS1,BIN,Load ROM",
+		"P2oNO,USERIO,Off,SNAC,Gear2Gear",
+		0
+	};
+	static const char *snac_snes[] = { "SNES", "FS1,BIN,Load ROM", "P2O8,SNAC,No,Yes", 0 };
+	static const char *snac_none[] = { "GAMEBOY", "FS1,BIN,Load ROM", "OEF,System,Auto,GB", 0 };
+
+	struct { const char **tbl; const char *spec; int ex; int snacval; const char *what; } cores[] =
+	{
+		{ snac_psx,  "[48:45]", 0, 10, "the PSX naming SNAC-port1 in Pad1" },
+		{ snac_nes,  "JK",      1, 1,  "the NES making the option itself the switch" },
+		{ snac_n64,  "[51:49]", 0, 4,  "the N64 offering SNAC among its pad types" },
+		{ snac_sms,  "NO",      1, 1,  "the SMS calling the option USERIO" },
+		{ snac_snes, "8",       0, 1,  "the SNES with a plain No/Yes" },
+	};
+
+	cfg.snac_pad = 1;
+	cfg.snac_device = 0;
+
+	for (unsigned c = 0; c < sizeof(cores) / sizeof(cores[0]); c++)
+	{
+		harness_reset_snac();
+		harness_set_confstr_table(cores[c].tbl);
+
+		// The core's own default: its first value, which is never SNAC.
+		harness_set_opt(cores[c].spec, 0, cores[c].ex);
+		snacpad_init();
+		snac_tick();
+		check(harness_snac_last_want() == 1, cores[c].what);
+
+		/*
+		  Now the player picks SNAC in the core's own options, mid-session and without a
+		  relaunch - which is the case that matters and the one the old probe-and-settle
+		  code could not do at all. No snacpad_init() here on purpose: the reader is
+		  already enabled, so this asserts the *release*, that we actively tell the
+		  fabric to let go rather than leaving two readers driving the port.
+		*/
+		harness_set_opt(cores[c].spec, (uint32_t)cores[c].snacval, cores[c].ex);
+		snac_tick();
+		check(harness_snac_last_want() == 0, "  and lets go when it is chosen mid-session");
+
+		// And back again, without a relaunch either way.
+		harness_set_opt(cores[c].spec, 0, cores[c].ex);
+		snac_tick();
+		check(harness_snac_last_want() == 1, "  and takes it back when it is unchosen");
+	}
+
+	/*
+	  The two decoys, which is where an over-eager name match would go wrong: both begin
+	  with "SNAC" and neither hands the port over.
+	*/
+	harness_reset_snac();
+	harness_set_confstr_table(snac_psx);
+	harness_set_opt("[48:45]", 0, 0);
+	harness_set_opt("[66]", 1, 0);            // SNAC MemCard = Real
+	snacpad_init();
+	snac_tick();
+	check(harness_snac_last_want() == 1, "\"SNAC MemCard\" does not hand the port over");
+
+	harness_reset_snac();
+	harness_set_confstr_table(snac_n64);
+	harness_set_opt("[51:49]", 0, 0);
+	harness_set_opt("[91]", 1, 0);            // SNAC Compare = On
+	snacpad_init();
+	snac_tick();
+	check(harness_snac_last_want() == 1, "nor does \"SNAC Compare\"");
+
+	// A core with no SNAC option at all: nothing claims it, so we read it.
+	harness_reset_snac();
+	harness_set_confstr_table(snac_none);
+	snacpad_init();
+	snac_tick();
+	check(harness_snac_last_want() == 1, "a core with no SNAC option leaves the port to us");
+
+	/*
+	  snac_device, the one thing that cannot be derived. A SuperDock's bypass switch routes
+	  the bus to an extension port taking any console's adapter and nothing readable moves,
+	  so this is asked once and believed - and when it says "not a PSX pad" we must not
+	  drive the port in any core, or in the menu.
+	*/
+	harness_reset_snac();
+	harness_set_confstr_table(snac_none);
+	snacpad_init();
+	snac_tick();
+	check(harness_snac_last_want() == 1, "with a PSX pad on the port we read it");
+
+	// Told what is really on the port, we let go of it and stay off - no relaunch needed.
+	cfg.snac_device = 1;
+	snac_tick();
+	check(harness_snac_last_want() == 0, "snac_device=1 keeps us off the port entirely");
+	snac_tick();
+	check(harness_snac_last_want() == 0, "and off it on every poll after that");
+	cfg.snac_device = 0;
+
+	// And snac_pad=0 is still the master switch.
+	cfg.snac_pad = 0;
+	harness_reset_snac();
+	harness_set_confstr_table(snac_none);
+	snacpad_init();
+	snac_tick();
+	check(harness_snac_last_want() == -1, "snac_pad=0 does not touch SPI at all");
+	cfg.snac_pad = 1;
+
+	/* ------------------------------------------------ the ID sanity check --- */
+
+	harness_reset_snac();
+	harness_set_confstr_table(snac_none);
+	snacpad_init();
+
+	harness_set_snac_pad(0, 1, 0x41, 0);      // a digital pad
+	snac_tick();
+	check(snacpad_test_present(0), "a digital pad (id 41) is accepted");
+
+	harness_set_snac_pad(0, 1, 0x73, 0);      // an analog pad
+	snac_tick();
+	check(snacpad_test_present(0), "an analog pad (id 73) is accepted");
+
+	harness_set_snac_pad(0, 1, 0x53, 0);
+	snac_tick();
+	check(snacpad_test_present(0), "and analog mode 2 (id 53)");
+
+	/*
+	  id 00 with every button set is the shape the inversion produces from a device that
+	  answers with zeroes - another console's adapter, on the reading where its lines idle
+	  low. Before the check this was a pad holding all sixteen buttons down for ever.
+	*/
+	harness_set_snac_pad(0, 1, 0x00, 0xFFFF);
+	snac_tick();
+	check(!snacpad_test_present(0), "id 00 is refused, not taken as every button held down");
+
+	harness_set_snac_pad(0, 1, 0x12, 0);      // a PSX mouse: real, but not decodable here
+	snac_tick();
+	check(!snacpad_test_present(0), "and so is an id this reader cannot decode");
+
+	harness_set_snac_pad(0, 1, 0x41, 0);
+	snac_tick();
+	check(snacpad_test_present(0), "a real pad after one is still accepted");
+
+	// A core built from an older sys, which answers without the magic word.
+	harness_reset_snac();
+	harness_set_snac_reader(0);
+	snacpad_init();
+	snac_tick();
+	check(!snacpad_test_present(0) && !snacpad_test_present(1),
+		"a core with no reader in its sys reports no pads");
+
+	harness_reset_snac();
+	harness_set_confstr(1);
+}
+
+/*
   "O" and "o" name different status words, and this screen has to keep them apart.
 
   Found while wiring the SNAC ownership rule, which needs to read the NES's "P2oJK" SNAC
@@ -17162,6 +17382,7 @@ int main()
 	assert_freeze_off();
 	assert_core_idle_predicate();
 	assert_core_options_screen();
+	assert_snac_ownership();
 	assert_core_option_word_forms();
 	assert_per_game_core_options();
 	assert_core_option_for_all_games();

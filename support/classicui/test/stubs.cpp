@@ -663,10 +663,28 @@ static const char *fake_confstr_optsex[] =
 };
 
 static int confstr_on = 1;
-void harness_set_confstr(int v) { confstr_on = v; }
+
+/*
+  A table supplied by the test instead of one of the fixtures above.
+
+  The SNAC arbitration has to be right for six real cores that spell the same thing two
+  different ways, and adding six numbered fixtures to the ladder below - each used once -
+  would bury the interesting part. Cleared by harness_set_confstr().
+*/
+static const char **confstr_custom = 0;
+void harness_set_confstr_table(const char **tbl) { confstr_custom = tbl; }
+void harness_set_confstr(int v) { confstr_on = v; confstr_custom = 0; }
 
 char *user_io_get_confstr(int index)
 {
+	if (confstr_custom)
+	{
+		int n = 0;
+		while (confstr_custom[n]) n++;
+		if (index < 0 || index >= n) return 0;
+		return (char *)confstr_custom[index];
+	}
+
 	if (!confstr_on) return 0;
 
 	const char **tbl = (confstr_on == 2) ? fake_confstr_nopause
@@ -1225,6 +1243,83 @@ uint16_t spi_uio_cmd16(uint8_t cmd, uint16_t)
 	if (cmd == UIO_GET_OSDMASK) return osd_mask;
 	return 0;
 }
+
+/* ------------------------------------------------- the SNAC pad reader ---- */
+
+/*
+  Enough of psx_snac_pad.sv for snacpad.cpp to talk to.
+
+  It answers the eight-word conversation the poll actually has: a magic word, then a
+  presence/id word and three data words per port. Only the shape matters here - what is
+  being tested is the firmware's arbitration and its ID check, not the fabric's protocol -
+  so the pad state is whatever a test set, and the buttons arrive already de-inverted
+  because the RTL does that inversion before the firmware sees them.
+
+  snac_reader_present models a core built from an older sys with no reader at all, which
+  answers without the magic and must not be mistaken for a port with nothing on it.
+*/
+static int snac_reader_present = 1;
+static int snac_port_present[2] = { 0, 0 };
+static uint8_t snac_port_id[2] = { 0x41, 0x41 };
+static uint16_t snac_port_btns[2] = { 0, 0 };
+static int snac_last_want = -1;
+
+void harness_set_snac_reader(int present) { snac_reader_present = present; }
+void harness_set_snac_pad(int port, int present, uint8_t id, uint16_t btns)
+{
+	if (port < 0 || port > 1) return;
+	snac_port_present[port] = present;
+	snac_port_id[port] = id;
+	snac_port_btns[port] = btns;
+}
+int harness_snac_last_want() { return snac_last_want; }
+void harness_reset_snac()
+{
+	snac_reader_present = 1;
+	snac_port_present[0] = snac_port_present[1] = 0;
+	snac_port_id[0] = snac_port_id[1] = 0x41;
+	snac_port_btns[0] = snac_port_btns[1] = 0;
+	snac_last_want = -1;
+}
+
+#define SNAC_MAGIC_STUB 0x4A
+static int snac_word = -1;
+
+uint16_t spi_uio_cmd_cont(uint16_t cmd)
+{
+	if (cmd == UIO_SNAC_PAD)
+	{
+		snac_word = 0;
+		return snac_reader_present ? (uint16_t)(SNAC_MAGIC_STUB << 8) : 0;
+	}
+	snac_word = -1;
+	return 0;
+}
+
+/*
+  fpga_spi() rather than spi_w(), which is inline in spi.h and only forwards to this.
+  Stubbing the lower one keeps the real spi_w in the tested path.
+*/
+uint16_t fpga_spi(uint16_t v)
+{
+	if (snac_word < 0) return 0;
+
+	int w = snac_word++;
+
+	// Word 0 carries the enable bit down and the port-1 presence/id back.
+	if (w == 0) snac_last_want = (v & 1) ? 1 : 0;
+
+	int port = (w < 4) ? 0 : 1;
+	switch (w & 3)
+	{
+	case 0:
+		return (uint16_t)((snac_port_present[port] ? 0x8000 : 0) | snac_port_id[port]);
+	case 1: return snac_port_btns[port];
+	default: return 0x8080;   // sticks centred
+	}
+}
+
+void DisableIO() { snac_word = -1; }
 
 uint32_t user_io_hd_mask(const char *opt)
 {
