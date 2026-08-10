@@ -44,6 +44,26 @@ assume a release means master moved - it never has.
 deliberate: beta 2 nearly shipped a rebuild nobody had tested, under notes describing hardware
 tests of a different binary. Quote the md5 of the build you actually tested.
 
+## What the host harness does and does not compile
+
+`support/classicui/test/run.sh` builds the `chome_*.cpp` files plus `snacpad.cpp`, `charrom.cpp`
+and the stubs. It does **not** build `cfg.cpp`, `menu.cpp`, `user_io.cpp`, `input.cpp` or
+anything else in the root — and `stubs.cpp` supplies a *fixture* standing in for `cfg.cpp`'s
+option table (`stub_vars[]`, a deliberately short list).
+
+So a change to ini parsing, `cfg_print()` or the option table **cannot be tested here**, and the
+trap is that it looks like it can: a test written against `stub_vars[]` passes happily while the
+real table is untouched. Two useful moves when that happens:
+
+- say so plainly instead of writing a test that exercises the stub, and
+- prove the change at the object level instead — build the ARM binary with and without the fix
+  and check the symbol appears and disappears (`arm-none-linux-gnueabihf-nm bin/cfg.cpp.o`).
+  That is what confirmed the ScreenScraper redaction actually landed.
+
+`snacpad.cpp` *is* in the build as of 2026-08-10 (by stubbing `fpga_spi`, which `spi_w` is
+inline over, so the real `spi_w` stays in the tested path). The fabric it talks to is still
+modelled, so arbitration is covered and electrical behaviour is not.
+
 ## Finished work is merged straight into `classic-ui`. No pull requests.
 
 One developer, no reviewer. A PR here is a review ceremony with nobody on the other side of
