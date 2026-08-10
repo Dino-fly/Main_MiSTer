@@ -1306,8 +1306,7 @@ static void draw_fallback_card(const chome_item *it, int x, int y, int w, int h)
 	gfx_frame_rect(x, y, w, h, COL_PANELLO, 1);
 
 	int ts = (w > 180) ? 2 : 1;
-	int maxc = gfx_text_cols(w - 6 * u, ts);
-	if (maxc < 4) maxc = 4;
+	int avail = w - 6 * u;
 
 	// Wrap the title on word boundaries.
 	char words[8][CH_TITLE_LEN];
@@ -1339,7 +1338,13 @@ static void draw_fallback_card(const chome_item *it, int x, int y, int w, int h)
 		if (lines[nl][0]) snprintf(cand, sizeof(cand), "%s %s", lines[nl], words[i]);
 		else snprintf(cand, sizeof(cand), "%s", words[i]);
 
-		if ((int)strlen(cand) > maxc && lines[nl][0])
+		/*
+		  Break when the line no longer fits, measured - not when it passes a character
+		  count derived from the same pixels. The four-character floor stays a count of
+		  characters, because that is honestly what it is: a card too narrow for four
+		  glyphs would otherwise put one letter on each of its five rows and show nothing.
+		*/
+		if (gfx_text_w(cand, ts) > avail && (int)strlen(cand) > 4 && lines[nl][0])
 		{
 			nl++;
 			if (nl >= 5) break;
@@ -2921,11 +2926,13 @@ static void draw_menubar(const chome_profile *p, int focused)
 
 		/*
 		  The short form, where the long one would be served cut. Measured against exactly
-		  what gfx_clip() measures against below, so the two cannot come to disagree about
-		  whether the word fits - a test of that shape is what found "CLOSE G>" at 240p.
-		  Shouted again because the short form has not been through it yet.
+		  what gfx_clip() measures against below - the same function against the same
+		  budget, not a character count converted from it, so the two cannot come to
+		  disagree about whether the word fits. A test of that shape is what found
+		  "CLOSE G>" at 240p. Shouted again because the short form has not been through it
+		  yet.
 		*/
-		if (mb_short[i] && (int)strlen(up) > gfx_text_cols(cellw - 8, s))
+		if (mb_short[i] && gfx_text_w(up, s) > cellw - 8)
 		{
 			snprintf(up, sizeof(up), "%s", mb_short[i]);
 			gfx_shout(up);
@@ -2980,8 +2987,25 @@ static panel_box draw_panel(const chome_profile *p, const char *title)
 	return draw_panel_ex(p, p->panel_w, p->panel_h, title);
 }
 
-// Word-wraps into at most `maxlines` lines of `cols` characters.
-static int wrap_text(const char *src, int cols, char out[4][64], int maxlines)
+/*
+  Word-wraps into at most `maxlines` lines of `px` canvas pixels, drawn at `scale`.
+
+  Pixels and not a column count, and that is the whole of what this signature is for. Every
+  caller of this function has a panel and knows its width in pixels; each of them used to
+  hand that width to gfx_text_cols() and pass the character count on, which asks the font
+  "how many glyphs fit in this many pixels" - a question with one answer only while every
+  glyph is the same width. The wrap itself never needed the count: it needs to know whether
+  *this line with this word on it* is too wide, which is one measurement of one string.
+
+  So the fit test below is `gfx_text_w(the line as it would read) > px`, measured by the same
+  function that will draw it - which is the property that keeps a wrapped paragraph inside
+  the panel it was wrapped for, rather than a shared assumption that they agree.
+
+  Byte-for-byte the same wrap as the column form for the built-in font: see the equivalence
+  asserted in assert_typography(), which is what says the two questions have the same answer
+  at every scale and every letter-spacing value.
+*/
+static int wrap_text(const char *src, int px, int scale, char out[4][64], int maxlines)
 {
 	int n = 0;
 	out[0][0] = 0;
@@ -2998,7 +3022,27 @@ static int wrap_text(const char *src, int cols, char out[4][64], int maxlines)
 		if (wl > 63) wl = 63;
 
 		int cur = (int)strlen(out[n]);
-		if (cur && cur + 1 + wl > cols)
+
+		/*
+		  The line as it would read with this word added, measured. Built in full rather
+		  than measured as "what is there plus one space plus the word": three widths added
+		  up is only the width of the whole where the pen advance does not depend on which
+		  glyphs meet, and taking that shortcut here would put the assumption straight back
+		  in. Roomy enough for the longest line either buffer can hold: 63 characters of
+		  line, the space, and 63 of word.
+		*/
+		char cand[144];
+		cand[0] = 0;
+		if (cur)
+		{
+			int cl = (cur > 63) ? 63 : cur;
+			memcpy(cand, out[n], (size_t)cl);
+			cand[cl++] = ' ';
+			memcpy(cand + cl, st, (size_t)wl);
+			cand[cl + wl] = 0;
+		}
+
+		if (cur && gfx_text_w(cand, scale) > px)
 		{
 			if (++n >= maxlines) break;
 			out[n][0] = 0;
@@ -3766,7 +3810,7 @@ static void draw_progress(const panel_box *b, int mark, const char *head, const 
 	int box = 16 * s;
 
 	char lines[4][64];
-	int nl = wrap_text(body, gfx_text_cols(b->w - 16 * s, s), lines, 3);
+	int nl = wrap_text(body, b->w - 16 * s, s, lines, 3);
 
 	/*
 	  Centred in what it was given rather than starting at the top. The panel is sized
@@ -3824,13 +3868,22 @@ static void draw_progress(const panel_box *b, int mark, const char *head, const 
   ran clean across its neighbours. The tiles are sized from the room the strip has now
   (chome_theme.cpp), so how narrow they get depends on the canvas and the margin, which is
   a reason to measure rather than to assume there is room. Clipped to the tile rather than
-  shortened by hand, and dropped entirely below three characters - an empty frame already
-  reads as empty, where "N>" over it reads as a fault in the drawing.
+  shortened by hand, and dropped entirely when too little of it would survive - an empty
+  frame already reads as empty, where one letter and an ellipsis over it reads as a fault in
+  the drawing.
+
+  "Too little" is the narrowest thing gfx_clip() could hand back and still be worth reading:
+  two letters of this word and the mark. Measured, and measured on the word itself rather
+  than on a count of cells, because the question is whether *these* glyphs fit - the tile is
+  sized in pixels and nothing here needs to know how many characters a pixel span holds.
 */
 static void slot_word(const char *word, int x, int y, int tw, int s, uint32_t col)
 {
 	int room = tw - 4 * s;
-	if (gfx_text_cols(room, s) < 3) return;
+
+	char stub[8];
+	snprintf(stub, sizeof(stub), "%.2s%s", word ? word : "", CH_ELLIPSIS);
+	if (gfx_text_w(stub, s) > room) return;
 	gfx_text_c(gfx_clip(word, s, room), x, y, s, col, 0);
 }
 
@@ -3901,7 +3954,7 @@ static void draw_suspend(const chome_profile *p)
 		int s2 = p->ts_ui;
 		char lines[4][64];
 		int nl = wrap_text("This system cannot save your place - it has no save states.",
-			gfx_text_cols(room - 16 * s2, s2), lines, 2);
+			room - 16 * s2, s2, lines, 2);
 		for (int i = 0; i < nl; i++)
 			gfx_text_c(lines[i], p->w / 2, y + 22 * s2 + i * 11 * s2, s2, COL_PANELHI, 0);
 		return;
@@ -4123,8 +4176,7 @@ static void draw_display_screen(const chome_profile *p)
 	if (h_blurb)
 	{
 		char lines[4][64];
-		int cols = gfx_text_cols(b.w - pad * 2, tiny);
-		int nl = wrap_text(vp_blurb(opts[look_row]), cols, lines, 2);
+		int nl = wrap_text(vp_blurb(opts[look_row]), b.w - pad * 2, tiny, lines, 2);
 		for (int i = 0; i < nl; i++)
 		{
 			char up[64];
@@ -4319,7 +4371,7 @@ static void draw_options_panel(const chome_profile *p)
 			cc_n, cc_n == 1 ? "" : "S");
 
 		char wrapped[4][64];
-		int nl = wrap_text(msg, gfx_text_cols(b.w - 12 * s2, s2), wrapped, 2);
+		int nl = wrap_text(msg, b.w - 12 * s2, s2, wrapped, 2);
 
 		int fy = b.y + b.h - foot + 2 * s2;
 		for (int i = 0; i < nl; i++)
@@ -4477,7 +4529,7 @@ static void draw_wifi(const chome_profile *p)
 	{
 		char lines[4][64];
 		int nl = wrap_text("Plug a USB Wi-Fi adapter into the MiSTer and come back to this screen.",
-			gfx_text_cols(b.w - 16 * s, s), lines, 3);
+			b.w - 16 * s, s, lines, 3);
 		for (int i = 0; i < nl; i++)
 			gfx_text_c(lines[i], b.x + b.w / 2, b.y + b.h / 2 + i * 10 * s, s, COL_INK, 0);
 		return;
@@ -4951,7 +5003,7 @@ static void draw_pads(const chome_profile *p)
 		char lines[4][64];
 		int nl = wrap_text("This MiSTer has no Bluetooth adapter. A controller plugged into "
 			"the USB port works without any setting up.",
-			gfx_text_cols(b.w - 16 * s, s), lines, 3);
+			b.w - 16 * s, s, lines, 3);
 		for (int i = 0; i < nl; i++)
 			gfx_text_c(lines[i], b.x + b.w / 2, b.y + b.h / 2 - 10 * s + i * 10 * s, s, COL_INK, 0);
 		return;
@@ -7592,7 +7644,7 @@ static void draw_power(const chome_profile *p)
 	{
 		char lines[4][64];
 		int nl = wrap_text("Always shut down here rather than pulling the plug.",
-			gfx_text_cols(b.w - 16 * s, s), lines, 2);
+			b.w - 16 * s, s, lines, 2);
 		for (int i = 0; i < nl; i++)
 			gfx_text_c(lines[i], b.x + b.w / 2, ny + i * 10 * s, s, COL_PANELHI, 0);
 	}
@@ -7665,7 +7717,7 @@ static void draw_close(const chome_profile *p)
 	char lines[4][64];
 	int nl = wrap_text(armed ? "UNSAVED PROGRESS WILL BE LOST"
 	                         : "THE GAME STAYS LOADED UNTIL YOU CLOSE IT",
-		gfx_text_cols(b.w - 16 * s, s), lines, 2);
+		b.w - 16 * s, s, lines, 2);
 
 	for (int i = 0; i < nl; i++)
 		gfx_text_c(lines[i], b.x + b.w / 2, ny + i * 10 * s, s,
@@ -7771,12 +7823,12 @@ static void draw_ini(const chome_profile *p)
 	*/
 	char okmsg[4][64];
 	int nok = wrap_text("Everything this menu wants is already set.",
-		gfx_text_cols(avail, s), okmsg, 2);
+		avail, s, okmsg, 2);
 
 	// Sized for its content, like Power, rather than taking the default panel.
 	int lines = done ? 3 : (ini_n ? ini_n * (stacked ? 2 : 1) : nok);
 	char note[4][64];
-	int nnote = done ? 0 : (ini_n ? wrap_text(INI_NOTE, gfx_text_cols(avail, s), note, 3) : 0);
+	int nnote = done ? 0 : (ini_n ? wrap_text(INI_NOTE, avail, s, note, 3) : 0);
 
 	int h = (10 * s + 6) + 5 * s + lines * rowh + 6 * s + nnote * 9 * s + 6 * s + 12 * s;
 	if (nan) h += 6 * s + 9 * s + nan * rowh;
@@ -8178,6 +8230,23 @@ static void draw_core_opts(const chome_profile *p)
 
 	  Two wordings, the same as every other line down here: at 240p the panel is not wide
 	  enough for the long one, and a sentence that loses its end is worse than a short one.
+
+	  `wide` stays a column count, and it is the one place in this file that should be read
+	  as a warning rather than as a measurement. It is not "does the long wording fit" - it
+	  is a hand-picked number, tuned on a television, that separates 240p (33 columns) from
+	  720p and 480p (44). The roomy wordings below are 46 to 56 characters, so on the wide
+	  side they do not fit either: the panel is 44 columns and the longest is 56, and what
+	  reaches the player is a clipped sentence that happens to have said enough by the time
+	  it is cut. Turning this into gfx_text_w(long) <= room would therefore not preserve the
+	  screen - it would move every profile onto the short wording - so it is left alone
+	  deliberately, and the same goes for `room` further down, whose 36 and 34 are the same
+	  kind of number.
+
+	  Two of these three cut a sentence of ours, and assert_no_clipped_copy() has never seen
+	  it: nothing in the suite draws this footer, because the fixture core whose options
+	  screen gets drawn has no Pad1/SNAC/USERIO row on it. Worth fixing on its own terms -
+	  by shortening the copy, or by choosing on fit and reworking all three pairs - and not
+	  as a side effect of a refactor that is meant to change nothing.
 	*/
 	const char *cohelp = 0;
 	if (co_row < n)
@@ -8361,7 +8430,7 @@ static void draw_settings(const chome_profile *p)
 	list_scrollbar(&b, rowh, set_top, fit, nrows);
 
 	int fy = b.y + b.h - foot + 2 * s;
-	int cols = gfx_text_cols(b.w - 12 * s, s);
+	int helpw = b.w - 12 * s;
 
 	const char *help = SET_SAVE_NOTE;
 	if (od) help = od->help;
@@ -8369,7 +8438,7 @@ static void draw_settings(const chome_profile *p)
 	if (set_failed) help = opt_error();
 
 	char wrapped[4][64];
-	int nl = wrap_text(help, cols, wrapped, 2);
+	int nl = wrap_text(help, helpw, s, wrapped, 2);
 	for (int i = 0; i < nl; i++)
 		gfx_text(wrapped[i], b.x + 6 * s, fy + i * 10 * s, s, set_failed ? COL_RED : COL_PANELLO, 0);
 
@@ -8711,7 +8780,9 @@ static void draw_covers(const chome_profile *p)
 	draw_rows_c(&b, labels, vals, vcol, COV_ROWS, cov_row);
 
 	int fy = b.y + b.h - botpad - foot + 2 * s;
-	int cols = gfx_text_cols(b.w - 12 * s, s);
+	// Not `avail`: that name is taken above by whether this build has a credential at all,
+	// and a second one here would have shadowed it into "the panel is 700 pixels wide".
+	int helpw = b.w - 12 * s;
 
 	/*
 	  What the selected row is for - or, ahead of it, the one thing that outranks every
@@ -8734,7 +8805,7 @@ static void draw_covers(const chome_profile *p)
 	if (said) body = cov_note;
 
 	char wrapped[4][64];
-	int nl = wrap_text(body, cols, wrapped, 2);
+	int nl = wrap_text(body, helpw, s, wrapped, 2);
 	for (int i = 0; i < nl; i++)
 		gfx_text(wrapped[i], b.x + 6 * s, fy + i * 10 * s, s,
 			(said || cov_failed) ? COL_RED : COL_PANELLO, 0);
@@ -11637,12 +11708,17 @@ static void draw_running_warning(const chome_profile *p)
 	  Two wordings, because gfx_text_c() centres and a line too long for the canvas
 	  loses both its ends. On the CRT the full sentence came out as "PLAYING - this
 	  system cannot pause your", which drops the one word that carries the warning.
-	*/
-	const char *msg = "STILL PLAYING - this system cannot pause your game";
-	int room = gfx_text_cols(p->w - 8 * s, s);
-	if ((int)strlen(msg) > room) msg = "STILL PLAYING - NOT PAUSED";
 
-	gfx_text_c(gfx_clip(msg, s, p->w - 8 * s), p->w / 2, y + (h - 7 * s) / 2, s, COL_WHITE, 0);
+	  The choice is made by asking whether the long one fits, against the same budget the
+	  clip below uses - one measurement of one sentence. It used to count how many
+	  characters the canvas holds and compare that with the sentence's length, which is the
+	  same answer only while the answer to "how many characters" exists at all.
+	*/
+	int room = p->w - 8 * s;
+	const char *msg = "STILL PLAYING - this system cannot pause your game";
+	if (gfx_text_w(msg, s) > room) msg = "STILL PLAYING - NOT PAUSED";
+
+	gfx_text_c(gfx_clip(msg, s, room), p->w / 2, y + (h - 7 * s) / 2, s, COL_WHITE, 0);
 }
 
 // Runs every frame in every core, so a registered save finishes whether the menu is

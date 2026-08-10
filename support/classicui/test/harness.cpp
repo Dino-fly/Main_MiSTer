@@ -14075,6 +14075,15 @@ static void make_pf(const char *path)
      process, so "restore" has to be byte-exact over all 2048 of them, and a file that will
      not load has to leave the previous font alone rather than blanking the screen.
 
+  5. Asking "does this string fit in this many pixels" and asking "is this string longer
+     than the number of characters that fit" are the same question of the built-in font.
+     That equivalence is what makes every screen in chome_ui.cpp safe to have moved from the
+     second form to the first: it says the move is a change of what the code means and not
+     of what it draws. It is asserted over every string length, both sides of every
+     boundary, at every scale and every letter-spacing value - because the interesting cases
+     are exactly the ones where a panel is one pixel too narrow, and no screenshot suite
+     lands on those on purpose.
+
   Run last, and it puts the built-in font, tracking 0 and the capitals back on the way out:
   every pixel assertion above this line was taken under those three.
 */
@@ -14211,6 +14220,57 @@ static void assert_typography()
 		printf("  %d spans too narrow for one character, floored to one\n", floored);
 		check(!bad, "a line that fits is never clipped, and a clipped one always fits");
 		check(floored > 0, "and below one character of room it still draws one, as it always did");
+	}
+
+	/*
+	  And the equivalence the layout refactor rests on: measuring the string and counting the
+	  columns decide the same way, for every length and on both sides of every boundary.
+
+	  Every fit test in chome_ui.cpp used to read `strlen(s) > gfx_text_cols(px, scale)` and
+	  now reads `gfx_text_w(s, scale) > px`. The first form only has a meaning while one
+	  number describes every glyph; the second is a measurement of the string in front of it.
+	  This is what says the two agree today - so a wrapped paragraph, a menu-bar word and a
+	  slot caption all break in the same place they did before, at every profile.
+
+	  Stronger than the inverse property above rather than a restatement of it. That one
+	  checks a run of `n` and `n + 1` characters against the span the count came from; this
+	  one checks every length against every span, which is where a caller comparing the wrong
+	  way round - a `>=` where a `>` belongs - would show and the inverse check would not.
+	*/
+	{
+		int bad = 0, checked = 0, decided_both_ways = 0;
+		char run[64];
+		for (int i = 0; i < 63; i++) run[i] = 'M';
+		run[63] = 0;
+
+		for (int k = -2; k <= 2; k++)
+		{
+			cfg.classicui_tracking = (int8_t)k;
+			for (int s = 1; s <= 3; s++)
+			{
+				for (int n = 0; n <= 48; n++)
+				{
+					char buf[64];
+					snprintf(buf, sizeof(buf), "%.*s", n, run);
+					int w = gfx_text_w(buf, s);
+
+					for (int px = 0; px <= 400; px++)
+					{
+						int by_width = (w > px);
+						int by_count = (n > gfx_text_cols(px, s));
+						checked++;
+						if (by_width != by_count) bad++;
+						else if (by_width) decided_both_ways++;
+					}
+				}
+			}
+		}
+		printf("  %d (string, span) pairs decided by width and by column count\n", checked);
+		check(checked > 250000 && !bad,
+			"measuring a string and counting the columns give the same fit answer, "
+			"at every length, scale and tracking value");
+		check(decided_both_ways > 100000,
+			"and both answers really occur, so the agreement is not one constant matching another");
 	}
 
 	cfg.classicui_tracking = 0;

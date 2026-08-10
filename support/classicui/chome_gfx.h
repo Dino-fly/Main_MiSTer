@@ -432,6 +432,32 @@ void gfx_track(int x, int y, int w, int h, int nseg, int done, int live, unsigne
   n for which a string of n characters still measures <= px. gfx_clip() is built on it for
   that reason. When the two drifted apart, the disc dialog widened its panel to fit a
   measured title and then clipped that same title anyway - "Super Nintendo (n>".
+
+  What is left of gfx_text_cols(), and why it is not the default any more.
+
+  A question with a single answer for the whole font is a question only a fixed-width font
+  can answer. "How many characters fit in 300 pixels" is 37 here and would be a different
+  number per string in any font whose glyphs differ in width - so every screen that asked it
+  in order to decide something was resting on the built-in font's cell being the only cell.
+  Layout has stopped asking. A caller that wants to know whether a string fits measures that
+  string (gfx_text_w(s) <= px); one choosing between a long and a short wording measures the
+  long one; one wrapping a paragraph measures each line as it builds it. None of them need a
+  count, and none of them would need revisiting to put a proportional font behind this file.
+
+  It survives for the two things that really are counted in characters:
+
+    - gfx_clip() and gfx_marquee(), which copy a prefix and therefore need a number of
+      characters, not a width. These two are one piece: the marquee's window is exactly
+      `max` cells at every offset by design (see the note above GFX_MARQ_HOLD_MS), and a
+      parked marquee must return byte-for-byte what gfx_clip() returns. Making either of
+      them measure per string means doing both together, and doing them together is part of
+      proportional-font support rather than of layout.
+
+    - draw_core_opts()'s `wide` and `room`, which pick between wordings on a hand-tuned
+      column count rather than on whether anything fits. Named as such there.
+
+  So a new caller reaching for this should check it is in one of those two situations, and
+  otherwise measure the string it actually means.
 */
 int gfx_adv(int scale);
 int gfx_text_cols(int px, int scale);
