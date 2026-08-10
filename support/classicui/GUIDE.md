@@ -415,6 +415,10 @@ Four things keep that from happening.
   back to the libretro pack, and the shelf starts again the next day by itself.
 - **Requests are at least 1.2 seconds apart**, so scrolling fast cannot machine-gun their
   server.
+- **A game that has never been asked about goes first.** When a week is up and a game
+  becomes askable again, it queues behind every game nobody has asked about yet — those are
+  likelier to match, and it is the unmatched budget that is scarce. The card under the
+  cursor still comes first: a cover that can be drawn now is never held up by any of this.
 
 ## Installing
 
@@ -581,6 +585,7 @@ All optional; the defaults are what most people want.
 | `classicui_screenscraper` | `0` | Ask ScreenScraper for the covers no local file can supply, before the libretro pack. Needs an account of your own |
 | `classicui_ss_user` | unset | Your ScreenScraper user name |
 | `classicui_ss_pass` | unset | And its password, in clear text |
+| `classicui_ss_replace_pack` | `0` | Try ScreenScraper once more for covers already downloaded from the libretro pack |
 | `classicui_disc` | `0` | Recognise a physical CD in a USB drive, and play it |
 
 **`classicui_screenscraper` needs a ScreenScraper account of your own.** Make one — it
@@ -592,6 +597,15 @@ quota. Two more things worth knowing before you fill it in. The password sits in
 text in `MiSTer.ini`, on a FAT partition anything on the machine can read, so use one
 you do not use anywhere else. And the front-end asks for one thing at a time, so art
 fills in gradually rather than all at once — it never holds the menu up waiting.
+
+**If your card was filled from the libretro pack before you had an account**, set
+`classicui_ss_replace_pack=1`. Covers this front-end downloaded from the pack are noted in
+`classicui/art-from-libretro.txt`, and with that option on each of them is offered to
+ScreenScraper once — from an idle shelf, after everything else, and once only per cover
+whichever way the answer goes. Nothing else is ever re-scraped: a cover your own
+`gamelist.xml` names, one you scraped with another tool, and a pack you installed by hand
+are all left exactly alone. With the option off — which is how it ships — the file is
+noted and nothing is asked; delete it and the covers are simply kept.
 
 If you build the firmware yourself the option is inert unless you supply your own
 per-application developer credential, which ScreenScraper's staff issue on request; see

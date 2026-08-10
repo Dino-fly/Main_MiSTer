@@ -144,6 +144,19 @@ typedef struct {
 	uint8_t classicui_halfres;
 	// Inert until this build carries a ScreenScraper devid; see chome_ss.h.
 	uint8_t classicui_screenscraper;
+
+	/*
+	  Retry ScreenScraper for the covers this front-end downloaded from the libretro
+	  thumbnail pack, once each. OFF, and only ever set by hand.
+
+	  For the player who entered their own account after their card had already been filled
+	  from the pack, and who would otherwise keep that pack art for ever - a fetched cover is
+	  found on the card at rung one and never looked for again. It applies to nothing else:
+	  no gamelist.xml cover, no scrape made with another tool, no pack installed by hand. See
+	  art_pack_marked() in support/classicui/chome_art.h for where the provenance is kept and
+	  why this is a setting rather than something that happens by itself.
+	*/
+	uint8_t classicui_ss_replace_pack;
 	// OFF by default: see support/classicui/chome_disc.h.
 	uint8_t classicui_disc;
 	char classicui_artdir[256];

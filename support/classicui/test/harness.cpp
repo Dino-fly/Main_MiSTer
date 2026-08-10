@@ -8210,10 +8210,39 @@ static void assert_ss_throttle()
 
 	check(miss_backdate(1) == 1, "age it one more day, to the edge of the window");
 	art_ss_miss_reload();
-	check(art_ss_miss_count() == 0, "and it is gone");
-	check(miss_file_records() == 0, "the file having been rewritten without it");
+	check(art_ss_miss_count() == 0, "and it stops counting as a miss");
 	check(art_next_source(ddragon) == ART_SRC_SS,
 		"so the game is asked about again - a database people add to is worth re-asking");
+
+	/*
+	  And the record itself is still there, which is the half that is new.
+
+	  It says nothing about the game any more - the line above proves the rung is back - and
+	  it is kept for one purpose only: telling "asked about once, a while ago" apart from
+	  "never asked about at all", which is what the fetch order downstream is built on. Delete
+	  the record when it stops counting and that distinction cannot be made, because the only
+	  evidence of the first ask was the thing that was deleted.
+	*/
+	check(art_ss_miss_held() == 1, "but the record is still held, now saying only that it was asked");
+	check(miss_file_records() == 1, "and is still on the card, so a restart can still tell");
+	check(art_ss_miss_stale(dd_sys, "Double Dragon (Europe).bin") == 1,
+		"which is what a re-ask reads: eligible again, and not a game nobody has asked about");
+	check(art_ss_miss_known(dd_sys, "Double Dragon (Europe).bin") == 0,
+		"while the miss itself is emphatically not still known - the two are different questions");
+
+	/*
+	  And the second horizon, where it is genuinely forgotten. A game asked about once and
+	  left alone for a month is as good as new: nothing on the card says otherwise, and
+	  nothing needs to.
+	*/
+	check(miss_backdate(ART_SS_MISS_KEEP_DAYS - ART_SS_MISS_DAYS) == 1,
+		"age it past the keep horizon as well");
+	art_ss_miss_reload();
+	check(art_ss_miss_held() == 0, "and now it is gone for good");
+	check(miss_file_records() == 0, "the file having been rewritten without it");
+	check(art_ss_miss_stale(dd_sys, "Double Dragon (Europe).bin") == 0,
+		"the game reading as one nobody has ever asked about, which after a month it is");
+	check(art_next_source(ddragon) == ART_SRC_SS, "and it is still on the rung either way");
 
 	/* ------------- THE CRUX: the throttle is a refusal, not a verdict --- */
 
@@ -8449,6 +8478,432 @@ static void assert_ss_throttle()
 
 	art_redo();
 	check(art_ss_absent(ddragon) == 0, "with the slots back the way the section above left them");
+}
+
+/*
+  ==========================================================================
+  The order covers are asked for, and where a cover came from.
+  ==========================================================================
+
+  Two features, one section each, and they share this note because they share a premise:
+  the store written yesterday made it possible to stop asking, and the two things asked for
+  next are about what happens *instead* of asking, and *when*.
+
+  Neither shows in a pixel. A shelf whose covers were fetched in the worst possible order
+  looks exactly like one fetched in the best, because the end state is the same and only the
+  bill differs - and the bill is the unmatched allowance, which is 2000 a day and which a
+  filename matcher against regional variants spends fast. So both sections assert against
+  the functions the live path uses: art_queue_next() is the order art_step() pops with, and
+  art_pack_landed() is the half of the pack fetch that runs on the device.
+
+  Not one request leaves this process. Every section that turns ScreenScraper on holds the
+  minimum gap closed with ss_note_request() first, which makes cover_ss_start() refuse at
+  the last gate before the fork - so the ladder, the ordering and the counters are all
+  exercised on the live code and the curl is never reached. That is asserted rather than
+  hoped for, in both sections, because "no request went out" is the one property here that
+  cannot be checked by reading the output afterwards.
+*/
+
+// Fresh slots, an empty queue and nothing walked yet - a boot, without the stepping
+// art_redo() does. Every ordering check below needs items that are ART_NONE rather than the
+// ART_MISSING a walked ladder leaves, because art_request() refuses to queue a missing item.
+static void art_fresh_slots()
+{
+	art_shutdown();
+	art_init(theme_get()->sel_w, theme_get()->sel_h);
+}
+
+// Record lines in the pack store, the same way miss_file_records() counts the other one.
+// Two counts of two files, because "the two stores stay distinct" is a claim about the card.
+static int pack_file_records()
+{
+	FILE *f = fopen(art_pack_path(), "rt");
+	if (!f) return -1;
+
+	int n = 0;
+	char line[256];
+	while (fgets(line, sizeof(line), f)) if (line[0] != '#' && line[0] != '\n') n++;
+
+	fclose(f);
+	return n;
+}
+
+static void assert_art_fetch_order()
+{
+	printf("\n== the fetch order: a first ask before a re-ask ==\n");
+
+	int ddragon = item_by_path("Genesis", "Double Dragon (Europe).bin");
+	int smwjp   = item_by_path("SNES", "Super Mario World (Japan).sfc");
+	int bonk    = item_by_path("TGFX16", "Bonk's Adventure (USA).pce");
+	int metroid = item_by_path("SNES", "Super Metroid (Europe).sfc");
+	check(ddragon >= 0 && smwjp >= 0 && bonk >= 0 && metroid >= 0,
+		"the four games this section needs are indexed");
+
+	chome_item *dd = lib_item(ddragon);
+	const char *dd_sys = ss_system_id(lib_sys(dd->sysidx)->id, "Double Dragon (Europe).bin");
+	chome_item *sm = lib_item(smwjp);
+	const char *sm_sys = ss_system_id(lib_sys(sm->sysidx)->id, "Super Mario World (Japan).sfc");
+	check(dd_sys != 0 && sm_sys != 0, "and both of the two systems in question can be asked about");
+
+	cfg.classicui_artfetch = 1;
+	cfg.classicui_screenscraper = 1;
+	strcpy(cfg.classicui_ss_user, FIX_SSID);
+	strcpy(cfg.classicui_ss_pass, FIX_SSPASS);
+	ss_forget_state();
+
+	unlink(art_ss_miss_path());
+	art_ss_miss_reload();
+	unlink(art_pack_path());
+	art_pack_reload();
+
+	/* ------------------------- one game asked about a week ago, one never --- */
+
+	/*
+	  The two states the whole section is about, set up on two real games: a miss recorded
+	  and then aged out of the window, and a game with nothing whatsoever against it.
+	*/
+	art_ss_miss_record(dd_sys, "Double Dragon (Europe).bin");
+	check(miss_backdate(ART_SS_MISS_DAYS) == 1, "one recorded miss, aged out of its window");
+	art_ss_miss_reload();
+
+	check(art_ss_miss_count() == 0, "so nothing counts as a miss any more");
+	check(art_ss_miss_stale(dd_sys, "Double Dragon (Europe).bin") == 1,
+		"but the Mega Drive game reads as a re-ask: asked about once, eligible again");
+	check(art_ss_miss_stale(sm_sys, "Super Mario World (Japan).sfc") == 0,
+		"while the SNES one has never been asked about at all");
+
+	check(art_next_source(ddragon) == ART_SRC_SS, "both are on the ScreenScraper rung");
+	check(art_next_source(smwjp) == ART_SRC_SS, "which is what makes the order a question");
+
+	/*
+	  And the floor, closed for the rest of the section. cover_ss_start() consults it at the
+	  last gate before it forks a curl, so from here the whole ladder runs and no request can
+	  possibly leave this process - see the note at the top of this section.
+	*/
+	ss_note_request();
+	check(ss_may_ask_now(SS_ASK_SPECULATIVE) == 0,
+		"with the minimum gap held closed, no request can leave this process at all");
+	check(ss_may_request() == 1, "while the ladder's own question is unaffected, as it must be");
+
+	/* ----------------------------------------- and the re-ask waits its turn --- */
+
+	/*
+	  The re-ask is the card under the cursor and the first ask is four cards away, which is
+	  the arrangement where the two rules disagree - and the one the owner asked to be got
+	  right. Before either has been walked all that is known is the priority, so priority is
+	  what decides: nothing has yet said that this game is about to spend a request.
+	*/
+	art_fresh_slots();
+	art_request(ddragon, 0);
+	art_request(smwjp, 4);
+	check(art_queue_next() == ddragon,
+		"before any ladder has been walked, the nearer card is next, exactly as it always was");
+
+	unsigned asks0 = art_ss_asks();
+	art_step();
+
+	check(art_ss_asks() == asks0 + 1, "one pass reaches the ScreenScraper rung exactly once");
+	check(art_ss_last_ask() == smwjp,
+		"and it is spent on the game nobody has ever asked about, not on the on-screen re-ask");
+
+	check(art_state(ddragon) == ART_NONE,
+		"the re-ask is stood down, not written off - ART_NONE is re-requestable");
+	check(art_next_source(ddragon) == ART_SRC_SS,
+		"and it is still on the ScreenScraper rung, not diverted to the pack over a deferral");
+	check(art_ss_miss_count() == 0, "nothing was recorded against either game - nothing was learnt");
+
+	/*
+	  And now that the ladder has said it out loud, the ordering sticks: the same pair queued
+	  the same way comes out the other way round, without the ladder being walked again.
+	*/
+	art_request(ddragon, 0);
+	art_request(smwjp, 4);
+	check(art_queue_next() == smwjp,
+		"queued again, the first ask is taken ahead of the re-ask from four cards away");
+
+	/* ------------------------------- on-screen priority still beats both --- */
+
+	// A second game nobody has asked about, nearer the cursor than the first one.
+	art_request(bonk, 1);
+	check(art_queue_next() == bonk,
+		"between two games nobody has asked about, the nearer one still wins - priority is intact");
+
+	/*
+	  A picture that can be painted now beats a request every time, however far off screen it
+	  is. Super Metroid has a cover on the card five cards away; the re-ask is under the
+	  cursor. One pass defers the one and decodes the other.
+	*/
+	art_fresh_slots();
+	art_request(ddragon, 0);
+	art_request(metroid, 5);
+	check(art_queue_next() == ddragon, "the card under the cursor is next, before anything is walked");
+
+	unsigned asks1 = art_ss_asks();
+	art_step();
+	check(art_state(metroid) == ART_READY,
+		"one pass stands the re-ask down and spends itself on the cover it can actually paint");
+	check(art_ss_asks() == asks1, "reaching the rung for nobody at all");
+
+	/*
+	  Deferred and not starved, which is the other half of "not written off". With nothing
+	  else waiting there is nobody to be unfair to, so the re-ask goes.
+	*/
+	art_request(ddragon, 0);
+	check(art_queue_next() == ddragon, "with the queue otherwise empty, the re-ask is what is left");
+
+	art_step();
+	check(art_ss_asks() == asks1 + 1, "so it is asked about after all");
+	check(art_ss_last_ask() == ddragon, "and it is the re-ask that got that turn");
+
+	/* ------------------------------------------ first asked, first served --- */
+
+	/*
+	  The fairness the owner asked for by name. Two cards the same distance from the
+	  selection: the one that has been waiting goes first. It used to be the other way about
+	  - queue_pop() filled the hole it made with the last entry, so equals came out roughly
+	  last-in-first-out - which cost nothing while every entry was a local decode and costs
+	  an allowance now that an entry can be a request.
+	*/
+	art_fresh_slots();
+	art_request(smwjp, 2);
+	art_request(bonk, 2);
+	check(art_queue_next() == smwjp, "of two cards the same distance away, the one asked for first");
+
+	art_request(bonk, 1);
+	check(art_queue_next() == bonk,
+		"unless the player scrolls towards one of them, which is the whole point of priority");
+
+	// And a promotion does not send a card to the back of its own queue: bonk was promoted
+	// above, so putting smwjp back on level terms leaves bonk in front of it.
+	art_request(smwjp, 1);
+	check(art_queue_next() == smwjp,
+		"and when the other catches up on priority the earlier arrival leads again - a promotion"
+		" changes what a card is worth, not where it stands in the line");
+
+	/* ------------------------------------------------------------- and out --- */
+
+	check(art_fetch_active() == 0, "no pack fetch was started anywhere in this section");
+	check(disc_art_active() == 0, "and no ScreenScraper download either");
+	check(art_ss_miss_count() == 0, "with nothing written to the miss store by any of it");
+	check(art_pack_count() == 0, "and nothing to the pack store, which this section never touched");
+
+	ss_forget_state();
+	cfg.classicui_artfetch = 0;
+	cfg.classicui_screenscraper = 0;
+	cfg.classicui_ss_user[0] = 0;
+	cfg.classicui_ss_pass[0] = 0;
+
+	unlink(art_ss_miss_path());
+	art_ss_miss_reload();
+	art_redo();
+}
+
+static void assert_pack_provenance()
+{
+	printf("\n== a cover from the pack: remembered as such, retried only if asked ==\n");
+
+	int smwjp   = item_by_path("SNES", "Super Mario World (Japan).sfc");
+	int ddragon = item_by_path("Genesis", "Double Dragon (Europe).bin");
+	int bonk    = item_by_path("TGFX16", "Bonk's Adventure (USA).pce");
+	check(smwjp >= 0 && ddragon >= 0 && bonk >= 0, "the three games this section needs are indexed");
+
+	chome_item *sm = lib_item(smwjp);
+	const chome_sys *smsys = lib_sys(sm->sysidx);
+	const char *sm_sys = ss_system_id(smsys->id, "Super Mario World (Japan).sfc");
+	chome_item *dd = lib_item(ddragon);
+	const char *dd_sys = ss_system_id(lib_sys(dd->sysidx)->id, "Double Dragon (Europe).bin");
+	check(sm_sys != 0 && dd_sys != 0, "and both systems have a ScreenScraper id");
+
+	// Where the pack's cover for that game lands: the libretro layout, in our own artdir,
+	// which is the file both fetchers write and the one rung one finds afterwards.
+	char landed[1024];
+	snprintf(landed, sizeof(landed), "%s/boxart/%s/Named_Boxarts/%s.png",
+		ROOT, smsys->lr, "Super Mario World (Japan)");
+
+	cfg.classicui_artfetch = 1;
+	cfg.classicui_screenscraper = 1;
+	strcpy(cfg.classicui_ss_user, FIX_SSID);
+	strcpy(cfg.classicui_ss_pass, FIX_SSPASS);
+	cfg.classicui_ss_replace_pack = 0;
+	ss_forget_state();
+
+	unlink(art_ss_miss_path());
+	art_ss_miss_reload();
+	unlink(art_pack_path());
+	art_pack_reload();
+	unlink(landed);
+
+	check(strcmp(art_pack_path(), art_ss_miss_path()) != 0,
+		"the two stores are two files, and not the same one under two names");
+	check(art_pack_count() == 0 && art_ss_miss_count() == 0, "and both start empty");
+
+	/* --------------------------------------- the pack's cover, and the mark --- */
+
+	/*
+	  The live landing path, driven on a file the way art_ss_settle() is driven on a reply.
+	  The curl cannot run here and must not, so the harness writes the PNG the pack would
+	  have sent and hands it to the function the fetcher calls with it.
+	*/
+	make_cover("/tmp/chome_pack_cover.png", 400, 600, 0xff20c0c0);
+	check(art_pack_landed(smwjp, "/tmp/chome_pack_cover.png") == 1,
+		"a pack download lands, and is stored on the card");
+	struct stat lst;
+	check(!stat(landed, &lst) && lst.st_size > 0,
+		"in the libretro layout, where rung one will find it");
+
+	check(art_pack_count() == 1, "and the card now records where that cover came from");
+	check(art_pack_marked(sm_sys, "Super Mario World (Japan).sfc") == 1,
+		"under the query ScreenScraper would be asked, not under the shelf's index - so a rescan cannot lose it");
+	check(pack_file_records() == 1, "with one record in the pack store's own file");
+
+	/*
+	  THE distinction. A cover from the pack is not a game the database has nothing for, and
+	  writing one down must not have written the other.
+	*/
+	check(art_ss_miss_count() == 0, "and it wrote no miss - a pack cover is not a refusal");
+	check(art_ss_miss_held() == 0, "not even a record of one having been asked about");
+	check(art_ss_miss_known(sm_sys, "Super Mario World (Japan).sfc") == 0,
+		"and the mark is emphatically not readable as a miss");
+	check(art_ss_miss_stale(sm_sys, "Super Mario World (Japan).sfc") == 0, "nor as an aged-out one");
+
+	// A restart re-reads it off the card, which is the property a session flag did not have.
+	art_pack_reload();
+	check(art_pack_count() == 1, "the mark survives a restart");
+	check(art_pack_marked(sm_sys, "Super Mario World (Japan).sfc") == 1, "and still answers for that game");
+
+	/* -------------------------- and by itself it does nothing whatsoever --- */
+
+	/*
+	  The setting is off, which is how it ships. The cover is drawn, the mark sits there, and
+	  nothing is asked about - which is the property yesterday's work exists to protect and
+	  the one this feature could most easily have broken.
+	*/
+	ss_note_request();
+	unsigned asks0 = art_ss_asks();
+
+	art_fresh_slots();
+	art_request(smwjp, 0);
+	for (int i = 0; i < 8; i++) art_step();
+
+	check(art_state(smwjp) == ART_READY, "the pack's cover decodes as any other local file does");
+	check(cover_is(smwjp, 0xff20c0c0, "pack cover") == 1, "and it is the pack's cover that is on screen");
+	check(art_next_source(smwjp) == ART_SRC_LOCAL,
+		"the ladder is untouched by the mark: the card still wins rung one");
+	check(art_pack_retry_pending() == 0, "nothing is queued for a retry");
+	check(art_ss_asks() == asks0, "and the ScreenScraper rung is not reached for it at all");
+
+	/* ------------------------------------ until the player asks for it --- */
+
+	cfg.classicui_ss_replace_pack = 1;
+
+	/*
+	  One pass, deliberately. That pass decodes the cover and arms the retry, and it does not
+	  spend itself on the retry as well - a pass that has done a decode is finished. So this is
+	  also the check that the two happen in that order and not in one go, which is what "the
+	  picture first, the preference afterwards" has to mean to be worth anything.
+	*/
+	art_fresh_slots();
+	art_request(smwjp, 0);
+	art_step();
+
+	check(art_state(smwjp) == ART_READY, "with the setting on, the cover on the card is still decoded first");
+	check(cover_is(smwjp, 0xff20c0c0, "pack cover, retry armed") == 1,
+		"and still drawn - a retry never withholds the picture the player already has");
+	check(art_next_source(smwjp) == ART_SRC_LOCAL, "rung one still answers for it");
+	check(art_pack_retry_pending() == 1, "but the retry is armed now, behind everything else");
+
+	unsigned asks1 = art_ss_asks();
+	ss_note_request();
+	art_step();
+
+	check(art_ss_asks() == asks1 + 1, "an idle pass spends itself on it");
+	check(art_ss_last_ask() == smwjp, "on that game");
+	check(art_pack_retry_pending() == 0, "and the retry is off the list");
+
+	ss_note_request();
+	for (int i = 0; i < 20; i++) art_step();
+	check(art_ss_asks() == asks1 + 1, "one attempt each, and twenty more passes do not find a second one");
+
+	/* ------------------------- and the settle hands the game to the other store --- */
+
+	/*
+	  The reply says the database has never heard of it. That is a verdict, so the miss store
+	  takes the game - and the mark comes off, because the question the player wanted asked
+	  has been asked and the pack's cover is the answer after all.
+
+	  One game, two stores, opposite claims, and this is the check that they went the right
+	  way round.
+	*/
+	put_file("/tmp/chome_pack_nogame.xml",
+		"<Data><ssuser><id>" FIX_SSID "</id><maxthreads>1</maxthreads>"
+		"<requeststoday>210</requeststoday><maxrequestsperday>20000</maxrequestsperday>"
+		"<requestskotoday>70</requestskotoday><maxrequestskoperday>2000</maxrequestskoperday>"
+		"</ssuser></Data>\n");
+
+	check(art_ss_settle(smwjp, "/tmp/chome_pack_nogame.xml") == 0, "the reply names no game, so no cover");
+	check(art_ss_miss_count() == 1, "the miss store takes it: they have not got it");
+	check(art_ss_miss_known(sm_sys, "Super Mario World (Japan).sfc") == 1, "under that game's query");
+	check(art_pack_count() == 0, "and the mark comes off - the retry has been had");
+	check(art_pack_marked(sm_sys, "Super Mario World (Japan).sfc") == 0, "for that game specifically");
+	check(pack_file_records() == 0, "the pack store's file having been rewritten without it");
+	check(miss_file_records() == 1, "while the miss store's file has the one record, and only it");
+
+	check(art_next_source(smwjp) == ART_SRC_LOCAL,
+		"and the cover the player has is still the cover they have");
+
+	/* ------------------------------------ neither store reads the other's mind --- */
+
+	art_pack_mark(dd_sys, "Double Dragon (Europe).bin");
+	check(art_pack_marked(dd_sys, "Double Dragon (Europe).bin") == 1, "a mark for a second game");
+	check(art_ss_miss_known(dd_sys, "Double Dragon (Europe).bin") == 0,
+		"which is not a miss for it - a mark must never suppress a request");
+	check(art_ss_miss_stale(dd_sys, "Double Dragon (Europe).bin") == 0, "and not an aged-out one either");
+	check(art_next_source(ddragon) == ART_SRC_SS,
+		"so that game is still asked about, mark and all");
+
+	art_ss_miss_record(ss_system_id(lib_sys(lib_item(bonk)->sysidx)->id, "Bonk's Adventure (USA).pce"),
+		"Bonk's Adventure (USA).pce");
+	check(art_ss_miss_known(ss_system_id(lib_sys(lib_item(bonk)->sysidx)->id, "Bonk's Adventure (USA).pce"),
+		"Bonk's Adventure (USA).pce") == 1, "a miss for a third game");
+	check(art_pack_marked(ss_system_id(lib_sys(lib_item(bonk)->sysidx)->id, "Bonk's Adventure (USA).pce"),
+		"Bonk's Adventure (USA).pce") == 0,
+		"which is not a mark for it - a miss must never authorise a retry");
+
+	// And off the card, both of them, because the claim is about the two files and not about
+	// two arrays that happen to be in step this run.
+	art_ss_miss_reload();
+	art_pack_reload();
+	check(art_ss_miss_count() == 2, "read back off the card: two misses");
+	check(art_pack_count() == 1, "and one mark");
+	check(art_pack_marked(dd_sys, "Double Dragon (Europe).bin") == 1, "still for the game it was written for");
+	check(art_ss_miss_known(dd_sys, "Double Dragon (Europe).bin") == 0, "and still not a miss for it");
+
+	/* ------------------------------------------------------------- and out --- */
+
+	cfg.classicui_ss_replace_pack = 0;
+	art_step();
+	check(art_pack_retry_pending() == 0, "switch the setting off and the retry list goes with it");
+
+	check(art_fetch_active() == 0, "no pack download was started anywhere in this section");
+	check(disc_art_active() == 0, "and no ScreenScraper one either");
+
+	ss_forget_state();
+	cfg.classicui_artfetch = 0;
+	cfg.classicui_screenscraper = 0;
+	cfg.classicui_ss_user[0] = 0;
+	cfg.classicui_ss_pass[0] = 0;
+
+	unlink("/tmp/chome_pack_nogame.xml");
+	unlink(art_ss_miss_path());
+	art_ss_miss_reload();
+	unlink(art_pack_path());
+	art_pack_reload();
+
+	// The cover this section put on the card goes too: every section after it is entitled to
+	// the shelf assert_gamelist() left behind.
+	unlink(landed);
+	art_redo();
+	check(art_state(smwjp) != ART_READY, "and that game has no cover on the card again");
 }
 
 static int count_lines(const char *rel, int *bad_sum, int *maxlen)
@@ -16549,6 +17004,15 @@ int main()
 	  settings off, deletes the store it wrote, and calls art_redo() on its way out.
 	*/
 	assert_ss_throttle();
+	/*
+	  And the two that build on that store, in this order because the second uses what the
+	  first proves. Both start from the shelf the sections above leave, both put the settings
+	  back off and delete what they wrote, and both call art_redo() on their way out - the
+	  second one also takes a cover it put on the card back off it, because every section
+	  after this is entitled to the shelf assert_gamelist() built.
+	*/
+	assert_art_fetch_order();
+	assert_pack_provenance();
 	assert_physical_disc();
 	// Directly after it, because it drives the same state machine with the same fake
 	// discs, and before every section that draws or logs a disc name: it puts a title

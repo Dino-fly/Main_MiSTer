@@ -45,7 +45,15 @@
   find_local_art() deliberately honours above everything else. So "first priority"
   applies to art that has to be *fetched*, and a cover already on the SD is an answer,
   not a gap. Re-scraping over the card would be a separate feature with a switch of its
-  own, and nobody has asked for one.
+  own.
+
+  It now has one, and it is deliberately the narrowest switch that answers the complaint:
+  classicui_ss_replace_pack retries ScreenScraper for the covers this front-end fetched
+  from the libretro pack itself, and for nothing else - never a gamelist.xml cover, never a
+  scrape a player did with another tool, never a pack they installed by hand. The ladder
+  above is untouched by it: rung one still wins, the cover on the card is still decoded and
+  drawn first, and the retry happens afterwards from an idle shelf. See art_pack_marked()
+  below, and pack_retry_step() in chome_art.cpp for the ordering.
 */
 
 #ifndef CHOME_ART_H
@@ -166,6 +174,27 @@ int art_ss_absent(int item);
 #define ART_SS_MISS_DAYS 7
 
 /*
+  And how long the record itself is kept, which is a longer thing than the answer it holds.
+
+  Past ART_SS_MISS_DAYS a miss stops counting: the game is on the ScreenScraper rung again,
+  because the database is one people add to. But the record stays, saying nothing except
+  "this was asked about once", until this second horizon.
+
+  That is not tidiness, it is the whole of the fairness rule in art_step(). A re-ask must
+  not go out ahead of a game nobody has ever asked about - a first ask is strictly likelier
+  to match, and the unmatched allowance is the thing being spent - and "never asked about"
+  cannot be told from "asked about, aged out this morning" if the evidence was deleted the
+  moment it stopped counting. So the store keeps it for four windows, and then genuinely
+  forgets: a month on, a game that was asked about once and left alone is as good as new,
+  and the shelf may treat it as never-asked without anybody being able to tell the
+  difference.
+
+  A month of records for a 1469-game shelf is at most 1469 of the 4096 the cap allows, so
+  keeping them costs nothing that was not already budgeted for.
+*/
+#define ART_SS_MISS_KEEP_DAYS (4 * ART_SS_MISS_DAYS)
+
+/*
   And the ceiling on the store, which is a real one rather than a formality.
 
   4096 is comfortably past the owner's 1469 and past any shelf this front-end indexes
@@ -192,22 +221,127 @@ int art_ss_miss_known(const char *systemeid, const char *name);
 void art_ss_miss_record(const char *systemeid, const char *name);
 
 /*
+  1 when the database was asked this query, had nothing, and that answer has since aged out
+  of the window: the game is askable again, and it is *not* a game nobody has ever asked
+  about.
+
+  The distinction the fetch order is built on. See ART_SS_MISS_KEEP_DAYS above for why the
+  record is still there to be asked about, and queue_best() in chome_art.cpp for what is
+  done with the answer. Never a reason not to ask - only a reason to ask later than a game
+  that has never been asked at all.
+*/
+int art_ss_miss_stale(const char *systemeid, const char *name);
+
+/*
   Drop the in-memory copy so the next question re-reads the card. This is how the harness
   simulates a restart, which is the only thing about this store worth testing and the only
   thing the old code got wrong.
 */
 void art_ss_miss_reload();
 
-// How many live entries are held, and where the file is. For the harness and for anyone
-// diagnosing a shelf that has stopped scraping.
+/*
+  How many entries count as misses, how many records are held at all, and where the file is.
+  For the harness and for anyone diagnosing a shelf that has stopped scraping.
+
+  The two counts differ by the records that have aged out of the window and not out of the
+  store - the games that are askable again, and that a re-ask must queue behind.
+*/
 int art_ss_miss_count();
+int art_ss_miss_held();
 const char *art_ss_miss_path();
+
+/*
+  ---------------------------------------------------------------------------
+  And the other store: covers that came from the libretro pack.
+  ---------------------------------------------------------------------------
+
+  A cover fetched from the thumbnail pack is written into the same file the ScreenScraper
+  one would have been, and from that moment nothing on the card says where it came from -
+  so a player who has entered their own ScreenScraper credentials, and whose card was
+  filled from the pack before they did, has no way to ever get the art they asked for. The
+  answer is permanent because a fetched cover is found at rung one for ever.
+
+  So the provenance is written down: <root>/classicui/art-from-libretro.txt, keyed on the
+  same "<systemeid>/<romnom>" query key the miss store uses - which is what makes it
+  survive a rescan renumbering the shelf - and carrying its own explanation at the top of
+  the file, because a stray file on somebody's SD card that does not say what it is for is
+  a support question.
+
+  Three things this is not, and each of them was a decision:
+
+    not a sidecar. <cover>.png.from beside every fetched cover would put a second file in
+    every Named_Boxarts folder on the card, in the very layout the community art packs use
+    and people copy around by hand. One file in our own directory is one thing to explain
+    and one thing to delete.
+
+    not part of the miss store. "They have not got it" and "we have something, from
+    somewhere else" are opposite claims about a game, and a single store would sooner or
+    later have one read as the other. Separate files, separate questions, and no function
+    that answers both.
+
+    not a source of requests. Marking is free and silent. Nothing is re-asked because a
+    mark exists unless the player sets classicui_ss_replace_pack, which is off, is not
+    written by anything on their behalf, and is the only thing that turns these marks into
+    a single retry each. Yesterday's work was about not burning somebody's allowance; a
+    feature that quietly re-asked about every pack cover on the card would have undone it.
+
+  Only covers this front-end downloaded itself are marked. A pack a player installed by
+  hand is indistinguishable from a scrape they did themselves, and guessing would mean
+  overwriting art they chose.
+*/
+int art_pack_marked(const char *systemeid, const char *name);
+void art_pack_mark(const char *systemeid, const char *name);
+void art_pack_forget(const char *systemeid, const char *name);
+void art_pack_reload();
+int art_pack_count();
+const char *art_pack_path();
+
+/*
+  A libretro pack download for one shelf item has landed at `src`: put it on the card and
+  write down that this is where it came from. 1 when the file got there. `src` is consumed
+  either way.
+
+  Public for the reason art_ss_settle() is - it is the half of that fetch a host test can
+  reach. The curl cannot be run there, so the harness writes the file the pack would have
+  sent and hands it in, which is the live path rather than a model of it.
+*/
+int art_pack_landed(int item, const char *src);
+
+/*
+  How many pack covers are waiting for the retry the player switched on.
+
+  Zero in every build with classicui_ss_replace_pack off, which is every default build, and
+  that is the property worth being able to assert: the marks exist, they cost nothing, and
+  nothing is queued because of them.
+*/
+int art_pack_retry_pending();
 
 // How many times the cover ladder has reached its ScreenScraper rung this session,
 // refusals included. The same shape and the same reason as disc_art_asks(): no request is
 // ever made in the harness, and whether the rung is reached at all - and in what order
 // against the libretro one - is precisely the shape of this feature.
 unsigned art_ss_asks();
+
+/*
+  And which item the rung was last reached for, or -1.
+
+  The counter above says how much of the allowance the shelf would have spent; this says on
+  what, and it is here because the *order* is the feature this time. Two games both on the
+  ScreenScraper rung, one never asked about and one whose miss aged out last night: which of
+  them the next request would be about is the whole of the fairness rule, it shows in no
+  pixel and no count, and this is the smallest thing that reveals it.
+*/
+int art_ss_last_ask();
+
+/*
+  Which queued item the next art_step() would take, or -1 for an empty queue.
+
+  Pure, and cheap: it reads the queue and the slots, stats nothing and decides nothing. The
+  ordering is three keys deep now - a re-ask last, then the distance from the selection,
+  then the order things were asked for - and exactly none of that is visible from a
+  screenshot, so it is asserted here against the same function the step itself pops with.
+*/
+int art_queue_next();
 
 /*
   Read a jeuInfos reply that has landed for one shelf item and settle what it means:
