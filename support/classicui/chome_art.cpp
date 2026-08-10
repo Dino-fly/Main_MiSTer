@@ -1937,21 +1937,47 @@ int disc_art_request(const char *key, const char *sysid, const char *romnom)
 	if (disc_already_tried(key)) return 0;
 
 	/*
-	  What to ask the database for.
+	  What to ask the database for, and this comment used to be wrong in a way worth
+	  correcting rather than deleting.
 
-	  This is the weak link and it is worth saying so out loud. jeuInfos.php matches on a
-	  rom name, a hash or a game id, and a pressed disc has none of the three: there is no
-	  file, hashing 700 MB off a spinning drive is not something to do while a dialog is
-	  open, and the serial is not a jeuInfos key. So the caller passes a name - the disc
-	  title if the title database knew it, else the serial - and it is matched as if it
-	  were a filename, which will hit for the well-known discs and miss for the rest.
+	  It said "the serial is not a jeuInfos key". It is one: the documentation lists
 
-	  The proper answer is jeuRecherche.php, or the serial search the API grew later.
-	  Neither can be tried until there is a credential to try it with, and guessing at a
-	  second endpoint we cannot test would be two unknowns instead of one.
+	      serialnum : Forcer la recherche du jeu avec le numero de serie de la rom (iso)
+	                  associe
+
+	  alongside romnom, the three hashes and gameid. So the option exists. It is still not
+	  taken, and the reasons are worth having written down because they are reasons to
+	  wait rather than reasons it cannot work:
+
+	    - It *forces* the search. What a serialnum that matches nothing does to a romnom
+	      that would have matched is not documented, and the wrong guess makes a working
+	      request stop working.
+	    - ScreenScraper's serial field is community-contributed and thin, and thin in a
+	      way that follows the console rather than the disc: roughly a fifth of its
+	      PlayStation and Saturn entries carry one, and none of its Mega-CD entries do.
+	      For the console this change just taught to read a serial, the field is empty.
+	    - A miss is charged twice, once to the day's requests and once to the unmatched
+	      allowance, which is about a tenth the size and is the one that runs out. Sega
+	      serials would need two or three spellings tried - the database stores the
+	      manufacturer's, Redump normalises differently - so the cost is several
+	      double-charged misses per disc.
+	    - None of that can be settled without spending from a capped, shared account.
+
+	  Against which the name below is an exact match against an offline table that
+	  resolves 100% of Mega CD and 96% of Saturn discs. So the name stays the key, the
+	  serial stays a fallback for a disc the table does not know, and serialnum waits for
+	  a deliberate test rather than being switched on speculatively.
+
+	  Hashing is not the alternative either, and that is now settled rather than assumed:
+	  the database stores hashes of whole dump files, so there is nothing small and stable
+	  on a disc that could be hashed to match one. Hashing 700 MB off a spinning drive is
+	  the only hashing route there is, and it is not one.
 
 	  Composed above, as discnom, because the miss store had to be consulted before we got
-	  this far. This is that same name.
+	  this far. This is that same name - disc_scrape_name()'s answer, which is the title
+	  when the table knew it and the serial when it did not, and which is never a volume
+	  label. That last part is the fix: a label cannot match a romnom and the attempt was
+	  being paid for out of the unmatched allowance.
 	*/
 	const char *name = discnom;
 

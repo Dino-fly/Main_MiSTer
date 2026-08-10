@@ -1,9 +1,16 @@
 #classicui-disctitles 1
 0001	Dukes of Hazzard, The - Racing for Home
+008105250B	Virtua Cop 2
 063486	Loadstar - The Legend of Tully Bodine
 063496	Cadillacs and Dinosaurs - The Second Cataclysm
 063636	Slam City with Scottie Pippen
+14002	Three Dirty Dwarves
+14003	Scud - The Disposable Assassin
 157036	Surgical Strike
+191306	Sonic R
+191546	Riven - A Sequencia de Myst
+191X81	Clockwork Knight 2 - Pepperouchau's Adventure
+193226	Nights into Dreams...
 4101	Sewer Shark
 4126	Sega Classics Arcade Collection
 4127	Sega Classics Arcade Collection - Limited Edition
@@ -76,9 +83,294 @@
 4903	Night Trap
 490309	Night Trap
 4908	Bouncers
+560000350	Wipeout 2097
+610573203	System-Disc
+610573206	System-Disc
+610591301	Tech Saturn Tsuushin - Spring 1995
+610591302	Tech Saturn Tsuushin - Autumn 1995 - Special CD-ROM
+610591303	Tech Saturn Tsuushin - Winter 1995 - Taikenban & Demo-ban ga Te
+610591304	Tech Saturn Tsuushin Vol. 4 - Spring 1996 - Youriyou Meippai Ki
+610591305	Tech Saturn Tsuushin Vol. 5 - Summer 1996
+6106020006	Saturn Super Vol. 5
+610602001	Saturn Super Vol. 1
+610602002	Saturn Super Vol. 2
+610602003	Saturn Super Vol. 3
+610602004	Saturn Super Henshuubu Hen - Taikenban Saturn Soft Taizen
+610602005	Saturn Super Vol. 4
+610602007	Saturn Super Vol. 6
+610602008	Saturn Super Vol. 7
+610602009	Saturn Super Vol. 8
+610602010	Saturn Super Vol. 9 Furoku CD-ROM
+610602011	Saturn Super Vol. 10 Furoku CD-ROM
+610602012	Saturn Super Vol. 11 Furoku CD-ROM
+6106033	Prime Selection Vol. 1
+6106083	Virtua Fighter CG Portrait Collection
+610609201	Wheel's
+6106113	Saturn CG Selection Vol. 1
+6106164	Rayman
+6106165	Bootleg Sampler
+610616601	Flash SegaSaturn Vol. 1
+610616602	Flash SegaSaturn Vol. 2
+610616603	Flash SegaSaturn Vol. 3
+610616604	Flash SegaSaturn Vol. 4
+610616605	Flash SegaSaturn Vol. 5
+610616606	Flash SegaSaturn Vol. 6
+610616607	Flash SegaSaturn Vol. 7
+610616608	Flash SegaSaturn Vol. 8
+610616609	Flash SegaSaturn Vol. 9
+610616610	Flash SegaSaturn Vol. 10
+610616611	Flash SegaSaturn Vol. 11
+610616612	Flash SegaSaturn Vol. 12
+610616613	Flash SegaSaturn Vol. 13
+610616614	Flash SegaSaturn Vol. 14
+610616615	Flash SegaSaturn Vol. 15
+610616616	Flash SegaSaturn Vol. 16
+610616617	Flash SegaSaturn Vol. 17
+610616618	Flash SegaSaturn Vol. 18
+610616619	Flash SegaSaturn Vol. 19
+610616620	Flash SegaSaturn Vol. 20
+610616621	Flash SegaSaturn Vol. 21
+610616622	Flash SegaSaturn Vol. 22
+610616623	Flash SegaSaturn Vol. 23
+610616624	Flash SegaSaturn Vol. 24
+610616625	Flash SegaSaturn Vol. 25
+610616626	Flash SegaSaturn Vol. 26
+610616627	Flash SegaSaturn Vol. 27
+610616628	Flash SegaSaturn Vol. 28
+610616629	Flash SegaSaturn Vol. 29
+610616630	Flash SegaSaturn Vol. 30
+610616631	Flash SegaSaturn Vol. 31
+610616632	Flash SegaSaturn Vol. 32
+610616699	Flash SegaSaturn - Ochikazuki-hen
+6106200	Dark Savior
+6106288B	Sega Flash Vol. 2
+6106288C	Sega Flash Vol. 3
+6106288D	Sega Flash Vol. 4
+6106288E	Sega Flash Vol. 5
+6106288F	Sega Flash Vol. 6
+6106297	Dark Savior
+6106300	Nights into Dreams...
+6106315	DecAthlete
+610632101	Keiou Yuugekitai - Okiraku Tamatebako
+610636001	Tech Saturn Vol. 1-1996 - Yatchimatta!
+610636002	Tech Saturn Vol. 2-1996 - Maitsuki 8-nichi wa Tessa no Hi - Ata
+610636003	Tech Saturn Jan.1997 - Kizuitara Gekkan-ka
+610636004	Tech Saturn Feb.1997 - E, Chocolate Kurereba Morau yo
+610636005	Tech Saturn Mar.1997 - Okaeshi wa Marshmallow, Cookie, Howaito
+610636006	Tech Saturn Apr.1997
+610636007	Tech Saturn May.1997
+610636008	Tech Saturn Jun.1997
+610636009	Tech Saturn Jul.1997
+610636010	Tech Saturn Aug.1997
+610636011	Tech Saturn Sep.1997
+610636012	Tech Saturn Oct.1997
+6106376	Fighting Vipers
+6106377	Preview Sega Saturn Vol. 1
+610638401	Gremlin Interactive Demo Disk
+6106431	Christmas Nights into Dreams...
+6106443	Dennou Senki - Virtual On - Cyber Troopers
+6106455	Crimewave
+610645801	Develo Magazine Appendix CD-ROM for SegaSaturn
+6106470	Nissan Presents - Over Drivin' GT-R
+6106484	Tengai Makyou - Daiyon no Mokushiroku - The Apocalypse IV
+6106493	Pinball Graffiti
+6106501	Farland Story - Habou no Mai
+6106502	QuoVadis 2 - Wakusei Kyoushuu Ovan Rei
+6106503	Drift King Shutokou Battle '97 - Tsuchiya Keiichi & Bandou Masa
+6106529	Swagman
+6106537	Monster Slider
+6106539	Touge King the Spirits 2
+6106540	Hudson Soft - New Soft Line Up for Sega Saturn
+6106541	Jantei Battle Cos-Player
+6106553	Jantei Battle Cos-Player - Original Gengashuu
+6106563	Thunder Force V
+6106567	Fully Cowled Mini Yonku - Super Factory
+6106569	Magical Drop III - Toretate Zoukangou!
+6106576	Core Demo Disc
+6106600	Grandia - Prelude
+6106602	Yuukyuu Gensoukyoku
+6106605	D-Xhird
+6106611	Bouken Katsugeki Monomono
+6106612	Waku Waku 7
+6106613	Rabbit
+6106621	Moon Cradle
+6106663	Tokimeki Memorial Drama Series Vol. 1 - Nijiiro no Seishun
+6106664	Marvel Super Heroes
+6106666	Mr. Bones
+6106672	Street Fighter Collection
+6106675	Gremlin Interactive Demo Disc
+6106677	Gekitotsu Koushien
+6106678	Side Pocket 3
+6106679	Silhouette Mirage
+6106680	Virus
+6106692	Ninja Jajamaru-kun - Onigiri Ninpouchou Gold
+6106695	Goiken Muyou - Anarchy in the Nippon
+6106698	Wipeout 2097
+6106702	DoDonPachi
+6106703	Devil Summoner - Soul Hackers & Ronde
+6106704	Devil Summoner - Soul Hackers & Ronde
+6106710	Soukuu no Tsubasa - Gotha World
+6106716	Steep Slope Sliders
+6106717	Tactics Formula
+6106719	Blue Breaker - Ken yori mo Hohoemi o
+6106725	Real Sound - Kaze no Regret
+6106727	Layer Section II
+6106728	Message Navi
+6106729	Desire
+6106730	Samurai Spirits - Amakusa Kourin
+6106731	Hansha de Spark!
+6106732	Disc Station Bessatsu - I Miss You. Tanaka Katsumi
+6106745	Super Robot Taisen F
+6106747	Sega Touring Car Championship
+6106749	Azel - Panzer Dragoon RPG
+6106762	DJ Wars
+6106777	Machi
+6106800	Maria - Kimitachi ga Umareta Wake
+6106801	Saturn Bomberman Fight!!
+6106802	Solo Crisis
+6106803	Delisoba Deluxe
+6106804	Devil Summoner - Soul Hackers Extra Dungeon
+610680501	Segakore Sega Bible Mogitate SegaSaturn Soukangou
+610680502	Mogitate SegaSaturn Vol. 2
+610680503	Mogitate SegaSaturn Vol. 3
+610680504	Mogitate SegaSaturn Vol. 4
+610680505	Mogitate SegaSaturn Vol. 5
+610680506	Mogitate SegaSaturn Vol. 6
+6106815	Sonic R
+6106816	Shining Force III - Scenario 1 - Outo no Kyoshin
+6106821	Tenant Wars
+6106822	Pia Carrot e Youkoso!! We've Been Waiting for You
+6106827	Stellar Assault SS
+6106831	Code R
+6106833	SatMag Sono CD
+6106837	Eve - The Lost One
+6106842	Yuukyuu Gensoukyoku 2nd Album
+6106848	Baroque Report - CD Data File
+6106856	Burning Rangers
+6106860	Shiroki Majo - Mou Hitotsu no Eiyuu Densetsu
+6106861	House of the Dead, The
+6106864	Sakura Taisen 2 - Kimi, Shinitamou Koto Nakare
+6106869	King of Fighters '97, The
+6106876	Cross Tantei Monogatari
+6106877	Cross Tantei Monogatari
+6106881	Vampire Savior - The Lord of Vampire
+6106885	Keriotosse!
+6106886	Princess Maker - Yumemiru Yousei
+6106895	Waku Waku Puyo Puyo Dungeon
+6106896	Gungriffon II
+6106905	MeltyLancer - Re-inforce
+6106914	Pocket Fighter
+6106929	Mogitate SegaSaturn - Special Movie
+6106957	Deep Fear
+6106979	Shining Force III Premium Disc
+6106987	Big Thanks - Super Keirin - Dream with Keirin 50 Years
+6107100	Noel 3
 670678350	Surgical Strike
+680602950	Nights into Dreams...
+7000012PM	Panzer Dragoon Saga
 7250117	Pier Solar and the Great Architects - The Definitive Original S
 775	Bugs Bunny - Lost in Time
+790000250	Core Demo Disc
+80012	Sega Rally Championship
+80118	Custom Web Browser
+80118B	Custom Web Browser
+80118D	Custom Web Browser
+80124	Sega Internet-Selain
+81001	Ghen War
+81003	BlackFire
+81004	Bug!
+81005	Virtua Fighter
+81007	Clockwork Knight - Pepperouchau's Adventure
+81009	Panzer Dragoon
+81010	Congo - The Movie - The Lost City of Zinj
+81012	Mansion of Hidden Souls, The
+81014	Virtua Fighter 2
+81015	Virtua Cop
+81016	Mr. Bones
+81018	Panzer Dragoon
+81019	Astal
+81020	Nights into Dreams...
+81022	Panzer Dragoon II Zwei
+8102250	Panzer Dragoon II Zwei
+81023	Virtua Fighter Remix
+81024	Wing Arms
+81026	Virtua Cop
+81027	Virtua Fighter Remix
+81028	Virtua Fighter Remix
+81029	Battle Arena Toshinden Remix
+81030	Bug!
+81031	Bootleg Sampler
+81035	Guardian Heroes
+81036	Clockwork Knight 2 - Pepperouchau's Adventure
+81040	Bug Too!
+81041	Fighting Vipers
+81042	Virtual On - Cyber Troopers
+81043	Virtua Cop 2
+81045	Golden Axe - The Duel
+81046	Gungriffon
+81048B	Nights into Dreams...
+81049	Virtua Fighter Kids
+81051	Sky Target
+81052	Virtua Cop 2
+81054	Battle Arena Toshinden URA - Ultimate Revenge Attack
+81057	Die Hard Arcade
+81062	Sonic 3D Blast
+81063	Nights into Dreams...
+81064	Amok
+81065	Lost World, The - Jurassic Park
+81066	Quake
+81067	Christmas Nights into Dreams...
+81068	Sega Saturn Bootleg II - On the Road
+81070	Saturn Bomberman
+81071	Duke Nukem 3D
+81072	Virtual On - Cyber Troopers Net Link Edition
+81073	Fighters Megamix
+81075	Sega Saturn Bootleg II - On the Road
+81076	Enemy Zero
+81077	Sega Screams Volume 2
+81078	Last Bronx
+81079	Sonic Jam
+8108450	Exhumed
+81101	Pebble Beach Golf Links
+81102	NHL All-Star Hockey
+81103	NBA Action
+81105	Worldwide Soccer - Sega International Victory Goal Edition
+81109	World Series Baseball
+81111	NFL '97
+81112	Sega Worldwide Soccer '97
+81113	World Series Baseball II
+81115	DecAthlete
+81122	NHL All-Star Hockey 98
+81123	Worldwide Soccer '98
+81124	NBA Action 98
+81127	World Series Baseball 98
+81128	Steep Slope Sliders
+81129	Winter Heat
+81200	Daytona USA
+81202	Hang-On GP
+81205	Cyber Speedway
+81207	Sega Rally Championship
+81210	Manx TT SuperBike
+81211	Wipeout
+81213	Daytona USA - Championship Circuit Edition
+81214	Scorcher
+81215	Sega Rally Championship Plus Netlink Edition
+81216	Sega Touring Car Championship
+81218	Daytona USA C.C.E. Net Link Edition
+81300	Mystaria - The Realms of Lore
+81302	Legend of Oasis, The
+81303	Blazing Heroes
+81304	Dark Savior
+81306	Shining the Holy Ark
+81307	Panzer Dragoon Saga
+81383	Shining Force III
+81501	Baku Baku Animal - World Zookeeper Contest
+81600	Sega Saturn Choice Cuts
+81606	Daytona USA
+81608	Custom Web Browser
+81800	Sonic R
+81802	House of the Dead, The
+81803	Burning Rangers
 8490072	Ys Book I & II
 9729624	Pet in TV
 9729723	Pet in TV
@@ -148,6 +440,7 @@ DECD003	Fighter's History Dynamite ~ Karnov's Revenge
 DECD003E	Fighter's History Dynamite ~ Karnov's Revenge
 DECD004	Dunk Dream ~ Street Slam ~ Street Hoop
 DECD004E	Dunk Dream ~ Street Slam ~ Street Hoop
+DGS9004	Clockwork Knight - Pepperouchau no Daibouken Joukan
 DK10794	Classic Card Games
 DTLS2170	PlayStation Programmer Tool - Runtime Library Version 2.6
 DTLS2180	PlayStation Programmer Tool - Runtime Library Version 3.0
@@ -219,6 +512,203 @@ GERP	Stuart Little 2
 GERUSK	Disneys Der Schatzplanet
 GLCD4001	Advanced V.G.
 GLCD6002	Steam-Heart's
+GS7101	Pad Nifty
+GS7103	Virtua Fighter Remix
+GS7105	Habitat II
+GS7106	Dennou Senki - Virtual On - Cyber Troopers for SegaNet
+GS7107	Dennou Senki - Virtual On - Cyber Troopers for SegaNet
+GS7109	Pad Nifty 1.1 & Habitat II
+GS7110	DecAthlete for SegaNet
+GS7111	Puyo Puyo Sun for SegaNet
+GS7113	Puzzle Bobble 3 for SegaNet
+GS7114	Dragon's Dream
+GS9001	Virtua Fighter
+GS9002	Victory Goal
+GS9003	Gale Racer
+GS9004	Clockwork Knight - Pepperouchau no Daibouken Joukan
+GS9005	Shinsetsu Yumemi Yakata - Tobira no Oku ni Dareka ga...
+GS9006	Pebble Beach Golf Links - Stadler ni Chousen
+GS9007	WanChai Connection
+GS9008	Deadalus
+GS9009	Gotha - Ismailia SenEki
+GS9010	Shin Shinobiden
+GS9011	Rampo
+GS9012	Virtual Hydlide
+GS9013	Daytona USA
+GS9014	Blue Seed - Kushinada Hirokuden
+GS9015	Clockwork Knight Puzzle - Pengin War
+GS9017	Kanzen Chuukei Pro Yakyuu Greatest Nine
+GS9018	Magic Knight Rayearth
+GS9019	Kisuishou Densetsu Astal
+GS9020	Ayrton Senna Personal Talk - Message for the Future
+GS9021	Riglordsaga
+GS9022	Gran Chaser
+GS9023	X Japan - Virtual Shock 001
+GS9025	World Advanced Daisenryaku - Koutetsu no Senpuu
+GS9026	Gakkou no Kaidan
+GS9027	SimCity 2000
+GS9028	Dragon Force
+GS9029	Clockwork Knight - Pepperouchau no Daibouken Gekan
+GS9030	Omakase! Savers
+GS9031	Guardian Heroes
+GS9032	Hang On GP '95
+GS9034	J.League Pro Soccer Club o Tsukurou!
+GS9035	F-1 Live Information
+GS9036	Ninku - Tsuyokina Yatsura no Daigekitotsu!
+GS9037	Sakura Taisen
+GS9038	Wing Arms - Kareinaru Gekitsuiou
+GS9039	Virtua Fighter Remix
+GS9040	Baku Baku Animal - Sekai Shiiku Gakari Senshuken
+GS9041	Golden Axe - The Duel
+GS9042	Sega Ages - Shukudai ga Tanto R
+GS9043	Sega Ages - Rouka ni Ichidanto R
+GS9044	Sega International Victory Goal
+GS9046	Nights into Dreams...
+GS9047	Sega Rally Championship
+GS9048	J.League Victory Goal '96
+GS9049	Panzer Dragoon II Zwei
+GS9050	Godzilla - Rettou Shinkan
+GS9051	Shin Seiki Evangelion
+GS9053	Thor - Seireioukiden
+GS9054	Terra Phantastica
+GS9055	Linkle Liver Story
+GS9056	Gekka Mugentan Torico
+GS9057	Shining Wisdom
+GS9058	Magic Knight Rayearth
+GS9059	Virtua Cop
+GS9060	Virtua Cop
+GS9061	Hideo Nomo World Series Baseball
+GS9062	Virtua Fighter CG Portrait Series Vol. 1 - Sarah Bryant
+GS9063	Bug! Jump Shite, Funzukechatte, Petchanko
+GS9064	Virtua Fighter CG Portrait Series Vol. 2 - Jacky Bryant
+GS9065	Virtua Fighter CG Portrait Series Vol. 3 - Akira Yuki
+GS9066	Virtua Fighter CG Portrait Series Vol. 4 - Pai Chan
+GS9067	Virtua Fighter CG Portrait Series Vol. 9 - Kage Maru
+GS9068	Virtua Fighter CG Portrait Series Vol. 5 - Wolf Hawkfield
+GS9069	Virtua Fighter CG Portrait Series Vol. 6 - Lau Chan
+GS9070	Virtua Fighter CG Portrait Series Vol. 7 - Shun Di
+GS9071	Virtua Fighter CG Portrait Series Vol. 8 - Lion Rafale
+GS9072	Virtua Fighter CG Portrait Series Vol. 10 - Jeffry McWild
+GS9073	Virtua Fighter CG Portrait Series - The Final - Dural
+GS9074	Clockwork Knight - Pepperouchau no Fukubukuro
+GS9076	Azel - Panzer Dragoon RPG
+GS9078	Toushinden S
+GS9079	Virtua Fighter 2
+GS9082	World Advanced Daisenryaku - Sakusen File
+GS9083	Eyeful Home
+GS9084	Riglordsaga 2
+GS9086	Greatest Nine '96
+GS9087	Advanced World War - Sennen Teikoku no Koubou - Last of the Mil
+GS9088	Mechanical Violator Hakaider - Last Judgement
+GS9095	Nights into Dreams...
+GS9096	DecAthlete
+GS9097	Virtua Cop 2
+GS9098	Virtua Fighter Kids
+GS9099	Dennou Senki - Virtual On - Cyber Troopers
+GS9100	Daytona USA - Circuit Edition
+GS9101	Fighting Vipers
+GS9102	Manx TT SuperBike
+GS9103	Sky Target
+GS9104	Magical Drop 2
+GS9107	Fighter's History Dynamite
+GS9108	Sega Ages - Space Harrier
+GS9109	Sega Ages - After Burner II
+GS9110	Sega Ages - OutRun
+GS9111	Sega Ages - Space Harrier
+GS9112	Victory Goal Worldwide Edition
+GS9113	Virtua Fighter Kids
+GS9115	Sakura Taisen
+GS9116	Sega Rally Championship Plus
+GS9117	Sakura Taisen
+GS9118	LuLu - Un Conte Interactif de Romain Victor-Pujebet
+GS9120	World Series Baseball II
+GS9121	Heim Waltz
+GS9122	Dynamite Deka
+GS9123	Die Hard Trilogy
+GS9124	Panzer Dragoon
+GS9125	World Advanced Daisenryaku - Koutetsu no Senpuu
+GS9126	Fighters Megamix
+GS9127	Mr. Bones
+GS9128	Bug Too! Motto Motto Jump Shite, Funzukechatte, Petchanko
+GS9129	Shin Seiki Evangelion - 2nd Impression
+GS9131	Command & Conquer
+GS9133	Digital Dance Mix Vol. 1 - Namie Amuro
+GS9134	Sakura Taisen - Hanagumi Tsuushin
+GS9135	Sega Ages - Memorial Selection Vol. 1
+GS9136	Sega Ages - Fantasy Zone
+GS9137	Three Dirty Dwarves
+GS9138	Sakura Taisen - Hanagumi Taisen Columns
+GS9139	Pro Yakyuu Greatest Nine '97
+GS9140	J.League Victory Goal '97
+GS9141	Shin Seiki Evangelion
+GS9142	Kidou Senkan Nadesico - Yappari Saigo wa Ai ga Katsu
+GS9143	Sonic 3D - Flickies' Island
+GS9144	Baku Baku Animal - Sekai Shiiku Gakari Senshuken
+GS9145	Dragon Force
+GS9146	Virtua Fighter 2
+GS9147	Sonic Jam
+GS9148	Nights into Dreams...
+GS9149	Sega Rally Championship Plus
+GS9150	DecAthlete
+GS9151	Sakura Taisen
+GS9152	Last Bronx
+GS9153	Fighter's History Dynamite
+GS9154	Virtua Cop 2
+GS9155	Soldnerschild
+GS9158	Zen Nihon Pro Wres featuring Virtua
+GS9159	Neon Genesis Evangelion - Digital Card Library
+GS9160	Sakura Taisen - Jouki Radio Show
+GS9161	Sega Ages - Columns Arcade Collection
+GS9162	Lost World, The - Jurassic Park
+GS9163	Sega Ages - Memorial Selection Vol. 2
+GS9164	Sega Touring Car Championship
+GS9165	Pro Yakyuu Team mo Tsukurou!
+GS9168	J.League Pro Soccer Club o Tsukurou! 2
+GS9169	Sakura Taisen 2 - Kimi, Shinitamou Koto Nakare
+GS9170	Sonic R
+GS9171	Pro Yakyuu Greatest Nine '97 - Make Miracle
+GS9172	Chisato Moritaka - Watarase Bashi & Lala Sunshine
+GS9173	House of the Dead, The
+GS9174	Burning Rangers
+GS9175	Shining Force III - Scenario 1 - Outo no Kyoshin
+GS9176	Terra Phantastica
+GS9177	Winter Heat
+GS9179	Sega Ages - I Love Mickey Mouse - Fushigi no Oshiro Daibouken &
+GS9181	Sega Ages - Power Drift
+GS9182	Shoujo Kakumei Utena - Itsuka Kakumei Sareru Monogatari
+GS9183	Wachenroder
+GS9184	Dragon Force II - Kami Sarishi Daichi ni
+GS9185	Pro Yakyuu Greatest Nine '98
+GS9186	Sega Ages - Phantasy Star Collection
+GS9187	Sega Worldwide Soccer '98
+GS9188	Shining Force III - Scenario 2 - Nerawareta Miko
+GS9189	Deep Fear
+GS9190	Advanced World War - Sennen Teikoku no Koubou - Last of the Mil
+GS9191	Sakura Taisen
+GS9193	Command & Conquer
+GS9194	Neon Genesis - Evangelion - Koutetsu no Girlfriend
+GS9195	Kidou Senkan Nadesico - The Blank of 3 Years
+GS9196	World Cup '98 France - Road to Win
+GS9197	Sega Ages - Galaxy Force II
+GS9198	Sakura Taisen 2 - Kimi, Shinitamou Koto Nakare
+GS9200	Sonic Jam
+GS9202	Pro Yakyuu Greatest Nine '98 - Summer Action
+GS9203	Shining Force III - Scenario 3 - Hyouheki no Jashinguu
+GS9204	Segata Sanshirou - Shinken Yuugi
+GS9205	Zen Nihon Pro Wres featuring Virtua
+GS9206	J.League Pro Soccer Club o Tsukurou! 2
+GS9207	House of the Dead, The
+GS9208	Pro Yakyuu Greatest Nine '98
+GS9503J	Virtua Fighter Remix
+GS9504J	Worldwide Soccer - Sega International Victory Goal Edition
+GS9506J	Sega Rally Championship
+GS9507J	Virtua Fighter 2
+GS9608J	Nights into Dreams...
+GS9609J	Virtua Fighter Kids
+GS9610J	Fighting Vipers
+GS9612J	Dennou Senki - Virtual On - Cyber Troopers
+GS9613J	Virtua Cop 2
+GS9614J	Daytona USA - Championship Circuit Edition
 HACD0003	Super Darius
 HACD9001	Juuouki
 HACD9002	Hyper Dyne - SideArms Special
@@ -341,6 +831,9 @@ HRCD9102	ROM^2 Karaoke Volume 2
 HRCD9103	ROM^2 Karaoke Volume 3
 HRCD9104	ROM^2 Karaoke Volume 4
 HRCD9105	ROM^2 Karaoke Volume 5
+HSS0120	SegaSaturn Electronic Book Operator
+HSS0121	SegaSaturn Photo CD Operator
+HSS0128	SegaSaturn FDD Operator
 ICCD1001	R-Type Complete CD
 ICCD2002	ImageFight II - Operation Deepstriker
 ICCD3003	Eiyuu Sangokushi
@@ -398,6 +891,8 @@ KSCD1001	Mashou Denki - La Valeur
 KSCD1002	Super Schwarzschild
 KSCD2003	Super Schwarzschild 2
 KSCD3004	Kisou Louga
+L151000	SegaSaturn - SGL Tool Kit - Sega 3D Game Library
+L151001	SegaSaturn - SGL Tool Kit - Sega 3D Game Library
 LSP0101500	Liquid Books Adventure 1 - Lety's Favorite Stories
 LSP01015001	Liquid Books Adventure 1 - Lety's Favorite Stories
 LSP0101600	Mars Moose Stay and Play 1 - In the Clubhouse
@@ -673,13 +1168,308 @@ MCCD4005	In Magical Adventure - Fray CD - Xak Gaiden
 MCCD4006	Dragon Half
 MEGA0001	Record of Lodoss War
 MHCD2007	Laplace no Ma
+MK0001	Dukes of Hazzard, The - Racing for Home
+MK14002	Three Dirty Dwarves
+MK14003	Scud - The Disposable Assassin
+MK4101	Sewer Shark
+MK4126	Sega Classics Arcade Collection
+MK4127	Sega Classics Arcade Collection - Limited Edition
+MK4130	Sol-Feace
+MK4202	NFL's Greatest - San Francisco vs. Dallas 1978-1993
 MK4206	Prize Fighter
+MK4284	Starblade
+MK4301	Rise of the Dragon
+MK4401	Batman Returns
+MK4402	Cobra Command
+MK4404	Wolfchild
+MK4405	Blackhole Assault
+MK4407	Sonic CD
+MK4408	Ecco the Dolphin
+MK4410	Final Fight CD
+MK4411	Jurassic Park
+MK4412	Amazing Spider-Man vs. The Kingpin, The
+MK4415	After Burner III
+MK4416	Robo Aleste
+MK4417	Time Gal
+MK4419	Double Switch
 MK4420	Dracula Unleashed
 MK442050	Dracula Unleashed
+MK4423	Silpheed
+MK4427	Eternal Champions - Challenge from the Dark Side
+MK4428	Wonder Dog
 MK4429	Tomcat Alley
 MK442950	Tomcat Alley
+MK4430	Yumemi Mystery Mansion
+MK4432	Adventures of Batman and Robin, The
+MK4435	Surgical Strike
+MK4436	Dragon's Lair
+MK4437	WireHead
+MK4438	Fahrenheit
+MK4439	Midnight Raiders
+MK4440	Wild Woody
+MK4441	Ecco - The Tides of Time
+MK4442	Mighty Morphin Power Rangers
+MK4444	Masked Rider, The - Kamen Rider ZO
+MK4445	Android Assault - The Revenge of Bari-Arm
+MK4448	Flashback - The Quest for Identity
+MK4450	Lords of Thunder
+MK4602	Jaguar XJ220
+MK4603	Road Avenger
+MK4607	Racing Aces
+MK4608	Formula One World Championship - Beyond the Limit
+MK4650	Sherlock Holmes - Consulting Detective
+MK4651	Dark Wizard
 MK4652	Prince of Persia
 MK465250	Prince of Persia
+MK4653	Sherlock Holmes - Consulting Detective - Vol. II
+MK4655	Eye of the Beholder
+MK4656	Shining Force CD
+MK4657	Dungeon Explorer
+MK4901	Make My Video - Marky Mark and the Funky Bunch
+MK4902	Make My Video - INXS
+MK4903	Night Trap
+MK4908	Bouncers
+MK6106288A	Sega Flash Vol. 1
+MK6106288G	Sega Flash Vol. 7
+MK80012	Sega Rally Championship
+MK80118	Custom Web Browser
+MK80124	Sega Internet-Selain
+MK81001	Ghen War
+MK81003	BlackFire
+MK81004	Bug!
+MK8100450	Bug!
+MK81005	Virtua Fighter
+MK8100550	Virtua Fighter
+MK81007	Clockwork Knight - Pepperouchau's Adventure
+MK8100750	Clockwork Knight - Pepperouchau's Adventure
+MK81008	Robotica - Cybernation Revolt
+MK8100850	Robotica - Cybernation Revolt
+MK81009	Panzer Dragoon
+MK8100950	Panzer Dragoon
+MK81010	Congo - The Movie - The Lost City of Zinj
+MK81012	Manoir des ames perdues, Le
+MK8101205	Mansion of Hidden Souls, The
+MK8101206	Mansion de las Almas Ocultas, La
+MK8101209	Manoir des ames perdues, Le
+MK8101218	Mystery Mansion - Das Haus der verlorenen Seelen
+MK81014	Virtua Fighter 2
+MK8101408	Virtua Fighter 2
+MK8101450	Virtua Fighter 2
+MK81015	Virtua Cop
+MK8101550	Virtua Cop
+MK81016	Mr. Bones
+MK8101650	Mr. Bones
+MK81018	Panzer Dragoon
+MK8101850	Panzer Dragoon
+MK81019	Astal
+MK81020	Nights into Dreams...
+MK8102008	Nights into Dreams...
+MK8102050	Nights into Dreams...
+MK81021	Clockwork Knight 2 - Pepperouchau's Adventure
+MK8102150	Clockwork Knight 2 - Pepperouchau's Adventure
+MK81022	Panzer Dragoon II Zwei
+MK81023	Virtua Fighter Remix
+MK8102308	Virtua Fighter Remix
+MK81024	Wing Arms
+MK8102450	Wing Arms
+MK81026	Virtua Cop
+MK81027	Virtua Fighter Remix
+MK81028	Virtua Fighter Remix
+MK81029	Battle Arena Toshinden Remix
+MK8102950	Battle Arena Toshinden Remix
+MK81030	Bug!
+MK81031	Bootleg Sampler
+MK81033	Three Dirty Dwarves
+MK8103350	Three Dirty Dwarves
+MK81035	Guardian Heroes
+MK8103550	Guardian Heroes
+MK81036	Clockwork Knight 2 - Pepperouchau's Adventure
+MK81040	Bug Too!
+MK8104050	Bug Too!
+MK81041	Fighting Vipers
+MK8104108	Fighting Vipers
+MK8104150	Fighting Vipers
+MK81042	Dennou Senki - Virtual On - Cyber Troopers
+MK8104208	Dennou Senki - Virtual On - Cyber Troopers
+MK8104250	Virtual On - Cyber Troopers
+MK81043	Virtua Cop 2
+MK8104308	Virtua Cop 2
+MK8104350	Virtua Cop 2
+MK81045	Golden Axe - The Duel
+MK8104550	Golden Axe - The Duel
+MK81046	Gun Griffon
+MK8104650	Gun Griffon
+MK81048	Nights into Dreams...
+MK8104850	Nights into Dreams...
+MK81049	Virtua Fighter Kids
+MK8104908	Virtua Fighter Kids
+MK8104950	Virtua Fighter Kids
+MK81051	Sky Target
+MK8105150	Sky Target
+MK81052	Virtua Cop 2
+MK81053	Torico
+MK8105350	Torico
+MK81054	Battle Arena Toshinden URA - Ultimate Revenge Attack
+MK8105450	Battle Arena Toshinden URA - Ultimate Revenge Attack
+MK81057	Die Hard Arcade
+MK8105750	Die Hard Arcade
+MK81062	Sonic 3D - Flickies' Island
+MK8106250	Sonic 3D - Flickies' Island
+MK81063	Nights into Dreams...
+MK81064	Amok
+MK8106450	Amok
+MK81065	Lost World, The - Jurassic Park
+MK8106550	Lost World, The - Jurassic Park
+MK81066	Quake
+MK8106650	Quake
+MK81067	Christmas Nights into Dreams...
+MK8106750	Christmas Nights into Dreams...
+MK81068	Sega Saturn Bootleg II - On the Road
+MK81070	Saturn Bomberman
+MK8107050	Saturn Bomberman
+MK81071	Duke Nukem 3D
+MK8107150	Duke Nukem 3D
+MK81072	Virtual On - Cyber Troopers Net Link Edition
+MK81073	Fighters Megamix
+MK8107350	Fighters Megamix
+MK81075	Sega Saturn Bootleg II - On the Road
+MK81076	Enemy Zero
+MK8107650	Enemy Zero
+MK81077	Sega Screams Volume 2
+MK81078	Last Bronx
+MK8107850	Last Bronx
+MK81079	Sonic Jam
+MK8107950	Sonic Jam
+MK81081	Myst
+MK8108150	Myst
+MK81082	Shinobi-X - Shin Shinobi Den
+MK8108250	Shinobi-X - Shin Shinobi Den
+MK81083	Virtua Fighter Remix
+MK8108350	Virtua Fighter Remix
+MK81084	Exhumed
+MK81085	Darius II
+MK8108550	Darius II
+MK81086	Tomb Raider
+MK8108650	Tomb Raider
+MK81087	Mighty Hits
+MK8108750	Mighty Hits
+MK81088	King of Fighters '95, The
+MK8108850	King of Fighters '95, The
+MK81089	Mass Destruction
+MK8108950	Mass Destruction
+MK81090	Pandemonium!
+MK8109050	Pandemonium!
+MK81091	Atlantis - The Lost Tales
+MK8109109	Atlantis - The Lost Tales
+MK8109150	Atlantis - The Lost Tales
+MK8109250	Resident Evil
+MK81093	Discworld II - Missing Presumed...!
+MK8109350	Discworld II - Missing Presumed...!
+MK81099	Courier Crisis - The Saga of the Modern Fatalist
+MK8109950	Courier Crisis - The Saga of the Modern Fatalist
+MK81101	Pebble Beach Golf Links
+MK8110150	Pebble Beach Golf Links
+MK81102	NHL All-Star Hockey
+MK8110250	NHL All-Star Hockey
+MK81103	NBA Action
+MK8110350	NBA Action
+MK81105	International Victory Goal
+MK8110508	Worldwide Soccer - Sega International Victory Goal Edition
+MK8110550	International Victory Goal
+MK81109	World Series Baseball
+MK8110950	World Series Baseball
+MK81111	NFL '97
+MK81112	Sega Worldwide Soccer '97
+MK8111250	Sega Worldwide Soccer 97
+MK81113	World Series Baseball II
+MK8111350	World Series Baseball II
+MK81115	Athlete Kings
+MK8111550	Athlete Kings
+MK81122	NHL All-Star Hockey 98
+MK8112250	NHL All-Star Hockey 98
+MK81123	Sega Worldwide Soccer '98 - Club Edition
+MK8112350	Sega Worldwide Soccer '98 - Club Edition
+MK81124	NBA Action 98
+MK8112450	NBA Action 98
+MK81125	Winter Heat
+MK8112550	Winter Heat
+MK81127	World Series Baseball 98
+MK8112708	World Series Baseball 98
+MK81128	Steep Slope Sliders
+MK8112850	Steep Slope Sliders
+MK81129	Winter Heat
+MK8112950	Winter Heat
+MK81180	UEFA Euro 96 - England
+MK8118050	UEFA Euro 96 - England
+MK81181	World League Soccer '98
+MK8118150	World League Soccer '98
+MK81200	Daytona USA
+MK8120050	Daytona USA
+MK81202	Hang On GP '96
+MK8120250	Hang On GP '96
+MK81205	Cyber Speedway
+MK8120550	Cyber Speedway
+MK81206	F1 Challenge
+MK8120650	F-1 Challenge
+MK81207	Sega Rally Championship
+MK8120708	Sega Rally Championship
+MK8120750	Sega Rally Championship
+MK81210	Manx TT SuperBike
+MK8121050	Manx TT SuperBike
+MK81211	Wipeout
+MK81213	Daytona USA - Championship Circuit Edition
+MK8121308	Daytona USA - Championship Circuit Edition
+MK8121350	Daytona USA - Championship Circuit Edition
+MK81214	Scorcher
+MK8121450	Scorcher
+MK81215	Sega Rally Championship Plus Netlink Edition
+MK81216	Sega Touring Car Championship
+MK8121650	Sega Touring Car Championship
+MK81218	Daytona USA C.C.E. Net Link Edition
+MK81282	Formula Karts - Special Edition
+MK8128250	Formula Karts - Special Edition
+MK81300	Mystaria - The Realms of Lore
+MK8130050	Mystaria - The Realms of Lore
+MK81302	Legend of Oasis, The
+MK8130250	Story of Thor 2, The
+MK81303	Blazing Heroes
+MK81304	Dark Savior
+MK8130450	Dark Savior
+MK81306	Shining the Holy Ark
+MK8130650	Shining the Holy Ark
+MK81307	House of the Dead, The
+MK8130750	House of the Dead, The
+MK81380	Virtual Hydlide
+MK8138050	Virtual Hydlide
+MK81381	Shining Wisdom
+MK8138150	Shining Wisdom
+MK81382	Dragon Force
+MK8138250	Dragon Force
+MK81383	Shining Force III
+MK8138350	Shining Force III
+MK81501	Baku Baku Animal - World Zookeeper Contest
+MK8150150	Baku Baku Animal - World Zookeeper Contest
+MK81580	SimCity 2000
+MK8158050	SimCity 2000
+MK81600	Sega Saturn Choice Cuts
+MK81604	Sega Ages Volume 1
+MK8160450	Sega Ages Volume 1
+MK81606	Daytona USA
+MK81608	Custom Web Browser
+MK81680	Digital Pinball
+MK8168050	Digital Pinball
+MK81681	Photo CD Operating System
+MK8168150	Photo CD Operating System
+MK81800	Sonic R
+MK8180050	Sonic R
+MK81801	Riven - A Sequencia de Myst
+MK8180145	Riven - A Sequencia de Myst
+MK8180150	Riven - The Sequel to Myst
+MK81802	House of the Dead, The
+MK81803	Burning Rangers
+MK8180350	Burning Rangers
+MK81804	Deep Fear
+MK8180450	Deep Fear
 MNCD3001	Black Hole Assault
 MRCD2001	Tecmo World Cup Super Soccer
 MRCD2002	Zero 4 Champ II
@@ -1166,6 +1956,8 @@ PCPX96199	Play-Pre Plus 005 - 2000 August
 PCPX96201	Play-Pre Plus 006 - 2000 October
 PCPX96202	Crash Bandicoot Carnival
 PCPX96203	Play-Pre Plus 007 - 2000 December
+PD002	Panzer Dragoon
+PDDEMO	Panzer Dragoon
 PEPX94009	Analog Controller Service Disc
 PN6400	Blackhole Assault
 PS0091	Taiwan Mahjong Episode 1
@@ -3066,6 +3858,15 @@ SG6025	Night Trap
 SG6027	Yumemi Yakata no Monogatari
 SG6029	PopfulMail
 SG6034	Heavenly Symphony - Formula One World Championship 1993
+SGS9013	Daytona USA
+SGS9021	Riglordsaga
+SGS9024	Kanzen Chuukei Pro Yakyuu Greatest Nine
+SGS9032	Hang On GP '95
+SGS9038	Wing Arms - Kareinaru Gekitsuiou
+SGS9047	Sega Rally Championship
+SGS9057	Shining Wisdom
+SGS9061	Hideo Nomo World Series Baseball
+SGS9079	Virtua Fighter 2
 SHCD4005	PC Engine Hyper Catalog CD-ROM 5 - 1994 Spring
 SHCD4006	PC Engine Hyper Catalog CD-ROM 6 - 1994 Summer
 SHCD4007	PC Engine Hyper Catalog CD-ROM 6 - 1994 Summer
@@ -3091,6 +3892,7 @@ SIPS60021	Twisted Metal EX - World Tour
 SIPS60022	Rally Cross
 SIPS60023	Formula 1 97
 SIPS60027	Nightmare Creatures
+SKR00468	Sakura Taisen Teikokukagekidan Taiin Meibo
 SLED00038	Croc - Legend of the Gobbos
 SLED00091	Colony Wars
 SLED00108	Bloody Roar - Hyper Beast Duel
@@ -4041,6 +4843,7 @@ SLES01334	Jimmy White's 2 - Cueball
 SLES01341	Absolute Football
 SLES01343	Command & Conquer - Red Alert - Retaliation
 SLES01344	Command & Conquer - Alerte Rouge - Mission Tesla
+SLES01345	Command & Conquer - Alarmstufe Rot - Gegenschlag
 SLES01345GER	Command & Conquer - Alarmstufe Rot - Gegenschlag
 SLES01346	Player Manager Ninety Nine
 SLES01349	Mortal Kombat 4
@@ -4700,6 +5503,7 @@ SLES02764	All Star Tennis 2000
 SLES02765	All Star Tennis 2000
 SLES02766	Cochons de Guerre, Les
 SLES027662	Cochons de Guerre, Les
+SLES02767	Frontschweine
 SLES027672	Frontschweine
 SLES02768	Marranos en Guerra
 SLES02769	Hogs of War - Nati per Soffritto
@@ -4771,6 +5575,7 @@ SLES02890	Spider-Man
 SLES02891	Disney Dinosaure
 SLES02892	Disney's Dinosaurier
 SLES02893	Disney Dinosauri
+SLES02894	Disney Dinosaurio
 SLES028942	Disney Dinosaurio
 SLES02895	Sheep, Dog 'n' Wolf
 SLES02896	Bugs Bunny & Taz - Time Busters
@@ -7603,7 +8408,7 @@ SLPS00155	Game of Life, The - DX Jinsei Game
 SLPS00156	Sidewinder
 SLPS00157	Gunbird
 SLPS00158	Bakushou!! All Yoshimoto Quiz-ou Ketteisen DX
-SLPS00159	Koten Tsumego-shuu - Shijin no Maki
+SLPS00159	Koten Tsumegoshuu - Shijin no Maki
 SLPS00160	Classic Road
 SLPS00162	Stahlfeder - Tekkou Hikuudan
 SLPS00163	Angel Graffiti - Anata e no Profile
@@ -9851,7 +10656,7 @@ SLPS02588	Morita Kazurou no Mahjong
 SLPS02589	Thrasher - SK8
 SLPS02590	Oyaji no Jikan - Nee-chan Tsuri Iku de!
 SLPS02591	Oyaji no Jikan - Nee-chan Hanafuda de Shoubu ya!
-SLPS02593	Koten Tsumego-shuu - Shijin no Maki
+SLPS02593	Koten Tsumegoshuu - Shijin no Maki
 SLPS02594	Oukyuu no Hihou Tension
 SLPS02595	Kakuge Yarou - Fighting Game Creator
 SLPS02596	Gale Gunner
@@ -12385,89 +13190,520 @@ SLUS90095	Rayman 2 - The Great Escape
 SLUS90098	Scooby-Doo and the Cyber Chase
 SLUS94272	Running Wild
 SMJ4110	What Is X'Eye Multi Entertainment System
+SOE000	Virtua Cop 2
+SOE000DEMO4	Virtua Cop 2
+SOEDEMO	Sega Worldwide Soccer 97
+SOEDEMO112	Sega Worldwide Soccer 97
 SPUS94951	PlayStation Picks
 SRCD4001	Bakuden - Unbalance Zone
 SSCD0001	Manhole, The
 SSCD2002	Quiz no Hoshi - Star of Quiz
 SSCD2003	Lemmings
+ST1202G	Vampire Hunter - Darkstalker's Revenge
+ST1203G	X-Men - Children of the Atom
+ST1212G	Street Fighter Zero 2
+ST1304G	Magical Drop
+ST1305G	Suiko Enbu - Fuuun Saiki
+ST1306G	Wizardry VI & VII Complete
+ST13306G	Mobile Suit Gundam Side Story I - Senritsu no Blue
+ST14302G	Saturn Bomberman
+ST14405G	DonPachi
+ST14407G	Strikers 1945
+ST14409G	PriKura
+ST14410G	Sengoku Blade - Sengoku Ace Episode II
+ST16705G	Idol Mahjong - Final Romance R
+ST17001G	Heisei Tensai Bakabon - Susume! Bakabons
+ST17002G	Game-Ware
+ST18901G	Digital Pinball - Last Gladiators
+ST18902G	Digital Pinball - Necronomicon - Revelations
+ST19703G	Can Can Bunny Premiere 2
+ST20003G	Funky Head Boxers
+ST21003G	Girls in Motion Puzzle Vol. 2 - Body Special 264
+ST2201G	Mahjong Kaigan Monogatari - Mahjong-kyou Jidai Sexy Idol-hen
+ST22301G	Ginga Eiyuu Densetsu
+ST2301G	Hyper Golf, The - Devil's Course
+ST27901G	Lunar - Silver Star Story
+ST3105G	Real Bout Garou Densetsu
+ST31501G	Vatlva
+ST4302G	Fire Pro Gaiden Blazing Tornado
+ST4501G	Yumimi Mix Remix
+ST4502G	Gungriffon - The Eurasian Conflict
 ST45054	Silpheed
 ST45064	Urusei Yatsura - Dear My Friends
 ST45074	Lunar - Eternal Blue
+ST5303G	Gebockers
+ST6005H	Victory Boxing
+ST6010G	Tomb Raiders
+ST7605G	Nobunaga no Yabou Tenshouki
+ST7607G	Gotha II - Tenkuu no Kishi & Teitoku no Ketsudan II
+ST7608G	Gotha II - Tenkuu no Kishi & Teitoku no Ketsudan II
+ST7616G	Nanatsu no Hikan
+ST8113G	Alien Trilogy
+ST9102G	Wangan Dead Heat
 STCD5001	Shougi Database Kiyuu
 SXCD2001	YaWaRa! A Fashionable Judo Girl!
 SXCD4002	YaWaRa! 2 - A Fashionable Judo Girl!
 T06204	Chuck Rock
 T06205	Hook
+T07904H	Olympic Soccer
+T07904H18	Olympic Soccer
+T10001H	In the Hunt
+T10001H50	In the Hunt
+T10002H	Robo Pit
+T1002H	Robo Pit
+T1002H50	Robo Pit
+T10301G	Steamgear Mash
+T10302G	Game of Life, The - DX Jinsei Game
+T10304G	Earthworm Jim 2
+T10305G	Toushinden URA
+T10306G	DX Nippon Tokkyuu Ryokou Game - Let's Travel in Japan
+T10307G	D-Xhird
+T10308G	Game of Life, The - DX Jinsei Game
+T10309G	Eberouge
+T10310G	Game of Life, The - DX Jinsei Game II
+T10311G	Arcana Strikes
+T10312G	Tour Party - Sotsugyou Ryokou ni Ikou
+T10314G	Choro Q Park
+T10315G	Eberouge Special - Koi to Mahou no Gakuen Seikatsu
+T10317G	Densha de Go! EX
+T10318G	Choro Q Park
+T10501G	Kekkon - Marriage
+T10502G	Kekkon - Marriage - Zen'ya
+T10503G	Sotsugyou Crossworld
+T10504G	Sotsugyou Album
+T10506G	Sotsugyou III - Wedding Bell
+T10601G	Mahjong Gokuu Tenjiku
+T10602G	Alone in the Dark 2
+T10604G	Senryaku Shougi
+T10605G	Theme Park
+T10606G	FIFA Soccer 96
+T10607G	Shellshock - Jus' Keepin' da Peace
+T10608G	Hi-Octane
+T10609G	Road Rash
+T10610G	Rabbit
+T10611G	Magic Carpet
+T10613G	Nissan Presents - Over Drivin' GT-R
+T10615G	Nissan Presents - Over Drivin' GT-R
+T10616G	Soukyuu Gurentai
+T10618G	Shin Theme Park
+T10619G	PGA Tour 97
+T10620G	NHL 97
+T10621G	Soviet Strike
+T10623G	WarCraft II - The Dark Saga
+T10626G	Soukyuu Gurentai - Otokuyou
+T10627G	Battle Garegga
 T10901	My Paint
 T110025	Stellar-Fire
 T110035	Rise of the Dragon
 T11014	Night Striker
+T1101G	Layer Section
 T11024	Ninja Warriors, The
 T11024P	Ninja Warriors, The
+T1102G	Darius Gaiden
+T1103G	HatTrick Hero S
+T1104G	Darius II
+T1105G	Taito Chase H.Q. + S.C.I.
+T1106G	Puzzle Bobble 2X
+T1107G	Space Invaders
+T1108G	Cleopatra Fortune
+T1109G	Puzzle Bobble 3
 T111015	Mad Dog McCree
 T111045	Who Shot Johnny Rock
 T111055	Crime Patrol
 T111065	Mad Dog II - The Lost Gold
+T1110G	Tokyo Shadow
+T1112G	Layer Section
+T1114G	Puzzle Bobble 2X
 T113015	Microcosm
 T11301550	Microcosm
+T11301H	Wipeout
+T11301H50	Wipeout
 T113025	Novastorm
+T11302H	Terry Pratchett's Discworld
+T11302H50	Terry Pratchett's Discworld
 T113035	Puggsy
 T11303550	Puggsy
+T11303H	Destruction Derby
+T11303H50	Destruction Derby
 T113045	Shadow of the Beast II
 T11304550	Beast II
+T11304H	3D Lemmings
+T11304H50	3D Lemmings
 T113055	Flink
 T11305550	Flink
+T11305H	Krazy Ivan
+T11305H18	Krazy Ivan
+T11305H50	Krazy Ivan
 T113065	Novastorm
 T11306550	Novastorm
+T11308H	Wipeout 2097
+T11308H50	Wipeout 2097
+T11401G	Masters - Harukanaru Augusta 3
+T11402G	Waialae no Kiseki - Extra 36 Holes
+T11403G	Junclassic C.C. & Rope Club
 T115015	Thunderhawk
 T11501550	Thunderhawk
+T11501H	Firestorm - Thunderhawk 2
+T11501H18	Firestorm - Thunderhawk 2
+T11501H50	Firestorm - Thunderhawk 2
 T115025	Chuck Rock II - Son of Chuck
 T11502550	Chuck Rock II - Son of Chuck
+T11502H	Shellshock
+T11502H09	Shellshock
+T11502H18	Shellshock
+T11502H50	Shellshock
 T115035	SoulStar
 T11503550	SoulStar
 T115045	Battlecorps
 T11504550	Battlecorps
+T11505H	Blam! Machinehead
+T11505H09	Blam! Machinehead
+T11505H18	Blam! Machinehead
+T11505H50	Blam! Machinehead
+T11506H	Virtual Golf
+T11506H50	Virtual Golf
 T115075	BC Racers
 T11507550	BC Racers
 T118025	Compton's Interactive Encyclopedia
+T12003H	Jonah Lomu Rugby
+T12003H05	Jonah Lomu Rugby
+T12003H09	Jonah Lomu Rugby
+T12003H50	Jonah Lomu Rugby
+T1201G	Street Fighter - Real Battle on Film
+T1202G	Vampire Hunter - Darkstalkers' Revenge
+T1203G	X-Men - Children of the Atom
+T1204G	Street Fighter II Movie
+T1205G	Gakkou no Kowai Uwasa - Hanako-san ga Kita!!
+T1206G	Street Fighter Zero
+T1206H	Street Fighter Alpha - Warriors' Dreams
+T1207G	Tenchi o Kurau II - Sekiheki no Tatakai
+T1208G	Ide Yousuke Meijin no Shin Jissen Mahjong
+T1208H	Night Warriors - Darkstalkers' Revenge
+T1209G	Arthur to Astaroth no Nazo Makaimura - Incredible Toons
 T121015	Dragon's Lair
 T121025	Space Ace
+T12103H	BrainDead 13
+T1210G	Rockman X3
+T1212G	Street Fighter Zero 2
+T1213G	Super Puzzle Fighter II X
+T1213H	Street Fighter Alpha 2
+T1214G	Rockman 8 - Metal Heroes
+T1214H	Marvel Super Heroes
+T1215G	Marvel Super Heroes
+T1215H	Super Puzzle Fighter II Turbo
+T1216G	Cyberbots - Fullmetal Madness
+T1216H	Mega Man 8
+T1217G	Cyberbots - Fullmetal Madness
+T1219G	Bio Hazard
+T1219H	Mega Man X4
+T1220G	Quiz Nanairo Dreams - Nijiiro-chou no Kiseki
+T1221G	Rockman X4
+T1221H	Resident Evil
+T1222G	Rockman X4
+T1222H	Street Fighter Collection
+T1223G	Street Fighter Collection
+T1224G	Dungeons & Dragons Collection
+T1225G	Super Adventure Rockman
+T1226G	X-Men vs. Street Fighter
+T1227G	X-Men vs. Street Fighter
+T1228G	Vampire Savior - The Lord of Vampire
+T1229G	Vampire Savior - The Lord of Vampire
+T12301H	Loaded
+T12301H50	Loaded
+T12302H	Actua Golf
+T12302H50	Actua Golf
+T12303H	Hardcore 4x4
+T12303H50	Hardcore 4x4
+T12305H	Actua Soccer - Club Edition
+T12305H50	Actua Soccer - Club Edition
+T1230G	Pocket Fighter
+T12313H	Gremlin Interactive Demo Disc
+T12313H50	Gremlin Interactive Demo Disc
+T1232G	Capcom Generation - Dai-1-shuu Gekitsuiou no Jidai
+T1233G	Capcom Generation - Dai-2-shuu Makai to Kishi
+T1234G	Capcom Generation - Dai-3-shuu Koko ni Rekishi Hajimaru
+T1235G	Capcom Generation - Dai-4-shuu Kokou no Eiyuu
+T1236G	Capcom Generation - Dai-5-shuu Kakutoukatachi
+T1237G	Rockman 8 - Metal Heroes
+T1238G	Marvel Super Heroes vs. Street Fighter
+T1239G	Marvel Super Heroes vs. Street Fighter
 T124015	Iron Helix
+T1241G	Super Adventure Rockman
+T1242G	Shichisei Toushin Guyferd - Crown Kaimetsu Sakusen
+T1243G	Rockman X4
+T1244G	Street Fighter Zero 2'
+T1247G	Street Fighter Zero 3
+T1248G	Final Fight Revenge
+T1249G	Final Fight Revenge
+T12501G	Cyberia
+T12503G	Casper
 T125045	Earthworm Jim - Special Edition
 T12504550	Earthworm Jim - Special Edition
+T12504G	Blood Factory
+T12508H	Cyberia
+T12508H50	Cyberia
+T12511H	Frankenstein - Through the Eyes of the Monster
+T12511H50	Frankenstein - Through the Eyes of the Monster
+T12512H	Casper
+T12512H50	Casper
+T12516H	Tempest 2000
+T12516H50	Tempest 2000
+T12517H	VR Soccer
+T12518H	VR Golf '97
+T12519H	Loaded
+T12520H	Pro-Pinball
+T12521H	Lost Vikings 2 - Norse by Norsewest
+T12521H50	Lost Vikings 2 - Norse by Norsewest
+T12522H	Norse by Norsewest - The Return of the Lost Vikings
+T12601H	SimCity 2000
 T127015	Lunar - The Silver Star
+T12701H	Iron Storm
 T127025	Vay
+T12702H	Shining Wisdom
 T127035	Popful Mail
+T12703H	Dragon Force
 T127045	Lunar - Eternal Blue
+T12705H	Albert Odyssey - Legend of Eldean
+T12706H	Magic Knight Rayearth
+T12707H	Sega Ages Volume 1
+T13001H	Shanghai - Triple-Threat
 T130025	Pitfall - The Mayan Adventure
 T13002550	Pitfall - The Mayan Adventure
 T130035	Radical Rex
+T13003H	Blast Chamber
+T13003H50	Blast Chamber
+T13004H	MechWarrior 2 - 31st Century Combat - Arcade Combat Edition
+T13004H50	MechWarrior 2 - 31st Century Combat - Arcade Combat Edition
 T13015	Panic!
+T1301G	Side Pocket 2 - Densetsu no Hustler
+T1301H	Defcon 5 - Peace Has a Price...
+T1302G	Suiko Enbu
+T1302H	Minnesota Fats - Pool Legend
+T1303G	Creature Shock
+T1304G	Magical Drop
+T1304H	Creature Shock - Special Edition
+T1305G	Suiko Enbu - Fuuun Saiki
+T1305H	Dark Legend
+T1306G	Wizardry VI & VII Complete
+T1307G	Tantei Jinguuji Saburou - Mikan no Report
+T1311G	Skull Fang - Kuuga Gaiden
+T1312G	Voice Idol Maniacs - Pool Bar Story
+T1313G	Magical Drop III - Toretate Zoukangou!
+T1314G	Side Pocket 3
+T1315G	Doukoku Soshite...
+T1316G	Tantei Jinguuji Saburou - Yume no Owari ni
+T1317G	Doukoku Soshite...
+T1318G	Magical Drop III - Toretate Zoukangou!
+T13203H	Earthworm Jim 2
+T13204	Skeleton Warriors
+T13204H	Skeleton Warriors
+T13205H	Powerslave
+T13301G	From TV Animation Slam Dunk - I Love Basketball
+T13301H	Dragon Ball Z - La Grande Legende des Boules de Cristal
+T13301H06	Dragon Ball Z - La Grande Legende des Boules de Cristal
+T13301H09	Dragon Ball Z - La Grande Legende des Boules de Cristal
+T13302G	Dragon Ball Z - Shinbutouden
+T13303G	Mobile Suit Gundam
+T13304G	PD Ultraman Link
+T13305G	Dragon Ball Z - Idainaru Dragon Ball Densetsu
+T13306G	Mobile Suit Gundam Side Story I - Senritsu no Blue
+T13307G	Mobile Suit Gundam Side Story I - Senritsu no Blue
+T13308G	Ultraman - Hikari no Kyojin Densetsu
+T13309G	Mobile Suit Gundam Side Story II - Ao o Uketsugu Mono
+T13310G	GeGeGe no Kitarou - Gentou Kaikitan
+T13311G	Mobile Suit Gundam Side Story II - Ao o Uketsugu Mono
+T13312G	Mobile Suit Gundam Side Story III - Sabakareshi Mono
+T13313G	Mobile Suit Gundam Side Story III - Sabakareshi Mono
+T13315G	Kidou Senshi Z Gundam - Zenpen Zeta no Kodou
+T13316G	Magical Hoppers
+T13317G	Dragon Ball Z - Idainaru Dragon Ball Densetsu
+T13318G	Mobile Suit Gundam Side Story - Optional Guide
+T13319G	Kochira Katsushikaku Kameari Kouenmae - Hashutsujo - Nakagawa L
+T13320G	Kidou Senshi Z Gundam - Kouhen Uchuu o Kakeru
+T13322G	RMJ - The Mystery Hospital
+T13323G	Next King - Koi no Sennen Oukoku
+T13324G	SD Gundam - GCentury S
+T13325G	Sega Saturn de Hakken!! Tamagotchi Park
+T13327G	Kidou Senshi Gundam - Gihren no Yabou
+T13328G	Next King - Koi no Sennen Oukoku
+T13329G	Mobile Suit Gundam
+T13330G	Kidou Senshi Gundam - Gihren no Yabou
+T13331G	Digital Monster Ver. S - Digimon Tamers
+T13332G	Kochira Katsushikaku Kameari Kouenmae - Hashutsujo - Nakagawa L
+T13333G	Kidou Senshi Gundam - Gihren no Yabou - Kouryaku Shireisho
 T135015	NFL Football Trivia Challenge
+T13703H	TNN Motor Sports HardCore 4X4
+T13705H	Ten Pin Alley
 T14014	Starblade
 T14025	Starblade
 T141014	Kamen Rider ZO
+T14101G	Kamen Rider - Sakusen File 1
 T143015	Space Adventure, The - Cobra - The Legendary Bandit
 T14301550	Space Adventure, The - Cobra - The Legendary Bandit
+T14301G	Tengai Makyou - Daiyon no Mokushiroku - The Apocalypse IV
 T143025	Dungeon Explorer
 T14302550	Dungeon Explorer
+T14302G	Saturn Bomberman
 T143035	Lords of Thunder
 T14303550	Lords of Thunder
+T14303G	Kuusou Kagaku Sekai Gulliver Boy
+T14304G	Virus
+T14305G	Saturn Bomberman
+T14306G	Willy Wombat
+T14307G	Ginga Ojousama Densetsu Yuna Remix
+T14308G	Ginga Ojousama Densetsu Yuna - Mika Akitaka Illust Works
+T14309G	Momotarou Douchuuki
+T14310G	Bulk Slash
+T14311G	Ginga Ojousama Densetsu Yuna 3 - Lightning Angel
+T14312G	Koden Koureijutsu - Hyaku Monogatari - Honto ni Atta Kowai Hana
+T14314G	Saturn Bomberman
+T14315G	Kindaichi Shounen no Jikenbo - Hoshimitou Kanashimi no Fukushuu
+T14316G	Denpa Shounen-teki Game
+T14318G	Denpa Shounen-teki Game
+T14319G	Shadows of the Tusk
+T14320G	Bomberman Wars
+T14321G	Saturn Bomberman Fight!!
+T14322G	Shiroki Majo - Mou Hitotsu no Eiyuu Densetsu
+T14323G	Ginga Ojousama Densetsu Yuna - Mika Akitaka Illust Works 2
+T14324G	Koden Koureijutsu - Hyaku Monogatari - Honto ni Atta Kowai Hana
+T14325G	Bulk Slash
+T14326G	Momotarou Douchuuki
+T14401G	Touge King the Spirits
+T14401H	Virtual Hydlide
+T14402G	Gunbird
+T14402H	High Velocity - Mountain Racing Challenge
+T14403G	Shin Megami Tensei - Devil Summoner
+T14403H	Lunacy
+T14404G	My Best Friends - St. Andrew Jogakuin-hen
+T14405G	DonPachi
+T14406G	Shin Megami Tensei - Devil Summoner - Akuma Zensho
+T14407G	Strikers 1945
+T14408G	Shin Megami Tensei - Devil Summoner
+T14409G	PriKura
+T14410G	Sengoku Blade - Sengoku Ace Episode II
+T14411G	Gouketsuji Ichizoku 3 - Groove on Fight
+T14412G	Touge King the Spirits 2
+T14413G	Gouketsuji Ichizoku 3 - Groove on Fight
+T14414G	Minakata Hakudou Toujou
+T14415G	Ronde
+T14417G	Shin Megami Tensei - Devil Summoner
+T14418G	Princess Crown
+T14419G	DoDonPachi
+T14420G	Devil Summoner - Soul Hackers
+T14421G	Devil Summoner - Soul Hackers - Akuma Zensho Dainishuu
+T14423G	Sol Divide
+T14424G	DoDonPachi
+T14425G	Princess Crown
 T145014	Bakuden - The Unbalanced Zone
+T15001G	Seifuku Densetsu - Pretty Fighter X
+T15002G	Jissen Mahjong
+T15004G	Mahou no Janshi - Poe Poe Poemy
+T15005G	Virtual Volleyball
+T15006G	Kaitei Daisensou
+T15007G	Virtual Open Tennis
+T15008G	Photograph of a Crime, The - Hankou Shashin - Shibarareta Shouj
+T15009G	Shouryuu Sangoku Engi
+T15010G	Panic-chan
+T15011G	Eve - Burst Error
+T15012G	StarFighter 3000
+T15013G	3D Lemmings
+T15014G	Heartbeat Scramble
+T15015G	Fist
+T15016G	MeltyLancer - Ginga Shoujo Keisatsu 2086
+T15017G	MeltyLancer - Ginga Shoujo Keisatsu 2086
+T15019G	Drift King Shutokou Battle '97 - Tsuchiya Keiichi & Bandou Masa
+T1501G	Myst
+T15022G	Eve - Burst Error
+T15024G	Taiheiyou no Arashi 2 - 3D Heiki Data-shuu
+T15025G	Ryuuteki Gosennen - Dragons of China
+T15027G	Welcome House
+T15028G	Transport Tycoon
+T15029G	Panic-chan
+T1502G	Game no Tatsujin
+T1502H	Hebereke's Popoitto
+T1502H50	Hebereke's Popoitto
+T15030G	Tenga Seiha
+T15031G	Desire
+T15033G	Marie no Atelier Ver. 1.3 - Salburg no Renkinjutsushi
+T15035G	Eve - The Lost One
+T15036G	Desire
+T15037G	Desire
+T15038G	MeltyLancer - Re-inforce
+T15039G	MeltyLancer - Re-inforce
+T1503G	Hissatsu Pachinko Collection
+T1503H	Jewels of the Oracle
+T1503H50	Jewels of the Oracle
+T15041G	Eve - The Lost One
+T1504G	Popoitto Hebereke
+T1504H	Galaxy Fight
+T1504H50	Galaxy Fight
+T1505G	Shanghai - Banri no Choujou - The Great Wall
+T1506G	Game no Tetsujin - The Shanghai
+T1507G	Albert Odyssey Gaiden - Legend of Eldean
+T1508G	Oh-chan no Oekaki Logic
+T1509G	Game no Tatsujin 2
 T151015	Smurfs, The
 T15101550	Smurfs, The
+T15101H	Alone in the Dark - Jack Is Back
+T15101H50	Alone in the Dark - Jack Is Back
+T15102H	Chaos Control
+T15102H50	Chaos Control
+T1510G	Galaxy Fight - Universal Warriors
+T1511G	Oracle no Houseki - Jewels of the Oracle
+T1512G	Shanghai - Great Moments
+T1513G	Amagi Shien
+T1514G	Albert Odyssey Gaiden - Legend of Eldean
+T1515G	Waku Waku 7
+T1516G	Waku Waku 7
+T1517G	Albert Odyssey Gaiden - Legend of Eldean
+T1521G	Astra Superstars
+T1525G	Photo Genic
+T1527G	Shanghai - Banri no Choujou - The Great Wall
 T153015	Loadstar - The Legend of Tully Bodine
 T153035	Cadillacs and Dinosaurs - The Second Cataclysm
+T15701G	Bishoujo Senshi Sailor Moon SuperS - Various Emotion
 T158015	San Diego Zoo Presents... The Animals!, The
 T15801550	San Diego Zoo Presents... The Animals!, The
 T158025	Software Toolworks' Star Wars Chess, The
 T15802550	Software Toolworks' Star Wars Chess, The
+T15901G	Off-World Interceptor Extreme
+T15902G	Horde, The
+T15902H	Slam 'n Jam '96 featuring Magic & Kareem - Signature Edition
+T15902H50	Slam 'n Jam '96 featuring Magic & Kareem - Signature Edition
+T15903G	Titan Wars
+T15904G	Gex
+T15904H	Gex
+T15904H50	Gex
+T15905G	Slam 'n Jam '96 featuring Magic & Kareem
+T15906H	3D Baseball
+T15907H	Blazing Dragons
+T15908H	Off-World Interceptor Extreme
+T15908H50	Off-World Interceptor Extreme
+T15909H	Horde, The
+T15909H09	Horde, The
+T15909H18	Horde, The
+T15909H50	Horde, The
+T15911H	Solar Eclipse
+T15911H50	Titan Wars
+T15913H	Blazing Dragons
+T15913H09	Blazing Dragons
+T15913H18	Blazing Dragons
+T15913H50	Blazing Dragons
+T15914H	Pandemonium!
 T160015	Lawnmower Man, The
 T16001550	Lawnmower Man, The
+T16103H	Die Hard Trilogy
+T16103H06	Die Hard Trilogy
+T16103H09	Die Hard Trilogy
+T16103H50	Die Hard Trilogy
+T16104H	Independence Day
+T16104H50	Independence Day - The Game
+T16105H	Croc - Legend of the Gobbos
 T162015	Kids on Site
 T16201550	Kids on Site
 T16201F	Corpse Killer
 T16201F50	Corpse Killer
+T16201H	Corpse Killer - Graveyard Edition
 T16202F	Night Trap
 T16202F50	Night Trap
 T162035	Slam City with Scottie Pippen
@@ -12480,18 +13716,555 @@ T16204F	Slam City with Scottie Pippen
 T16204F50	Slam City with Scottie Pippen
 T162055	Corpse Killer
 T16205550	Corpse Killer
+T16207H	Double Switch
 T162105	Night Trap
+T16213H	Quarterback Attack
+T16403H	Worms
+T16403H50	Worms
+T16406H	True Pinball
+T16406H50	True Pinball
+T16408H	Break Point
+T16408H50	Break Point
+T16414H	Tunnel B1
+T16414H50	Tunnel B1
+T16501G	Super Real Mahjong P.V
+T16502G	Shougi Matsuri
+T16503G	Super Real Mahjong P.V
+T16504G	Super Real Mahjong Graffiti
+T16505G	Kanazawa Shougi
+T16506G	Super Real Mahjong Graffiti
+T16507G	Super Real Mahjong PVI
+T16508G	Super Real Mahjong PVI
+T16509G	Super Real Mahjong P7
+T16510G	Super Real Mahjong P7
+T16511G	Real Mahjong Adventure Umi e - Summer Waltz
+T16512G	Real Mahjong Adventure Umi e - Summer Waltz
+T16602G	Tadaima Wakusei Kaitaku-chuu!
+T16603G	Robo Pit
+T16604G	Mighty Hits
+T16605G	Elf o Karu Monotachi
+T16606G	Elf o Karu Monotachi - Hanafuda-hen
+T16607G	Jung Rhythm
+T16608G	Waku^2 Monster
+T16609G	Sorvice
+T16610G	Elf o Karu Monotachi II
+T16611G	Honkaku Hanafuda
+T16612G	RoX - 6 = Six
+T16702G	Idol Mahjong - Final Romance 2
+T16703G	Idol Mahjong - Final Romance R
+T16704G	Big Ichigeki! Pachi-Slot Daikouryaku - Universal Museum
+T16705G	Idol Mahjong - Final Romance R
+T16705G01	Idol Mahjong - Final Romance R
+T16706G	Voice Fantasia S - Ushinawareta Voice Power
+T16708G	Asuka 120% Limited - Burning Fest. Limited
+T16801G	Pro Mahjong Kiwame-S
+T16802G	Joshikousei no Houkago... Pukunpa
+T16804G	Dezaemon 2
+T16806G	Crows - The Battle Action for SegaSaturn
+T16807G	Pro Mahjong Kiwame-S
+T17001G	Heisei Tensai Bakabon - Susume! Bakabons
+T17002G	Game-Ware
+T17002GT	Game-Ware
+T17003G	Game-Ware Vol. 2
+T17004G	Game-Ware Vol. 3
+T17004GT	Game-Ware Vol. 3
+T17005G	Game-Ware Vol. 4
+T17006G	Game-Ware Vol. 5
+T17401G	QuoVadis
+T17402G	QuoVadis 2 - Wakusei Kyoushuu Ovan Rei
+T17601G	AI Igo
+T17602G	AI Shougi 2
+T17701G	Rayman
+T17701H	Rayman
+T17701H50	Rayman
+T17702G	Street Racer Extra
+T17702H	Street Racer
+T17702H50	Street Racer
+T17703G	Tennis Arena
+T17809G	VirtuaNavi V2.00 Version Up CD
+T17811G	PictFlash Don Don
+T18001G	Seireki 1999 - Pharaoh no Fukkatsu
+T18003G	3D Baseball - The Majors
+T18005G	Seikai Risshiden - Yoi Kuni, Yoi Seiji
+T18007G	Mass Destruction - Otousan ni mo Dekiru Soft
+T18007H	Mass Destruction
+T18008G	Jungle Park - Saturn Shima
+T18009G	Jungle Park - Saturn Shima
+T18010G	Courier Crisis - The Saga of the Modern Fatalist
+T1801G	Kyuutenkai
+T1802G	Nekketsu Oyako
+T1803G	Hyper Reverthion
+T1805G	Koutetsu Reiiki - Steeldom
+T1806G	Koutetsu Reiiki - Steeldom
+T1807G	Thunder Force Gold Pack 1
+T1808G	Thunder Force Gold Pack 2
+T1809G	Hyper Duel
+T1810G	Blast Wind
+T1811G	Thunder Force V
+T1812G	Thunder Force V
+T1813G	Kumitate Battle Kuttu Ketto
+T1814G	Thunder Force V
+T18501G	Darkseed
+T18502G	Quantum Gate I - Akumu no Joshou
+T18503G	Psychotron, The
+T18504G	Father Christmas
+T18505G	Tekkyuu - True Pinball
+T18506G	Shippuu Mahou Daisakusen - Kingdom-Grandprix
+T18510G	Daisuki
+T18511G	3D Mission Shooting - Finalist
+T18602G	AI Shougi
+T18603G	Wipeout
+T18604G	Destruction Derby
+T18605G	Krazy Ivan
+T18606G	Assault Rigs
+T18610G	Doom
+T18611G	Simulation Zoo
+T18612G	Hexen - Beyond Heretic
+T18613G	Area 51
+T18614G	Primal Rage
+T18619G	Wipeout XL
+T18701G	Battle Monsters
+T18702G	Heiwa Pachinko Soushingeki
+T18703G	Shunsai
+T18704G	Mahjong Yon Shimai - Wakakusa Monogatari
+T18705G	Top Anglers - Super Fishing Big Fight 2
+T18706G	Actua Soccer
+T18707G	Japan Super Bass Classic '96
+T18709G	Honkaku Pro Mahjong - Tetsuman Special
+T18710G	Actua Golf
+T18711G	Planet Joker
+T18712G	Motteke Tamago with Ganbare! Kamonohashi
+T18714G	Nihon Pro Mahjong Renmei Kounin - Doujou Yaburi
+T18715G	Kyuukyoku Tiger II Plus
+T18716G	Honkaku Pro Mahjong - Tetsuman Special
+T18801G	Lupin the 3rd - The Master File
+T18802G	Isto E Zico - Zico no Kangaeru Soccer
+T18804G	Lupin the 3rd Chronicles
+T18805G	Lupin the 3rd Chronicles
+T18806G	Lupin the 3rd Chronicles
+T18807G	DJ Wars
+T18901G	Digital Pinball - Last Gladiators
+T18902G	Digital Pinball - Necronomicon
+T18903G	Digital Pinball - Last Gladiators Ver.9.7
+T19401G	Cubic Gallery - Edy & Disy
+T19501G	Shichuu Suimei Pitagraph
+T19502G	Roommate - Inoue Ryouko
+T19503G	Dragon Master Silk
+T19504G	Roommate - Ryouko in Summer Vacation
+T19505G	Sugoventure - Dragon Master Silk Gaiden
+T19507G	Roommate 3 - Ryouko Kaze no Kagayaku Asa ni
+T19508G	Roommate W - Futari
+T19509G	Ryouko no Oshaberi Room
+T19510G	Roommate - Inoue Ryouko
+T19701G	Can Can Bunny Premiere
+T19703G	Can Can Bunny Premiere 2
+T19704G	Can Can Bunny Premiere
+T19705	Can Can Bunny Premiere 2
+T19705G	Can Can Bunny Premiere 2
+T19706G	Can Can Bunny Extra
+T19707G	Tenant Wars
+T19708G	Pia Carrot e Youkoso!! We've Been Waiting for You
+T19709G	Sakamoto Ryouma - Ishin Kaikoku
+T19710G	GunBlaze-S
+T19711G	Game de Seishun
+T19713G	Houkago Ren'ai Club - Koi no Etude
+T19714G	Houkago Ren'ai Club - Koi no Etude
+T19715G	Highschool Terra Story
+T19717G	She'sn
+T19718G	Virtuacall S
+T19719G	Pia Carrot e Youkoso!! We've Been Waiting for You
+T19720G	Virtuacall S
+T19721G	6 Inch My Darling
+T19722G	Ruriiro no Yuki
+T19723G	Kiss yori...
+T19724G	Kiss yori...
+T19801G	Doraemon - Nobita to Fukkatsu no Hoshi
+T19901G	Night Striker S
+T19902G	Metal Black
+T19903G	Elevator Action^2 - Returns
+T19904G	Harukaze Sentai V-Force
+T19905G	Bubble Symphony
+T19906G	BackGuiner - Yomigaeru Yuushatachi - Kakusei-hen - Guiner Tense
+T19907G	BackGuiner - Yomigaeru Yuushatachi - Hishou-hen - Uragiri no Se
+T19909G	Metal Black
+T19910G	Mizubaku Daibouken
+T20001G	Bakushou!! All Yoshimoto Quiz-ou Ketteisen DX
+T20002G	Funky Fantasy
+T20003G	Funky Head Boxers
+T20004G	Funky Head Boxers Plus
+T2001G	Houma Hunter Lime Perfect Collection
+T2002G	World Evolution Soccer
+T2003G	Sid Meier's Civilization - Shin Sekai Shichidai Bunmei
+T2004G	Lupin Sansei - Pyramid no Kenja
+T20101G	Tanjou - Debut S
+T20102G	Doukyuusei - if
+T20103G	Sotsugyou - Graduation S
+T20104G	Doukyuusei 2
+T20106G	Sentimental Graffiti
+T20109G	Friends - Seishun no Kagayaki
+T20110G	Mahou Shoujo Pretty Samy - Osorubeshi Shintai Sokutei! Kakubaku
+T20111G	Sentimental Graffiti - First Window
+T20112G	Mahou Shoujo Pretty Samy - Heart no Kimochi
+T20113G	Black-Matrix
+T20114G	Pia Carrot e Youkoso!! 2
+T20115G	Black-Matrix
+T20117G	With You - Mitsumeteitai
+T20118G	Black-Matrix
+T20201G	Tokimeki Mahjong Paradise - Koi no Tenpai Beat
+T20202G	Tokimeki Mahjong Graffiti - Toshishita no Tenshitachi
+T20203G	Nightruth - Explanation of the Paranormal - The Making of Night
+T20204G	Nightruth - Explanation of the Paranormal 01 - Yami no Tobira
+T20205G	Nightruth - Explanation of the Paranormal - Making of Nightruth
+T20206G	Nightruth - Explanation of the Paranormal - Maria
+T20207G	Nightruth - Explanation of the Paranormal - Nightruth Voice Sel
+T20301G	Airs Adventure
+T20402G	Strikers 1945 II
+T20403G	Yoshimoto Mahjong Club
+T20501G	Strahl - Himerareshi Nanatsu no Hikari
+T20502G	Discworld
+T20504G	Free Talk Studio - Mari no Kimamana Oshaberi
+T20505G	Derby Analyst
+T20506G	Free Talk Studio - Mari no Kimamana Oshaberi
+T20507G	Hop Step Idol
+T20601G	Hokuto no Ken
+T20602G	Tokuso Kidoutai J-SWAT
+T20603G	GranDread
+T20604G	Zoku Gussun Oyoyo
+T20605G	Batsugun
+T20606G	Gekka no Kishi - Ouryuusen
+T20607G	Time Bokan Series - Bokan to Ippatsu! Doronbow Kanpekiban
+T20608G	Baldy Land
+T20610G	Super Robot Taisen F
+T20611G	Sokkou Seitokai - Sonic Council
+T20612G	Super Robot Taisen F - Kanketsu-hen
+T20701G	Thunder Storm & Road Blaster
+T20702G	Time Gal & Ninja Hayate
+T20802G	Tetris S
+T20804G	Tetris S
+T20902G	Hansha de Spark!
+T21001G	FEDA Remake! The Emblem of Justice
+T21002G	Girls in Motion Puzzle Vol. 1 - Hiyake no Omoide + Himekuri
+T21003G	Girls in Motion Puzzle Vol. 2 - Body Special 264
+T21004G	Cube Battler - Story of Shou
+T21006G	Cube Battler - Story of Anna
+T2101G	Mahjong Ganryuujima
+T2103G	Jikuu Tantei DD
+T2104G	Kakinoki Shougi
+T2105G	Shin Kaitei Gunkan - Koutetsu no Kodoku
+T2106G	Simulation RPG Tkool
+T2108G	Sound Novel Tkool 2
+T2111G	Game Basic for SegaSaturn
+T2112G	Linda^3 Kanzenban
+T2113G	Derby Stallion
+T21201G	Mainichi Kawaru Quiz Bangumi - Quiz 365
+T21202G	Daisenryaku - Strong Style
+T21203G	Kuro no Danshou - The Literary Fragment
+T21204G	Kuro no Danshou - The Literary Fragment
+T21301G	3x3 Eyes - Kyuusei Koushu S
+T21302G	Tryrush Deppy
+T21303G	My Dream - On Air ga Matenakute
+T21401G	Zero4 Champ DooZy-J Type-R
+T21402G	Tactical Fighter
+T21501G	BreakThru!
+T21502G	Zork I - The Great Underground Empire
+T21503G	Rapyulus Panic
+T21504G	Tsuukai!! Slot Shooting
+T21507G	Wara Wara Wars - Gekitou! Daigundan Battle
+T21508G	Bouken Katsugeki Monomono
+T21510G	Paneltia Story - Koln no Daibouken
+T21512G	Ayakashi Ninden Kunoichiban Plus
+T21601G	Tower, The
+T21701G	Fuusui Sensei - Feng-Shui Master
+T21702G	Ryouri no Tetsujin - Kitchen Stadium Tour
+T21801G	Tenchi Muyou! Ryououki Gokuraku CD-ROM for Sega Saturn
+T21802G	Tenchi Muyou! Mimiri Onsen - Yukemuri no Tabi
+T21803G	Kurubushi Kyoudai Gekijou Daiikkan - Mahjong-hen
+T21804G	Star Bowling, The
+T21805G	Star Bowling Vol. 2, The
+T21901G	Yakyuuken Special, The - Kon'ya wa 12-kaisen!!
+T21902G	Haunted Casino
+T21903G	Album Club
+T21904G	Ousama Game
+T22001G	Wizard's Harmony
+T22004G	Wizard's Harmony 2
 T22014	Heavy Nova
+T2201G	Mahjong Kaigan Monogatari - Mahjong-kyou Jidai Sexy Idol-hen
 T22024	Black Hole Assault
 T22025	Third World War
 T22034	IIIrd World War, The
 T22035	Revengers of Vengeance
+T2203G	Mahjong-kyou Jidai Cogal Houkago-hen
 T22044	Battle Fantasy
+T2204G	Mahjong-kyou Jidai Cebu Island '96
+T2205G	Soukuu no Tsubasa - Gotha World
+T2206G	Virtual Mahjong
+T2207G	Virtual Mahjong
+T22101G	Dark Savior
+T22202G	Shinpi no Sekai El-Hazard - El-Hazard - The Magnificent World f
+T22204G	Tenchi Muyou! Rensa Hitsuyou
+T22205G	Noel 3 - Not Digital
+T22206G	Noel 3 - Not Digital
+T22301G	Ginga Eiyuu Densetsu
+T22302G	ClockWerx
+T22303G	Ginga Eiyuu Densetsu Plus
+T22401G	Cyber Doll
+T22402G	Bakuretsu Hunter
+T22403G	Irem Arcade Classics
+T22405G	Worms
+T22406G	Cyber Doll
+T22701G	DeathMask
+T23001H	Herc's Adventures
 T23015	Mansion of Hidden Souls
+T2301G	Hyper Golf, The - Devil's Course
+T2301H	Shinobi Legions
+T2302G	Criticom - The Critical Combat
+T2302H	Criticom
+T2303G	Playboy - Karaoke Collection Volume 1
+T2303H	Valora Valley Golf
+T2303H50	Valora Valley Golf
+T2304G	Playboy - Karaoke Collection Volume 2
 T23055	Flink
+T23101G	Daibouken - Great Adventure - St. Elmos no Kiseki
+T23102G	Texthoth Ludo - Arcana Senki
+T23103G	Texthoth Ludo - Arcana Senki
+T23201G	Pappara Paoon
+T23202G	Death Crimson
+T23401G	Return to Zork
+T23402G	Hissatsu!
+T23403G	Chou Jikuu Yousai Macross - Ai Oboete Imasu ka
+T23406G	MechWarrior 2
+T23407G	Koi no Summer Fantasy - in Miyazaki Seagaia
+T23501G	Solo Crisis
+T23502G	Code R
+T24001G	Aquazone - Desktop Life
+T24002G	Aquazone - Desktop Life Option Disc Series 1 - Angel Fish
+T24003G	Aquazone - Desktop Life Option Disc Series 2 - Black Molly
+T24004G	Aquazone - Desktop Life Option Disc Series 3 - Blue Emperor
+T24005G	Aquazone - Desktop Life Option Disc Series 4 - Clown Loach
+T24006G	Aquazone - Desktop Life Option Disc Series 5 - False Rummy-Nose
+T2401G	Jissen! Pachi-Slot Hisshou-hou! 3
+T2402G	Mahjong Hyper Reaction R
 T24034	Sengoku Denshou
+T2403G	Angel Paradise Vol. 1 - Sakaki Yuko - Koi no Yokan in Hollywood
+T2404G	Jissen! Pachi-Slot Hisshou-hou! Iron Hook - The Great Marine Ad
+T2405G	Angel Paradise Vol. 2 - Yoshino Kimika - Isshoni I-ta-i in Hawa
+T2406G	Jissen! Pachi-Slot Hisshou-hou! 4
+T2407G	Jissen Pachinko Hisshou-hou! Twin
+T24101G	Defcon 5
+T24201G	Kururin Pa!
+T24202G	Shingata Kururin Pa!
+T24301G	Horror Tour
+T24601G	Battle Athletess Daiundoukai
+T24603G	Princess Quest
+T24604G	Princess Quest
+T24901G	Fishing Koushien
+T24902G	Shusse Mahjong Daisettai
+T24903G	Bakuretsu Hunter R
+T24904G	Fishing Koushien II
+T24905G	Mario Mushano no Chou Shougi Juku - Mario Mushano's Hyper Shogi
+T25001G	MediaROMancer - DA - Daisuke Asakura
 T25014	Ranma 1-2 - Byakuranaika
+T2501G	Assault Suit Leynos 2
+T2502G	Langrisser III
+T2503G	Chou Aniki - Kyuukyoku... Otoko no Gyakushuu
+T2504G	Langrisser III
+T2505G	Langrisser IV
+T2506G	Langrisser IV
+T2507G	Langrisser - Dramatic Edition
+T2509G	Langrisser V - The End of Legend
+T25101G	Lode Runner - The Legend Returns
+T25102G	Taklamakan - Tonkou Denki
+T25103G	Lode Runner Extra
+T2510G	Langrisser III
+T2511G	Dream Generation - Koi ka Shigoto ka!...
+T2512G	Langrisser IV
+T2513G	Langrisser - Dramatic Edition
+T25201G	Ai Iijima Interactive Video Clip - Good Island Cafe
+T25301G	Mahjong Doukyuusei Special
+T25302G	Mahjong Doukyuusei Special
+T25303G	Maboroshi no Black Bass
+T25304G	Mahjong Gakuensai
+T25305G	Mahjong Gakuensai
+T25306G	Mahjong Gakuensai DX - Zenjitsu ni Matsuwaru Funsenki
+T25401H	Defcon 5
+T25401H09	Defcon 5
+T25401H50	Defcon 5
+T25403H	Ultimate Mortal Kombat 3
+T25403H50	Ultimate Mortal Kombat 3
+T25405H	Doom
+T25405H50	Hexen
+T25405H51	Hexen
+T25406H	Hexen
+T25406H50	Doom
+T25406H51	Doom
+T25408H	Area 51
+T25408H50	Area 51
+T25411H	Trash It
+T25411H50	Trash It
+T25412H	Z
+T25412H50	Z
+T25413H	Arcade's Greatest Hits - The Atari Collection 1
+T25413H50	Arcade's Greatest Hits - The Atari Collection 1
+T25414H	Mortal Kombat Trilogy
+T25414H50	Mortal Kombat Trilogy
+T25415H	Courier Crisis - The Saga of the Modern Fatalist
+T25416H	Rampage - World Tour
+T25416H50	Rampage - World Tour
+T25417H	Maximum Force
+T25417H50	Maximum Force
+T25501G	Ultraman Zukan
+T25502G	Ultraman Zukan 2
+T25503G	Koudou Saisoku Densetsu - Initial D
+T25505G	Ultraman Zukan 3
+T25506G	Mizuki Shigeru no Youkai Zukan Soushuuhen
+T25701G	Brain Battle Q
+T25901H	Cleaning Kit for Sega Saturn
+T26001G	Okudera Yasuhiko no Sekai o Mezase! Soccer Kids - Nyuumon-hen
+T26101G	Gussun Oyoyo S
+T26102G	K-1 Grand Prix - Fighting Illusion Shou
+T26103G	Tenchi Muyou! Toukou Muyou - Aniraji Collection
+T26104G	Kouryuu Sangoku Engi
+T26105G	Wolf Fang SS - Kuuga 2001
+T26106G	Arcade Gears Vol. 1 - Pu-Li-Ru-La
+T26107G	Arcade Gears Vol. 3 - Wonder 3
+T26109G	Arcade Gears Vol. 2 - Gun Frontier
+T26110G	Arcade Gears Vol. 4 - ImageFight & XMultiply
+T26112G	Prisoner of Ice - Jashin Kourin
+T26113G	K-1 Grand Prix - Fighting Illusion Shou
+T26401G	Matsukata Hiroki no World Fishing
+T26402G	Sonic Wings Special
+T26403G	Death Throttle - Kakuzetsu Toshi kara no Dasshutsu
+T26405G	LifeScape - Seimei 40 Okunen Haruka na Tabi
+T26406G	Zoop
+T26408G	Fully Cowled Mini Yonku - Super Factory
+T26409G	Layer Section II
+T26410G	Croc! Pau-Pau Island
+T26411G	LifeScape 2 - Body Bionics - Kyoui no Shouuchuu Jintai
+T26413G	Super Tempo
+T26414G	Uno DX
+T26801H	Myst
+T26801H08	Myst
+T26801H16	Myst
+T26806H	Impact Racing
+T26806H08	Impact Racing
+T27001G	Mahjong Tenshi - Angel Lips
+T27101G	Minami no Shima ni Buta ga Ita - Lucas no Daibouken
+T27301G	Virtual Casino
+T27302G	Monster Slider
+T27801G	AnEarth Fantasy Stories - The First Volume
+T27802G	Eternal Melody
+T27803G	Ojousama Express
+T27805G	Yuukyuu Gensoukyoku
+T27806G	Yuukyuu no Kobako Official Collection
+T27807G	Yuukyuu Gensoukyoku 2nd Album
+T27809G	Yuukyuu Gensoukyoku Ensemble 2
+T27810G	Device Reign
+T27811G	Yuukyuu Gensoukyoku
+T27901G	Lunar - Silver Star Story
+T27902G	Mahou Gakuen Lunar!
+T27903G	Slayers Royal
+T27904G	Lunar - Silver Star Story Complete
+T27906G	Lunar 2 - Eternal Blue
+T27907G	Slayers Royal 2
+T28001G	Nonomura Byouin no Hitobito
+T28002G	Kakyuusei
+T28004G	Yu-No - Konoyo no Hate de Koi o Utau Shoujo
+T28005G	Yu-No - Konoyo no Hate de Koi o Utau Shoujo
 T28014	Detonator Orgun
+T28201G	Kaitou Saint Tail
+T28901G	Mujintou Monogatari R - Futari no Love Love Island
+T28902G	Goiken Muyou - Anarchy in the Nippon
+T29001G	Taikyoku Shougi - Kiwame II
+T29002G	Gals Panic SS
+T29003G	Go III Professional - Taikyoku Igo
+T29004G	Beach de Riichi!
+T29005G	Himitsu Sentai Metamor V
+T29101G	Gal Jan
+T29102G	Shienryuu
+T29201G	Daitoride
+T29301G	Pup-Breeder
+T29401H	Alone in the Dark - One-Eyed Jack's Revenge
+T29601G	Gekiretsu Pachinkers
+T29602G	Ippatsu Gyakuten - Gambling King e no Michi
+T29701H	StarFighter 3000
+T29701H50	StarFighter 3000
+T30001G	Enemy Zero
+T30002G	Real Sound - Kaze no Regret
+T30004G	Enemy Zero
+T3001G	Honkaku 4-nin Uchi Geinoujin Taikyoku Mahjong - The Wareme de P
+T3002G	Dream Square - Hinagata Akiko
+T3003G	Idol Mahjong - Final Romance 4
+T30301G	Aqua-world - Umi Monogatari
+T30302G	DeJig - Tin Toy
+T30303G	DeJig - Aqua World
+T30304G	DeJig - Lassen - Art Collection
+T30305G	DeJig - McKnight - Art Collection
+T30306G	Keriotosse!
+T30602G	Pastel Muses
+T30603G	G Vector
+T30701H	Pro-Pinball - The Web
+T30701H50	Pro-Pinball - The Web
+T30801G	Private Idol Disc Vol. 1 - Yuu Kinoshita
+T30802G	Private Idol Disc Vol. 2 - Miki Uchiyama
+T30803G	Private Idol Disc Vol. 3 - Akemi Ooshima
+T30804G	Private Idol Disc - Tokubetsu-hen - Cosplayers
+T30805G	Private Idol Disc - Data-hen - Race Queen F
+T30806G	Private Idol Disc - Data-hen - Race Queen G
+T30807G	Private Idol Disc - Tokubetsu-hen - Kogal Daihyakka 100
+T30808G	Private Idol Disc - Tokubetsu-hen - Can Gal '97
+T30809G	Private Idol Disc Vol. 4 - Mirei Kuroda
+T30810G	Shutsudou! Miniskirt Police
+T30811G	Private Idol Disc Vol. 5 - Nanako Fujisaki
+T30812G	Shutsudou! Miniskirt Police
+T30813G	Private Idol Disc Vol. 6 - Satomi Yoshida
+T30814G	Private Idol Disc Vol. 7 - Kaori Asou
+T30815G	Private Idol Disc Vol. 8 - Emiko Furukawa
+T30816G	Private Idol Disc Vol. 9 - Keiko Nagamatsu
+T30817G	Private Idol Disc Vol. 10 - Mai Masaki
+T30818G	Private Idol Disc Vol. 11 - Mayumi Hirose
+T30902G	Senkutsu Katsuryu Taisen - Chaos Seed
+T30904G	Senkutsu Katsuryu Taisen - Chaos Seed
+T31001G	Mezase Idol Star!! Natsuiro Memories - Mahjong-hen
+T3101G	King of Fighters '95, The
+T3102G	Garou Densetsu 3 - Road to the Final Victory
+T3103G	World Heroes Perfect
+T3104G	Samurai Spirits - Zankurou Musouken
+T3105G	Real Bout Garou Densetsu
+T3106G	Samurai Spirits - Zankurou Musouken
+T3107G	Stakes Winner - GI Kanzen Seiha e no Michi
+T3108G	King of Fighters '96, The
+T3109G	King of Fighters '96, The
+T31101G	Pyon Pyon Kyaruru no Mahjong Biyori
+T31101H	Highway 2000
+T31102H	Virtual Casino
+T31103H	Bust-A-Move 3
+T3110G	King of Fighters '95, The
+T3111G	Metal Slug - Super Vehicle-001
+T3112G	Shinsetsu Samurai Spirits - Bushidou Retsuden
+T3113G	Shinouken
+T3115G	Stakes Winner 2 - Saikyouba Densetsu
+T3116G	Samurai Spirits - Amakusa Kourin
+T3117G	Real Bout Garou Densetsu Special
+T3118G	Samurai Spirits - Amakusa Kourin
+T3119G	Real Bout Garou Densetsu Special
+T31202G	m
+T3120G	King of Fighters '97, The
+T3123G	Samurai Spirits - Amakusa Kourin
+T3124G	Real Bout Garou Densetsu
+T3125G	King of Fighters '95, The
+T31301G	SegaSaturn Internet Vol. 1
+T31302G	SegaSaturn Internet 2
+T31303G	Special Disc with SegaSaturn Internet 2
+T31401G	Culdcept
+T31402G	Culdcept
+T31501G	Vatlva
+T31502G	Falcom Classics
+T31503G	Falcom Classics
+T31504G	Falcom Classics II
+T31505G	Falcom Classics II
+T31506G	Falcom Classics
+T31507G	Falcom Classics
+T31601G	Zero Divide - The Final Conflict
 T32014	Earnest Evans
 T32024	Sol-Feace
 T32034	Seirei Shinseiki - Fhey Area
@@ -12500,24 +14273,134 @@ T32064	Thunder Storm FX
 T32074	Devastator
 T32084	Tenbu Mega CD Special
 T32094	Arcus I, II, III
+T32101G	Sankyo Fever - Jikki Simulation S
+T32102G	Sankyo Fever - Jikki Simulation S
+T32103G	Sankyo Fever - Jikki Simulation S Vol. 2
 T32104	Annett Futatabi
+T32104G	Sankyo Fever - Jikki Simulation S
+T32106G	Sankyo Fever - Jikki Simulation S Vol. 2
 T32114	Time Gal
 T32124	Road Blaster FX
+T32201G	Sekai no Shasou kara - I Swiss-hen - Alps Tozantetsudou no Tabi
+T32502G	Steam-Heart's
+T32505G	Farland Story - Habou no Mai
+T32506G	Advanced V.G.
+T32507G	Farland Saga
+T32508G	Tilk - Aoi Umi kara Kita Shoujo
+T32509G	Farland Saga - Toki no Michishirube
+T32510G	Mahoutsukai ni Naru Houhou
+T32511G	Farland Saga - Toki no Michishirube
+T32602G	Sakura Taisen - Teigeki Graph - Teigeki Graph in Sakura Wars
+T32801G	Saturn Music School
+T32803G	Saturn Music School 2
+T32901G	Silhouette Mirage
+T32902G	Radiant Silvergun
+T32903G	Silhouette Mirage
+T33003G	Digital Ange - Dennou Tenshi SS
+T33004G	Hatsukoi Monogatari
+T33005G	Zoku Hatsukoi Monogatari - Shuugaku Ryokou
+T33101G	Shining the Holy Ark
+T33901G	Baroque
+T34001G	Sound Novel Machi
+T34101G	Tactics Formula
+T34601G	Jantei Battle Cos-Player
+T34602G	Zenkoku Seifuku Bishoujo Grand Prix - Find Love
+T34604G	Find Love 2 - The Prologue
+T34605G	Find Love 2 - Rhapsody
+T34801G	Gaia Breeder
+T35001G	Umanari 1 Furlong Theater
+T35101G	Princess Maker - Yumemiru Yousei
+T35102G	Yoshiyuki Sadamoto Illustrations
+T35103G	Shin Seiki Evangelion - Eva to Yukai na Nakamatachi
+T35501G	Nanatsu Kaze no Shima Monogatari
+T35502G	Ninpen Manmaru
+T35503G	Riven - The Sequel to Myst
+T35504G	Nihon Daihyou Team no Kantoku ni Naruu! Sekaihatsu Soccer RPG -
+T35601G	Tutankhamen no Nazo - A.N.K.H
+T35701G	Cat the Ripper - 13Ninme no Tanteishi
+T36001G	Phantasm
 T36014	Captain Tsubasa
+T3601G	Deroon Dero Dero
+T3602G	J.League Go Go Goal!
+T3603G	Dead or Alive
+T3604G	Dead or Alive
+T36101G	Dark Seed II
+T36102G	Whizz
+T36201G	Nightruth - Explanation of the Paranormal - Futatsu dake no Shi
+T36202G	Universal Nuts
+T36302G	Maria - Kimitachi ga Umareta Wake
+T36401G	Cross Tantei Monogatari - Motsureta Nanatsu no Labyrinth
+T36501G	Pachi-Slot Kanzen Kouryaku Uni-Colle '97 - Universal Collection
+T36701G	Bishoujo Hanafuda Kikou - Michinoku Hitou Koi Monogatari Specia
+T37001G	Wizardry Nemesis - The Wizardry Adventure
+T37002G	Girl Doll Toy - Tamashii o Kudasai
+T37101G	Legend of Heroes I & II, The - Eiyuu Densetsu
+T37301G	Twinkle Star Sprites
+T37401G	Senken Kigyouden
+T37401H	Xianjian Qixiazhuan
+T37401H16	Xianjian Qixiazhuan
+T37501G	Pachinko Hall - Shinsou Daikaiten
+T37601G	Techno Motor
+T37901G	Etude Prologue - Yureugoku Kokoro no Katachi
+T38001G	Another Memories
+T38101G	Ojousama o Nerae!!
+T38201G	Zanma Chou Ougi - Valhollian
+T38202G	Touryuu Densetsu Elan Doree
+T38401G	Sakura Tsuushin
+T38501G	Pro Shinan Mahjong - Tsuwamono
+T38601G	Wizardry - Llylgamyn Saga
 T4201	Joe Montana's NFL Football
 T43024	Bari-Arm
+T4302G	Fire Pro Gaiden Blazing Tornado
+T4303G	Logic Puzzle Rainbow Town
+T4305G	2Tax Gold
+T4306G	No-appointment Gals Olympos
+T4308G	Fire Prowrestling S - 6Men Scramble
+T4309G	Standby Say You!
+T4310G	Conveni, The - Ano Machi o Dokusen seyo
+T4311G	Standby Say You!
+T4313G	Deka 4-ku - Tough the Truck
+T4314G	Blue Breaker - Ken yori mo Hohoemi o
+T4316G	Fire Prowrestling S - 6Men Scramble
+T4317G	Conveni 2, The - Zenkoku Chain Tenkai da!
+T4318G	Sound Qube
 T44014	Vay - Ryuusei no Yoroi
+T4401G	Message Navi
 T44024	Quiz Tonosama no Yabou
+T4402G	Honkaku Shougi Shinan - Wakamatsu Shougi Juku
+T4403G	Stellar Assault SS
 T44044	Shin Megami Tensei
+T4404G	Message Navi Vol. 2
 T4501	Sherlock Holmes - Consulting Detective
 T45014	Lunar - The Silver Star
+T4501G	Yumimi Mix Remix
 T45024	Tenkafubu - Eiyuutachi no Houkou
+T4502G	Gungriffon - The Eurasian Conflict
 T45034	Yumimi Mix
+T4503G	Dino Island
 T45044	Gyuwambler Jiko Chuushinha 2 - Gekitou! Tokyo Mahjongland-hen
+T4504G	Gyuwambler Jiko Chuushinha - Tokyo Mahjongland
 T45054	Silpheed
+T4505G	Dino Island - Yokoku-hen
 T45064	Urusei Yatsura - Dear My Friends
 T45074	Lunar - Eternal Blue
+T4507G	Grandia
+T4508G	Gyuwambler Jiko Chuushinha - Tokyo Mahjongland
+T4509G	Gungriffon - The Eurasian Conflict
+T4510G	Gungriffon II
+T4511G	Gungriffon II
+T4512G	Grandia - Digital Museum
+T4513G	Grandia
 T48015	Robo Aleste
+T4801G	Tama - Adventurous Ball in Giddy Labyrinth
+T4801H	Virtua Racing
+T4801H50	Virtua Racing
+T4802G	Race Drivin'
+T4802H	Primal Rage
+T4802H50	Primal Rage
+T4803G	Virtua Racing
+T4804G	Shinrei Jusatsushi Taroumaru
+T4804H	Last Gladiators - Digital Pinball
 T49014	Cosmic Fantasy Stories
 T49024	Mahou no Shoujo - Silky Lip
 T49034	Death Bringer
@@ -12526,34 +14409,154 @@ T49054	Cyborg 009
 T49064	A-Rank Thunder - Tanjou-hen
 T50015	NHL '94
 T5001550	NHL Hockey '94
+T5001H	Theme Park
+T5001H50	Theme Park
 T50025	Bill Walsh College Football
 T5002505	Bill Walsh College Football
+T5002H	Hi-Octane - The Track Fights Back!
+T5002H50	Hi-Octane
 T50035	Power Monger
 T5003550	PowerMonger
+T5003H	FIFA Soccer 96
+T5003H50	FIFA Soccer 96
 T50045	Wing Commander
 T50055	FIFA International Soccer
 T5005550	FIFA International Soccer - Championship Edition
+T5005H	Shockwave Assault
+T5005H50	Shockwave Assault
+T5006H	Magic Carpet
+T5006H50	Magic Carpet
+T5007H	Space Hulk - Vengeance of the Blood Angels
+T5007H50	Space Hulk - Vengeance of the Blood Angels
 T50085	Road Rash
+T5008H	Road Rash
+T5008H50	Road Rash
+T5009H	Road & Track Presents - The Need for Speed
+T5009H50	Road & Track Presents - The Need for Speed
+T5010H	Madden NFL 97
+T5011H	PGA Tour 97
+T5011H50	PGA Tour 97
+T5013H	Soviet Strike
+T5013H09	Soviet Strike
+T5013H18	Soviet Strike
+T5013H50	Soviet Strike
+T5014H	Crusader - No Remorse
+T5014H09	Crusader - No Remorse
+T5014H18	Crusader - No Remorse
+T5014H50	Crusader - No Remorse
+T5015H	NBA Live 97
+T5015H50	NBA Live 97
+T5016H	NHL 97
+T5016H18	NHL 97
+T5016H50	NHL 97
+T5017H	FIFA Soccer 97
+T5017H09	FIFA 97
+T5017H18	FIFA 97
+T5017H50	FIFA 97
+T5018H	Madden NFL 97
+T5018H50	Madden NFL 97
+T5020H	Andretti Racing
+T5020H09	Andretti Racing
+T5020H18	Andretti Racing
+T5020H50	Andretti Racing
+T5021H	Battle Stations
+T5021H50	Battle Stations
+T5022H	Darklight Conflict
+T5022H50	Darklight Conflict
+T5023H	WarCraft II - The Dark Saga
+T5023H50	WarCraft II - The Dark Saga
+T5024H	Madden NFL 98
+T5024H50	Madden NFL 98
+T5025H	FIFA - Road to World Cup 98
+T5025H50	FIFA - Road to World Cup 98
+T5026H	NHL 98
+T5026H50	NHL 98
+T5027H	NBA Live 98
+T5027H50	NBA Live 98
+T5028H	NASCAR 98
+T5028H09	NASCAR 98
+T5028H18	NASCAR 98
+T5028H50	NASCAR 98
+T5029H	Croc - Legend of the Gobbos
+T5029H18	Croc - Legend of the Gobbos
 T51014	Gen'ei Toshi - Illusion City
+T5201G	Princess Maker 2
+T5202G	Sword & Sorcery
+T5203G	Princess Maker 2
+T5204G	Eiyuu Shigan - Gal Act Heroism
+T5206G	Noon
+T5207G	Sword & Sorcery
+T5208G	Savaki
+T5301G	Sotsugyou II - Neo Generation
+T5302G	J. B. Harold - Blue Chicago Blues
+T5303G	Gebockers
+T5304G	Gebockers
+T5305G	Densetsu no Ogre Battle
+T5306G	Tactics Ogre - Let Us Cling Together
+T5307G	Minton Keibu no Sousa File - Doukeshi Satsujin Jiken
+T5308G	Refrain Love - Anata ni Aitai
+T5701G	Idol Janshi Suchie-Pai Special
+T5703G	Moero!! Pro Yakyuu '95 - Double Header
+T5703H	Bases Loaded '96 - Double Header
+T5704G	Idol Janshi Suchie-Pai Remix
+T5704H	Tetris Plus
+T5704H50	Tetris Plus
+T5705G	Idol Janshi Suchie-Pai II
+T5707G	TurfWind '96 - Take Yutaka Kyousouba Ikusei Game
+T5708G	Tetris Plus
+T5709G	Ninja Jajamaru-kun - Onigiri Ninpouchou Gold
+T5710G	Fantastep
+T5711G	Game Tengoku - The Game Paradise!
+T5712G	Game Tengoku - The Game Paradise!
+T5713G	Suchie-Pai Adventure - Doki Doki Nightmare
+T5714G	GT24
+T5715G	Suchie-Pai Adventure - Doki Doki Nightmare
+T5716G	Idol Janshi Suchie-Pai Mecha Genteiban - Hatsubai 5 Shuunen Tok
+T5717G	Idol Janshi Suchie-Pai Secret Album
 T574013	Pier Solar and the Great Architects Enhanced Soundtrack Disc
 T574016	Pier Solar and the Great Architects Enhanced Soundtrack Disc
 T57401650	Pier Solar and the Great Architects Enhanced Soundtrack Disc
+T5801G	Lovely Pop 2 in 1 - Jan Jan Koi Shimasho
+T5802G	Lovely Pop 2 in 1 - Jan Jan Koi Shimasho
 T60014	Prince of Persia
+T6001G	King of Boxing, The
 T60024	Daihoushinden
+T6002G	Metal Fighter Miku
 T60034	Shadow of the Beast II - Juushin no Jubaku
 T60035	Secret of Monkey Island, The
+T6003G	Keiou Yuugekitai - Katsugeki-hen
 T60044	Secret of Monkey Island, The
+T6004G	America Oudan Ultra Quiz
 T60054	Heimdall
 T60055	AH3 - Thunderstrike
+T6005G	SeaBass Fishing
+T6005H	Center Ring Boxing
+T6005H50	Victory Boxing
+T6006G	Thunderhawk II
 T60074	Wonder Dog
 T60075	Star Wars - Rebel Assault
 T6007550	Star Wars - Rebel Assault
+T6007G	Tournament Leader
 T60085	Dungeon Master II - Skullkeep
 T6008550	Dungeon Master II - Skullkeep
+T6008G	Marica - Shinjitsu no Sekai
+T6008H	Keio Flying Squadron 2
+T6008H50	Keio Flying Squadron 2
 T60094	Jaguar XJ220
+T6009G	Yuushun - Classic Road
+T6009H	Sea Bass Fishing
+T6009H50	Sea Bass Fishing
 T60104	Wolfchild
+T6010G	Tomb Raiders
+T6010H	Impact Racing
+T6010H50	Impact Racing
 T60114	Keiou Yuugekitai
+T6011G	SeaBass Fishing 2
+T6011H	Pinball Graffiti
+T6011H50	Pinball Graffiti
 T60124	Jangou World Cup
+T6012H	Highway 2000
+T6012H50	Highway 2000
 T60134	Thunderhawk
 T60144	Dungeon Master II - Skullkeep
 T60145	Heimdall
@@ -12573,40 +14576,295 @@ T6202	Make My Video - Kris Kross
 T6207	Road Avenger
 T6214	Time Gal
 T6300	Adventures of Willy Beamish, The
+T6301G	Master of Monsters - Neo Generations
 T6402	Wonder Dog
 T6403	Wolfchild
 T6406	Jaguar XJ220
 T66014	Dennin Aleste - Nobunaga and His Ninja Force
+T6601G	Puyo Puyo Tsuu
 T66024	Shadowrun
+T6603G	Puyo Puyo Sun
+T6604G	Puyo Puyo Tsuu
+T6606G	Waku Waku Puyo Puyo Dungeon
+T6607G	Madou Monogatari
+T6608G	Waku Waku Puyo Puyo Dungeon
+T6609G	Puyo Puyo Sun
+T6701G	Gekitotsu Koushien
 T68014	After Burner III
+T6801G	Sento Monogatari Sono I
 T68024	Might and Magic III - Isles of Terra
+T6802G	2do Aru Koto wa Sando R
+T6803G	Kunoichi Torimonochou
+T6804G	2do Aru Koto wa Sando R
 T70015	Terminator, The
 T7001550	Terminator, The
+T7001H	Spot Goes to Hollywood
+T7001H50	Spot Goes to Hollywood
 T70025	Heart of the Alien - Out of This World Parts I and II
+T7002G	Chaos Control
 T70035	Dune
 T7003550	Dune
+T7003G	BlackFire
 T70045	Chuck Rock II - Son of Chuck
+T7004G	Ghen War
+T7004H	Grand Slam
 T70065	Dune
+T7006G	Chaos Control Remix
+T7007G	Hyper 3D Pinball
+T7008G	Gekirindan
+T7008H	Street Fighter Alpha - Warriors' Dreams
+T7008H50	Street Fighter Alpha - Warriors' Dreams
 T70095	Links - The Challenge of Golf
+T7009G	Grid Runner
+T7009H	Night Warriors - Darkstalkers' Revenge
+T7009H50	Night Warriors - Darkstalkers' Revenge
+T7010G	Mouja
+T7010H	Ghen War
+T7010H50	Ghen War
+T7011H	BlackFire
+T7011H50	BlackFire
+T7012G	NHL Powerplay '96
+T7013G	Black Dawn
+T7013H	NHL Powerplay '96
+T7013H50	NHL Powerplay '96
+T7014G	Spot Goes to Hollywood
+T7015G	Blam! Machinehead
+T7015H	Hyper 3-D Pinball
+T7015H50	Tilt!
+T7017G	Unsolved, The
+T7017H	Grid Run
+T7017H50	Grid Run
+T7018G	Crimewave
+T7018H	Skeleton Warriors
+T7018H50	Skeleton Warriors
+T7019H	Earthworm Jim 2
+T7019H50	Earthworm Jim 2
+T7025H	Grid Runner
+T7026H	Street Fighter Alpha 2
+T7026H50	Street Fighter Alpha 2
+T7027H	Black Dawn
+T7027H50	Black Dawn
+T7028H	Command & Conquer
+T7028H09	Command & Conquer
+T7028H18	Command & Conquer - Teil 1 - Der Tiberiumkonflikt
+T7028H50	Command & Conquer
+T7029H	Mega Man X3
+T7029H50	Mega Man X3
+T7030H	Super Puzzle Fighter II Turbo
+T7030H50	Super Puzzle Fighter II Turbo
+T7032H	Marvel Super Heroes
+T7032H05	Marvel Super Heroes
+T7032H50	Marvel Super Heroes
+T7032H51	Marvel Super Heroes
+T7033H	Street Fighter Collection
+T7033H50	Street Fighter Collection
 T71014	F1 Circus CD
+T7101G	Virtual Kyoutei
+T7102G	Terra Cresta 3D
+T7103G	Cross Romance - Koi to Mahjong to Hanafuda to
+T7104G	Virtual Kyoutei 2
+T7301G	World Cup Golf - In Hyatt Dorado Beach
+T7302G	Johnny Bazooka
+T7304G	Olympic Soccer
+T7305G	BrainDead 13
+T7306G	Super Casino Special
+T7307G	Impact Racing
+T7308G	Angel Graffiti S - Anata e no Profile
+T7309G	Formula Grand Prix - Team Un'ei Simulation
 T75014	Eye of the Beholder
+T7501G	Legend of K-1 - The Best Collection
+T7502G	Zap! Snowboarding Trix
+T7503G	Legend of K-1 - Grand Prix '96
+T7504G	Zap! Snowboarding Trix '98
 T76014	Sangokushi III
+T7601G	Sangokushi IV
+T7601H	Romance of the Three Kingdoms IV - Wall of Fire
+T7601H11	Sanguozhi IV
+T7601H16	Sanguozhi IV
 T76024	Nobunaga no Yabou - Haouden
+T7602G	Emit Vol. 1 - Toki no Maigo
+T7602H	Winning Post
+T7603G	Emit Vol. 2 - Inochigake no Tabi
+T7603H	Sanguozhi Yingjiezhuan
+T7603H11	Sanguozhi Yingjiezhuan
+T7603H16	Sanguozhi Yingjiezhuan
 T76044	Winning Post
+T7604G	Emit Vol. 3 - Watashi ni Sayonara o
+T7604H	P.T.O. - Pacific Theater of Operations II
 T76054	Aoki Ookami to Shiroki Mejika - Genchou Hishi
+T7605G	Nobunaga no Yabou Tenshouki
+T7605H	Heir of Zendor - The Legend and the Land
+T7606G	Winning Post EX
+T7606H	Sanguozhi V
+T7606H11	Sanguozhi V
+T7606H16	Sanguozhi V
+T7607G	Teitoku no Ketsudan II
+T7608G	Gotha II - Tenkuu no Kishi
+T7611G	Air Management '96
+T7612G	Winning Post 2
+T7613G	Sangokushi Eiketsuden
+T7614G	Nobunaga no Yabou - Returns
+T7615G	Angelique Special
+T7616G	Nanatsu no Hikan
+T7617G	Sangokushi Returns
+T7618G	Taikou Risshiden II
+T7620G	Winning Post 2 - Program '96
+T7621G	Mahjong Taikai II Special
+T7622G	Angelique Special
+T7623G	Sangokushi V
+T7624G	Suikoden - Tenmei no Chikai
+T7625G	Nobunaga no Yabou Tenshouki
+T7626G	EGWord
+T7627G	Angelique Special 2
+T7628G	Daikoukai Jidai II
+T7629G	Sangokushi Koumeiden
+T7631G	Dark Hunter Jou - Ijigen Gakuen
+T7632G	Dark Hunter Ge - Youma no Mori
+T7633G	Game Nihonshi - Kakumeiji Oda Nobunaga
+T7634G	Fushigi no Kuni no Angelique
+T7635G	Nobunaga no Yabou - Returns
+T7636G	Sangokushi Returns
+T7637G	Amok
+T7638G	Angelique Special 2
+T7640G	Teitoku no Ketsudan III
+T7642G	EGWord Ver 2.00
+T7643G	Nobunaga no Yabou Tenshouki with Power-Up Kit
+T7644G	Sangokushi IV with Power-Up Kit
+T7645G	Ishin no Arashi
+T7646G	Mouri Motonari - Chikai no Sanshi
+T7647G	Winning Post 2 - Final '97
+T7650G	Angelique Special
+T7652G	Sangokushi Eiketsuden
+T7656G	Suikoden - Tendou Hyaku Hachi-sei
+T7657G	Daikoukai Jidai Gaiden
+T7658G	Nobunaga no Yabou - Sengoku Gunyuuden
+T7660G	Winning Post 3
+T7661G	Teitoku no Ketsudan III with Power-Up Kit
+T7662G	Angelique Duet
+T7664G	Nobunaga no Yabou - Shouseiroku
+T7667G	Taikou Risshiden II
+T7668G	Air Management '96
+T7670G	Druid - Yami e no Tsuisekisha
+T7671G	Winning Post 3 - Program '98
 T77014	Nostalgia 1907 - In North Atlantic Sea
+T7901H	Shellshock
 T79025	World Cup USA '94
 T7902550	World Cup USA '94
+T7902H	Thunderstrike 2
+T7903H	World Cup Golf - Professional Edition
+T7903H09	World Cup Golf - Professional Edition
+T7903H18	World Cup Golf - Professional Edition
+T7903H50	World Cup Golf - Professional Edition
+T7904H	Olympic Soccer
+T7904H09	Olympic Soccer
+T7904H50	Olympic Soccer
+T7905H	Incredible Hulk, The - The Pantheon Saga
+T7905H50	Incredible Hulk, The - The Pantheon Saga
+T7909H	Johnny Bazookatone
+T7909H50	Johnny Bazookatone
+T7910H	Tomb Raider
+T7914H	Machine Head
 T81014	Mortal Kombat Kanzenban
 T81015	WWF - Rage in the Cage
 T8101550	WWF - Rage in the Cage
+T8101G	D no Shokutaku
+T8101H	Myst
 T81024	WWF Mania Tour - WWF - Rage in the Cage
 T81025	Mortal Kombat
 T8102550	Mortal Kombat
+T8102G	NBA Jam - Tournament Edition
+T8102H	NBA Jam - Tournament Edition
+T8102H50	NBA Jam - Tournament Edition
 T81034	NBA Jam
 T81035	NBA Jam
 T8103550	NBA Jam
+T8103G	Virtua Photo Studio - Cameraman Simulation
+T8103H	Mortal Kombat II
+T8103H50	Mortal Kombat II
 T81045	Demolition Man
+T8104G	Rise 2 - Resurrection
+T8104H	Robotica
+T8105G	NFL Quarterback Club '96
+T8105H	Street Fighter - The Movie
+T8105H50	Street Fighter - The Movie
+T8106G	Revolution X - Music Is the Weapon
+T8106H	D
+T8106H50	D
+T8106H50E	D
+T8106H50F	D
+T8106H50G	D
+T8107G	Mortal Kombat II Kanzenban
+T8107H	Revolution X - Music Is the Weapon
+T8107H50	Revolution X - Music Is the Weapon
+T8107H50G	Revolution X - Music Is the Weapon
+T8108H	X-Men - Children of the Atom
+T8108H50	X-Men - Children of the Atom
+T8109G	Yellow Brick Road
+T8109H	NFL Quarterback Club '96
+T8109H50	NFL Quarterback Club '96
+T8111G	Frank Thomas Big Hurt Baseball
+T8111H	College Slam
+T8112G	WWF WrestleMania - The Arcade Game
+T8112H	WWF WrestleMania - The Arcade Game
+T8112H50	WWF WrestleMania - The Arcade Game
+T8113G	Alien Trilogy
+T8113H	Alien Trilogy
+T8113H18	Alien Trilogy
+T8113H50	Alien Trilogy
+T8114G	Striker 96
+T8114H	Rise 2 - Resurrection
+T8114H50	Rise 2 - Resurrection
+T8115G	Iron Man & X-O Manowar in Heavy Metal
+T8116G	NFL Quarterback Club '97
+T8116H	Galactic Attack
+T8116H50	Galactic Attack
+T8117H	DragonHeart - Fire & Steel
+T8117H50	DragonHeart - Fire & Steel
+T8118G	Batman Forever - The Arcade Game
+T8119G	Space Jam
+T8119H	Iron Man & X-O Manowar in Heavy Metal
+T8119H50	Iron Man & X-O Manowar in Heavy Metal
+T8120G	WWF In Your House
+T8120H	NBA Jam Extreme
+T8122G	NBA Jam Extreme
+T8123G	Crow, The - City of Angels
+T8123H	Darius Gaiden
+T8123H50	Darius Gaiden
+T8124G	D no Shokutaku
+T8124H	Crow, The - City of Angels
+T8124H18	Crow, The - City of Angels
+T8124H50	Crow, The - City of Angels
+T8125H	Space Jam
+T8125H50	Space Jam
+T8126H	WWF In Your House
+T8126H50	WWF In Your House
+T8129G	Time Commando
+T8129H	Virtual Open Tennis
+T8129H50	Virtual Open Tennis
+T8131H	Bubble Bobble also featuring Rainbow Islands
+T8131H50	Bubble Bobble also featuring Rainbow Islands
+T8132H	Bust-A-Move 2 - Arcade Edition
+T8132H50	Bust-A-Move 2 - Arcade Edition
+T8133H	Striker 96
+T8133H50	Striker 96
+T8135H	Star Fighter
+T8136H	NFL Quarterback Club '97
+T8136H50	NFL Quarterback Club '97
+T8137H	Battle Monsters
+T8137H50	Battle Monsters
+T8138H	Frank Thomas Big Hurt Baseball
+T8138H50	Frank Thomas Big Hurt Baseball
+T8139H	Impact Racing
+T8140H	Batman Forever - The Arcade Game
+T8140H50	Batman Forever - The Arcade Game
+T8144H	Tunnel B1
+T8145H	Break Point Tennis
+T8149H	BattleSport
+T8150H	All-Star Baseball '97 Featuring Frank Thomas
+T8151H	NBA Jam Extreme
+T8151H50	NBA Jam Extreme
+T8155H	Bust-A-Move 3
+T8155H50	Bust-A-Move 3
 T83015	Brutal - Paws of Fury
 T8301550	Brutal - Paws of Fury
 T84024	Psychic Detective Series Vol. 3 - Aya
@@ -12625,7 +14883,25 @@ T88055	Theme Park
 T8805550	Theme Park
 T88065	Syndicate
 T8806550	Syndicate
+T8807H	Crimewave
+T8807H50	Crimewave
 T89015	Trivial Pursuit
+T9101G	Pinball Graffiti
+T9102G	Wangan Dead Heat
+T9103G	Wangan Dead Heat + Real Arrange
+T9104G	Ooedo Renaissance
+T9105G	Hyper Securities S
+T9106G	Nile-gawa no Yoake
+T9107G	Break Point
+T9108G	Ochigee Designer Tsukutte Pon!
+T9109G	Moon Cradle
+T9110G	Wangan Trial Love
+T9111G	Dungeon Master Nexus
+T9112G	Steep Slope Sliders
+T9113G	Tomb Raiders
+T9114G	SeaBass Fishing 2
+T9115G	Murakoshi Seikai no Bakuchou Nihon Rettou
+T9116G	Steep Slope Sliders
 T92014	Alshark
 T93015	Sewer Shark
 T9301550	Sewer Shark
@@ -12659,11 +14935,57 @@ T93325	Microcosm
 T95014	Lethal Enforcers
 T95015	Lethal Enforcers
 T9501550	Lethal Enforcers
+T9501G	Gokujou Parodius Da! Deluxe Pack
+T9501H	Parodius
+T9501H50	Parodius
 T95025	Lethal Enforcers II - Gun Fighters
 T9502550	Lethal Enforcers II - Gun Fighters
+T9502G	Jikkyou Powerful Pro Yakyuu '95 - Kaimakuban
 T95034	Lethal Enforcers II - The Western
 T95035	Snatcher
 T9503505	Snatcher
+T9504G	Tokimeki Memorial - Forever with You
+T9505G	Detana Twinbee Yahoo! Deluxe Pack
+T9505H	Bottom of the 9th
+T9506G	Eisei Meijin
+T9507G	Chibi Maruko-chan no Taisen Puzzle-dama
+T9507H	Contra - Legacy of War
+T9508G	Snatcher
+T9509G	Gradius Deluxe Pack
+T9509H	Crypt Killer
+T9509H50	Crypt Killer
+T9510G	Policenauts
+T9511G	Tokimeki Memorial - Forever with You
+T9512G	Tokimeki Memorial Taisen Puzzledama
+T9513G	Jikkyou Oshaberi Parodius - Forever with Me
+T9514G	Sexy Parodius
+T9514H	Whizz
+T9514H50	Whizz
+T9516G	Eisei Meijin II
+T9517G	Tokimeki Memorial Selection - Fujisaki Shiori
+T9518G	Henry Explorers
+T9520G	Salamander Deluxe Pack Plus
+T9522G	Tokimeki Memorial Drama Series Vol. 1 - Nijiiro no Seishun
+T9523G	Jikkyou Powerful Pro Yakyuu S
+T9524G	Tokimeki Memorial Taisen Tokkaedama
+T9525G	Gensou Suikoden
+T9526G	Vandal Hearts - Ushinawareta Kodai Bunmei
+T9527G	Akumajou Dracula X - Gekka no Yasoukyoku
+T9528G	J.League Jikkyou Honoo no Striker
+T9529G	Tokimeki Memorial Drama Series Vol. 2 - Irodori no Love Song
+T9530G	Konami Antiques - MSX Collection Ultra Pack
+T9531G	Yoshimura Shougi
+T9532G	Tokimeki Memorial Drama Series Vol. 3 - Tabidachi no Uta
+T9701H	Ultimate Mortal Kombat 3
+T9703H	Arcade's Greatest Hits
+T9704H	Mortal Kombat Trilogy
+T9705H	Area 51
+T9706H	Arcade's Greatest Hits - The Atari Collection 1
+T9707H	Maximum Force
+T9708H	Rampage - World Tour
+T9904G	Magical Night Dreams - Cotton 2
+T9905G	Guardian Force
+T9906G	Magical Night Dreams - Cotton Boomerang
 TCCD4001	Godzilla Bakutou Retsuden
 TGXCD1001	Fighting Street
 TGXCD1002	Ys Book I & II
@@ -12753,6 +15075,8 @@ TMCD2001	God Panic - Shijou Saikyou no Gundan
 TPCD1001	Zan - Kagerou no Toki
 TPCD1002	Gensou Tairiku Auleria
 TPCD1003	Gyuwambler Jiko Chuushinha - Mahjong Puzzle Collection
+VFCG001	Virtua Fighter CG Portrait Collection
+VFDEMO	Virtua Fighter
 VOC3628	Revival Chase
 WCM9302	Colors of Modern Rock, The
 WCM930200	Colors of Modern Rock, The

@@ -6176,7 +6176,8 @@ static void disc_dlg_get(disc_dlg *d)
 	  prefetch never sees at all.
 	*/
 	/*
-	  The console the disc BELONGS to, not the one that would load it.
+	  The platform to ask the database about, which is neither the one that would load the
+	  disc nor the shelf row it is filed under.
 
 	  d->sysidx is the launch answer, and for a Saturn disc there is no launch answer -
 	  saturncdd cannot stream from a drive, so the Play row is refused and sysidx is -1.
@@ -6189,13 +6190,28 @@ static void disc_dlg_get(disc_dlg *d)
 	  has nothing to do with it, and the two answers were only ever the same by accident.
 	  A disc the player has pointed at a core by hand still wins, because that is a
 	  statement about what the disc IS.
+
+	  disc_scrape_id() rather than disc_console_id(), which was the next layer of the same
+	  mistake: the shelf row for a Mega CD disc is "md", and asking ScreenScraper for a
+	  Mega Drive game when the disc is a Mega-CD one cannot match anything. Three consoles
+	  were scraping against the platform next door - see disc_scrape_id() in chome_disc.cpp.
 	*/
 	int art_sx = (disc_chosen_sys >= 0) ? disc_chosen_sys
-		: (d->running ? d->sysidx : disc_sys_by_id(disc_console_id(disc_type())));
+		: (d->running ? d->sysidx : disc_sys_by_id(disc_scrape_id(disc_type())));
 	if (art_sx < 0) art_sx = d->sysidx;
 
-	if (d->key[0]) disc_art_request(d->key, lib_sys(art_sx) ? lib_sys(art_sx)->id : 0,
-		d->title[0] ? d->title : d->key);
+	/*
+	  The name to match on, which for a disc in the drive is not the one on screen. A
+	  running disc came from a file and keeps the filename it was mounted under, which is
+	  exactly what jeuInfos.php wants; a pressed disc gets disc_scrape_name(), which is the
+	  resolved title or the serial and is *nothing at all* for the consoles that carry
+	  neither. See disc_scrape_name() for why sending the volume label instead was not a
+	  free mistake.
+	*/
+	const char *scrape = d->running ? (d->title[0] ? d->title : d->key) : disc_scrape_name();
+
+	if (d->key[0] && scrape && scrape[0])
+		disc_art_request(d->key, lib_sys(art_sx) ? lib_sys(art_sx)->id : 0, scrape);
 }
 
 #ifdef CHOME_HOST_TEST
@@ -6267,19 +6283,35 @@ static void disc_art_prefetch()
 	const char *key = disc_serial()[0] ? disc_serial() : disc_label();
 	if (!key[0]) return;
 
-	// The system the disc would load on, exactly as the dialog derives it. No hand-picked
-	// core can be involved: disc_chosen_sys is forgotten on every drive change, which is
-	// the same event that got us here.
-	int sysidx = disc_sys_by_id(disc_system_id(disc_type()));
+	/*
+	  The platform to scrape as, exactly as the dialog derives it. No hand-picked core can
+	  be involved: disc_chosen_sys is forgotten on every drive change, which is the same
+	  event that got us here.
+
+	  disc_scrape_id() and not disc_system_id(), and the difference is the whole of whether
+	  this function does anything for half the discs it sees. disc_system_id() answers
+	  "which core can be handed the drive", which is 0 for Saturn - so the prefetch, unlike
+	  the dialog beside it, silently did nothing at all for every Saturn disc ever inserted.
+	  The dialog had this same bug and was fixed; this copy of it was not, and the two had
+	  drifted into asking different questions while reading as if they asked one.
+	*/
+	int sysidx = disc_sys_by_id(disc_scrape_id(disc_type()));
 	const chome_sys *sc = (sysidx >= 0) ? lib_sys(sysidx) : 0;
 
-	// And the name to match on, which is the title table's answer when it has one - the
-	// same order disc_display_name() and the dialog use. disc_art_request() refuses
-	// everything else that has to hold: the fetch option, an account, a systemeid it
-	// recognises, one attempt per key per session.
-	const char *name = disc_display_name();
+	/*
+	  And the name to match on - the title table's answer when it has one, else the serial,
+	  else nothing at all, which is a refusal and not a gap. disc_display_name() used to be
+	  read here and it is the wrong string for this: it prefers the volume label, so a
+	  Saturn disc the table did not know went out to the database as "SEGARALLY
+	  CHAMPIONSHIP" and spent an unmatched request that could never have matched.
 
-	disc_art_request(key, sc ? sc->id : 0, name[0] ? name : key);
+	  disc_art_request() refuses everything else that has to hold: the fetch option, an
+	  account, a systemeid it recognises, one attempt per key per session.
+	*/
+	const char *name = disc_scrape_name();
+	if (!name || !name[0]) return;
+
+	disc_art_request(key, sc ? sc->id : 0, name);
 }
 
 /*

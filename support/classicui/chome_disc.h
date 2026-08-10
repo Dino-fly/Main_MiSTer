@@ -70,6 +70,20 @@
 
   A disc that answers none of them is UNKNOWN, which is a real answer: it is what
   makes the "choose a core yourself" prompt necessary rather than a fallback.
+
+  How a disc is *named* is a second question, asked after the first and answered per
+  console, because the identifier a disc carries is a fact about who pressed it:
+
+    PlayStation  a serial in the boot configuration, "SLUS_006.26" -> SLUS-00626
+    Saturn       a ten-byte product number at 0x20 of the disc header, "GS-9061"
+    Mega CD      a fourteen-byte product code at 0x180, "GM MK-4407 -00" -> MK-4407
+    everything   nothing, and deliberately. PC Engine CD discs have no filesystem
+    else         and no product code in their data; Neo Geo CD discs have a volume
+                 label that is a house code as often as a name. Neither can be keyed
+                 on, so neither is sent anywhere - see disc_scrape_name().
+
+  That is disc_serial_for(), and the serial it produces is a key into the disc title
+  table (chome_titles.h) which turns it into the name on the box.
 */
 
 #ifndef CHOME_DISC_H
@@ -237,7 +251,21 @@ const char *disc_console_id(int type);
 */
 const char *disc_system_id(int type);
 
-// Empty when the disc carries none, which is normal for anything but PlayStation.
+/*
+  The system id to ask ScreenScraper about, or 0 when there is no platform to ask as.
+
+  A third answer to what looks like one question, and the difference is not cosmetic: a
+  Mega CD disc BELONGS to the "md" shelf row (disc_console_id) and is scraped as the
+  "megacd" row, because Mega-CD and Mega Drive are different platforms holding different
+  games in the database. PC Engine CD and Neo Geo CD are the same shape. Read only by the
+  artwork request; nothing about folders or cores comes through here.
+*/
+const char *disc_scrape_id(int type);
+
+/*
+  Empty when the disc carries none, which after the Sega readers means PC Engine CD, Neo
+  Geo CD, CD-i, 3DO and anything unidentified. PlayStation, Saturn and Mega CD all fill it.
+*/
 const char *disc_serial();
 
 // The ISO volume label, cleaned up. Empty when there is none worth showing.
@@ -248,6 +276,21 @@ const char *disc_label();
   the console name. Never empty while a disc is present.
 */
 const char *disc_display_name();
+
+/*
+  The name to send to ScreenScraper, or 0 for "do not ask at all".
+
+  Deliberately not disc_display_name(). That one prefers the volume label because a label
+  is the closest thing to a human name a disc has; this one refuses a bare label, because
+  romnom is matched exactly against filenames and no volume label was ever indexed as one.
+  A request that cannot match is not free - a failed match is charged both to the day's
+  requests and to the much smaller unmatched allowance - so the systems with no usable key
+  ask for nothing rather than ask badly.
+
+  0 is a real answer. A caller must not fall back to a label or a type name when it gets
+  one; that is exactly the fallback this exists to remove.
+*/
+const char *disc_scrape_name();
 
 /* -------------------------------------------------------------- the parts --- */
 
@@ -321,6 +364,42 @@ int disc_identify_at(int data_lba0);
   uses.
 */
 int disc_serial_at(int data_lba0, char *out, int outsz);
+
+/*
+  The Saturn product number - "GS-9061", "MK-81088", "T-1809G" - read from the ten bytes
+  at 0x20 of the disc header, beside the "SEGA SEGASATURN" maker id. Returns the length
+  written, or 0 when this is not a Saturn disc.
+
+  Already in Redump's own notation, so unlike the two either side of it there is nothing
+  to rewrite. The version ("V1.000", at 0x2A) and the release date (0x30) sit next to it
+  and are deliberately not read: neither distinguishes one game from another, which is
+  the only question this layer is asked.
+*/
+int disc_saturn_serial_at(int data_lba0, char *out, int outsz);
+
+/*
+  The Mega CD product code, from the fourteen bytes at 0x180 of the Mega Drive ROM header
+  carried inside the same first sector. Returns the length written, or 0.
+
+  Normalised on the way out, because the disc and Redump disagree about this field and
+  neither is wrong: the disc says "GM MK-4407 -00" and Redump says "MK-4407-50". The media
+  type and the revision are stripped, leaving "MK-4407". See the definition for why the
+  revision is only removed when it is a dash and exactly two digits.
+*/
+int disc_megacd_serial_at(int data_lba0, char *out, int outsz);
+
+/*
+  The serial for a disc of a known type: the one the front-end actually calls, and the
+  only one that knows which reader belongs to which console.
+
+  PlayStation and unidentified discs get the Sony scan, Saturn and Mega CD their header
+  fields, and everything else gets nothing - which for PC Engine CD and Neo Geo CD is the
+  considered answer and not a gap. Those discs carry no product code in their data at all,
+  so there is no key to read; sending their volume label to a database that has never
+  indexed a volume label would spend an unmatched request to learn nothing, and the
+  unmatched allowance is the scarce one.
+*/
+int disc_serial_for(int type, int data_lba0, char *out, int outsz);
 
 // The volume label out of an ISO primary volume descriptor.
 int disc_label_at(int data_lba0, char *out, int outsz);

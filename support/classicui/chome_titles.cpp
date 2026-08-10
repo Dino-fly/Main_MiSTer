@@ -41,11 +41,11 @@
       over ~650 KB, once per disc insertion. Choosing the faster of two operations
       that each happen once when somebody puts a disc in a drive is not engineering.
 
-  Size, for the record: Redump lists on the order of 12,000 PlayStation discs, plus
-  roughly 600 Mega CD, 900 PC Engine CD and 250 Neo Geo CD. At a 10-character key, a
-  tab, a ~34-character title and a newline that is about 46 bytes a row, so ~640 KB
-  for all four systems. One erase block on the card, and small enough that the
-  "should this be per-system?" question does not need answering yet.
+  Size, for the record: 15,085 rows and 518 KB as built, of which PlayStation is
+  ~11,900 and Saturn ~2,270. At a 10-character key, a tab, a ~34-character title and
+  a newline that is about 35 bytes a row. One erase block on the card, and small
+  enough that the "should this be per-system?" question does not need answering yet -
+  adding Saturn, the largest system after PlayStation, cost 75 KB.
 
   ---------------------------------------------------- why nothing stays open ---
 
