@@ -30,6 +30,15 @@ struct core_opt
 {
 	char name[CO_NAME_LEN];
 	char spec[12];                    // bit spec, as user_io_status_set() wants it
+	/*
+	  Which status word the spec addresses: 0 for "O", 1 for "o". Every call that
+	  touches the bits has to pass it, because "o" means the same letters count from
+	  bit 32 (user_io_status_bits() adds the 32). Dropping it does not fail - it reads
+	  and writes a *different, valid* option's bits, so the row shows a value that
+	  belongs to something else and changing it corrupts that something else. See the
+	  note above core_opt_value().
+	*/
+	uint8_t ex;
 	char page[24];                    // the core's own page name, "" when it has none
 	char vals[CO_VALS][CO_VAL_LEN];
 	uint8_t nvals;

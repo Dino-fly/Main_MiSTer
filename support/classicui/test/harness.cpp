@@ -9781,6 +9781,69 @@ static int sysidx_of(const char *id)
 }
 
 /*
+  "O" and "o" name different status words, and this screen has to keep them apart.
+
+  Found while wiring the SNAC ownership rule, which needs to read the NES's "P2oJK" SNAC
+  row. Every bit-addressing call in chome_core.cpp passed ex=0, so an "o" option was read
+  from and written to the bits 32 *below* the ones it names. The stock OSD derives ex from
+  the letter (menu.cpp:2593); this file did not.
+
+  Why it survived this suite for so long, which is the part worth keeping: the fixture core
+  had no "o" option at all, and the stub's option map was keyed on the spec string alone.
+  With ex dropped the wrong slot was then used *consistently* - every read agreed with every
+  write, so the screen was self-coherent and no assertion could tell. It takes a core that
+  publishes both forms of the same letter to make the collision visible, which real cores do
+  constantly: the SMS lists Z80 Speed as "H8o8" beside its "O" settings.
+
+  What it cost a player: the Genesis "Vertical Crop" row, the SNES "SuperFX FastROM" row,
+  "SMS BIOS", "Mapper", "Orientation" and a dozen more showed a value belonging to some
+  other setting, and changing the row changed that other setting instead. Silent both ways.
+  Bracket specs were never affected - they are absolute and take no ex.
+*/
+static void assert_core_option_word_forms()
+{
+	printf("\n== the two status words ==\n");
+
+	harness_set_confstr(8);
+	harness_set_osd_mask(0x0000);
+	core_opts_scan();
+
+	const core_opt *lock = 0, *z80 = 0, *mapper = 0, *systype = 0;
+	for (int i = 0; i < core_opts_count(); i++)
+	{
+		const core_opt *o = core_opt_at(i);
+		if (!strcasecmp(o->name, "Region Lock")) lock = o;
+		if (!strcasecmp(o->name, "Z80 Speed")) z80 = o;
+		if (!strcasecmp(o->name, "Mapper")) mapper = o;
+		if (!strcasecmp(o->name, "System Type")) systype = o;
+	}
+
+	check(lock && z80 && mapper && systype, "a core publishing both spec forms is read");
+	if (!lock || !z80 || !mapper || !systype) { harness_set_confstr(1); return; }
+
+	check(lock->ex == 0, "an \"O\" option is tagged as the lower word");
+	check(z80->ex == 1, "an \"o\" option is tagged as the upper word");
+	check(mapper->ex == 1, "and so is a multi-bit \"o\" option");
+	check(systype->ex == 0, "a bracket spec stays the lower word, brackets being absolute");
+
+	// The crux. "O8" and "o8" arrive at the bit layer as the same string, "8".
+	harness_set_opt("8", 0, 0);
+	harness_set_opt("8", 0, 1);
+
+	core_opt_set(z80, 1);
+	check(core_opt_value(z80) == 1, "setting an \"o\" option reads back as itself");
+	check(core_opt_value(lock) == 0, "and leaves the \"O\" option sharing its letter alone");
+	check(harness_opt_val("8", 1) == 1, "the upper word is the one that moved");
+	check(harness_opt_val("8", 0) == 0, "and the lower word did not move at all");
+
+	core_opt_set(lock, 1);
+	check(core_opt_value(lock) == 1, "setting the \"O\" option reads back as itself too");
+	check(core_opt_value(z80) == 1, "with the \"o\" option still on the value it was given");
+
+	harness_set_confstr(1);
+}
+
+/*
   Core settings kept for one game instead of for the whole core.
 
   <CORE>.CFG is the core's global config: PSX's Widescreen Hack written there flatters
@@ -11384,7 +11447,8 @@ static void assert_slot_match()
 	press(KEY_RIGHT, 10);                     // slot 2
 	press(KEY_BACKSPACE, 12);                 // Y saves there
 	check(harness_opt_val("GH") == 0, "and still left alone after picking a slot");
-	check(harness_opt_val("01") != 0, "the savestate slot option is the one that moved");
+	// "o01" in this core's CONF_STR, so the upper word - see harness_opt_val().
+	check(harness_opt_val("01", 1) != 0, "the savestate slot option is the one that moved");
 
 	press(KEY_MENU, 16);
 	frame(8);
@@ -17098,6 +17162,7 @@ int main()
 	assert_freeze_off();
 	assert_core_idle_predicate();
 	assert_core_options_screen();
+	assert_core_option_word_forms();
 	assert_per_game_core_options();
 	assert_core_option_for_all_games();
 	assert_core_options_are_reachable();

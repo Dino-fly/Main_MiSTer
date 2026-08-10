@@ -26,8 +26,13 @@ const char *harness_last_rbf();
 int harness_status_pulses();
 int harness_pulses_on(const char *opt);
 uint32_t harness_pause_val();
-uint32_t harness_opt_val(const char *opt);
-void harness_set_opt(const char *opt, uint32_t v);
+/*
+  ex defaults to 0, which is right for every "O"-form and bracket-form spec - almost all
+  of them. Pass 1 for an option the core wrote as "o<letters>": those live 32 bits higher
+  and are a different slot here, exactly as they are a different slot on the device.
+*/
+uint32_t harness_opt_val(const char *opt, int ex = 0);
+void harness_set_opt(const char *opt, uint32_t v, int ex = 0);
 void harness_reset_status();
 
 uint32_t *harness_fb_shown();

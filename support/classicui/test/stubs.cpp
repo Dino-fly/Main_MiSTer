@@ -636,6 +636,32 @@ static const char *fake_confstr_twoslot[] =
 	0
 };
 
+/*
+  A core that publishes options in BOTH bit-spec letter forms, which is the only shape
+  that can catch a reader that drops the "O"/"o" distinction.
+
+  Real cores do this constantly - the SMS lists Z80 Speed as "H8o8" and SMS BIOS as
+  "H8oBC" while its other settings are "O..." - and the two forms address different
+  status words: "o8" is bit 40, "O8" is bit 8. With only one form present the wrong
+  bits are still self-consistent, so every read matches every write and the screen
+  looks right; it is the collision between the two that shows the defect.
+
+  Note the deliberate letter reuse: "O8" and "o8" share a spec string and differ only
+  in ex, and "[41:40]" names in brackets the same bits "o8" reaches by ex - bracket
+  specs are absolute and take no ex, which is why they were never affected.
+*/
+static const char *fake_confstr_optsex[] =
+{
+	"EXCORE",
+	"FS1,BIN,Load ROM",
+	"-",
+	"O[9:8],System Type,Auto,NTSC,PAL",   // lower word, bracket form
+	"O8,Region Lock,Off,On",              // lower word, letter form, bit 8
+	"o8,Z80 Speed,Normal,Turbo",          // UPPER word, same letter, bit 40
+	"o79,Mapper,Auto,Codemasters,Korea",  // upper word, multi-bit
+	0
+};
+
 static int confstr_on = 1;
 void harness_set_confstr(int v) { confstr_on = v; }
 
@@ -648,7 +674,8 @@ char *user_io_get_confstr(int index)
 		: (confstr_on == 4) ? fake_confstr_realpause
 		: (confstr_on == 5) ? fake_confstr_twoslot
 		: (confstr_on == 6) ? fake_confstr_opts
-		: (confstr_on == 7) ? fake_confstr_opts_v2 : fake_confstr;
+		: (confstr_on == 7) ? fake_confstr_opts_v2
+		: (confstr_on == 8) ? fake_confstr_optsex : fake_confstr;
 	int n = 0;
 	while (tbl[n]) n++;
 
@@ -675,24 +702,35 @@ int substrcpy(char *d, const char *s, char idx)
   real core's pause option is "Q" behind a P3 page prefix, and its savestate-to-card
   option is "V", so hardcoding one name hid both.
 */
-#define OPTMAP_MAX 16
-static struct { char opt[32]; uint32_t val; } optmap[OPTMAP_MAX];
+#define OPTMAP_MAX 24
+/*
+  Keyed on the spec AND on ex, because those two together are what identify an option.
+
+  "o8" and "O8" are different bits - 40 and 8 - and arrive here as the same string with
+  different ex, since the caller strips the letter that told them apart. A map keyed on
+  the string alone answers both from one slot, which makes a reader that drops ex look
+  perfectly consistent: it writes and reads the same wrong place. That is exactly the
+  bug this fixture exists to catch, so the key has to carry ex.
+*/
+static struct { char opt[32]; int ex; uint32_t val; } optmap[OPTMAP_MAX];
 static int noptmap = 0;
 
-static uint32_t *opt_slot(const char *opt)
+static uint32_t *opt_slot(const char *opt, int ex)
 {
 	if (!opt || !opt[0]) return 0;
-	for (int i = 0; i < noptmap; i++) if (!strcmp(optmap[i].opt, opt)) return &optmap[i].val;
+	for (int i = 0; i < noptmap; i++)
+		if (optmap[i].ex == !!ex && !strcmp(optmap[i].opt, opt)) return &optmap[i].val;
 	if (noptmap >= OPTMAP_MAX) return 0;
 	snprintf(optmap[noptmap].opt, sizeof(optmap[noptmap].opt), "%s", opt);
+	optmap[noptmap].ex = !!ex;
 	optmap[noptmap].val = 0;
 	return &optmap[noptmap++].val;
 }
 
-// The pause option of the modelled core (P3OQ).
-uint32_t harness_pause_val() { uint32_t *v = opt_slot("Q"); return v ? *v : 0; }
-uint32_t harness_opt_val(const char *opt) { uint32_t *v = opt_slot(opt); return v ? *v : 0; }
-void harness_set_opt(const char *opt, uint32_t v) { uint32_t *p = opt_slot(opt); if (p) *p = v; }
+// The pause option of the modelled core (P3OQ) - "O" form, so ex is 0.
+uint32_t harness_pause_val() { uint32_t *v = opt_slot("Q", 0); return v ? *v : 0; }
+uint32_t harness_opt_val(const char *opt, int ex) { uint32_t *v = opt_slot(opt, ex); return v ? *v : 0; }
+void harness_set_opt(const char *opt, uint32_t v, int ex) { uint32_t *p = opt_slot(opt, ex); if (p) *p = v; }
 
 static char last_pulse_opt[64] = {};
 const char *harness_last_pulse_opt() { return last_pulse_opt; }
@@ -730,11 +768,11 @@ const char *harness_last_status_opt() { return last_status_opt; }
 int harness_status_pulses() { return status_pulses; }
 void harness_reset_status() { last_status_opt[0] = 0; last_pulse_opt[0] = 0; status_pulses = 0; npulses = 0; }
 
-void user_io_status_set(const char *opt, uint32_t value, int)
+void user_io_status_set(const char *opt, uint32_t value, int ex)
 {
 	snprintf(last_status_opt, sizeof(last_status_opt), "%s", opt ? opt : "");
 	last_status_val = value;
-	uint32_t *slot = opt_slot(opt);
+	uint32_t *slot = opt_slot(opt, ex);
 	if (slot) *slot = value;
 	if (value)
 	{
@@ -837,9 +875,9 @@ int fpga_load_rbf(const char *name, const char *, const char *)
 	}
 	return 0;
 }
-uint32_t user_io_status_get(const char *opt, int)
+uint32_t user_io_status_get(const char *opt, int ex)
 {
-	uint32_t *slot = opt_slot(opt);
+	uint32_t *slot = opt_slot(opt, ex);
 	return slot ? *slot : 0;
 }
 /*

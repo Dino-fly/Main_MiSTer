@@ -228,6 +228,7 @@ int core_opts_scan()
 		memset(o, 0, sizeof(*o));
 
 		snprintf(o->spec, sizeof(o->spec), "%s", body + 1);
+		o->ex = (body[0] == 'o') ? 1 : 0;
 		field(line, 1, o->name, sizeof(o->name));
 		if (!o->name[0]) continue;
 
@@ -287,10 +288,21 @@ const core_opt *core_opt_tier_at(int tier, int idx)
 
 /* ------------------------------------------------------------ read/write --- */
 
+/*
+  o->ex is not optional, on any of the four calls in this file that address the bits.
+
+  "O" and "o" are different status words: user_io_status_bits() adds 32 to the start and
+  end when ex is set, so "oJK" is bits 41-42 and not bits 9-10. Passing 0 for an "o"
+  option therefore reads and writes a perfectly valid *different* option - the NES's
+  SNAC row would show, and set, whatever lives at bits 9-10 instead. It is silent both
+  ways, which is why it survived: the row draws, the press is accepted, and the damage
+  lands on a setting the player was not looking at. The stock OSD gets this right at
+  menu.cpp:2593 (int ex = (p[0] == 'o')) and this file did not.
+*/
 int core_opt_value(const core_opt *o)
 {
 	if (!o) return 0;
-	uint32_t v = user_io_status_get(o->spec);
+	uint32_t v = user_io_status_get(o->spec, o->ex);
 	return (v < o->nvals) ? (int)v : 0;
 }
 
@@ -300,7 +312,7 @@ void core_opt_set(const core_opt *o, int value)
 	if (value < 0) value = o->nvals - 1;
 	if (value >= o->nvals) value = 0;
 
-	user_io_status_set(o->spec, (uint32_t)value);
+	user_io_status_set(o->spec, (uint32_t)value, o->ex);
 	printf("ClassicUI: core option %s = %s\n", o->name, o->vals[value]);
 }
 
@@ -514,7 +526,7 @@ int core_opt_can_promote(const core_opt *o)
 
 	// A spec this firmware cannot address and a core with no config name are both
 	// "promotion is impossible", and the screen asks this before it offers the press.
-	if (!user_io_status_bits(o->spec, 0, 0)) return 0;
+	if (!user_io_status_bits(o->spec, 0, 0, o->ex)) return 0;
 
 	char *name = user_io_create_config_name(1);
 	if (!name || !name[0]) return 0;
@@ -547,16 +559,22 @@ int core_opt_can_promote(const core_opt *o)
   before it tries to load one. So zeros *are* the shared config when there is none.
 
   The bit arithmetic below is user_io_status_set()'s, deliberately: the same start%8 shift
-  and the same "at most two adjacent bytes" span, and the same ex=0 that core_opt_set()
+  and the same "at most two adjacent bytes" span, and the same o->ex that core_opt_set()
   passes. If it drifted from that pair the file would disagree with the core it is meant to
   describe, which is a bug nothing on screen could show.
+
+  ex matters here twice over. It picks the word the option lives in, so an "o" option
+  promoted with ex=0 would write this game's value over a different option's shared bits -
+  wrong setting changed, in a file the player cannot inspect, and persistent. Note the
+  span check below stays in bytes and so needs no adjustment: ex has already moved start
+  and end into the 4..7 byte range by the time they get here, and CO_CFG_BYTES is 16.
 */
 int core_opt_promote_to_core(const core_opt *o)
 {
 	if (!core_opt_can_promote(o)) return 0;
 
 	int start = 0, end = 0;
-	int size = user_io_status_bits(o->spec, &start, &end);
+	int size = user_io_status_bits(o->spec, &start, &end, o->ex);
 	if (!size) return 0;
 
 	char *name = user_io_create_config_name(1);
