@@ -1283,13 +1283,21 @@ no new table.
   and larger ones fall back to `romnom`/`romtaille`, the matching the scrapers
   themselves call the error-prone one. `systemeid` is a numeric per-platform id, and a
   wrong one silently scrapes the wrong console rather than failing, so the built-in
-  table carries **only the eleven values that could be cross-checked against a working
-  client's source** and every other system returns nothing at all; the gaps are filled
-  from `classicui_ss_systems.cfg` or, once there is a key, from `systemesListe.php`.
-  Two systems ride in another core's shelf and are a different platform to the API -
-  `.gbc` in the Game Boy shelf is `10` not `9`, and `.gg` in the Master System shelf
-  is refused outright rather than scraped as Master System. And the quota surface is
-  real work: HTTP 429/430/431 for threads-per-minute, daily quota and too-many-unknown
+  table carries **every system the library table knows, each one cross-checked against
+  a working client's source rather than guessed** - the original eleven against
+  Skyscraper's `getPlatformId()`, the rest against both Skyscraper's and ES-DE's
+  published tables once this build's own call to `systemesListe.php` came back "Erreur
+  de login" against a live devid that should have worked; see the comment above
+  `builtin[]` in `chome_ss.cpp` for the detail. Gaps that remain - one, today: a third
+  extension on the Neo Geo Pocket shelf that neither reference client can name with
+  confidence - are filled per-machine from `classicui/ss-systems.cfg`
+  (`docs/ss-systems.example.cfg` is a worked, commented copy) or, once there is a key,
+  from `systemesListe.php` itself. Four systems ride in another core's shelf and are a
+  different platform to the API - `.gbc` in the Game Boy shelf is `10` not `9`, `.gg`
+  in the Master System shelf is `21` not `2`, `.wsc` in the WonderSwan shelf is `46`
+  not `45`, and `.ngc` in the Neo Geo Pocket shelf is `82` not `25` - and the quota
+  surface is real work: HTTP 429/430/431 for threads-per-minute, daily quota and
+  too-many-unknown
   ROMs, plus `maxthreads`/`requeststoday` in every response body to throttle against
   ([batocera-emulationstation#1090](https://github.com/batocera-linux/batocera-emulationstation/issues/1090),
   [Skyscraper's screenscraper.cpp](https://github.com/muldjord/skyscraper/blob/master/src/screenscraper.cpp)).

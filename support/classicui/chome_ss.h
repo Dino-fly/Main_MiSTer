@@ -297,25 +297,29 @@ int ss_enabled();
   MiSTer system id ("nes", "psx", ...) to the API's systemeid, as a string because
   that is how it goes into the URL. 0 when we do not know it.
 
-  Deliberately incomplete. The values that are here were taken from a working
-  client rather than guessed, and the systems that are missing are missing because
-  a wrong systemeid does not fail - it silently matches a different platform and
-  writes somebody else's box art onto the shelf. Fill them from systemesListe.php
-  once there is a credential to call it with, or per-machine from the override file
-  below.
+  Every system chome_lib.cpp's library table carries is meant to be here - a MiSTer
+  core and a ScreenScraper platform both existing is reason enough - and each one is
+  taken from a working client rather than guessed, never from memory: a wrong
+  systemeid does not fail, it silently matches a different platform and writes
+  somebody else's box art onto the shelf. What is still missing is missing because
+  the match was genuinely ambiguous (see the .npc case below); fill a gap like that
+  per-machine from the override file below rather than guessing here.
 
-  Two systems ride in another core's shelf and are told apart by extension, which
-  the API does not do for us: .gbc is a different systemeid from .gb, and .gg is a
-  different one from .sms. Pass the ROM name so that can be handled; pass 0 for it
-  to take the core's own platform.
+  Four systems ride in another core's shelf and are told apart by extension, which
+  the API does not do for us: .gbc is a different systemeid from .gb, .gg is a
+  different one from .sms, .wsc is a different one from .ws, and .ngc is a different
+  one from .ngp. Pass the ROM name so that can be handled; pass 0 for it to take the
+  core's own platform.
 */
 const char *ss_system_id(const char *sysid, const char *romnom);
 
 /*
-  Reads /media/fat/config/classicui_ss_systems.cfg if it is there: lines of
-  `<sysid>=<number>`, `#` comments. Lets the gaps above be filled without a
-  rebuild, and is where a cached systemesListe.php would be written. Returns how
-  many mappings it took.
+  Reads classicui/ss-systems.cfg under the card's root if it is there: lines of
+  `<sysid>=<number>`, `#` comments. Lets the gaps above be filled without a rebuild,
+  and is where a cached systemesListe.php would be written. Loaded once at start-up
+  (chome_ui.cpp), same folder as disctitles.txt and the ScreenScraper miss store
+  rather than mixed in with MiSTer's own config files. Returns how many mappings it
+  took.
 */
 int ss_systems_load(const char *path);
 void ss_systems_forget();

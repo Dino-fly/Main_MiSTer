@@ -12474,6 +12474,31 @@ static void ig_select_running()
 	mark_dirty();
 }
 
+/*
+  The ScreenScraper system-id override file, loaded once at start-up so a card can
+  correct or extend ss_system_id()'s built-in table - including Saturn, if this
+  build's table on it ever goes stale - without a rebuild.
+
+  classicui/ss-systems.cfg, the same classicui/ folder chome_titles.cpp's disc title
+  table and chome_art.cpp's ScreenScraper miss store live in, rather than mixed in
+  with MiSTer's own config/ files. Not chome_ss.cpp's problem to build this path:
+  that file also links on its own into the gate binary (see test/gate.cpp) against
+  nothing but a cfg definition, and getRootDir() is a firmware symbol that binary
+  does not carry.
+
+  A missing file is silent and harmless - ss_systems_load() itself already treats
+  "not there" as "no overrides" - so there is nothing to guard here beyond the
+  once-per-process placement the two callers below share with lib_init().
+*/
+#define SS_SYSTEMS_FILE "classicui/ss-systems.cfg"
+
+static void ss_systems_load_default()
+{
+	char path[1024];
+	snprintf(path, sizeof(path), "%s/%s", getRootDir(), SS_SYSTEMS_FILE);
+	ss_systems_load(path);
+}
+
 // Returns 1 when the menu took over, 0 when the core cannot host it.
 static int ig_open()
 {
@@ -12634,6 +12659,7 @@ static int ig_open()
 	{
 		lib_init();
 		vp_install();
+		ss_systems_load_default();
 		inited = 1;
 	}
 
@@ -12998,6 +13024,7 @@ static void enter()
 	{
 		lib_init();
 		vp_install();
+		ss_systems_load_default();
 		inited = 1;
 	}
 
