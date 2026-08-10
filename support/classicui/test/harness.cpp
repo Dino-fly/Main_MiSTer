@@ -810,6 +810,48 @@ static void press(int key, int settle = 12)
 }
 
 /*
+  A key held down, delivered the way menu_key_get() delivers one: the press, then the same
+  keycode again every REPEATRATE with *nothing at all* on the frames in between, and one
+  release at the end. That shape is what the front-end has to tell apart from a run of taps -
+  see held_key in chome_ui.cpp - and it is the same shape assert_carousel_slide() has pinned
+  for the partial-repaint work since long before this existed.
+
+  `repeats` is how many auto-repeats follow the press, so a cursor is offered repeats + 1
+  chances to move. Every list now wraps at its ends on a press the player made, so this is
+  the only way to walk one to its end and *stay* there: a run of press() calls is a run of
+  fresh presses, and the one that arrives at the end wraps round.
+*/
+static void hold_dir(int key, int repeats, int settle = 8)
+{
+	chome_handle(key);
+	for (int r = 0; r < repeats; r++)
+	{
+		// Three frames of nothing at 16 ms each, which is about the 50 ms of REPEATRATE.
+		for (int f = 0; f < 3; f++) { harness_advance(16); chome_handle(0); }
+		chome_handle(key);
+	}
+	harness_advance(16);
+	chome_handle(key | UPSTROKE);
+	frame(settle);
+}
+
+/*
+  Put the cursor on a known entry of whatever list is up, from wherever it happens to be.
+
+  A hold to the first entry and then that many taps. Counting taps from an unknown start is
+  what stops working once the ends wrap: the walk arrives somewhere that depends on how long
+  the list is and on where the previous part of a section left the cursor, and it does so
+  silently. `axis` is 0 for a column and 1 for a row, as chome_list_cursor() takes it.
+*/
+static void list_goto(int axis, int row, int fwd, int back, int settle = 6)
+{
+	int n = 0;
+	chome_list_cursor(axis, &n);
+	hold_dir(back, n + 8, settle);
+	for (int i = 0; i < row; i++) press(fwd, settle);
+}
+
+/*
   A fingerprint of whatever panel is up. Panels here are centred and at least half the
   canvas wide at every profile, so the middle half of the middle of the screen is inside
   one and outside the shelf - which is what makes two of these comparable across steps.
@@ -1329,11 +1371,52 @@ static int leading_folders()
 	return n;
 }
 
+/*
+  The shelf, wound back to its leftmost card, whatever it was showing before.
+
+  A *held* LEFT and not a run of taps, which is task 54 seen from the test side. This used to
+  read "for (i < 40) press(KEY_LEFT)" with the comment "LEFT clamps at index 0", and that was
+  true and is not any more: the carousel wraps at its ends now, so forty taps mean forty
+  cards and wrap round as often as the shelf is short - which lands the cursor somewhere that
+  depends on how many games the fixture happens to have. Holding the key is what a player
+  does to get to the front of a shelf, and holding is the thing that stops at the end.
+
+  Enough repeats to cross the whole view from anywhere on it, plus a few spare: the first
+  event of the hold is a real press, so a cursor already at 0 wraps to the far end on it and
+  then has the whole view to walk back.
+*/
+static void shelf_rewind()
+{
+	hold_dir(KEY_LEFT, lib_view_count() + 8, 6);
+	frame(8);
+}
+
+/*
+  Out to the *root* shelf, however deep into a folder the previous section left it.
+
+  B pops a folder only from its leftmost entry (see the SCR_HOME case of back()), and
+  nav_pop() restores the position the folder was opened from rather than the leftmost - so a
+  level costs the pair "jump left, then pop", and twenty presses cover any stack NAV_DEPTH
+  allows. At the root both presses are no-ops: nav_pop() answers 0 and B jumps to a leftmost
+  entry the cursor is already on. That is what makes a fixed count safe rather than hopeful.
+
+  Worth having on its own, and not only for task 54: select_folder() and select_titled() below
+  both look for a card *on the root shelf* and neither used to make sure it was looking at
+  one. That went unnoticed while the shelf clamped, because nothing they did could pop a view
+  and every section that opened a folder happened to close it; the marquee section found it
+  the first time a section left the browser open behind it.
+*/
+static void shelf_root()
+{
+	for (int i = 0; i < 20; i++) press(KEY_ESC, 2);
+	frame(6);
+}
+
 static void select_first_game()
 {
 	// Re-entry keeps the previous shelf position by design, so rewind to the
-	// start before counting. LEFT clamps at index 0.
-	for (int i = 0; i < 30; i++) press(KEY_LEFT, 2);
+	// start before counting.
+	shelf_rewind();
 
 	int n = leading_folders();
 	for (int i = 0; i < n; i++) press(KEY_RIGHT, 6);
@@ -1349,7 +1432,10 @@ static void select_first_game()
 */
 static int select_folder(const char *label)
 {
-	for (int i = 0; i < 40; i++) press(KEY_LEFT, 2);
+	// Out of any folder first, then to the front of the root shelf: the label being looked
+	// for is on the root and nowhere else. See shelf_root().
+	shelf_root();
+	shelf_rewind();
 
 	int target = -1;
 	for (int i = 0; i < leading_folders(); i++)
@@ -1366,7 +1452,8 @@ static int select_folder(const char *label)
 // Rewinds and steps right until the named game is selected on the root shelf.
 static int select_titled(const char *want)
 {
-	for (int i = 0; i < 40; i++) press(KEY_LEFT, 2);
+	shelf_root();
+	shelf_rewind();
 
 	int target = -1;
 	for (int i = 0; i < lib_view_count(); i++)
@@ -4428,7 +4515,7 @@ static void assert_letter_jump()
 
 	// The initial of whatever is selected, read the way the front-end reads it.
 	int at = -1;
-	for (int i = 0; i < 40; i++) press(KEY_LEFT, 2);
+	shelf_rewind();
 	frame(20);
 	at = view_sel();
 	check(at == 0, "rewound to the first entry");
@@ -4825,7 +4912,7 @@ static void assert_carousel_slide()
 	  path: opening a folder rebuilds the view, which changes the cards, the title, the
 	  prompts and the count all at once, and no band could contain that.
 	*/
-	for (int i = 0; i < 40; i++) press(KEY_LEFT, 2);
+	shelf_rewind();
 	frame(6);
 
 	int was_n = lib_view_count();
@@ -5202,19 +5289,26 @@ static void assert_disc_dialog()
 		"and moving back onto the first restores it");
 
 	/*
-	  Back onto Options, then right again - which has nowhere to go.
+	  Right *held* against the end of the button row, which is where it now stops.
+
+	  This check used to read "two taps of right, and it stops at the second button" and
+	  asserted the clamp the dialog had before task 54 - the button row wraps on a fresh press
+	  now, like every other list here, so the second tap would land back on Play and launch
+	  the disc. What survives the change, and is the more useful claim, is that *holding* the
+	  key cannot do that: auto-repeat walks to the last button and stays, so nothing a player
+	  leans on can launch a disc they were only trying to scroll past. The wrap itself is
+	  asserted in assert_uniform_wrap().
 
 	  Asserted through A rather than through the legend, deliberately: a refused press paints
 	  the line above the legend red, and this UI only repaints what changed, so that line is
 	  still red the next time anything reads those pixels. What A does is not ambiguous like
-	  that - if right had wrapped round to the first button the disc would have launched and
-	  this screen would be gone.
+	  that - if the hold had wrapped round to the first button the disc would have launched
+	  and this screen would be gone.
 	*/
-	press(KEY_RIGHT);
-	press(KEY_RIGHT);
+	hold_dir(KEY_RIGHT, 8, 12);
 	press(KEY_ENTER);
 	check(chome_screen_id() == S_DISC,
-		"right stops at the second button, and A there opens the core chooser "
+		"a held right stops at the second button, and A there opens the core chooser "
 		"rather than launching");
 	dump("disc-10-dialog-cores");
 
@@ -13129,7 +13223,7 @@ static void assert_recent()
 */
 static int shelf_go(const char *sysid, const char *relpath)
 {
-	for (int i = 0; i < 60; i++) press(KEY_LEFT, 2);
+	shelf_rewind();
 
 	int target = entry_carrying(item_at(sysid, relpath));
 	if (target < 0) return -1;
@@ -14557,7 +14651,7 @@ static void assert_scan_slices()
 
 	// Rewound first, so the folder opened below is entry 0 - Favourites, which is always a
 	// folder. Opening whatever `was_sel` happens to be would launch a game.
-	for (int i = 0; i < 60; i++) press(KEY_LEFT, 1);
+	shelf_rewind();
 	press(KEY_ENTER, 8);
 	press(KEY_ESC, 8);
 	for (int i = 0; i < was_sel; i++) press(KEY_RIGHT, 1);
@@ -17377,8 +17471,14 @@ static void assert_rip_screen()
 	/*
 	  Down to the last row, which is the copy. The rows above it are the cores, and the copy
 	  row is deliberately last: it is not what most players open this list for.
+
+	  Held rather than tapped, and that is not a style choice: the list wraps at its ends now
+	  (see wrap_step in chome_ui.cpp), so eight taps down a list of four rows hand the disc to
+	  whichever core the count happens to land on - which this section did, and launched
+	  TurboGrafx-16 off a PlayStation disc. Holding the key walks to the last row and stays
+	  there whatever the list is worth, which is what "down to the last row" always meant.
 	*/
-	for (int i = 0; i < 8; i++) press(KEY_DOWN, 6);
+	hold_dir(KEY_DOWN, 12, 8);
 	dump("rip-01-options");
 
 	check(rip_test_starts() == 0, "nothing has been started yet");
@@ -17716,7 +17816,7 @@ static void assert_rip_screen()
 
 	press(KEY_RIGHT);
 	press(KEY_ENTER);
-	for (int i = 0; i < 8; i++) press(KEY_DOWN, 6);
+	hold_dir(KEY_DOWN, 12, 8);                         // to the copy row; see rip-01 above
 	dump("rip-12-megacd-options");
 
 	press(KEY_ENTER, 8);
@@ -17770,12 +17870,14 @@ static void assert_rip_screen()
 	  LEFT first, and it is not decoration: disc_dlg_enter() opens the cursor on the first
 	  button that is NOT dim, so over a Saturn disc the dialog comes up on Options - see
 	  rip-13-saturn.png - and a bare press here would open the Options list and prove
-	  nothing about Play at all. LEFT clamps at button 0 rather than wrapping, so after it
+	  nothing about Play at all. A *held* LEFT walks to button 0 and stops there, so after it
 	  the cursor is on Play whichever button it opened on, and nothing else has been
-	  pressed that could have opened anything.
+	  pressed that could have opened anything. A single tap would not do it any more: the
+	  buttons wrap at their ends now, so a tap on a dialog that opened on Play would take the
+	  cursor to the far end of the row - see the disc case of move_h().
 	*/
 	harness_clear_launch();
-	press(KEY_LEFT);
+	hold_dir(KEY_LEFT, 8, 12);
 	press(KEY_ENTER, 4);
 	frame(80);
 	check(harness_last_launch()[0] == 0,
@@ -17784,7 +17886,7 @@ static void assert_rip_screen()
 
 	press(KEY_RIGHT);
 	press(KEY_ENTER);
-	for (int i = 0; i < 8; i++) press(KEY_DOWN, 6);
+	hold_dir(KEY_DOWN, 12, 8);                         // to the copy row; see rip-01 above
 	dump("rip-14-saturn-options");
 
 	press(KEY_ENTER, 8);
@@ -17830,7 +17932,7 @@ static void assert_rip_screen()
 
 	press(KEY_RIGHT);
 	press(KEY_ENTER);
-	for (int i = 0; i < 8; i++) press(KEY_DOWN, 6);
+	hold_dir(KEY_DOWN, 12, 8);                         // to the copy row; see rip-01 above
 	dump("rip-15-msu1-options");
 
 	harness_clear_launch();
@@ -18958,7 +19060,7 @@ static void assert_marquee()
 		  they fit at every profile, and parked on one the front-end has to be as still as it
 		  was before any of this existed.
 		*/
-		for (int i = 0; i < 30; i++) press(KEY_LEFT, 2);
+		shelf_rewind();
 		frame(20);
 		check(!chome_marq_live(), "a card whose name fits is not scrolled");
 		dump("marquee-240p-title-fits");
@@ -19120,6 +19222,496 @@ static const char *clip_allowance(const gfx_clip_rec *r)
 		if (!strcasecmp(clip_allowed[i].text, r->text)) return clip_allowed[i].why;
 	}
 	return 0;
+}
+
+/* ------------------------------------------- one boundary rule for every list --- */
+
+/*
+  Every list wraps at its ends, and only on a press the player made.
+
+  What was wrong. Some lists wrapped and some clamped. Options, More Settings, Online Covers,
+  Sort, Power and Close Game wrapped by modulo; core options, Controllers, the disc dialog's
+  buttons and the disc's core chooser clamped with a nudge; and Wi-Fi and the file browser
+  clamped *silently*, pinning the row at the end with no answer of any kind. Worse than the
+  disagreement, every one of the wrapping ones wrapped on auto-repeat too - so a held Down on
+  a two-row screen flipped between its rows fifty times a second for as long as the key was
+  held, and a held Down on Options cycled the whole panel round and round for ever.
+
+  What holds now, for every list on both axes: holding a direction steps one entry per repeat
+  to the end of the list and stops there, and a *fresh* press at that end - one with a release
+  before it - jumps to the other end. See wrap_step() in chome_ui.cpp for the rule and
+  held_key above it for how a press is told from a repeat.
+
+  The menu bar is the one exemption and it is asserted here as one rather than left untested;
+  move_h()'s SCR_MENUBAR case carries the argument, and assert_close_game_on_the_bar() is what
+  rests on it.
+*/
+
+// Open a menu-bar entry by the screen it opens rather than by counting cells, which differ per
+// profile and per whether a game is running. Leaves that screen up.
+static int bar_open(int want)
+{
+	for (int slot = 0; slot < 6; slot++)
+	{
+		if (bar_slot_opens(slot) == want) return 1;
+		bar_walk_home();
+	}
+	return 0;
+}
+
+/*
+  Hold a direction and watch where the cursor goes, repeat by repeat.
+
+  The trajectory and not only the destination, because a destination can be reached by
+  coincidence. On a list of ten, a hold of nineteen events finishes on the last entry whether
+  the end clamps or wraps by modulo - nineteen modulo ten is nine, and nine is the last entry -
+  so a check that read the finishing position alone would pass on the very behaviour this
+  replaces. What cannot coincide is the shape: every move exactly one entry, and then nothing.
+
+  `*steps` counts the moves and `*jumps` counts those that were not a single entry. Returns
+  where it finished. Callers start the hold away from a boundary, because the first event of a
+  hold is a real press and is entitled to wrap.
+*/
+static int hold_walk(int axis, int key, int repeats, int *steps, int *jumps)
+{
+	int prev = chome_list_cursor(axis, 0);
+	int st = 0, jp = 0;
+
+	chome_handle(key);
+	for (int r = 0; r <= repeats; r++)
+	{
+		if (r)
+		{
+			// Three frames of nothing at 16 ms each, which is about the 50 ms of REPEATRATE.
+			for (int f = 0; f < 3; f++) { harness_advance(16); chome_handle(0); }
+			chome_handle(key);
+		}
+
+		int now = chome_list_cursor(axis, 0);
+		if (now != prev)
+		{
+			st++;
+			if (now - prev != 1 && now - prev != -1) jp++;
+		}
+		prev = now;
+	}
+
+	harness_advance(16);
+	chome_handle(key | UPSTROKE);
+	frame(6);
+
+	if (steps) *steps = st;
+	if (jumps) *jumps = jp;
+	return prev;
+}
+
+/*
+  The whole rule, applied to whatever list is on screen, on one axis. `fwd` and `back` are the
+  two keys that walk it - Down and Up for a column, Right and Left for a row - and the screen
+  must already be up with its cursor somewhere on the list.
+
+  Leaves the cursor on the first entry, which is where every screen here opens, so a caller can
+  go on driving the screen afterwards.
+*/
+static void wrap_rules(const char *name, int axis, int fwd, int back)
+{
+	char what[256];
+	int n = 0;
+	int cur = chome_list_cursor(axis, &n);
+
+	snprintf(what, sizeof(what), "%s: a list with a cursor and at least two entries on it", name);
+	check(cur >= 0 && n >= 2, what);
+	if (cur < 0 || n < 2) return;
+	printf("  %s: %d entries, cursor at %d\n", name, n, cur);
+
+	/*
+	  To the first entry. A hold and not a run of presses: taps wrap now, so a count of them
+	  cannot arrive anywhere known from an unknown start. Nothing is measured about this walk,
+	  because the cursor may begin on the boundary where the hold's own first press may wrap.
+	*/
+	hold_dir(back, n + 8, 5);
+	snprintf(what, sizeof(what), "%s: holding back reaches the first entry", name);
+	check(chome_list_cursor(axis, 0) == 0, what);
+
+	/* Down the list under a held key, one entry per repeat, and stopping at the bottom. */
+	int steps = 0, jumps = 0;
+	int end = hold_walk(axis, fwd, n + 8, &steps, &jumps);
+	printf("  %s: held forward, %d step(s), %d jump(s), finished on %d of %d\n",
+		name, steps, jumps, end, n - 1);
+	snprintf(what, sizeof(what),
+		"%s: a held forward steps once per entry to the last and then stops, with nine "
+		"repeats to spare", name);
+	check(end == n - 1 && steps == n - 1 && jumps == 0, what);
+
+	/* The one thing a press may do there that a repeat may not. */
+	press(fwd, 5);
+	snprintf(what, sizeof(what), "%s: and a fresh press there wraps to the first entry", name);
+	check(chome_list_cursor(axis, 0) == 0, what);
+
+	/* The same from the other end. */
+	press(back, 5);
+	snprintf(what, sizeof(what), "%s: a fresh press at the first entry wraps to the last", name);
+	check(chome_list_cursor(axis, 0) == n - 1, what);
+
+	/* Which leaves a held back the whole list to walk, ending at the top. */
+	steps = jumps = 0;
+	end = hold_walk(axis, back, n + 8, &steps, &jumps);
+	snprintf(what, sizeof(what),
+		"%s: a held back steps once per entry to the first and then stops", name);
+	check(end == 0 && steps == n - 1 && jumps == 0, what);
+
+	/*
+	  And the count in discrete presses, which is the check a clamp cannot satisfy: n - 1 taps
+	  from the first entry reach the last, and the nth is back at the first. A clamp fails the
+	  second of those, an off-by-one in either direction fails one of them, and no nudge or
+	  repaint can make either true by accident.
+
+	  Skipped on a list too long to tap through, where the two holds above have already counted
+	  every entry twice.
+	*/
+	if (n <= 30)
+	{
+		for (int i = 0; i < n - 1; i++) press(fwd, 3);
+		snprintf(what, sizeof(what),
+			"%s: %d press(es) from the first entry reach the last", name, n - 1);
+		check(chome_list_cursor(axis, 0) == n - 1, what);
+
+		press(fwd, 3);
+		snprintf(what, sizeof(what),
+			"%s: and press %d is back at the first, so the walk is exactly %d long",
+			name, n, n);
+		check(chome_list_cursor(axis, 0) == 0, what);
+	}
+	else
+	{
+		hold_dir(back, n + 8, 5);
+	}
+}
+
+static void assert_uniform_wrap()
+{
+	printf("\n== every list wraps, and only on a deliberate press ==\n");
+
+	enum {
+		W_HOME = 0, W_MENUBAR = 1, W_SUSPEND = 2, W_SORT = 3, W_DISPLAY = 4,
+		W_OPTIONS = 5, W_BROWSE = 8, W_WIFI = 10, W_PADS = 11, W_POWER = 12,
+		W_SET = 15, W_CORE = 16, W_DISC = 17, W_COVERS = 19, W_CLOSE = 20
+	};
+
+	const uint8_t was_prof = cfg.classicui_profile;
+
+	cfg.classicui_profile = 1;
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+	harness_set_fb_supported(1);
+	harness_set_confstr(1);
+	harness_set_osd_visible(0);
+	// Declared visible so Display is on the bar at all - draw_menubar drops the entry when
+	// the scaler output is not what is on screen.
+	harness_set_scaler_visible(1);
+
+	/* ------------------------------------------------- the shelf and its panels --- */
+
+	harness_set_menu_core(1);
+	chome_leave();
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 80 && lib_scanning(); i++) frame(2);
+	frame(12);
+	bar_walk_home();
+	check(chome_screen_id() == W_HOME, "on the shelf, at 720p");
+
+	// The carousel: the one list here long enough for a wrap to be worth something to a
+	// player rather than merely consistent with the rest.
+	wrap_rules("the shelf carousel", 1, KEY_RIGHT, KEY_LEFT);
+
+	/*
+	  Down from the shelf has never been a list - it opens the suspend strip - and the strip's
+	  own list is the row of slots. Asserted rather than assumed, because "which axis is a
+	  list" is exactly the decision chome_list_cursor() is there to record: an axis that
+	  answers -1 is one move_v() or move_h() has deliberately left alone.
+	*/
+	check(chome_list_cursor(0, 0) < 0, "the shelf has no list on its vertical axis");
+
+	shelf_rewind();
+	select_first_game();
+	press(KEY_DOWN, 14);
+	check(chome_screen_id() == W_SUSPEND, "Down on a game card opens its suspend strip");
+	wrap_rules("the suspend strip", 1, KEY_RIGHT, KEY_LEFT);
+	check(chome_list_cursor(0, 0) < 0,
+		"while Down on the strip locks a slot rather than walking one");
+	press(KEY_ESC, 12);
+	frame(6);
+
+	// Sort, which is Select on the shelf.
+	bar_walk_home();
+	press(KEY_GRAVE, 14);
+	check(chome_screen_id() == W_SORT, "Select on the shelf opens Sort");
+	wrap_rules("Sort", 0, KEY_DOWN, KEY_UP);
+	press(KEY_ESC, 12);
+
+	/* ------------------------------------------------------ the one exemption --- */
+
+	bar_walk_home();
+	press(KEY_UP, 14);
+	check(chome_screen_id() == W_MENUBAR, "Up from the shelf reaches the menu bar");
+	{
+		int n = 0;
+		int cur = chome_list_cursor(1, &n);
+		printf("  the menu bar: %d entries, cursor at %d\n", n, cur);
+		check(cur >= 0 && n >= 2, "the bar is a row with a cursor on it");
+
+		hold_dir(KEY_LEFT, n + 8, 5);
+		check(chome_list_cursor(1, 0) == 0, "a held left reaches the first entry");
+		press(KEY_LEFT, 6);
+		check(chome_list_cursor(1, 0) == 0,
+			"and a fresh press there stays put - the bar is the one cursor still clamped");
+
+		hold_dir(KEY_RIGHT, n + 8, 5);
+		check(chome_list_cursor(1, 0) == n - 1, "a held right reaches the last entry");
+		press(KEY_RIGHT, 6);
+		check(chome_list_cursor(1, 0) == n - 1, "and a fresh press there stays put too");
+
+		check(chome_list_cursor(0, 0) < 0, "and the bar has no list on its vertical axis");
+		hold_dir(KEY_LEFT, n + 8, 5);
+	}
+
+	/* ------------------------------------------------ the rest of the bar's own --- */
+
+	check(bar_open(W_DISPLAY), "Display opens from the bar");
+	wrap_rules("Display", 1, KEY_RIGHT, KEY_LEFT);
+	check(chome_list_cursor(0, 0) < 0, "and it is one row of tiles, with nothing above or below");
+	bar_walk_home();
+
+	check(bar_open(W_POWER), "Power opens from the bar");
+	wrap_rules("Power", 0, KEY_DOWN, KEY_UP);
+	bar_walk_home();
+
+	/* ------------------------------------------------------ the Options family --- */
+
+	check(bar_open(W_OPTIONS), "Options opens from the bar");
+	wrap_rules("Options", 0, KEY_DOWN, KEY_UP);
+
+	// Each of these is counted down from row 0, which is where Options always opens - and
+	// wrap_rules() leaves it there.
+	press(KEY_DOWN, 6);
+	press(KEY_ENTER, 14);
+	check(chome_screen_id() == W_COVERS, "Online Covers opens from its row");
+	wrap_rules("Online Covers", 0, KEY_DOWN, KEY_UP);
+	press(KEY_ESC, 12);
+
+	// Controllers, with the same three-pad fixture the controllers section uses.
+	harness_clear_pads();
+	harness_add_pad(1, PAD_WIRED, 0x054C, 0x09CC, "Sony Computer Entertainment Wireless Controller", "");
+	harness_add_pad(2, PAD_SNAC,  0x0000, 0x0000, "MiSTer SNAC Pad 1", "");
+	harness_add_pad(3, PAD_BT,    0x054C, 0x09CC, "Wireless Controller", "DC:2C:26:1B:9A:71");
+	frame(8);
+
+	list_goto(0, 5, KEY_DOWN, KEY_UP, 5);
+	press(KEY_ENTER, 14);
+	check(chome_screen_id() == W_PADS, "Controllers opens from its row");
+	wrap_rules("Controllers", 0, KEY_DOWN, KEY_UP);
+	press(KEY_ESC, 12);
+
+	/*
+	  Wi-Fi, with a radio and a finished scan asserted the way the wi-fi section does it -
+	  there is none in the container. That section also leaves a fake `iw` in PATH, which is
+	  what stops the link refresher answering "not connected" and wiping the ingested link out
+	  from under the list; this runs after it for that reason.
+	*/
+	net_force_present(1);
+	net_force_scanning(0);
+	net_force_join(JOIN_IDLE, "");
+	net_ingest_scan(SCAN_TEXT);
+	net_ingest_link(LINK_TEXT);
+	frame(10);
+
+	list_goto(0, 6, KEY_DOWN, KEY_UP, 5);
+	press(KEY_ENTER, 14);
+	check(chome_screen_id() == W_WIFI, "Wi-Fi opens from its row");
+	wrap_rules("Wi-Fi", 0, KEY_DOWN, KEY_UP);
+	press(KEY_ESC, 12);
+
+	// More Settings, which is the longest list in the front-end and always scrolls - so this
+	// is also where "the window follows a wrap" is exercised, since list_track() is asked for
+	// a jump of the whole list twice.
+	list_goto(0, 8, KEY_DOWN, KEY_UP, 5);
+	press(KEY_ENTER, 16);
+	check(chome_screen_id() == W_SET, "More Settings opens from its row");
+	wrap_rules("More Settings", 0, KEY_DOWN, KEY_UP);
+	press(KEY_ESC, 14);
+	press(KEY_ESC, 12);
+	frame(6);
+
+	net_force_present(-1);
+
+	/* -------------------------------------------------------- the file browser --- */
+
+	/*
+	  Three files in the Amiga folder. Amiga is a computer system, which is off the shelf
+	  altogether and reached only through the browser - and the browser lists the directory as
+	  it finds it, so the fixture exists for exactly as long as this needs it and nothing has
+	  to be rescanned to make it go away. Same bargain, and the same folder, as the marquee
+	  section's own long-name file.
+	*/
+	mkpath(ROOT "/games/Amiga");
+	touch(ROOT "/games/Amiga", "Wrap One.adf", 2048);
+	touch(ROOT "/games/Amiga", "Wrap Two.adf", 2048);
+	touch(ROOT "/games/Amiga", "Wrap Three.adf", 2048);
+
+	check(marq_open_browser() && chome_screen_id() == W_BROWSE,
+		"the browser opens on the Amiga folder");
+	wrap_rules("the file browser", 0, KEY_DOWN, KEY_UP);
+	check(chome_list_cursor(1, 0) < 0, "and it is a column, with nothing on the other axis");
+	press(KEY_ESC, 12);
+
+	unlink(ROOT "/games/Amiga/Wrap One.adf");
+	unlink(ROOT "/games/Amiga/Wrap Two.adf");
+	unlink(ROOT "/games/Amiga/Wrap Three.adf");
+
+	/* ---------------------------------------------------------- the disc dialog --- */
+
+	/*
+	  A PlayStation disc in the fake drive, set up the way assert_disc_dialog() sets one up.
+
+	  The one screen in scope with a list on each axis: its buttons are a row and the core
+	  chooser behind them is a column. It is also the screen whose row used to clamp on the
+	  argument that two entries which wrap make Left and Right the same key - which Close Game
+	  and Power, both two-row lists, have always disproved.
+
+	  Everything is put back on the way out. The sections after this one draw the menu bar,
+	  and a disc in the drive puts a whole tier between the shelf and the bar.
+	*/
+	const int disc_was = cfg.classicui_disc;
+	cfg.classicui_disc = 1;
+
+	static fake_disc dw;
+	memset(&dw, 0, sizeof(dw));
+	static const char *const dw_none[] = { "" };
+	fake_iso(&dw, 0, "PLAYSTATION", "PLAYSTATION", dw_none, 0);
+	fake_put(&dw, 20, 0, "BOOT = cdrom:\\SLUS_006.26;1", 27, 100);
+
+	disc_ingest_present(1);
+	disc_set_reader(fake_read, &dw);
+	disc_ingest_identify(0);
+	frame(8);
+	check(disc_type() == DISC_T_PSX, "a PlayStation disc is in the drive");
+
+	press(KEY_UP, 12);                        // the badge in the corner
+	press(KEY_ENTER, 14);                     // and its dialog
+	check(chome_screen_id() == W_DISC, "the disc dialog opens over it");
+	wrap_rules("the disc dialog's buttons", 1, KEY_RIGHT, KEY_LEFT);
+
+	/*
+	  And the core chooser behind the Options button, reached by *holding* Right to the last
+	  button: A on the first button plays the disc, so a tap that wrapped round onto it would
+	  launch a game rather than open a list. The same reasoning assert_disc_dialog() now
+	  spells out where it makes the same move.
+	*/
+	hold_dir(KEY_RIGHT, 8, 10);
+	press(KEY_ENTER, 14);
+	check(chome_screen_id() == W_DISC && chome_list_cursor(0, 0) >= 0,
+		"and A on its last button opens the core chooser, which is a column");
+	wrap_rules("the disc's core chooser", 0, KEY_DOWN, KEY_UP);
+
+	press(KEY_ESC, 12);                       // out of the chooser, back to the buttons
+	press(KEY_ESC, 12);                       // and off the dialog
+
+	disc_ingest_present(0);
+	disc_set_reader(0, 0);
+	frame(8);
+	cfg.classicui_disc = (uint8_t)disc_was;
+	bar_walk_home();
+
+	/* ------------------------------------------------------ over a running game --- */
+
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "gb\nTetris (World).gb\n"); fclose(f); }
+	}
+
+	harness_set_menu_core(0);
+	harness_set_core_name("GAMEBOY");
+	chome_handle(0);
+	if (chome_ingame_active()) press(KEY_MENU, 14);
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 40 && lib_scanning(); i++) frame(2);
+	frame(14);
+	check(chome_ingame_active(), "the menu is up over a running game");
+
+	// Options again, because the panel is a different length in a game: OPT_ROWS_GAME and
+	// OPT_ROWS_MENU are separate counts and only one of them was walked above.
+	check(bar_open(W_OPTIONS), "Options opens from the in-game bar");
+	wrap_rules("Options, in a game", 0, KEY_DOWN, KEY_UP);
+	bar_walk_home();
+
+	check(bar_open(W_CLOSE), "Close Game opens from the in-game bar");
+	wrap_rules("Close Game", 0, KEY_DOWN, KEY_UP);
+	bar_walk_home();
+
+	/*
+	  The core's own options, where the last row of every page is the page switch.
+
+	  The thing worth proving here is that wrapping down off that row does not fight the page
+	  change: the page turns on A and on nothing else, so Down off the switch row must land on
+	  row 0 of the page the player is already on. The list length before and after is what says
+	  so - a page turn would change it under the walk, and the tally in wrap_rules() would not
+	  come out either.
+
+	  Navigation only. Nothing here presses Left or Right on this screen, which is where a
+	  value would be written to the core.
+	*/
+	core_opts_scan();
+	frame(6);
+	check(bar_open(W_CORE), "the running core's options open from the in-game bar");
+	int co_was = 0;
+	{
+		/*
+		  Which page it opened on, worked out the way the MB_CORE case of accept() works it
+		  out: Picture, or the first page after it that has anything. The fixture's Picture
+		  tier is empty, so hardcoding it would be asserting against a page the screen never
+		  shows.
+		*/
+		int tier = core_opts_tier_count(CO_TIER_PICTURE);
+		if (!tier) tier = core_opts_tier_count(CO_TIER_SYSTEM);
+		if (!tier) tier = core_opts_tier_count(CO_TIER_RISKY);
+
+		chome_list_cursor(0, &co_was);
+		printf("  core options: %d row(s) for %d option(s) on the page it opened\n", co_was, tier);
+		check(co_was == tier + 1,
+			"the page switch is the last row, so the list is one longer than the page");
+	}
+	wrap_rules("core options", 0, KEY_DOWN, KEY_UP);
+	{
+		int n = 0;
+		chome_list_cursor(0, &n);
+		check(n == co_was,
+			"and the page never turned under it: same page, same length after the whole walk");
+	}
+	bar_walk_home();
+
+	if (chome_ingame_active()) press(KEY_MENU, 16);
+	frame(8);
+
+	/* ------------------------------------------- and the state, put back as found --- */
+
+	harness_set_menu_core(1);
+	cfg.classicui_profile = was_prof;
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, was_prof);
+	chome_leave();
+	press(KEY_MENU, 20);
+	frame(10);
+	bar_walk_home();
+	/*
+	  Out of the Amiga folder the browser was opened from, which enter() does not undo - it
+	  puts the *screen* back to the shelf and leaves the view where it was. A section that
+	  hands on a sub-view hands on a shelf with no Favourites or Systems card on it, and the
+	  next section to look for one by name simply does not find it.
+	*/
+	shelf_root();
+	frame(6);
 }
 
 /*
@@ -19953,14 +20545,24 @@ int main()
 		dump("pads-2-forget-armed");
 		check(bt_count() == 3, "one press of X does not forget anything");
 
-		// Moving off the row disarms it, so a stray press cannot be completed later.
-		press(KEY_DOWN, 10);
-		press(KEY_TAB, 10);                   // arm row 2
-		press(KEY_UP, 10);                    // ...and off it again
-		press(KEY_UP, 10);                    // a refused move counts too
+		/*
+		  Moving off the row disarms it, so a stray press cannot be completed later - and a
+		  move that is *refused* disarms it too, which is the half worth stating: the code
+		  clears the arm before it tests the boundary, because reaching for a row that is not
+		  there still means the player has stopped meaning to forget this one.
+
+		  The refused move is a held UP against the top of the list, and that is the only shape
+		  it now has: a tap at the first row wraps to the last, so tapping would move the cursor
+		  rather than being refused, and the arm would be cleared by the ordinary path instead
+		  of by the one this line is about.
+		*/
+		list_goto(0, 1, KEY_DOWN, KEY_UP, 10);
+		press(KEY_TAB, 10);                   // arm the second row
+		press(KEY_UP, 10);                    // ...and off it again, onto the first
+		hold_dir(KEY_UP, 8, 10);              // a refused move counts too
 		press(KEY_DOWN, 10);
 		press(KEY_TAB, 10);                   // so this arms rather than forgets
-		press(KEY_UP, 10);
+		hold_dir(KEY_UP, 8, 10);
 		frame(4);
 		check(bt_count() == 3, "moving off an armed row disarms it, refused moves included");
 
@@ -19968,8 +20570,12 @@ int main()
 		  A paired controller that is not connected is the case worth acting on, so the
 		  legend offers waking it - and only for that one. Row 2 is paired-not-connected
 		  in the fixture; row 1 is connected and must not offer it.
+
+		  Placed rather than stepped, here and at every A below: the walks above end at the top
+		  of the list now instead of being stopped short by a clamp, so "one more Down" no
+		  longer names a row.
 		*/
-		press(KEY_DOWN, 12);
+		list_goto(0, 1, KEY_DOWN, KEY_UP, 10);   // the second row, counting from one
 		frame(6);
 		dump("pads-4-wake-offered");
 		press(KEY_UP, 10);
@@ -20125,7 +20731,10 @@ int main()
 			0x0136, 0x0137, 0x013A, 0x013B,      // L, R, Select, Start
 		};
 
-		// Row 1 is the wired DualShock, player 1. A on it is "test it", not "scan".
+		// Row 1 is the wired DualShock, player 1. A on it is "test it", not "scan". Placed
+		// rather than assumed: the pairing panel above left the cursor wherever it left it,
+		// and harness_set_pad_state() below is about *this* pad and no other.
+		list_goto(0, 0, KEY_DOWN, KEY_UP, 10);
 		press(KEY_ENTER, 14);
 		harness_set_pad_state(1, 0, PAD_CODES, 0, 0, 0);
 		frame(8);
@@ -20188,8 +20797,14 @@ int main()
 		  And the entry itself, which is what all of that was for: five controllers in the
 		  fixture, so the sixth row is the one that adds one - reachable only if it is
 		  there, and the only row on the screen for which A starts a scan.
+
+		  Reached by holding Down rather than by counting five of them, which is both more
+		  honest and now necessary. It always meant "the bottom of the list"; counting only
+		  worked because the fifth press was absorbed by a clamp when the walk started a row
+		  in - and with the ends wrapping, that fifth press lands on row 0 instead and A there
+		  opens a tester rather than a scan.
 		*/
-		for (int i = 0; i < 5; i++) press(KEY_DOWN, 8);
+		hold_dir(KEY_DOWN, 12, 8);
 
 		/*
 		  Asked before the frame settles, not after. btctl is not in the container either,
@@ -22428,7 +23043,7 @@ int main()
 		  below to force a redraw would land on the menu bar instead of coming back
 		  here, and the hashes would be of two different screens.
 		*/
-		for (int i = 0; i < 30; i++) press(KEY_LEFT, 2);
+		shelf_rewind();
 		int lead = 0;
 		while (lead < lib_view_count() && lib_view_entry(lead)->kind != ENT_GAME) lead++;
 		for (int i = 0; i < lead; i++) press(KEY_RIGHT, 6);
@@ -22726,6 +23341,20 @@ int main()
 	  are skipped, under a site beginning "assert_", the same as assert_typography()'s two
 	  hundred measurements.
 	*/
+	/*
+	  Task 54's own section: one boundary rule for every list.
+
+	  Here rather than beside the screens it drives, and after the wi-fi and controllers
+	  sections rather than before them, because it needs what those two leave behind: a fake
+	  `iw` and a fake bluetoothctl in PATH, without which the refresh children answer
+	  "nothing there" and empty the two lists out from under the cursor. It sets up its own
+	  radio, scan and pads on top of that and puts all three back.
+
+	  Before the marquee and the clipped-copy sweep, like every other section that opens a
+	  panel: the clips its walks make belong in the reading those two do.
+	*/
+	assert_uniform_wrap();
+
 	assert_marquee();
 
 	/*

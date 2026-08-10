@@ -50,6 +50,26 @@ The row starts with **Favourites** and **Systems**, so from anywhere in the shel
 
 The strip of pips under a card is its save-state slots — filled ones are green.
 
+### Getting from one end of a list to the other
+
+Every list in the front-end — the shelf, the settings panels, the controller list, the
+file browser, the save-state slots — ends the same way, and it is worth knowing because
+the two things it does are deliberately different:
+
+- **Holding** a direction walks to the end of the list and **stops there.** It never
+  keeps going round. So holding left is how you get to the front of a long shelf, and
+  holding down is how you get to the bottom of a long settings page.
+- **Pressing** the same direction again once you have arrived jumps to the *other* end.
+  From the first item, press up for the last; from the last, press down for the first.
+
+The line under the panel flashes red when a key you are holding has run out of list.
+That is the cue that one more press — a real press, not the one you are already
+holding — would take you round to the other end.
+
+The **menu bar** across the top is the exception, and on purpose: it is three to five
+entries all on screen at once, so it simply stops at each end. There is nothing on it to
+go round to.
+
 ### System icons
 
 ![System icons](img/system-icons.png)

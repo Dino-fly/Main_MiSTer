@@ -1062,6 +1062,63 @@ on (`user_io_kbd()`), and exposes it as `input_menu_key_from_pad()`.
 Key repeat for the shelf needs `chome_active()` in `menu_key_get()` - without it
 `menu_key_get()` only repeats for ASCII keys and the file browser.
 
+### The ends of a list, and how a press is told from a repeat
+
+Every list in the front-end obeys one rule, in one function - `wrap_step()` in
+`chome_ui.cpp`:
+
+- **Holding** a direction steps one entry per repeat to the end of the list and **stops
+  there**, whatever it does next.
+- A **fresh** press at that end - one with a release before it - jumps to the other end.
+
+So wrapping is always a deliberate press at a boundary and never something auto-repeat
+can do on its own. It replaces a genuine mess: Options, More Settings, Online Covers,
+Sort, Power and Close Game wrapped by `% n`, so a held key cycled them for ever; core
+options, Controllers, the disc dialog's buttons and the disc's core chooser clamped with
+a nudge; and Wi-Fi and the file browser clamped *silently*, giving no answer at all.
+
+`nudge()` means something narrower now. It is no longer "there is nothing that way" -
+there always is, one press later - but "you have arrived at the end and the key you are
+**holding** will not take you further", which is the moment the feedback is wanted. A
+fresh press at a boundary is not nudged, because it moves, and the cursor jumping from
+the last row to the first says so on its own. A list of *one* still refuses outright.
+
+**Telling a press from a repeat is the whole of it, and it is not a per-screen question.**
+Nothing in `chome_ui.cpp` synthesises repeats - `menu_key_get()` in `menu.cpp` does, and
+it delivers a held key as *the same keycode again* every `REPEATRATE` with an `UPSTROKE`
+only on the real release. A single `chome_handle()` call therefore cannot tell them apart;
+what can is the release in between. `held_key` latches that: set on every press, cleared
+on the upstroke, and deliberately **not** cleared on an idle frame - a hold is mostly
+`key == 0` frames, so clearing there would call every repeat a press and put the looping
+straight back. `key_run` cannot stand in for it for exactly that reason (it *is* reset on
+idle frames, and survives only as the shelf's screenful-jump counter). `held_gap` is the
+net for an upstroke that never arrives, and its threshold has to clear `REPEATDELAY`
+because the first repeat of a hold is that far behind the press.
+
+Two things are exempt, both on purpose and both commented where they live:
+
+- **The menu bar** still clamps. It is three to five cells all on screen at once, so
+  there is no far end to reach, and its ends are load-bearing as landmarks - "press
+  against the left stop" is how this file and the harness reach a known entry from an
+  unknown position, since `mb_idx` survives leaving the bar. Its vertical axis says the
+  same thing about what the screen is: Up nudges, Down leaves for the shelf.
+- **The axes that are not lists.** Down on the shelf opens the suspend strip, Down on the
+  strip locks a slot, Up and Down on the disc dialog leave it, and the Display row has
+  nothing above or below. `chome_list_cursor()` - a `CHOME_HOST_TEST` accessor - answers
+  `-1` for each of those, and the harness asserts that, so "this axis is deliberately not
+  a list" is a checked claim rather than an omission.
+
+A wrap on the **shelf** is placed rather than eased, like `view_rebuild()` and
+`nav_pop()`: the ease exists to show cards sliding past, and sliding past three hundred of
+them in one press is a smear, not an animation.
+
+The harness's own idioms had to move with this, and that is worth knowing before writing
+a test here: `for (i < 40) press(KEY_LEFT)` used to mean "as far as it goes" and now means
+forty cards, wrapping. `shelf_rewind()`, `hold_dir()` and `list_goto()` are the
+replacements; `assert_uniform_wrap()` is where the rule itself is asserted, screen by
+screen, by counting entries traversed rather than by hashing pixels - a wrap and a clamp
+are the same pixels one press apart.
+
 ## Running it on a laptop
 
 ```
