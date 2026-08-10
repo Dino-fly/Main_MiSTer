@@ -21945,7 +21945,8 @@ int main()
 		{
 			const opt_def *o = opt_at(i);
 			if (o->def < o->lo || o->def > o->hi) bad_range++;
-			if (o->rec < o->lo || o->rec > o->hi) bad_range++;
+			// rec is checked separately below, because one row is allowed to have none.
+			if (o->rec != OPT_NO_REC && (o->rec < o->lo || o->rec > o->hi)) bad_range++;
 			if (o->kind == OPT_NUMBER && o->step < 1) bad_range++;
 			if (!o->key[0] || !o->label[0] || !o->help[0]) no_text++;
 			for (int c = 0; c < o->nchoices; c++)
@@ -21968,6 +21969,28 @@ int main()
 			if (i >= 0 && opt_at(i)->rec != atoi(wt->value)) disagree++;
 		}
 		check(!disagree, "an option in both tables recommends what Best Settings writes");
+
+		/*
+		  And a recommendation is either a value the row can hold or the sentinel that says
+		  there isn't one. Worth its own check because opt_rec_text() would hand INT_MIN to
+		  text_for() and print it, which is only unreachable while every caller is guarded by
+		  opt_is_rec() - a guard that lives in a different file from this table.
+
+		  The count is asserted at exactly one, and that is a deliberate ratchet rather than
+		  a fact worth knowing: "no opinion" is the easy way out of writing a recommendation,
+		  and the argument for the row that has it (chome_opt.h, OPT_NO_REC) is that its value
+		  is a measurement of the player's hardware rather than a preference. A second row
+		  claiming that should have to come and say so here.
+		*/
+		int rec_oor = 0, rec_none = 0;
+		for (int i = 0; i < opt_count(); i++)
+		{
+			const opt_def *o = opt_at(i);
+			if (o->rec == OPT_NO_REC) { rec_none++; continue; }
+			if (o->rec < o->lo || o->rec > o->hi) rec_oor++;
+		}
+		check(!rec_oor, "every recommendation is a value its own row can actually hold");
+		check(rec_none == 1, "and exactly one row says it has no opinion, which is snac_device");
 
 		/* ------------------------------------------------------------- the model --- */
 
@@ -22321,6 +22344,61 @@ int main()
 				dump("set-11-240p-replace-pack-art");
 				check(panel_hash() != h_top, "and it is reachable at 240p too");
 			}
+		}
+
+		/*
+		  SNAC Adapter, which is the same omission as Physical Disc made a second time: the
+		  key shipped reachable only by editing MiSTer.ini with a keyboard.
+
+		  The interesting assertion is the one about the amber. Every other row on this
+		  screen is a preference, so "away from what we recommend" is worth colouring - but
+		  this one says what is physically plugged into a port, and both answers are correct
+		  for the person giving them. A player who set Other Console because they own an N64
+		  adapter must not be told they are off-spec, so the row carries OPT_NO_REC and
+		  neither value is flagged. That is checked on both values rather than on the
+		  sentinel, because what matters is what the footer does, not how it is spelled.
+
+		  Also that it is not scaler_only. The machine this setting exists for is a
+		  SuperStation One with a SuperDock - analog, and so exactly the machine that drops
+		  every scaler_only row from this list.
+		*/
+		{
+			int i_snac = opt_find("snac_device");
+			check(i_snac >= 0, "the SNAC adapter has a row, not only an ini key");
+
+			const opt_def *od = (i_snac >= 0) ? opt_at(i_snac) : 0;
+			check(od && od->group == OG_PADS,
+				"in Controllers, where somebody goes when a pad is not behaving");
+			check(od && od->kind == OPT_LIST && od->lo == 0 && od->hi == 1,
+				"as a two-value list inside the range cfg.cpp declares");
+			check(od && od->nchoices == 2 && od->choices
+				&& !strcmp(od->choices[0].label, "PlayStation")
+				&& !strcmp(od->choices[1].label, "Other Console"),
+				"named for the plug the player can see, not Off and On");
+			check(od && od->when == OW_NOW,
+				"and it takes effect now, which snacpad_poll() re-deriving ownership is what makes true");
+			check(od && !od->scaler_only,
+				"and it is offered on an analog machine, which is the one it is for");
+			check(od && od->help && od->help[0], "and it carries a sentence of its own");
+
+			put_file(path, SRC);
+			opt_load(path);
+
+			check(!opt_present(i_snac) && opt_value(i_snac) == 0,
+				"a card that has never heard of it reads as a PlayStation pad");
+			check(opt_is_rec(i_snac), "and is not flagged");
+			check(opt_step_by(i_snac, 1) && opt_value(i_snac) == 1, "one press says Other Console");
+			check(opt_is_rec(i_snac),
+				"and that is not flagged either - it is a fact about the desk, not a preference");
+
+			check(opt_apply(path, 0, 0) == 1, "saving writes it");
+			check(slurp_file(path, now, sizeof(now)) > 0
+				&& strstr(now, "[MiSTer]\r\nsnac_device=1\r\n") != 0,
+				"under a [MiSTer] header of its own, not into the [NES] section the file ends in");
+			check(cfg.snac_device == 1 && opt_wrote_live(),
+				"and the running poll is told, so the port is let go without a relaunch");
+
+			cfg.snac_device = 0;
 		}
 
 		press(KEY_ESC, 10);

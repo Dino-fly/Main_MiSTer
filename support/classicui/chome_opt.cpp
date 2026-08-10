@@ -41,6 +41,15 @@ static const opt_choice ch_res[] = { { 0, "Sharp" }, { 1, "Fast" } };
 */
 static const opt_choice ch_popup[] = { { 0, "Hidden" }, { 6, "Shown" } };
 
+/*
+  Named for the two consoles a player can look down and see, because that is the
+  question: not "is SNAC on" - snac_pad is that, and it is not on this screen - but
+  "what is the plug on the end of the cable". Off/On could not be given a direction
+  here at all; "On" would have to mean "yes, it is something else", and a setting whose
+  On means a negative is a setting people get backwards.
+*/
+static const opt_choice ch_snacdev[] = { { 0, "PlayStation" }, { 1, "Other Console" } };
+
 #define NCH(a) ((uint8_t)(sizeof(a) / sizeof(a[0])))
 
 /*
@@ -91,6 +100,42 @@ static const opt_def opts[] =
 	{ "controller_info", "Button Pop-Up",
 	  "The button list a pad shows the first time in a game.",
 	  OG_PADS, OPT_LIST, 0, 0, 10, 1, 0, 6, 0, ch_popup, NCH(ch_popup), &cfg.controller_info, 0, OW_NOW },
+
+	/*
+	  What is on the SNAC port - and this row exists because the firmware cannot find out.
+
+	  Every other fact about a controller on this machine is read from the hardware. This
+	  one is not readable, and not for want of trying: the bypass switch on a SuperDock
+	  reroutes the SNAC bus to an extension port that takes any console's adapter, and
+	  nothing on any pin changes when it moves (snacpad.cpp, snacpad_poll()). So the
+	  player is the only source, which makes a row the only mechanism - it is the exact
+	  shape of the mistake Physical Disc above was added to fix, and it was made twice:
+	  this key shipped reachable only by editing MiSTer.ini with a keyboard.
+
+	  In Controllers, next to Rumble and the button pop-up, because that is where somebody
+	  goes when a pad is not behaving. It is a port and a plug; it is not a menu setting
+	  and it is not about the picture.
+
+	  rec is OPT_NO_REC - the only row on the screen with no opinion. The header says why
+	  at length: this is a statement of fact, and both answers are correct for the person
+	  giving them.
+
+	  OW_NOW, and it is true rather than nearly true. snacpad_poll() re-derives ownership
+	  from this field every 2 ms with no state to unwind, so the port is handed over or let
+	  go on the next poll - and snac_gap_note() reads it on the frame it draws, so the
+	  "needs a newer core" notice stops or starts being offered at the same moment.
+	  There is nothing to relaunch and nothing to rescan.
+
+	  What it does NOT do, and the help line is worded to not promise it: this cannot make
+	  a non-PlayStation adapter work. Reading an N64 or SNES pad off the port needs a core
+	  that does it in RTL. All this says is "stand back", which is worth having on its own -
+	  the alternative is the front-end clocking PlayStation command frames at somebody
+	  else's adapter for as long as it is plugged in.
+	*/
+	{ "snac_device", "SNAC Adapter",
+	  "Other Console leaves the SNAC port completely alone.",
+	  OG_PADS, OPT_LIST, 0, 0, 1, 1, 0, 0, OPT_NO_REC, ch_snacdev, NCH(ch_snacdev),
+	  &cfg.snac_device, 0, OW_NOW },
 
 	/*
 	  Physical discs, and this row is the whole of how the feature is reached.
@@ -281,7 +326,19 @@ void opt_load(const char *path)
 
 int opt_value(int i)   { return (i >= 0 && i < NOPTS) ? cur[i] : 0; }
 int opt_present(int i) { return (i >= 0 && i < NOPTS) ? present[i] : 0; }
-int opt_is_rec(int i)  { return (i >= 0 && i < NOPTS) ? (cur[i] == opts[i].rec) : 1; }
+/*
+  "Is this row where we would want it." A row with no opinion answers yes whatever it
+  is set to, which is what keeps the amber footer off it - see OPT_NO_REC in the header
+  for why exactly one row is like that. Written as a separate test rather than by giving
+  the sentinel a value no `cur` can hold, because `cur` is an int and a comparison that
+  happens to never be true is a coincidence, not a statement.
+*/
+int opt_is_rec(int i)
+{
+	if (i < 0 || i >= NOPTS) return 1;
+	if (opts[i].rec == OPT_NO_REC) return 1;
+	return cur[i] == opts[i].rec;
+}
 
 int opt_set(int i, int v)
 {

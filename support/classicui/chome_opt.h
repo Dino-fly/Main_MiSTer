@@ -39,6 +39,7 @@
 #define CHOME_OPT_H
 
 #include <inttypes.h>
+#include <limits.h>              // for OPT_NO_REC
 
 #include "chome_ini.h"           // for ini_set: opt_apply() carries the screen's own keys
 
@@ -57,6 +58,9 @@
 // When a written value starts being true.
 #define OW_NOW   0               // this session is already living under it
 #define OW_GAME  1               // the next core load, which re-reads the whole ini
+
+// A row with no opinion about its own value. See `rec` in opt_def below.
+#define OPT_NO_REC INT_MIN
 
 struct opt_choice
 {
@@ -86,7 +90,24 @@ struct opt_def
 	const char *unit;            // OPT_NUMBER: drawn after the number, or 0
 
 	int def;                     // what the firmware uses when the key is absent
-	int rec;                     // ...and what is right for this front-end. Usually def
+
+	/*
+	  ...and what is right for this front-end. Usually def, and OPT_NO_REC when the
+	  honest answer is "that is not for us to say".
+
+	  Every other row on this screen is a preference, so "away from what we recommend"
+	  is a useful thing to colour amber. snac_device is not a preference: it says what
+	  is physically plugged into a port, and a player who told us they have an adapter
+	  for another console gave the *correct* answer. Telling that person they are away
+	  from the recommendation - "Usually PlayStation" - would be the screen arguing with
+	  a fact about their own desk, and the one thing worse than no advice is advice that
+	  is wrong for the person reading it.
+
+	  A sentinel rather than -1, because -1 is a value a player can legitimately set:
+	  classicui_tracking's range is -2..+2. INT_MIN is outside every range cfg.cpp
+	  declares and will stay outside any that gets added.
+	*/
+	int rec;
 
 	const opt_choice *choices;   // OPT_LIST
 	uint8_t nchoices;
