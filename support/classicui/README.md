@@ -1311,6 +1311,20 @@ no new table.
   restart, expires, refuses to record a refusal, fails safe when corrupt, and stays
   bounded.
 
+  Two things sit on top of that store. A miss that has aged out of its week is *retained* as
+  a record for a month, saying only that the game was asked about once - which is what lets
+  the fetch order put every game nobody has ever asked about ahead of any re-ask, since the
+  unmatched budget is what is scarce and a first ask is likelier to match. Priority still
+  wins for anything that can be painted: a re-ask is by construction a card that has been
+  showing a plate for a week, so standing it down delays no pixel. And a cover downloaded
+  from the libretro pack is now noted in `classicui/art-from-libretro.txt`, so a player who
+  entered an account after their card was filled is not stuck with pack art for ever -
+  `classicui_ss_replace_pack`, off unless they set it, offers each noted cover to
+  ScreenScraper once, from an idle shelf, after everything else. The two stores make opposite
+  claims about a game and neither is ever read as the other; `assert_art_fetch_order()` and
+  `assert_pack_provenance()` assert both, including that a mark on its own asks for
+  nothing.
+
   Until a `devid` is issued, the gamelist reader is the same outcome by a better
   route: scrape on a PC with Skraper or Skyscraper, which already hold registered keys
   and already hash properly, and the result works here untouched.

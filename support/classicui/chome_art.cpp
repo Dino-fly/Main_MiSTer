@@ -41,6 +41,24 @@ struct art_slot
 	  meaning "some network source has been tried" could not express that.
 	*/
 	int ss_absent;
+
+	/*
+	  This game's ScreenScraper rung is a *re-ask*: the database was asked about it before,
+	  had nothing, and that answer has since aged out of the window - see
+	  art_ss_miss_stale(). So it is askable again, and it must not be asked before a game
+	  nobody has ever asked about.
+
+	  Set by art_step_one() the first time it walks the ladder for this item and finds both
+	  halves true, and read by queue_best() on every pop after that. Discovered rather than
+	  computed at request time, and that is the point of the field: the cheap answer
+	  ("something aged out for this game") is not the answer wanted ("this game is going to
+	  spend a request"), and the two part company for exactly the games where it matters
+	  most. A game whose miss aged out and whose cover the pack has since supplied has local
+	  art now: it is on rung one, it decodes, and demoting its *decode* for fairness we do
+	  not owe it would leave a card blank while the player scrolls past it. So nothing is
+	  demoted until the ladder has said out loud that it is about to ask.
+	*/
+	int ss_reask;
 };
 
 static art_slot *slots = 0;    // one per item, sparse: data only for loaded ones
@@ -51,22 +69,69 @@ static uint32_t clock_tick = 0;
 static int cache_bytes = 0;
 static int cache_count = 0;
 
-// decode queue, sorted by priority
+/*
+  The decode queue: what to look at, in what order. See queue_best() for the order.
+
+  qseq is the arrival number, and it is the fairness half of the ordering. Without it the
+  order among equals was whatever the array happened to look like - queue_pop() fills the
+  hole it made with the last entry, so equal-priority items came out roughly last-in
+  first-out, and a card that had been waiting since the player started scrolling could be
+  passed over indefinitely by cards asked for after it. That never mattered while every
+  entry was a local decode; it matters now that an entry can be a request against a finite
+  allowance.
+*/
 static int queue[QUEUE_MAX];
 static int qprio[QUEUE_MAX];
+static unsigned qseq[QUEUE_MAX];
+static unsigned qseq_next = 1;
 static int nqueue = 0;
+
+// How many times the ScreenScraper rung has been acted on, and for which item last. Up here
+// rather than beside the ladder because art_shutdown() clears the second one: it is an item
+// index, and a rescan renumbers those. See art_ss_last_ask().
+static unsigned ss_asks = 0;
+static int ss_ask_last = -1;
 
 // one outstanding fetch
 static pid_t fetch_pid = -1;
 static int fetch_item = -1;
-static char fetch_tmp[1024];
-static char fetch_dst[1024];
-
-/* ------------------------------------- the misses we remember across boots --- */
 
 /*
-  See the long note on art_ss_miss_known() in chome_art.h for why this exists at all. What
-  is here is the shape of it, and the two decisions that are not obvious from the header.
+  Which game that item index meant when the download started.
+
+  The same guard ssf_item_key is, for the same reason and now for the same need: the
+  destination used to be worked out at the request and carried in fetch_dst, so a library
+  renumbered mid-download could only mis-attribute the log line. It is worked out from the
+  item at the landing now - art_pack_landed(), which is also the harness's way in - so a
+  stale index would write the file, and the mark, under another game's name.
+*/
+static uint32_t fetch_key = 0;
+static char fetch_tmp[1024];
+
+
+/* --------------------------------- what the card remembers about a game --- */
+
+/*
+  Two stores live in here, and they are two rather than one because they say two different
+  things about a game:
+
+    ss-misses.txt          ScreenScraper answered about this game and had no cover for it.
+                           "They have not got it."
+    art-from-libretro.txt  the cover on this card came from the libretro thumbnail pack.
+                           "We have something, from somewhere else, and better may exist."
+
+  Nothing may read one as the other, and no function here answers both. A miss suppresses a
+  request for ART_SS_MISS_DAYS; a libretro mark suppresses nothing at all and only ever
+  *enables* a retry the player has switched on. Conflating them in either direction is a bug
+  with a week's memory: a mark read as a miss writes off a game the database does have, and
+  a miss read as a mark re-asks about a game that has already said no.
+
+  What they share is the mechanism and only the mechanism: the same record shape, the same
+  hash-matched lookup, the same append-on-write / compact-on-load discipline, the same cap
+  and the same atomic rewrite. That is shared as code rather than copied for the reason the
+  ssf_ prefix exists further down this file - the temporary-and-rename, the future-dated day
+  guard and the eviction order are each one line away from being wrong, and one copy of them
+  is one place to be right.
 
   ---------------------------------------------------------------------------
   One: matched on a hash, readable as text.
@@ -91,40 +156,98 @@ static char fetch_dst[1024];
   Two: appended to, not rewritten.
   ---------------------------------------------------------------------------
 
-  Recording a miss appends one line. A first scan of a shelf that misses on most of it is
-  1469 appends of ~60 bytes rather than 1469 rewrites of a file growing to 90 KB, which is
-  the difference between a card that shrugs and a card that has been asked to write 60 MB
-  for no reason.
+  Recording a line appends it. A first scan of a shelf that misses on most of it is 1469
+  appends of ~60 bytes rather than 1469 rewrites of a file growing to 90 KB, which is the
+  difference between a card that shrugs and a card that has been asked to write 60 MB for
+  no reason.
 
   The file is compacted on load instead, which is the one moment its whole contents are in
-  hand anyway: expired entries are dropped, a key that appears twice keeps its latest day,
-  and the file is rewritten only when that actually changed something. So a shelf that is
-  scraped once and then left alone rewrites the file once a week, when things start
-  expiring, and never otherwise.
+  hand anyway: entries past their keep window are dropped, a key that appears twice keeps
+  its latest day, and the file is rewritten only when that actually changed something. So a
+  shelf that is scraped once and then left alone rewrites the file when things start to
+  fall out of the store, and never otherwise.
 
   Corruption fails safe in the only direction that is safe: a line that does not parse is
   skipped, and a skipped line means the game it described gets asked about again. Losing
   the whole file costs one shelf's worth of requests; trusting a mangled one could write
   off a game forever.
+
+  ---------------------------------------------------------------------------
+  Three: a record outlives the answer it holds.
+  ---------------------------------------------------------------------------
+
+  A store has two horizons rather than one, and this is the part that is new.
+
+  window_days is how long the record's answer *counts* - for the miss store, how long a
+  game the database had nothing for is left alone. keep_days is how much longer the record
+  is remembered at all, saying nothing except "this was asked about once".
+
+  Without that second horizon there is no way to tell a game that has never been asked
+  about from one whose miss aged out this morning, because the record would have been
+  deleted at the moment it stopped counting. The whole of the fairness rule below -
+  never let a re-ask go out ahead of a game nobody has ever asked about - is a question
+  about records that no longer count, so they have to still be there to be asked about.
+  See queue_best() and the note on art_ss_miss_stale() in chome_art.h.
 */
 
-struct ss_miss_rec
+struct art_key_rec
 {
 	uint64_t key;      // hash of the whole "<systemeid>/<name>" query key. What is matched.
-	uint32_t day;      // days since the epoch, when we asked
+	uint32_t day;      // days since the epoch, when it was written down
 	char what[80];     // the same key, truncated, for a human reading the file
 };
 
-static ss_miss_rec *ss_miss = 0;   // sorted by key, so a lookup is a binary search
-static int ss_nmiss = 0;
-static int ss_miss_loaded = 0;
+struct art_keystore
+{
+	const char *file;        // the basename, under <root>/classicui
+	const char *header;      // the comment block written at the top of it
+	int window_days;         // how long a record's answer counts. 0: for ever
+	int keep_days;           // how long the record is held at all. 0: for ever
 
-// The store is consulted from art_source_for(), which the shelf calls for every card it
-// draws. Kept sorted so that is 12 comparisons rather than 4096; inserting is a memmove of
-// at most 4096 * 96 bytes, which happens once per miss and never in a draw.
-#define SS_MISS_REC_BYTES ((int)sizeof(ss_miss_rec))
+	art_key_rec *rec;        // sorted by key, so a lookup is a binary search
+	int n;
+	int loaded;
+	char path[1024];
+};
 
-static uint64_t ss_miss_hash(const char *s)
+#define ART_KEY_REC_BYTES ((int)sizeof(art_key_rec))
+
+// The store is consulted from art_source_for(), which the step calls for every card it
+// walks. Kept sorted so that is 12 comparisons rather than 4096; inserting is a memmove of
+// at most 4096 * 96 bytes, which happens once per record and never in a draw.
+static art_keystore ss_misses =
+{
+	"ss-misses.txt",
+	"# ClassicUI: games ScreenScraper answered about and had no cover for.\n"
+	"# Delete this file to ask it about all of them again.\n",
+	ART_SS_MISS_DAYS, ART_SS_MISS_KEEP_DAYS,
+	0, 0, 0, { 0 }
+};
+
+/*
+  And the other one, which is not a list of refusals and must never be read as one.
+
+  No window and no expiry: a cover that came from the pack came from the pack until
+  something replaces it, and there is no date on which that stops being true. Entries leave
+  this store in exactly two ways - the retry settled (the cover was replaced, or the
+  database said it has nothing, in which case the pack's cover is the answer and the miss
+  store now holds the refusal), or the cap evicted one.
+*/
+static art_keystore pack_marks =
+{
+	"art-from-libretro.txt",
+	"# ClassicUI: covers on this card that were downloaded from the libretro thumbnail\n"
+	"# pack rather than scraped from ScreenScraper.\n"
+	"#\n"
+	"# Nothing is ever asked about again because of a line in here. It is what lets\n"
+	"# classicui_ss_replace_pack=1 - off unless you turn it on yourself - try\n"
+	"# ScreenScraper once more for these, once each. Delete this file and the covers\n"
+	"# are simply kept.\n",
+	0, 0,
+	0, 0, 0, { 0 }
+};
+
+static uint64_t ks_hash(const char *s)
 {
 	// FNV-1a, 64-bit. Chosen because the tree already uses the 32-bit form for chome_item
 	// keys, so there is one hash idiom here rather than two.
@@ -143,56 +266,66 @@ static uint64_t ss_miss_hash(const char *s)
   systemeid rather than the MiSTer system id, because that is the half that goes into the
   URL - and because .gb and .gbc, or .sms and .gg, share a shelf but are different
   platforms to the API. Keying on the shelf's system would merge two of them.
+
+  Both stores key on this one string, which is also what makes a mark survive a rescan: it
+  is a property of the game as the database sees it, not of the shelf's numbering.
 */
-static void ss_miss_key(const char *systemeid, const char *name, char *out, int len)
+static void ks_key(const char *systemeid, const char *name, char *out, int len)
 {
 	snprintf(out, len, "%s/%s", systemeid ? systemeid : "?", name ? name : "?");
 }
 
-static uint32_t ss_miss_today()
+static uint32_t ks_today()
 {
 	return (uint32_t)(time(0) / 86400);
 }
 
-const char *art_ss_miss_path()
+static const char *ks_path(art_keystore *s)
 {
-	static char p[1024];
-	snprintf(p, sizeof(p), "%s/classicui/ss-misses.txt", getRootDir());
-	return p;
+	snprintf(s->path, sizeof(s->path), "%s/classicui/%s", getRootDir(), s->file);
+	return s->path;
+}
+
+static void ks_mkdir(art_keystore *s)
+{
+	(void)s;
+	char dir[1024];
+	snprintf(dir, sizeof(dir), "%s/classicui", getRootDir());
+	mkdir(dir, 0777);
 }
 
 // Where in the sorted array this key is, or where it would go. Returns 1 when it is
 // actually there.
-static int ss_miss_find(uint64_t key, int *at)
+static int ks_find(art_keystore *s, uint64_t key, int *at)
 {
-	int lo = 0, hi = ss_nmiss;
+	int lo = 0, hi = s->n;
 	while (lo < hi)
 	{
 		int mid = lo + (hi - lo) / 2;
-		if (ss_miss[mid].key < key) lo = mid + 1;
+		if (s->rec[mid].key < key) lo = mid + 1;
 		else hi = mid;
 	}
 
 	*at = lo;
-	return (lo < ss_nmiss && ss_miss[lo].key == key) ? 1 : 0;
+	return (lo < s->n && s->rec[lo].key == key) ? 1 : 0;
 }
 
 // Insert or update in place. Returns 1 when the store changed.
-static int ss_miss_put(uint64_t key, uint32_t day, const char *what)
+static int ks_put(art_keystore *s, uint64_t key, uint32_t day, const char *what)
 {
-	if (!ss_miss) return 0;
+	if (!s->rec) return 0;
 
 	int at = 0;
-	if (ss_miss_find(key, &at))
+	if (ks_find(s, key, &at))
 	{
 		// Already known. Keep the later day: the file is append-only, so the same key
 		// appearing twice is a re-ask after an expiry and the second line is the truth.
-		if (ss_miss[at].day >= day) return 0;
-		ss_miss[at].day = day;
+		if (s->rec[at].day >= day) return 0;
+		s->rec[at].day = day;
 		return 1;
 	}
 
-	if (ss_nmiss >= ART_SS_MISS_MAX)
+	if (s->n >= ART_SS_MISS_MAX)
 	{
 		/*
 		  Full. Drop the oldest, then re-find the insertion point - dropping shifts
@@ -202,74 +335,78 @@ static int ss_miss_put(uint64_t key, uint32_t day, const char *what)
 		  "not remembered" for games that are, and the whole shelf would be re-asked.
 		*/
 		int oldest = 0;
-		for (int i = 1; i < ss_nmiss; i++) if (ss_miss[i].day < ss_miss[oldest].day) oldest = i;
+		for (int i = 1; i < s->n; i++) if (s->rec[i].day < s->rec[oldest].day) oldest = i;
 
-		memmove(&ss_miss[oldest], &ss_miss[oldest + 1],
-			(size_t)(ss_nmiss - oldest - 1) * (size_t)SS_MISS_REC_BYTES);
-		ss_nmiss--;
+		memmove(&s->rec[oldest], &s->rec[oldest + 1],
+			(size_t)(s->n - oldest - 1) * (size_t)ART_KEY_REC_BYTES);
+		s->n--;
 
-		ss_miss_find(key, &at);
+		ks_find(s, key, &at);
 	}
 
-	memmove(&ss_miss[at + 1], &ss_miss[at], (size_t)(ss_nmiss - at) * (size_t)SS_MISS_REC_BYTES);
+	memmove(&s->rec[at + 1], &s->rec[at], (size_t)(s->n - at) * (size_t)ART_KEY_REC_BYTES);
 
-	memset(&ss_miss[at], 0, sizeof(ss_miss_rec));
-	ss_miss[at].key = key;
-	ss_miss[at].day = day;
-	snprintf(ss_miss[at].what, sizeof(ss_miss[at].what), "%s", what ? what : "");
-	ss_nmiss++;
+	memset(&s->rec[at], 0, sizeof(art_key_rec));
+	s->rec[at].key = key;
+	s->rec[at].day = day;
+	snprintf(s->rec[at].what, sizeof(s->rec[at].what), "%s", what ? what : "");
+	s->n++;
 	return 1;
 }
 
-static void ss_miss_write_all()
+static void ks_write_all(art_keystore *s)
 {
-	char dir[1024];
-	snprintf(dir, sizeof(dir), "%s/classicui", getRootDir());
-	mkdir(dir, 0777);
+	ks_mkdir(s);
 
 	// Through a temporary and a rename, so that a firmware killed mid-write - which is
 	// what a core change does - cannot leave a half-file behind. A half-file would parse:
-	// every line in it is well formed, it is simply missing the rest, and the misses it
+	// every line in it is well formed, it is simply missing the rest, and the records it
 	// lost would quietly become requests.
-	char tmp[1100];
-	snprintf(tmp, sizeof(tmp), "%s.new", art_ss_miss_path());
+	char want[1100];
+	snprintf(want, sizeof(want), "%s", ks_path(s));
+
+	char tmp[1200];
+	snprintf(tmp, sizeof(tmp), "%s.new", want);
 
 	FILE *f = fopen(tmp, "wt");
 	if (!f) return;
 
-	fprintf(f,
-		"# ClassicUI: games ScreenScraper answered about and had no cover for.\n"
-		"# Delete this file to ask it about all of them again.\n"
-		"# <day since epoch> <key> <what was asked - for reading, not for matching>\n");
+	fprintf(f, "%s", s->header);
+	if (s->window_days)
+	{
+		fprintf(f, "# A line here counts for %d days and is remembered for %d.\n",
+			s->window_days, s->keep_days);
+	}
+	fprintf(f, "# <day since epoch> <key> <what was asked - for reading, not for matching>\n");
 
 	int ok = 1;
-	for (int i = 0; i < ss_nmiss && ok; i++)
+	for (int i = 0; i < s->n && ok; i++)
 	{
-		ok = (fprintf(f, "%u %016llx %s\n", ss_miss[i].day,
-			(unsigned long long)ss_miss[i].key, ss_miss[i].what) > 0);
+		ok = (fprintf(f, "%u %016llx %s\n", s->rec[i].day,
+			(unsigned long long)s->rec[i].key, s->rec[i].what) > 0);
 	}
 
 	if (fclose(f) || !ok) { unlink(tmp); return; }
-	if (rename(tmp, art_ss_miss_path())) unlink(tmp);
+	if (rename(tmp, want)) unlink(tmp);
 }
 
-static void ss_miss_load()
+static void ks_load(art_keystore *s)
 {
-	if (ss_miss_loaded) return;
-	ss_miss_loaded = 1;
+	if (s->loaded) return;
+	s->loaded = 1;
 
-	if (!ss_miss)
+	if (!s->rec)
 	{
-		ss_miss = (ss_miss_rec*)calloc(ART_SS_MISS_MAX, sizeof(ss_miss_rec));
-		if (!ss_miss) return;
+		s->rec = (art_key_rec*)calloc(ART_SS_MISS_MAX, sizeof(art_key_rec));
+		if (!s->rec) return;
 	}
 
-	ss_nmiss = 0;
+	s->n = 0;
 
-	FILE *f = fopen(art_ss_miss_path(), "rt");
+	FILE *f = fopen(ks_path(s), "rt");
 	if (!f) return;
 
-	uint32_t today = ss_miss_today();
+	uint32_t today = ks_today();
 	int lines = 0, dropped = 0, bad = 0;
 
 	char line[256];
@@ -298,72 +435,111 @@ static void ss_miss_load()
 		for (char *p = what; *p; p++) if (*p == '\n' || *p == '\r') { *p = 0; break; }
 
 		/*
-		  Expiry, and the guard for a day in the future.
+		  The keep horizon, and the guard for a day in the future.
 
 		  A card with no RTC - which is every MiSTer - boots with whatever the last
 		  timestamp was until NTP catches up, so a file written after a successful sync
 		  can genuinely be dated ahead of `today`. Treating that as "not yet expired" is
 		  right; what would be wrong is the unsigned subtraction underflowing into a
-		  gigantic age and expiring the whole file, which is the bug this branch is here
+		  gigantic age and dropping the whole file, which is the bug this branch is here
 		  to not have.
-		*/
-		if (day <= today && (today - day) >= (uint32_t)ART_SS_MISS_DAYS) { dropped++; continue; }
 
-		ss_miss_put((uint64_t)key, (uint32_t)day, what);
+		  This is keep_days and not window_days on purpose: a miss that has stopped
+		  counting is still worth having, because "asked about a fortnight ago" and "never
+		  asked about" are the two things the fetch order has to tell apart.
+		*/
+		if (s->keep_days && day <= today && (today - day) >= (uint32_t)s->keep_days)
+		{
+			dropped++;
+			continue;
+		}
+
+		ks_put(s, (uint64_t)key, (uint32_t)day, what);
 	}
 
 	fclose(f);
 
 	/*
-	  Rewrite only when reading it changed something: an expiry, a line that did not parse,
+	  Rewrite only when reading it changed something: a drop, a line that did not parse,
 	  a duplicate key, or a file over the cap. A store that is simply read back unchanged -
 	  the common case, every boot - touches the card not at all.
 
-	  Compared against what is *held* rather than against what ss_miss_put() reported. Once
+	  Compared against what is *held* rather than against what ks_put() reported. Once
 	  the store is full every put still succeeds, by evicting something first, so counting
 	  successful puts would say a 5000-line file was read back intact - and the 900 records
 	  the cap dropped would be written to the card again on the next boot, and the one after
-	  that, for ever. ss_nmiss is what is actually there.
+	  that, for ever. s->n is what is actually there.
 	*/
-	if (dropped || bad || ss_nmiss != lines) ss_miss_write_all();
+	if (dropped || bad || s->n != lines) ks_write_all(s);
 
 	if (dropped || bad)
 	{
-		printf("ClassicUI: %d remembered ScreenScraper misses (%d expired, %d unreadable)\n",
-			ss_nmiss, dropped, bad);
+		printf("ClassicUI: %s holds %d record%s (%d expired, %d unreadable)\n",
+			s->file, s->n, (s->n == 1) ? "" : "s", dropped, bad);
 	}
-	else if (ss_nmiss)
+	else if (s->n)
 	{
-		printf("ClassicUI: %d remembered ScreenScraper misses\n", ss_nmiss);
+		printf("ClassicUI: %s holds %d record%s\n", s->file, s->n, (s->n == 1) ? "" : "s");
 	}
 }
 
-int art_ss_miss_known(const char *systemeid, const char *name)
-{
-	if (!systemeid || !systemeid[0] || !name || !name[0]) return 0;
+/*
+  How long ago this key was written down: -1 for nothing remembered, else the age in days,
+  and 0 for today and for anything dated in the future.
 
-	ss_miss_load();
-	if (!ss_miss) return 0;
+  The one question both stores are asked, so that "counts as a miss", "was asked about
+  once" and "came from the pack" are three readings of one lookup rather than three
+  lookups that could disagree.
+*/
+static int ks_age(art_keystore *s, const char *systemeid, const char *name)
+{
+	if (!systemeid || !systemeid[0] || !name || !name[0]) return -1;
+
+	ks_load(s);
+	if (!s->rec) return -1;
 
 	char key[CH_PATH_LEN + 32];
-	ss_miss_key(systemeid, name, key, sizeof(key));
+	ks_key(systemeid, name, key, sizeof(key));
 
 	int at = 0;
-	return ss_miss_find(ss_miss_hash(key), &at);
+	if (!ks_find(s, ks_hash(key), &at)) return -1;
+
+	uint32_t today = ks_today();
+	uint32_t day = s->rec[at].day;
+	if (day >= today) return 0;
+	return (int)(today - day);
 }
 
-void art_ss_miss_record(const char *systemeid, const char *name)
+// How many records still count, as against how many are held. Equal in a store with no
+// window, which is why the field rather than a second constant decides it.
+static int ks_live(art_keystore *s)
+{
+	ks_load(s);
+	if (!s->rec) return 0;
+	if (!s->window_days) return s->n;
+
+	uint32_t today = ks_today();
+	int n = 0;
+	for (int i = 0; i < s->n; i++)
+	{
+		uint32_t day = s->rec[i].day;
+		if (day >= today || (today - day) < (uint32_t)s->window_days) n++;
+	}
+	return n;
+}
+
+static void ks_record(art_keystore *s, const char *systemeid, const char *name)
 {
 	if (!systemeid || !systemeid[0] || !name || !name[0]) return;
 
-	ss_miss_load();
-	if (!ss_miss) return;
+	ks_load(s);
+	if (!s->rec) return;
 
 	char key[CH_PATH_LEN + 32];
-	ss_miss_key(systemeid, name, key, sizeof(key));
+	ks_key(systemeid, name, key, sizeof(key));
 
-	uint32_t today = ss_miss_today();
-	if (!ss_miss_put(ss_miss_hash(key), today, key)) return;
+	uint32_t today = ks_today();
+	if (!ks_put(s, ks_hash(key), today, key)) return;
 
 	/*
 	  Appended, not rewritten - except when the insert had to evict something to fit, in
@@ -371,30 +547,119 @@ void art_ss_miss_record(const char *systemeid, const char *name)
 	  read it straight back in. That is the one case where the file has to be re-stated in
 	  full, and on a shelf under the cap it never happens.
 	*/
-	if (ss_nmiss >= ART_SS_MISS_MAX) { ss_miss_write_all(); return; }
+	if (s->n >= ART_SS_MISS_MAX) { ks_write_all(s); return; }
 
-	char dir[1024];
-	snprintf(dir, sizeof(dir), "%s/classicui", getRootDir());
-	mkdir(dir, 0777);
+	ks_mkdir(s);
 
-	FILE *f = fopen(art_ss_miss_path(), "at");
+	FILE *f = fopen(ks_path(s), "at");
 	if (!f) return;
 
-	fprintf(f, "%u %016llx %s\n", today, (unsigned long long)ss_miss_hash(key), key);
+	fprintf(f, "%u %016llx %s\n", today, (unsigned long long)ks_hash(key), key);
 	fclose(f);
+}
+
+/*
+  Take a record out again. The one operation an append cannot express, so it costs a
+  rewrite - which is affordable because it happens at most once per game, ever: it is how
+  a libretro mark is cleared when the retry it authorised has been settled.
+*/
+static void ks_forget(art_keystore *s, const char *systemeid, const char *name)
+{
+	if (!systemeid || !systemeid[0] || !name || !name[0]) return;
+
+	ks_load(s);
+	if (!s->rec) return;
+
+	char key[CH_PATH_LEN + 32];
+	ks_key(systemeid, name, key, sizeof(key));
+
+	int at = 0;
+	if (!ks_find(s, ks_hash(key), &at)) return;
+
+	memmove(&s->rec[at], &s->rec[at + 1],
+		(size_t)(s->n - at - 1) * (size_t)ART_KEY_REC_BYTES);
+	s->n--;
+
+	ks_write_all(s);
+}
+
+static void ks_reload(art_keystore *s)
+{
+	s->loaded = 0;
+	s->n = 0;
+	ks_load(s);
+}
+
+/* ------------------------------------------- the misses, as the ladder asks --- */
+
+int art_ss_miss_known(const char *systemeid, const char *name)
+{
+	int age = ks_age(&ss_misses, systemeid, name);
+	return (age >= 0 && age < ART_SS_MISS_DAYS) ? 1 : 0;
+}
+
+int art_ss_miss_stale(const char *systemeid, const char *name)
+{
+	return (ks_age(&ss_misses, systemeid, name) >= ART_SS_MISS_DAYS) ? 1 : 0;
+}
+
+void art_ss_miss_record(const char *systemeid, const char *name)
+{
+	ks_record(&ss_misses, systemeid, name);
 }
 
 void art_ss_miss_reload()
 {
-	ss_miss_loaded = 0;
-	ss_nmiss = 0;
-	ss_miss_load();
+	ks_reload(&ss_misses);
 }
 
 int art_ss_miss_count()
 {
-	ss_miss_load();
-	return ss_nmiss;
+	return ks_live(&ss_misses);
+}
+
+int art_ss_miss_held()
+{
+	ks_load(&ss_misses);
+	return ss_misses.n;
+}
+
+const char *art_ss_miss_path()
+{
+	return ks_path(&ss_misses);
+}
+
+/* --------------------------------- and where a cover came from, when we know --- */
+
+int art_pack_marked(const char *systemeid, const char *name)
+{
+	return (ks_age(&pack_marks, systemeid, name) >= 0) ? 1 : 0;
+}
+
+void art_pack_mark(const char *systemeid, const char *name)
+{
+	ks_record(&pack_marks, systemeid, name);
+}
+
+void art_pack_forget(const char *systemeid, const char *name)
+{
+	ks_forget(&pack_marks, systemeid, name);
+}
+
+void art_pack_reload()
+{
+	ks_reload(&pack_marks);
+}
+
+int art_pack_count()
+{
+	ks_load(&pack_marks);
+	return pack_marks.n;
+}
+
+const char *art_pack_path()
+{
+	return ks_path(&pack_marks);
 }
 
 void art_init(int cw, int chh)
@@ -429,6 +694,16 @@ void art_init(int cw, int chh)
 	}
 }
 
+/*
+  Forget the pack retries, defined with the ring below.
+
+  Called from art_shutdown() because the ring holds item indexes and a rescan renumbers them.
+  A stale index there would not be a missed retry, it would be a request about the wrong game -
+  the same trap ssf_item_key and fetch_key exist for, and the reason this is a call rather than
+  something left to a comment.
+*/
+static void pack_retry_clear();
+
 void art_shutdown()
 {
 	if (slots)
@@ -441,6 +716,9 @@ void art_shutdown()
 	nqueue = 0;
 	cache_bytes = 0;
 	cache_count = 0;
+
+	pack_retry_clear();
+	ss_ask_last = -1;
 }
 
 int art_cache_count() { return cache_count; }
@@ -1157,7 +1435,14 @@ static int fetch_start(int item)
 	const chome_sys *s = lib_sys(it->sysidx);
 	if (!s || !s->lr[0]) return 0;
 
-	if (!art_cache_path(it, fetch_dst, sizeof(fetch_dst))) return 0;
+	/*
+	  Asked here as a refusal and not kept: a game with no cache path has nowhere for a cover
+	  to live, so there is no point downloading one. Where the file actually goes is worked out
+	  again at the landing, by art_pack_landed(), against the fetch_key guard above - one
+	  place that decides it rather than a path carried across a fork.
+	*/
+	char dst[1024];
+	if (!art_cache_path(it, dst, sizeof(dst))) return 0;
 
 	char base[CH_PATH_LEN];
 	rom_base(it, base, sizeof(base));
@@ -1174,7 +1459,7 @@ static int fetch_start(int item)
 	snprintf(url, sizeof(url), "%s/%s/Named_Boxarts/%s.png", root, encsys, encname);
 
 	snprintf(fetch_tmp, sizeof(fetch_tmp), "/tmp/classicui_art_%d.png", item);
-	mkdirs(fetch_dst);
+	mkdirs(dst);
 
 	// 0: a public libretro thumbnail URL, safe on argv. See curl_spawn().
 	pid_t pid = curl_spawn(url, fetch_tmp, 0, 0);
@@ -1182,6 +1467,7 @@ static int fetch_start(int item)
 
 	fetch_pid = pid;
 	fetch_item = item;
+	fetch_key = it->key;
 	if (slots && item < nslots) slots[item].state = ART_FETCHING;
 	printf("ClassicUI: fetching art for %s\n", it->title);
 	return 1;
@@ -1240,6 +1526,7 @@ static void art_requeue(int item)
 	{
 		queue[nqueue] = item;
 		qprio[nqueue] = 0;
+		qseq[nqueue] = qseq_next++;
 		nqueue++;
 		slots[item].state = ART_PENDING;
 		return;
@@ -1261,7 +1548,10 @@ static void fetch_poll()
 
 	art_slot *s = (slots && fetch_item >= 0 && fetch_item < nslots) ? &slots[fetch_item] : 0;
 
-	if (ok && file_exists_abs(fetch_tmp) && store_download(fetch_tmp, fetch_dst))
+	chome_item *fit = lib_item(fetch_item);
+	int same = (fit && fit->key == fetch_key) ? 1 : 0;
+
+	if (ok && same && file_exists_abs(fetch_tmp) && art_pack_landed(fetch_item, fetch_tmp))
 	{
 		if (s) art_requeue(fetch_item);    // decode it on a later step
 	}
@@ -1272,6 +1562,7 @@ static void fetch_poll()
 	}
 
 	fetch_item = -1;
+	fetch_key = 0;
 }
 
 /* --------------------------------------------------- the ScreenScraper fetch --- */
@@ -2071,6 +2362,18 @@ static int ssf_settle(const char *reply_path, long long got)
 
 		printf("ClassicUI: ScreenScraper has no %s for %s, and will not be asked again for %d days\n",
 			ssf_what(), ssf_key, ART_SS_MISS_DAYS);
+
+		/*
+		  And if this cover came from the pack, that is now the answer rather than a
+		  placeholder: the database has been asked the question the player wanted asked and
+		  has nothing, so the mark comes off. It is the miss store's business from here.
+
+		  The two stores do opposite things with the same key in these four lines, which is
+		  exactly why they are two stores. Note the order of the claims and not just the
+		  order of the calls: "they have not got it" goes in, "we have something else" comes
+		  out, and nothing reads either as the other.
+		*/
+		if (ssf_kind == SS_KIND_COVER) art_pack_forget(ssf_systemeid, ssf_romnom);
 	}
 
 	return m ? 1 : 0;
@@ -2297,6 +2600,11 @@ static void ss_fetch_poll()
 			{
 				printf("ClassicUI: cover stored for %s: %s (%lld bytes)\n",
 					ssf_key, ssf_dst, ssf_file_size(ssf_dst));
+
+				// Whatever was in that file before, it is a ScreenScraper cover now. If the
+				// pack put the old one there, the mark it left goes with it - otherwise the
+				// next boot would offer a retry for a cover that has already been retried.
+				art_pack_forget(ssf_systemeid, ssf_romnom);
 			}
 		}
 
@@ -2322,6 +2630,9 @@ void art_request(int item, int prio)
 	{
 		if (queue[i] == item)
 		{
+			// Already waiting. It can be promoted, and it keeps the place in the line it
+			// has already earned: a card the player has scrolled towards matters more than
+			// it did, which is not a reason to send it behind everything asked for since.
 			if (prio < qprio[i]) qprio[i] = prio;
 			return;
 		}
@@ -2335,27 +2646,103 @@ void art_request(int item, int prio)
 		if (qprio[worst] <= prio) return;
 		queue[worst] = item;
 		qprio[worst] = prio;
+		qseq[worst] = qseq_next++;
 	}
 	else
 	{
 		queue[nqueue] = item;
 		qprio[nqueue] = prio;
+		qseq[nqueue] = qseq_next++;
 		nqueue++;
 	}
 
 	s->state = ART_PENDING;
 }
 
+/*
+  Which queued entry the next pass takes. Three keys, in this order:
+
+    1. a re-ask goes last. slots[].ss_reask - a game the database has already been asked
+       about, whose answer has aged out. Everything else in the queue is either a picture
+       that can be painted now or a game nobody has ever asked about, and both of those
+       are worth more: the first shows the player something, and the second is strictly
+       likelier to match, which is what the unmatched allowance is for.
+
+    2. then the priority the caller gave, which is the distance from the selection. So the
+       existing behaviour is exactly the existing behaviour for every entry that is not a
+       re-ask - a player scrolling gets the card under the cursor first, and nothing waits
+       behind work for a part of the shelf that is not on screen.
+
+    3. then arrival. First asked for, first served, among entries that tie on both of the
+       above.
+
+  On the one place where 1 and 2 disagree, since that is the interesting part. An on-screen
+  re-ask now loses to an off-screen first ask, which is not what "on screen wins" would say
+  on its own. It is right here because of what a re-ask candidate *is*: a game the database
+  said it had no cover for, which therefore fell to the pack, which either supplied a cover -
+  and then this game is on rung one, decodes, and is never a re-ask candidate at all - or did
+  not, and the card has been showing a coloured plate ever since. Demoting it delays no
+  pixel. The player sees the same plate either way; what changes is only which game a finite
+  allowance is spent on first.
+
+  Pure. Reads the queue and one slot flag, stats nothing, and is the whole of the order -
+  art_step() pops through here and art_queue_next() answers from here, so there is one
+  ordering rather than two accounts of it.
+*/
+static int queue_best()
+{
+	int best = -1;
+
+	for (int i = 0; i < nqueue; i++)
+	{
+		if (best < 0) { best = i; continue; }
+
+		int ir = (slots && queue[i] >= 0 && queue[i] < nslots && slots[queue[i]].ss_reask) ? 1 : 0;
+		int br = (slots && queue[best] >= 0 && queue[best] < nslots && slots[queue[best]].ss_reask) ? 1 : 0;
+
+		if (ir != br) { if (ir < br) best = i; continue; }
+		if (qprio[i] != qprio[best]) { if (qprio[i] < qprio[best]) best = i; continue; }
+		if (qseq[i] < qseq[best]) best = i;
+	}
+
+	return best;
+}
+
+/*
+  1 when the queue holds anything that is not a known re-ask.
+
+  What a re-ask has to wait for, asked as one question at the moment of contention rather
+  than kept as a count that something would have to remember to maintain. Note that it is
+  "not a re-ask" rather than "never asked about": a queued local decode counts, because a
+  picture that can be painted this frame is worth more than any request, and a queued pack
+  fetch counts, because it spends nothing that ScreenScraper is counting.
+*/
+static int queue_has_other_work()
+{
+	for (int i = 0; i < nqueue; i++)
+	{
+		int it = queue[i];
+		if (!slots || it < 0 || it >= nslots) continue;
+		if (!slots[it].ss_reask) return 1;
+	}
+	return 0;
+}
+
+int art_queue_next()
+{
+	int at = queue_best();
+	return (at < 0) ? -1 : queue[at];
+}
+
 static int queue_pop()
 {
-	if (!nqueue) return -1;
-
-	int best = 0;
-	for (int i = 1; i < nqueue; i++) if (qprio[i] < qprio[best]) best = i;
+	int best = queue_best();
+	if (best < 0) return -1;
 
 	int item = queue[best];
 	queue[best] = queue[nqueue - 1];
 	qprio[best] = qprio[nqueue - 1];
+	qseq[best] = qseq[nqueue - 1];
 	nqueue--;
 	return item;
 }
@@ -2368,11 +2755,14 @@ int art_ss_absent(int item)
 	return slots[item].ss_absent ? 1 : 0;
 }
 
-static unsigned ss_asks = 0;
-
 unsigned art_ss_asks()
 {
 	return ss_asks;
+}
+
+int art_ss_last_ask()
+{
+	return ss_ask_last;
 }
 
 /*
@@ -2449,6 +2839,37 @@ static int ss_can_ask(const chome_item *it)
 }
 
 /*
+  A pack download has landed: store it, and write down where it came from.
+
+  The recording is here rather than at the request for one reason - a request is not a cover.
+  A pack that 404s for a regional variant, a fork that fails, a card with no room: none of
+  those put anything on the card, and a mark for a file that is not there would be a request
+  spent later on a game that never had a pack cover in the first place.
+
+  Nothing is recorded for a game that has no ScreenScraper query - no systemeid for its
+  platform, or no cache path to write a cover into. Such a game can never be retried whatever
+  the setting says, so a mark for it would be a line on somebody's card that nothing will ever
+  read.
+*/
+int art_pack_landed(int item, const char *src)
+{
+	chome_item *it = lib_item(item);
+	if (!it || !src || !src[0]) { if (src) unlink(src); return 0; }
+
+	char dst[1024];
+	if (!art_cache_path(it, dst, sizeof(dst))) { unlink(src); return 0; }
+
+	mkdirs(dst);
+	if (!store_download(src, dst)) return 0;
+
+	char name[CH_PATH_LEN];
+	const char *systemeid = ss_cover_query(it, name, sizeof(name));
+	if (systemeid) art_pack_mark(systemeid, name);
+
+	return 1;
+}
+
+/*
   The ladder, in order, as one answer. See the top of chome_art.h for why the order is what
   it is; this is that order and nothing else, so that art_step() below and the harness are
   reading the same thing rather than two accounts of it.
@@ -2520,6 +2941,130 @@ int art_next_source(int item)
 }
 
 /*
+  1 when this game's ScreenScraper rung would be a re-ask rather than a first ask.
+
+  Cheap on purpose - a snprintf, a hash and a binary search over an array that is already in
+  memory - because it is asked at the moment the ladder is about to spend a request, and it
+  must not be the reason a frame is slow. It touches the card only through ks_load(), on the
+  first question of the session.
+*/
+static int ss_reask_item(int item)
+{
+	chome_item *it = lib_item(item);
+	if (!it) return 0;
+
+	char name[CH_PATH_LEN];
+	const char *systemeid = ss_cover_query(it, name, sizeof(name));
+	if (!systemeid) return 0;
+
+	return art_ss_miss_stale(systemeid, name);
+}
+
+/* ------------------------------- retrying the covers that came from the pack --- */
+
+/*
+  The opt-in half of the provenance feature, and the whole of its scheduling.
+
+  A cover this front-end fetched from the libretro pack is marked in the store (see
+  art_pack_marked() in the header). With classicui_ss_replace_pack set, the item is offered
+  here once - after its pack cover has been decoded and drawn - and asked about again when
+  there is nothing else at all to do.
+
+  Three properties, and they are the three the owner asked for:
+
+    it is never a source of requests on its own. The ring is only ever filled when the
+    setting is on, so with the setting off - which is every default build - nothing is
+    queued, nothing is asked, and the marks sit on the card costing nothing.
+
+    it never delays a picture. The offer is made *after* the local decode, from
+    art_step_one()'s rung-one branch, so the cover the player already has is on screen
+    before the retry exists. The ladder itself is untouched: rung one still wins.
+
+    it never jumps a queue. The ring is drained only when the decode queue is empty and no
+    download is in flight, which puts it behind every card being drawn, every first ask, and
+    every re-ask. It is the last thing this module does, which is what "the player's own
+    preference, when nothing else needs doing" means in code.
+
+  One attempt per item per session, because taking it off the ring is what triggers it and
+  nothing puts it back. Whichever way that attempt goes the mark is cleared at the settle -
+  a cover replaces the file, a verdict means the database has nothing and the miss store now
+  says so - so it is also one attempt per cover, ever, rather than one per boot.
+*/
+#define PACK_RETRY_MAX 16
+
+static int pack_retry[PACK_RETRY_MAX];
+static int pack_retry_n = 0;
+
+// Defined just below, with the rung-two request it shares every line of. Declared here
+// because the drain is the caller and the two read better in this order.
+static int cover_ss_start(int item);
+
+int art_pack_retry_pending()
+{
+	return pack_retry_n;
+}
+
+static void pack_retry_clear()
+{
+	pack_retry_n = 0;
+}
+
+/*
+  Consider an item whose local art has just been decoded for the retry.
+
+  `local` is the file that was decoded, and it has to be *our* file: art_cache_path() is
+  where both fetchers write, and anything else - a gamelist.xml cover, a Skraper media
+  folder, a pack somebody installed by hand, a picture next to the ROM - is art the player
+  chose and is not ours to overwrite. That check is why the mark is not consulted for it
+  either: a marked game whose cover has since been superseded by a scrape of their own is
+  simply not offered.
+*/
+static void pack_retry_offer(int item, const char *local)
+{
+	if (!cfg.classicui_ss_replace_pack) return;
+	if (!cfg.classicui_artfetch) return;
+	if (pack_retry_n >= PACK_RETRY_MAX) return;
+
+	chome_item *it = lib_item(item);
+	if (!it) return;
+
+	char mine[1024];
+	if (!art_cache_path(it, mine, sizeof(mine))) return;
+	if (!local || strcmp(local, mine)) return;
+
+	char name[CH_PATH_LEN];
+	const char *systemeid = ss_cover_query(it, name, sizeof(name));
+	if (!systemeid) return;
+
+	if (!art_pack_marked(systemeid, name)) return;
+
+	// The same three refusals the ladder's rung two honours. A game the database has
+	// already answered about inside the window is not asked again over a setting: that
+	// would be the setting overruling yesterday's whole point.
+	if (!ss_may_request()) return;
+	if (art_ss_miss_known(systemeid, name)) return;
+
+	for (int i = 0; i < pack_retry_n; i++) if (pack_retry[i] == item) return;
+
+	pack_retry[pack_retry_n++] = item;
+}
+
+// Spend an idle pass on one of them. 1 when a query went out.
+static int pack_retry_step()
+{
+	if (!pack_retry_n) return 0;
+	if (nqueue) return 0;                       // behind every card being drawn
+	if (ss_fetch_active() || fetch_pid > 0) return 0;
+	if (!cfg.classicui_ss_replace_pack) { pack_retry_n = 0; return 0; }
+
+	int item = pack_retry[0];
+	memmove(&pack_retry[0], &pack_retry[1], (size_t)(pack_retry_n - 1) * sizeof(int));
+	pack_retry_n--;
+
+	return cover_ss_start(item);
+}
+
+/*
   Ask ScreenScraper for one game's cover. Returns 1 when a query is on its way.
 
   The shape is disc_art_request()'s, and the parts that are the same are the same code:
@@ -2532,8 +3077,13 @@ static int cover_ss_start(int item)
 	  Counted above every refusal below, for the reason disc_art_asks() is: "did the ladder
 	  reach this rung" is a different question from "did it get anywhere", and the first one
 	  is the shape of the feature. Not printed - the shelf can walk a lot of cards.
+
+	  The item is kept as well as counted, because with the fetch order now deciding between
+	  two games that are both on this rung, "how many" cannot say which. See
+	  art_ss_last_ask().
 	*/
 	ss_asks++;
+	ss_ask_last = item;
 
 	if (ss_fetch_active() || fetch_pid > 0) return 0;
 	if (!cfg.classicui_artfetch) return 0;
@@ -2649,30 +3199,27 @@ static int cover_ss_start(int item)
 	return 1;
 }
 
-void art_step()
+/*
+  One item's turn at the ladder. 1 when the pass is spent - a decode done, a fetch started,
+  an answer settled, or nothing more to be done for this game - and 0 only when the item was
+  deliberately stood down and the pass should be spent on somebody else.
+
+  Split out of art_step() for that second return value. Standing a re-ask down cannot simply
+  return: the item goes back to ART_NONE, the shelf asks for it again on the very next frame,
+  and it is the lowest-priority thing on screen that would then be popped again - so a bare
+  return would spend every frame discovering the same deferral and the game it is deferring
+  to would never come up at all. The frame has to go on to the next candidate, which means
+  the caller has to know the difference.
+*/
+static int art_step_one(int item)
 {
-	fetch_poll();
-
-	/*
-	  Before the early return below, deliberately. The disc dialog is drawn over a running
-	  core, and the shelf's slots may not exist at all there - art_init() runs off a
-	  library that a disc-only session never builds. Reaping after that check would leave a
-	  started fetch unreaped until the player went back to the shelf, which is a zombie and
-	  a picture that turns up minutes late.
-	*/
-	ss_fetch_poll();
-
-	if (!slots) return;
-
-	int item = queue_pop();
-	if (item < 0) return;
-	if (item >= nslots) return;
+	if (item >= nslots) return 1;
 
 	art_slot *s = &slots[item];
-	if (s->state == ART_READY) return;
+	if (s->state == ART_READY) return 1;
 
 	chome_item *it = lib_item(item);
-	if (!it) { s->state = ART_MISSING; return; }
+	if (!it) { s->state = ART_MISSING; return 1; }
 
 	const chome_sys *sys = lib_sys(it->sysidx);
 	uint32_t plate = sys ? sys->tint : 0xff4a4c58u;
@@ -2682,9 +3229,15 @@ void art_step()
 
 	if (src == ART_SRC_LOCAL)
 	{
-		if (decode_into(path, s, plate)) return;
+		if (decode_into(path, s, plate))
+		{
+			// The cover is on screen. Only now is it worth asking whether the player wants a
+			// different one - see pack_retry_offer(), which refuses unless they have said so.
+			pack_retry_offer(item, path);
+			return 1;
+		}
 		s->state = ART_MISSING;
-		return;
+		return 1;
 	}
 
 	if (src == ART_SRC_SS || src == ART_SRC_LIBRETRO)
@@ -2701,22 +3254,83 @@ void art_step()
 		  which is long enough for it to have become the common case rather than the odd one.
 		  ART_NONE is re-requestable, and the shelf asks again for every card it draws.
 		*/
-		if (ss_fetch_active() || fetch_pid > 0) { s->state = ART_NONE; return; }
+		if (ss_fetch_active() || fetch_pid > 0) { s->state = ART_NONE; return 1; }
 
 		if (src == ART_SRC_SS)
 		{
-			if (cover_ss_start(item)) return;
+			/*
+			  The fairness rule, at the one moment it can be applied honestly: the ladder has
+			  just said this game is about to spend a request, so this is the first point at
+			  which "a re-ask" means what it says.
+
+			  The flag is set whether or not anything is waiting, because the point of setting
+			  it is the passes to come: from here on this item sorts behind every first ask in
+			  the queue without the ladder having to be walked for it again.
+
+			  Deferred and not diverted. It does not fall through to the pack - a game held
+			  back for a few frames must not end up with a permanent cover from the source the
+			  player did not choose, which is the same trap ss_may_ask_now() is kept out of the
+			  ladder to avoid.
+			*/
+			if (ss_reask_item(item))
+			{
+				s->ss_reask = 1;
+				if (queue_has_other_work()) { s->state = ART_NONE; return 0; }
+			}
+
+			if (cover_ss_start(item)) return 1;
 
 			// It refused after the ladder said it would not - a fork that failed, in
 			// practice. Put the item back rather than write it off: nothing has been learnt
 			// about the game, and the rung below it has not had its turn.
 			s->state = ART_NONE;
-			return;
+			return 1;
 		}
 
 		s->tried_fetch = 1;
-		if (fetch_start(item)) return;
+		if (fetch_start(item)) return 1;
 	}
 
 	s->state = ART_MISSING;
+	return 1;
+}
+
+/*
+  How many items one pass may look at before giving up on finding work for it.
+
+  More than one because a stood-down re-ask has to be able to hand the frame on, and a
+  handful rather than the whole queue because handing it on costs an art_source_for(), which
+  stats the card a dozen times. A shelf where every card is a re-ask - the owner's, a
+  fortnight after it was first scraped - would otherwise walk all 32 queued items in one
+  frame the first time it was drawn, and pay for all of them again on the next frame if the
+  player kept scrolling. Four bounds that at four times a pass's existing cost, and the
+  flags it sets mean the walk is paid for once per item and not once per frame.
+*/
+#define ART_STEP_PASSES 4
+
+void art_step()
+{
+	fetch_poll();
+
+	/*
+	  Before the early return below, deliberately. The disc dialog is drawn over a running
+	  core, and the shelf's slots may not exist at all there - art_init() runs off a
+	  library that a disc-only session never builds. Reaping after that check would leave a
+	  started fetch unreaped until the player went back to the shelf, which is a zombie and
+	  a picture that turns up minutes late.
+	*/
+	ss_fetch_poll();
+
+	if (!slots) return;
+
+	for (int pass = 0; pass < ART_STEP_PASSES; pass++)
+	{
+		int item = queue_pop();
+		if (item < 0) break;
+		if (art_step_one(item)) return;
+	}
+
+	// Nothing left that wants a frame, so the player's own preference gets one. Refuses
+	// unless the queue is empty and the setting is on - see pack_retry_step().
+	pack_retry_step();
 }

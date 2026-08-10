@@ -185,6 +185,7 @@ static const struct { const char *name; char kind; void *var; } stub_vars[] =
 	{ "CLASSICUI_DISC",          'u', &cfg.classicui_disc },
 	{ "CLASSICUI_SS_USER",       's', cfg.classicui_ss_user },
 	{ "CLASSICUI_SS_PASS",       's', cfg.classicui_ss_pass },
+	{ "CLASSICUI_SS_REPLACE_PACK", 'u', &cfg.classicui_ss_replace_pack },
 };
 
 int cfg_var_count() { return (int)(sizeof(stub_vars) / sizeof(stub_vars[0])); }

@@ -168,6 +168,7 @@ static const ini_var_t ini_vars[] =
 	{ "CLASSICUI_DISC", (void*)(&(cfg.classicui_disc)), UINT8, 0, 1 },
 	{ "CLASSICUI_SS_USER", (void*)(&(cfg.classicui_ss_user)), STRING, 0, sizeof(cfg.classicui_ss_user) - 1 },
 	{ "CLASSICUI_SS_PASS", (void*)(&(cfg.classicui_ss_pass)), STRING, 0, sizeof(cfg.classicui_ss_pass) - 1 },
+	{ "CLASSICUI_SS_REPLACE_PACK", (void*)(&(cfg.classicui_ss_replace_pack)), UINT8, 0, 1 },
 };
 
 static const int nvars = (int)(sizeof(ini_vars) / sizeof(ini_var_t));
@@ -682,6 +683,13 @@ void cfg_parse()
 	  support/classicui/chome_ss.h.
 	*/
 	cfg.classicui_screenscraper = 0;
+
+	/*
+	  Off, and this one is off for a reason that outlives the devid: it turns marks that cost
+	  nothing into one request each. A player who wants their own account's art over the
+	  pack's says so; nothing says it for them. See cfg.h.
+	*/
+	cfg.classicui_ss_replace_pack = 0;
 
 	/*
 	  On by default, at the owner's request: composing and copying a menu frame is CPU
