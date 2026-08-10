@@ -147,10 +147,50 @@ static int pad_create(int idx)
 	return fd;
 }
 
+/*
+  Let go of everything the pad is holding, before the device stops existing.
+
+  UI_DEV_DESTROY removes the node. It does not say what was held at the time, and there is
+  nobody left to send a release afterwards - so whatever the consumer last saw pressed, it
+  goes on believing is pressed. pad_reset_state() below does not help: it clears *our*
+  struct, after the device it would have reported through is already gone.
+
+  This is not theoretical, and the way it presents is worth writing down because it looks
+  nothing like a stuck button. Setting the PSX core's Pad1 to SNAC-port1 is done by holding
+  a direction on the very pad this reads - and landing on that value is exactly what makes
+  the core claim the port, so core_owns_snac() flips and this device is destroyed on the
+  same poll, with the direction still down. The options row then received a direction that
+  never came up and cycled through its own values on its own, which is what a player sees
+  and reports as "the menu keeps changing the setting". Found on hardware; the harness has
+  no /dev/uinput and cannot see any of it.
+
+  Zero every button, centre the hat and both sticks, sync, and only then destroy. Cheap,
+  and it costs nothing on the path where nothing was held.
+*/
+static void pad_release_all(int idx)
+{
+	snac_pad_t *pad = &pads[idx];
+	if (pad->fd < 0) return;
+
+	for (int i = 0; i < 16; i++)
+	{
+		if (btn_codes[i]) emit(pad->fd, EV_KEY, btn_codes[i], 0);
+	}
+
+	emit(pad->fd, EV_ABS, ABS_HAT0X, 0);
+	emit(pad->fd, EV_ABS, ABS_HAT0Y, 0);
+
+	static const uint16_t sticks[4] = { ABS_X, ABS_Y, ABS_RX, ABS_RY };
+	for (int i = 0; i < 4; i++) emit(pad->fd, EV_ABS, sticks[i], 0x80);
+
+	emit(pad->fd, EV_SYN, SYN_REPORT, 0);
+}
+
 static void pad_destroy(int idx)
 {
 	if (pads[idx].fd >= 0)
 	{
+		pad_release_all(idx);
 		ioctl(pads[idx].fd, UI_DEV_DESTROY);
 		close(pads[idx].fd);
 		pads[idx].fd = -1;
