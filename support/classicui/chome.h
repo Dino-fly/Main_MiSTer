@@ -156,6 +156,16 @@ int  disc_test_rot_renders();
   sentences rather than as pixels.
 */
 void disc_test_dlg_text(char *title, int tsz, char *sub, int ssz);
+
+/*
+  Lists that lost a row off the bottom of their panel, by calling function. Recorded by
+  draw_rows_c_at(); see the note above it for why a silent truncation there is a defect and
+  not a drawing decision. One entry per screen, holding its worst case.
+*/
+int chome_rowdrop_n();
+const char *chome_rowdrop_site(int i);
+int chome_rowdrop_lost(int i);
+void chome_rowdrop_clear();
 #endif
 
 #endif

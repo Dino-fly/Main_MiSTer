@@ -9782,6 +9782,103 @@ static int sysidx_of(const char *id)
 }
 
 /*
+  A core-options list longer than the panel, at every profile.
+
+  The row-drop guard at the end of this file is worth nothing without a list that can
+  actually overflow, and until now no fixture had one - every modelled core is short enough
+  to fit at 240p, so the guard would have reported a clean sweep over a defect that was
+  live on hardware. fake_confstr_long is the real PSX list, 30-odd settings on one page
+  against roughly fifteen that fit at 240p.
+
+  What has to hold: the last row is reachable, the highlight is on screen when the cursor is
+  on it, and nothing is drawn past the panel edge. The first two are what a player does; the
+  third is what the guard sees. All three at 240p especially, which is the television this
+  front-end is for and the profile where the panel is smallest.
+*/
+static void assert_long_core_list_scrolls()
+{
+	printf("\n== a core list longer than its panel ==\n");
+
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "gb\nTetris (World).gb\n"); fclose(f); }
+	}
+	harness_set_confstr(9);
+	harness_set_menu_core(0);
+	harness_set_fb_supported(1);
+	harness_set_osd_visible(0);
+
+	struct { int w, h, force; const char *name; } canv[] = {
+		{ 1280, 720, 1, "hd" },
+		{  640, 480, 2, "sd" },
+		{  320, 240, 3, "lo" },
+	};
+
+	const int was_prof = cfg.classicui_profile;
+
+	for (int c = 0; c < 3; c++)
+	{
+		cfg.classicui_profile = (uint8_t)canv[c].force;
+		harness_set_fb(canv[c].w, canv[c].h);
+		gfx_shutdown();
+		theme_update(canv[c].w, canv[c].h, canv[c].force);
+
+		/*
+		  Close it if the previous profile left it open. Without this the MENU press below
+		  toggles the already-open menu shut and the profile is silently never tested - which
+		  is what happened at 640x480, and it read as a drawing bug rather than a test bug.
+		*/
+		chome_leave();
+		chome_handle(0);
+		if (chome_ingame_active()) press(KEY_MENU, 14);
+		frame(6);
+		press(KEY_MENU, 20);
+		for (int i = 0; i < 40 && lib_scanning(); i++) frame(2);
+		frame(16);
+
+		// To the bar, then along it to the running core's entry, as a player would.
+		press(KEY_UP, 14);
+		for (int i = 0; i < 6; i++) press(KEY_RIGHT, 8);
+		frame(8);
+		press(KEY_ENTER, 18);
+		frame(10);
+
+		int n = core_opts_tier_count(CO_TIER_SYSTEM);
+		printf("  %s: %d rows on the System page\n", canv[c].name, n);
+
+		chome_rowdrop_clear();
+
+		/*
+		  Down past the end. RIGHT is not used here on purpose - it would change values on
+		  the way through, and this is about reaching rows, not setting them.
+		*/
+		for (int i = 0; i < n + 4; i++) press(KEY_DOWN, 6);
+		frame(10);
+
+		int bar = sel_bar_y();
+		printf("  %s: highlight at y=%d after walking to the bottom\n", canv[c].name, bar);
+		check(bar >= 0, "the cursor on the last row is drawn, not left below the panel");
+		check(chome_rowdrop_n() == 0, "and no row of the list is drawn past the panel edge");
+
+		{ char nm[64]; snprintf(nm, sizeof(nm), "core-options-long-%s", canv[c].name); dump(nm); }
+
+		press(KEY_ESC, 14);
+		frame(6);
+	}
+
+	cfg.classicui_profile = (uint8_t)was_prof;
+	harness_set_confstr(1);
+	harness_set_menu_core(1);
+	chome_leave();
+	/*
+	  The log is NOT cleared here. Anything this section recorded belongs to the run-wide
+	  guard at the end - clearing it on the way out would erase exactly the evidence that
+	  guard exists to report, and did: with the windowing reverted this section failed while
+	  the global check still said every list was clean.
+	*/
+}
+
+/*
   Who owns the SNAC port, which is now derived from the core's own options rather than set.
 
   The rule: our reader drives the port only when the running core has not claimed it. That
@@ -9825,6 +9922,9 @@ static void snac_tick()
 static void assert_snac_ownership()
 {
 	printf("\n== who owns the SNAC port ==\n");
+
+	// Not the menu core: core_owns_snac() answers 0 there, so this must not inherit it.
+	harness_set_menu_core(0);
 
 	// A core publishing each of the two idioms, alongside settings that must not match.
 	static const char *snac_psx[] =
@@ -9996,6 +10096,36 @@ static void assert_snac_ownership()
 	check(!snacpad_test_present(0) && !snacpad_test_present(1),
 		"a core with no reader in its sys reports no pads");
 
+	/* ------------------------------------------- and they are reachable now --- */
+
+	/*
+	  The rows the arbitration reads have to be rows the player can get at, or "set Pad1 to
+	  SNAC-port1" is advice about a screen we do not offer. They were hidden as ours while
+	  snac_psx existed; with that gone they are the control itself.
+	*/
+	harness_set_confstr_table(snac_psx);
+	harness_set_osd_mask(0x0001);              // so the h0-masked SNAC MemCard row applies
+	core_opts_scan();
+
+	int has_pad1 = 0, has_memcard = 0, has_compare = 0;
+	for (int i = 0; i < core_opts_count(); i++)
+	{
+		const char *nm = core_opt_at(i)->name;
+		if (!strcasecmp(nm, "Pad1")) has_pad1 = 1;
+		if (!strcasecmp(nm, "SNAC MemCard")) has_memcard = 1;
+		if (!strcasecmp(nm, "SNAC Compare")) has_compare = 1;
+	}
+	check(has_pad1, "Pad1 is offered in the core screen, not hidden as ours");
+	check(has_memcard, "and so is SNAC MemCard");
+
+	harness_set_confstr_table(snac_n64);
+	core_opts_scan();
+	has_compare = 0;
+	for (int i = 0; i < core_opts_count(); i++)
+		if (!strcasecmp(core_opt_at(i)->name, "SNAC Compare")) has_compare = 1;
+	check(!has_compare, "while SNAC Compare stays hidden, being a debug aid that hands over nothing");
+
+	harness_set_osd_mask(0x0000);
 	harness_reset_snac();
 	harness_set_confstr(1);
 }
@@ -10024,6 +10154,8 @@ static void assert_core_option_word_forms()
 {
 	printf("\n== the two status words ==\n");
 
+	// core_opts_scan() returns nothing on the menu core, so say which core this is.
+	harness_set_menu_core(0);
 	harness_set_confstr(8);
 	harness_set_osd_mask(0x0000);
 	core_opts_scan();
@@ -17217,6 +17349,41 @@ static void assert_no_clipped_copy()
 	check(n < 4000, "the clip log did not overflow, so nothing went unexamined");
 }
 
+/*
+  Rows a player cannot see, which is the same defect as a cut sentence one dimension over.
+
+  draw_rows_c() stops when a row would cross the bottom of its panel. That is correct
+  drawing and a silent loss: the row is still in the list, still selectable, and never
+  appears. It has bitten twice - Close Game in the Options panel, and every row past the
+  fifteenth on the PSX's 27-row core-options page - both times found by eye on a television
+  rather than here.
+
+  A list that can outgrow its panel must window itself: list_fit(), list_track() and
+  list_scrollbar() in chome_ui.cpp, which is what the Options panel, More Settings, the
+  browser, Wi-Fi, Controllers and the core-options page all now do. This asserts it for all
+  of them at once, at every profile, and names the screen when it fails - so the next list
+  to grow is caught by a test instead of by a player.
+*/
+static void assert_no_row_is_hidden()
+{
+	printf("\n== rows below the fold ==\n");
+
+	int n = chome_rowdrop_n();
+	for (int i = 0; i < n; i++)
+		printf("  LOST  %-24s %d row(s) drawn past the panel edge\n",
+			chome_rowdrop_site(i), chome_rowdrop_lost(i));
+
+	printf("  %d list(s) truncated a row somewhere\n", n);
+	check(n == 0, "no list loses a row off the bottom of its panel, at any profile");
+
+	/*
+	  And the fixture plumbing itself. An exhausted option map answers every later read with
+	  a default and drops every write, which does not fail here - it fails somewhere else,
+	  as an unrelated feature apparently not working. It cost a while to trace once.
+	*/
+	check(!harness_optmap_full(), "the stub option map never ran out, so no write was dropped");
+}
+
 int main()
 {
 	printf("Classic Home host harness\n\n");
@@ -17382,6 +17549,7 @@ int main()
 	assert_freeze_off();
 	assert_core_idle_predicate();
 	assert_core_options_screen();
+	assert_long_core_list_scrolls();
 	assert_snac_ownership();
 	assert_core_option_word_forms();
 	assert_per_game_core_options();
@@ -20136,6 +20304,8 @@ int main()
 	  of its own.
 	*/
 	assert_no_clipped_copy();
+	// After the sweep above, which is what visits every screen at every profile.
+	assert_no_row_is_hidden();
 
 	// Last, because it changes text rendering globally. Anything measuring a width after
 	// this runs would be measuring whatever tracking the section left behind.

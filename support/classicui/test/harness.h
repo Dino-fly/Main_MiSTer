@@ -26,6 +26,8 @@ const char *harness_last_rbf();
 int harness_status_pulses();
 int harness_pulses_on(const char *opt);
 void harness_set_confstr_table(const char **tbl);
+// 1 once the option map has run out of slots, which makes every later write a silent no-op.
+int harness_optmap_full();
 
 // The modelled SNAC pad reader - see the note above harness_set_snac_reader() in stubs.cpp.
 void harness_set_snac_reader(int present);

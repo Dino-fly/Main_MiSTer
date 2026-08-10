@@ -662,6 +662,58 @@ static const char *fake_confstr_optsex[] =
 	0
 };
 
+/*
+  A core with more options than a 240p panel can hold, taken from the real PSX CONF_STR.
+
+  This is the fixture the row-drop guard needs to mean anything. Every other core modelled
+  here is short enough to fit at every profile, so a list that silently dropped its tail
+  would pass the whole suite - which is exactly what happened: the PSX's System page is 27
+  rows against roughly fifteen that fit, and every row past the fold was selectable and
+  never drawn, on hardware, unnoticed by any test in this file.
+
+  Trimmed to the settings rows: the file selectors, triggers and separators are not offered.
+
+  Deliberately all on ONE page. The first attempt at this fixture used the PSX's real
+  option *names*, and the curation in chome_core.cpp promptly sorted them into three tiers
+  of about ten - so no single page overflowed and the fixture proved nothing. What makes the
+  real PSX System page 27 rows is that most of its settings are named in system_tier[] or in
+  no list at all, and both land in CO_TIER_SYSTEM. These do.
+*/
+static const char *fake_confstr_long[] =
+{
+	"PSXLONG",
+	"FS1,CUECHD,Load CD",
+	"O[40:39],System Type,Auto,NTSC-U,NTSC-J,PAL",
+	"O[1],Video Region,Auto,NTSC,PAL",
+	"O[2],TV System,Auto,NTSC,PAL",
+	"O[3],Auto Region,Off,On",
+	"O[4],Priority,Normal,High",
+	"O[5],TMSS,Off,On",
+	"O[7],Mapper,Auto,Codemasters,Korea",
+	"O[8],SMS BIOS,Off,On",
+	"O[10],GG BIOS,Off,On",
+	"O[11],ROM Header,Auto,Ignore",
+	"O[12],RAM Clear,Off,On",
+	"O[13],PPU Reset Behavior,Off,On",
+	"O[14],Initial WRAM,Zero,Random",
+	"O[15],Initial ARAM,Zero,Random",
+	"O[16],Audio Clock,Auto,NTSC,PAL",
+	"O[17],Audio mode,Stereo,Mono",
+	"O[18],Audio Enable,On,Off",
+	"O[19],Audio Filter,On,Off",
+	"O[20],FM Chip,YM2612,YM3438",
+	"O[21],Stereo Mix,None,25%,50%",
+	"O[22],Save Type,Auto,Off",
+	"O[23],RTC,Off,On",
+	"O[24],Fastboot,Off,On",
+	"O[25],Sync core to video,Off,On",
+	"O[26],Fixed Video Blanks,Off,On",
+	"O[28],Sync 480i for HDMI,Off,On",
+	"O[29],480i to 480p Hack,Off,On",
+	"O[30],Disk Speed,Normal,Fast",
+	0
+};
+
 static int confstr_on = 1;
 
 /*
@@ -693,7 +745,8 @@ char *user_io_get_confstr(int index)
 		: (confstr_on == 5) ? fake_confstr_twoslot
 		: (confstr_on == 6) ? fake_confstr_opts
 		: (confstr_on == 7) ? fake_confstr_opts_v2
-		: (confstr_on == 8) ? fake_confstr_optsex : fake_confstr;
+		: (confstr_on == 8) ? fake_confstr_optsex
+		: (confstr_on == 9) ? fake_confstr_long : fake_confstr;
 	int n = 0;
 	while (tbl[n]) n++;
 
@@ -720,7 +773,17 @@ int substrcpy(char *d, const char *s, char idx)
   real core's pause option is "Q" behind a P3 page prefix, and its savestate-to-card
   option is "V", so hardcoding one name hid both.
 */
-#define OPTMAP_MAX 24
+/*
+  Big enough for the longest core modelled here, with room to spare.
+
+  It was 24, and the 28-row fixture core walked straight past it - after which opt_slot()
+  returned 0 for every new option, so writes were dropped and every read answered the
+  default. That surfaced three sections later as the SNAC arbitration "failing" for all six
+  cores, which is a long way from the cause. A silent cap on a fixture is the same class of
+  defect as a silent cap on a list: harness_optmap_full() is asserted at the end of the run
+  so the next one to hit it is told, rather than debugged.
+*/
+#define OPTMAP_MAX 96
 /*
   Keyed on the spec AND on ex, because those two together are what identify an option.
 
@@ -732,13 +795,16 @@ int substrcpy(char *d, const char *s, char idx)
 */
 static struct { char opt[32]; int ex; uint32_t val; } optmap[OPTMAP_MAX];
 static int noptmap = 0;
+static int optmap_full = 0;
+
+int harness_optmap_full() { return optmap_full; }
 
 static uint32_t *opt_slot(const char *opt, int ex)
 {
 	if (!opt || !opt[0]) return 0;
 	for (int i = 0; i < noptmap; i++)
 		if (optmap[i].ex == !!ex && !strcmp(optmap[i].opt, opt)) return &optmap[i].val;
-	if (noptmap >= OPTMAP_MAX) return 0;
+	if (noptmap >= OPTMAP_MAX) { optmap_full = 1; return 0; }
 	snprintf(optmap[noptmap].opt, sizeof(optmap[noptmap].opt), "%s", opt);
 	optmap[noptmap].ex = !!ex;
 	optmap[noptmap].val = 0;

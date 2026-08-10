@@ -36,9 +36,21 @@ static const char *ours[] =
 	"Savestate Slot", "SaveState Slot", "Savestates to SDCard", "Save state to SD",
 	"Save to SDCard", "Autoincrement Slot", "Autosave", "Cheats Enabled", "Cheats enabled",
 	"Pause when OSD is open", "Pause When OSD is Open", "Pause when OSD open",
-	"State Ld/Sv", "Rewind Capture", "SNAC", "USERIO", "SNAC MemCard", "SNAC Compare",
-	"Pad1", "Pad2", "Pad 1 Type", "Pad 2 Type", "Pad 3 Type", "Pad 4 Type",
+	"State Ld/Sv", "Rewind Capture", "SNAC Compare",
 	"Automount Memory Card 1", "Storage", "SPU RAM select",
+	/*
+	  The SNAC rows are NOT on this list any more, and that is the point of them.
+
+	  They were ours while snac_psx decided who read the SNAC port. It does not exist:
+	  core_owns_snac() in snacpad.cpp reads these very rows to decide, so offering them is
+	  offering the control itself rather than a second one - and hiding them meant a player
+	  who wanted a light gun, a wheel or real memory cards had to leave this front-end for
+	  the classic OSD to get them. "SNAC Compare" stays hidden because it is a debug aid and
+	  hands the port to nobody.
+
+	  Each carries per-value help, because the consequence differs per value rather than per
+	  row - see co_help_for() in chome_ui.cpp.
+	*/
 	/*
 	  And the three that overlap Display looks. These are core-side video controls, and
 	  the front-end already drives the scaler's filters, mask and gamma through presets.
