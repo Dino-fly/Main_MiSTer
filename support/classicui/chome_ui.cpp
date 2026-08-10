@@ -728,6 +728,42 @@ static unsigned long marq_epoch = 0;
 static uint32_t last_key = 0;
 static int key_run = 0;
 
+/*
+  Is the key that just arrived a press the player made, or the input layer repeating one
+  they are still holding down?
+
+  Every list in this front-end needs that answer and none of them may work it out for
+  itself, which is the whole of why this is here: the ends of a list wrap on a press and
+  refuse on a repeat (see wrap_step), and eleven screens each deciding what "a press"
+  means is how the boundary rule drifted apart in the first place.
+
+  Where the repeats come from. Nothing in this file synthesises them - menu_key_get() in
+  menu.cpp does, and it delivers a held key as the *same keycode again* every REPEATRATE
+  with an UPSTROKE only when the key is really let go. So the two are indistinguishable
+  from a single call: KEY_DOWN arriving says nothing about whether KEY_DOWN was already
+  down. What tells them apart is the release in between, and that is what held_key
+  latches - set on every press, cleared on the upstroke, and deliberately *not* cleared on
+  an idle frame. That last clause is the trap the file already documents twice: a hold
+  delivers key == 0 on most frames, so anything treating an idle frame as the end of a
+  hold would call every repeat a fresh press and we would be back to looping while held.
+
+  (key_run cannot answer this. It is reset on those same idle frames - see the release
+  branch of chome_handle - so by the time a repeat arrives it is always zero. It survives
+  here only as the shelf's screenful-jump counter and is not a hold detector.)
+
+  held_gap is the safety net for an upstroke that never arrives, which happens: the menu
+  key's release is eaten on purpose, and chome_handle is not called at all while a game
+  owns the screen, so a key let go in that window is released to nobody. Without the net a
+  stale held_key would disable wrapping for that key for the rest of the session. The
+  threshold has to clear REPEATDELAY, because the *first* repeat of a hold arrives that
+  long after the press and calling it fresh would wrap on exactly the hold this exists to
+  stop; everything after it comes at REPEATRATE, which is an order of magnitude closer.
+*/
+#define HOLD_LOST_MS (REPEATDELAY + 250)
+static uint32_t held_key = 0;             // the keycode whose release has not been seen
+static unsigned long held_gap = 0;        // ... and when to stop believing that
+static int key_fresh = 1;                 // set per press; read by wrap_step()
+
 // Set once the user hands off to the classic menu, so we do not immediately
 // grab the screen back. The OSD/menu button brings us back.
 static int handed_off = 0;
@@ -1086,6 +1122,49 @@ static void nudge()
 {
 	nudge_until = GetTimer(160);
 	mark_dirty();
+}
+
+/*
+  The one place a list in this front-end decides what its ends mean.
+
+  Returns where a cursor at `cur` lands when `dir` is applied to it in a list of `n`
+  entries: the neighbouring entry while there is one, and the far end of the list when
+  there is not - but only for a press the player made. A repeat arriving because the key
+  is still held stops at the end instead.
+
+  So: holding Down walks to the last entry and stays there, however long it is held; and
+  from the last entry a fresh press of Down reaches the first. Wrapping is always a
+  deliberate second press at the boundary, never something auto-repeat can do on its own.
+  A hold begun *on* the boundary does wrap once - its first event is a real press and
+  there is no way to know at that moment that the key will be held - and then walks the
+  list and stops, which is still not the constant looping this replaces.
+
+  Nudging is the refusal, and it now means something narrower than it did: not "there is
+  nothing that way" (there always is, one press later) but "you have arrived at the end of
+  the list and the key you are holding will not take you further". That is the moment the
+  feedback is actually wanted, because the player is holding a key and nothing is moving. A
+  fresh press at the boundary is not nudged: the cursor jumping from the last row to the
+  first is unmistakable on its own, and a nudge on a press that *did* move would be saying
+  the opposite of what happened.
+
+  A list of one is the exception that is not a boundary at all: there is nowhere to go in
+  either direction and no press can invent one, so it refuses outright.
+
+  Callers compare the answer against what they passed in - anything unchanged has already
+  been nudged here and wants no repaint of its own.
+*/
+static int wrap_step(int cur, int n, int dir)
+{
+	if (n <= 0) return cur;
+	if (cur < 0) cur = 0;
+	if (cur >= n) cur = n - 1;
+	if (n == 1) { nudge(); return cur; }
+
+	int next = cur + dir;
+	if (next >= 0 && next < n) return next;
+
+	if (!key_fresh) { nudge(); return cur; }
+	return (next < 0) ? n - 1 : 0;
 }
 
 /*
@@ -9781,6 +9860,28 @@ static void move_h(int dir)
 
 	switch (screen)
 	{
+	/*
+	  The menu bar is the one cursor in the front-end that is deliberately *left* clamped,
+	  and it is an exemption from the shared rule rather than an oversight.
+
+	  Two reasons, and the first is about the bar and not about the tests. Every other list
+	  here scrolls: a boundary is where the entries you cannot see begin, and wrapping is how
+	  the far end stops being a long walk away. The bar has no far end - it is three to five
+	  cells drawn across the top, all of them on screen at once, at every profile. There is
+	  nothing to reach.
+
+	  The second is that its ends are load-bearing as landmarks. This bar is the root of the
+	  front-end, and both this file and the harness treat "press against the left stop" as the
+	  way to a known entry from an unknown position - mb_idx survives leaving the bar, so
+	  arriving on it says nothing about where the cursor is. A root whose ends are open has no
+	  such position; the walk would be off by however far the player had already wandered. The
+	  vertical axis says the same thing about what this screen is: Up nudges and Down leaves
+	  for the shelf, so the bar is a mode strip, not a column of rows.
+
+	  Note that clamping does not make the bar behave differently under a *held* key, which is
+	  the half of task 54 that was actually wrong: holding Right walks to the last entry and
+	  stops, which is what it now does everywhere.
+	*/
 	case SCR_MENUBAR:
 	{
 		int n = mb_idx + dir;
@@ -9788,19 +9889,25 @@ static void move_h(int dir)
 		mb_idx = n;
 		break;
 	}
+	// The suspend strip: a row of slots, and a list like any other on its own axis.
 	case SCR_SUSPEND:
 	{
-		int n = slot_idx + dir;
-		if (n < 0 || n >= user_slots()) { nudge(); return; }
-		slot_idx = n;
+		int next = wrap_step(slot_idx, user_slots(), dir);
+		if (next == slot_idx) return;
+		slot_idx = next;
 		break;
 	}
 	/*
 	  The disc dialog's buttons sit side by side, so this is the axis that walks them -
 	  and the core chooser, which is a column, has nothing on it.
 
-	  Clamped rather than wrapping, like every other short list here: two entries that
-	  wrap make left and right the same key.
+	  These wrap now, where they used to clamp on the argument that "two entries that wrap
+	  make left and right the same key". True, and it turned out not to be a reason: Close
+	  Game and Power are two-row lists that have always wrapped, so the argument only ever
+	  applied to this one screen. Two keys that do the same thing on a list of two is what
+	  every list of two in every menu does, and paying for it with a different boundary rule
+	  on one dialog is the inconsistency task 54 exists to remove. wrap_step() still refuses
+	  outright on a dialog with a single button, where there genuinely is nowhere to go.
 	*/
 	case SCR_DISC:
 	{
@@ -9810,17 +9917,17 @@ static void move_h(int dir)
 		disc_dlg_get(&d);
 		disc_build_btns(&d);
 
-		int n = disc_btn + dir;
-		if (n < 0 || n >= disc_nbtn) { nudge(); return; }
-		disc_btn = n;
+		int next = wrap_step(disc_btn, disc_nbtn, dir);
+		if (next == disc_btn) return;
+		disc_btn = next;
 		break;
 	}
 	case SCR_DISPLAY:
 	{
 		int opts[VP_MAX_OPTIONS];
 		int nn = vp_options_for(sel_class(), opts);
-		int next = look_row + dir;
-		if (next < 0 || next >= nn) { nudge(); return; }
+		int next = wrap_step(look_row, nn, dir);
+		if (next == look_row) return;
 		look_row = next;
 		break;
 	}
@@ -9916,8 +10023,28 @@ static void move_h(int dir)
 	case SCR_HOME:
 	{
 		int n = lib_view_count();
-		int next = sel + dir;
-		if (next < 0 || next >= n) { nudge(); return; }
+		int next = wrap_step(sel, n, dir);
+		if (next == sel) return;
+
+		/*
+		  A wrap on the shelf is a discontinuity, so the shelf is *placed* at the far end
+		  rather than eased to it - the same thing view_rebuild() and nav_pop() do, and for
+		  the same reason. The ease exists to show the cards sliding past; sliding past three
+		  hundred of them to land where the player asked to be in one press would be a smear,
+		  not an animation. Placing it also means the chrome commits on this frame, so the
+		  title never spends the ease naming a game at the other end of the library.
+
+		  Detected as "the step did not land next door", which is the only shape a wrap has.
+		*/
+		if (next != sel + dir)
+		{
+			sel = next;
+			selF = sel;
+			sel_shown = sel;       // placed, not moved - see view_rebuild()
+			slot_idx = 0;
+			mark_dirty();
+			return;
+		}
 
 		// Hold to accelerate: after a few repeats, move a screenful.
 		if (key_run > 8)
@@ -9963,6 +10090,14 @@ static void move_v(int dir)
 	/*
 	  Up and down walk the list; the last row is the page switch.
 
+	  Wrapping is safe on this screen and does not fight the page switch, which is worth
+	  saying because it looks as though it should: the switch is on the *last row* of every
+	  page, so "Down from the last row" is both "wrap to the top" and the row that changes
+	  page. It is not a conflict, because the page only turns on A (see the SCR_CORE case of
+	  accept()) - Down has never done it and still does not. Wrapping down off the switch row
+	  lands on row 0 of the page the player is already on, which is where every other list
+	  here lands.
+
 	  mark_dirty() is not optional here, and its absence is a real bug a user found: move_v()
 	  has no trailing repaint - every case does its own - so the row moved and nothing was
 	  drawn. The cursor then appeared to jump only when left or right changed a value, because
@@ -9971,9 +10106,8 @@ static void move_v(int dir)
 	*/
 	case SCR_CORE:
 	{
-		int n = co_rows();
-		int next = co_row + dir;
-		if (next < 0 || next >= n) { nudge(); return; }
+		int next = wrap_step(co_row, co_rows(), dir);
+		if (next == co_row) return;
 		co_row = next;
 		mark_dirty();
 		break;
@@ -10033,10 +10167,20 @@ static void move_v(int dir)
 		break;
 
 	case SCR_POWER:
-		pwr_row = (pwr_row + dir + PWR_ROWS) % PWR_ROWS;
-		pwr_arm = -1;                    // moving off disarms, as everywhere else here
+	{
+		/*
+		  Disarmed before the boundary is tested, not after - the same order draw_pads() spells
+		  out: reaching for another row and finding the key will not take you there still means
+		  the player has stopped meaning to do this one. wrap_step()'s nudge repaints, so the
+		  disarm is drawn even on a refusal.
+		*/
+		pwr_arm = -1;
+		int next = wrap_step(pwr_row, PWR_ROWS, dir);
+		if (next == pwr_row) return;
+		pwr_row = next;
 		mark_dirty();
 		break;
+	}
 
 	/*
 	  Moving off disarms, which on this screen is not housekeeping but the point of it. The
@@ -10047,30 +10191,39 @@ static void move_v(int dir)
 	  wrong and the screen must be found disarmed.
 	*/
 	case SCR_CLOSE:
-		cls_row = (cls_row + dir + CLS_ROWS) % CLS_ROWS;
+	{
+		int next = wrap_step(cls_row, CLS_ROWS, dir);
 		ig_close_until = 0;
+		if (next == cls_row) return;
+		cls_row = next;
 		mark_dirty();
 		break;
+	}
 
 	case SCR_SORT:
-		sort_idx = (sort_idx + dir + SORT_COUNT) % SORT_COUNT;
+	{
+		int next = wrap_step(sort_idx, SORT_COUNT, dir);
+		if (next == sort_idx) return;
+		sort_idx = next;
 		mark_dirty();
 		break;
+	}
 
 	case SCR_DISC:
 	{
 		if (disc_picking)
 		{
 			/*
-			  Clamped rather than wrapping, and mark_dirty() at the end: leaving that off
-			  is the bug a user reported on the core options screen, where the cursor
-			  moved and the screen did not.
+			  The core chooser is a list like any other, so it takes the shared boundary rule
+			  (see wrap_step) rather than the clamp it used to have. mark_dirty() at the end
+			  is still not optional: leaving it off is the bug a user reported on the core
+			  options screen, where the cursor moved and the screen did not.
 			*/
 			int n = disc_rows();
 			if (n <= 0) { nudge(); break; }
 
-			int next = disc_row + dir;
-			if (next < 0 || next >= n) { nudge(); break; }
+			int next = wrap_step(disc_row, n, dir);
+			if (next == disc_row) break;
 
 			disc_row = next;
 			mark_dirty();
@@ -10120,7 +10273,7 @@ static void move_v(int dir)
 	case SCR_OPTIONS:
 		{
 			int n = ig_active ? OPT_ROWS_GAME : OPT_ROWS_MENU;
-			opt_row = (opt_row + dir + n) % n;
+			int next = wrap_step(opt_row, n, dir);
 
 			/*
 			  Moving off disarms, as it does on More Settings and Online Covers:
@@ -10134,32 +10287,39 @@ static void move_v(int dir)
 			  to the bottom of it feels like.
 			*/
 			ig_close_until = 0;
+			if (next == opt_row) return;
+			opt_row = next;
 		}
 		mark_dirty();
 		break;
 
 	case SCR_SET:
 	{
-		int n = set_nrows();
-		set_row = (set_row + dir + n) % n;
+		int next = wrap_step(set_row, set_nrows(), dir);
 
 		// Moving off disarms, as everywhere else here: reaching for another row means
 		// the player has stopped meaning to do the thing this one offered.
 		set_arm = 0;
 		set_quit_arm = 0;
+		if (next == set_row) return;
+		set_row = next;
 		mark_dirty();
 		break;
 	}
 
 	case SCR_COVERS:
-		cov_row = (cov_row + dir + COV_ROWS) % COV_ROWS;
+	{
+		int next = wrap_step(cov_row, COV_ROWS, dir);
 		// Disarmed on the way past, for the reason above. The refusal note goes too: it
 		// was about the row the player has just left.
 		cov_arm = 0;
 		cov_quit_arm = 0;
 		cov_note[0] = 0;
+		if (next == cov_row) return;
+		cov_row = next;
 		mark_dirty();
 		break;
+	}
 
 	case SCR_PADS:
 	{
@@ -10170,15 +10330,15 @@ static void move_v(int dir)
 		if (!n) { nudge(); return; }
 
 		/*
-		  Disarmed before the bounds check, not after: reaching for another row and
-		  finding there isn't one still means the player has stopped meaning to forget
-		  this one. Leaving it armed there left a row sitting red and one press from
+		  Disarmed before the boundary is tested, not after: reaching for another row and
+		  finding the key will not take you there still means the player has stopped meaning
+		  to forget this one. Leaving it armed there left a row sitting red and one press from
 		  being forgotten.
 		*/
 		pads_forget_arm = -1;
 
-		int next = pads_row + dir;
-		if (next < 0 || next >= n) { nudge(); return; }
+		int next = wrap_step(pads_row, n, dir);
+		if (next == pads_row) return;
 
 		pads_row = next;
 		mark_dirty();          // move_v() has no trailing repaint; each case does its own
@@ -10192,26 +10352,100 @@ static void move_v(int dir)
 		int n = net_count();
 		if (!n) { nudge(); return; }
 
-		wifi_row += dir;
-		if (wifi_row < 0) wifi_row = 0;
-		if (wifi_row >= n) wifi_row = n - 1;
+		/*
+		  This list used to clamp *silently* - the row was pinned at the ends with no nudge
+		  at all - so it was the one list that gave no answer whatever when it would not move.
+		  wrap_step() replaces both halves of that: the ends wrap on a press, and refuse
+		  audibly when a held key has run out of networks.
+		*/
+		int next = wrap_step(wifi_row, n, dir);
+		if (next == wifi_row) return;
+		wifi_row = next;
 		mark_dirty();
 		break;
 	}
 
 	case SCR_BROWSE:
+	{
 		if (!nbent) { nudge(); return; }
-		browse_sel += dir;
-		if (browse_sel < 0) browse_sel = 0;
-		if (browse_sel >= nbent) browse_sel = nbent - 1;
+		// Silently clamped before, like Wi-Fi above; the shared rule for the same reasons.
+		int next = wrap_step(browse_sel, nbent, dir);
+		if (next == browse_sel) return;
+		browse_sel = next;
 		mark_dirty();
 		break;
+	}
 
 	default:
 		nudge();
 		break;
 	}
 }
+
+#ifdef CHOME_HOST_TEST
+/*
+  The cursor and length of whatever list is on screen - see chome.h for why the harness is
+  given this rather than left to read it off the pixels.
+
+  Deliberately one function with two switches that mirror move_h() and move_v() above,
+  entry for entry. It is the same knowledge stated twice, which is normally a smell, and
+  here it is the point: the two switches are what a test can compare, so a screen that
+  grows a cursor without joining the shared boundary rule is a -1 the harness refuses
+  rather than an inconsistency nobody notices until a player does.
+
+  The axes that are not lists answer -1 on purpose, and each of those is a decision
+  recorded in move_h()/move_v(): the shelf's own vertical is the disc tier and the suspend
+  strip, the suspend strip's vertical locks a slot, the disc dialog's vertical leaves it,
+  and the Display row has nothing above or below.
+*/
+int chome_list_cursor(int axis, int *count)
+{
+	int cur = -1, n = 0;
+
+	if (axis)
+	{
+		switch (screen)
+		{
+		case SCR_HOME:    cur = sel;      n = lib_view_count();      break;
+		case SCR_MENUBAR: cur = mb_idx;   n = mb_count_visible();    break;
+		case SCR_SUSPEND: cur = slot_idx; n = user_slots();          break;
+		case SCR_DISPLAY:
+		{
+			int opts[VP_MAX_OPTIONS];
+			n = vp_options_for(sel_class(), opts);
+			cur = look_row;
+			break;
+		}
+		case SCR_DISC:
+			// The core chooser is a column; only the button row is on this axis.
+			if (!disc_picking) { cur = disc_btn; n = disc_nbtn; }
+			break;
+		default: break;
+		}
+	}
+	else
+	{
+		switch (screen)
+		{
+		case SCR_OPTIONS: cur = opt_row;    n = ig_active ? OPT_ROWS_GAME : OPT_ROWS_MENU; break;
+		case SCR_SET:     cur = set_row;    n = set_nrows();     break;
+		case SCR_COVERS:  cur = cov_row;    n = COV_ROWS;        break;
+		case SCR_SORT:    cur = sort_idx;   n = SORT_COUNT;      break;
+		case SCR_POWER:   cur = pwr_row;    n = PWR_ROWS;        break;
+		case SCR_CLOSE:   cur = cls_row;    n = CLS_ROWS;        break;
+		case SCR_CORE:    cur = co_row;     n = co_rows();       break;
+		case SCR_PADS:    cur = pads_row;   n = pads_count();    break;
+		case SCR_WIFI:    cur = wifi_row;   n = net_count();     break;
+		case SCR_BROWSE:  cur = browse_sel; n = nbent;           break;
+		case SCR_DISC:    if (disc_picking) { cur = disc_row; n = disc_rows(); } break;
+		default: break;
+		}
+	}
+
+	if (count) *count = n;
+	return (n > 0) ? cur : -1;
+}
+#endif
 
 static void accept()
 {
@@ -13422,6 +13656,17 @@ int chome_handle(uint32_t key)
 		if (pad != using_pad) { using_pad = pad; mark_dirty(); }
 
 		/*
+		  Press or repeat, decided once for the whole frame and before anything modal can
+		  return early with the answer un-taken. The keyboard below and the pad tester after
+		  it both consume the key and go home; leaving the latch un-updated across a hold in
+		  one of those would carry a stale held_key into whatever screen comes next. See
+		  held_key for what this is and why key_run cannot stand in for it.
+		*/
+		key_fresh = (k != held_key) || CheckTimer(held_gap);
+		held_key = k;
+		held_gap = GetTimer(HOLD_LOST_MS);
+
+		/*
 		  The keyboard is modal: while it is up every key belongs to it, including
 		  MENU, which cancels the entry rather than closing the front-end.
 		*/
@@ -13784,6 +14029,15 @@ int chome_handle(uint32_t key)
 		// Reset the hold counter on release as well as on idle, otherwise a run of
 		// discrete taps looks like a held key and triggers the screenful jump.
 		if (!key || k == last_key) key_run = 0;
+
+		/*
+		  The release, and *only* the release, ends a hold as far as the boundary rule is
+		  concerned - so the next press of this key is a fresh one and may wrap a list.
+		  Deliberately not under the `!key` half of this branch: a hold is idle frames with
+		  repeats sprinkled through it, and clearing here on an idle frame would make every
+		  repeat look like a press. That is precisely the looping-while-held bug.
+		*/
+		if (key & UPSTROKE) held_key = 0;
 
 		/*
 		  Letting go of a key that scrolls the shelf commits the chrome to wherever it

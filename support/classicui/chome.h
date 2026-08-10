@@ -180,6 +180,26 @@ void chome_rowdrop_clear();
 */
 unsigned long chome_marq_epoch();
 int chome_marq_live();
+
+/*
+  Where the cursor is in whatever list is on screen, and how long that list is. `axis` is 0
+  for the column up and down walk and 1 for the row left and right walk; the answer is -1
+  when the screen has no list on that axis, and *count is how many entries it has.
+
+  Exported for exactly the reason chome_sel_index() above it is, and the property is a
+  sharper case of the same thing. Every list in the front-end now shares one boundary rule
+  (see wrap_step in chome_ui.cpp), and what has to be proved of it is a *count*: that
+  holding a direction stops after n-1 steps, and that the press after that lands on entry 0
+  rather than staying on entry n-1. A wrap and a clamp are the same pixels one press apart -
+  both leave the cursor somewhere legal on a list that has not otherwise changed - so no
+  hash, no highlight position and no scrollbar can tell them apart. Reading the index is the
+  only thing that can, and reading it for every screen from one function is what stops the
+  eleven of them drifting apart again: a screen added to move_v() and forgotten here has no
+  boundary test at all, and shows up as a -1 the section refuses.
+
+  Compiled out of the firmware, like everything else in this block.
+*/
+int chome_list_cursor(int axis, int *count);
 #endif
 
 #endif
