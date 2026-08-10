@@ -8254,7 +8254,24 @@ static void draw_core_opts(const chome_profile *p)
 		const core_opt *sel = core_opt_tier_at(co_tier, co_row);
 		if (sel)
 		{
-			int wide = gfx_text_cols(b.w - 12 * s, p->ts_tiny) >= 36;
+			/*
+			  Which of the two wordings, decided by measuring the long one rather than by a
+			  column threshold.
+
+			  It was ">= 36 columns", and that was wrong in the way a magic number usually is:
+			  the panel is 44 columns at 720p and 480p, the roomy wordings were 46 to 56
+			  characters, and so two of the three were cut on every wide profile. Nothing
+			  caught it because no fixture had ever drawn one of these rows - this help is the
+			  only copy of ours chosen by a *value* instead of by a screen. The harness draws
+			  them now.
+
+			  Asking whether the sentence fits cannot drift the way a threshold can: rewrite
+			  the copy, change the font, change the tracking, and the choice stays correct.
+			*/
+			int avail = b.w - 12 * s;
+			#define CO_HELP(long_s, short_s) \
+				(gfx_text_w((long_s), p->ts_tiny) <= avail ? (long_s) : (short_s))
+
 			const char *v = sel->vals[core_opt_value(sel)];
 			int is_snac = (v && strcasestr(v, "SNAC"))
 				|| (!strcasecmp(sel->name, "SNAC") && core_opt_value(sel) != 0)
@@ -8264,16 +8281,17 @@ static void draw_core_opts(const chome_profile *p)
 				|| !strncasecmp(sel->name, "Pad ", 4) || !strcasecmp(sel->name, "SNAC")
 				|| !strcasecmp(sel->name, "USERIO"))
 			{
-				if (is_snac) cohelp = wide ? "The core reads the port: guns and real cards, no menu"
-					: "Guns work - the pad cannot open this";
-				else cohelp = wide ? "We read the port: Select+Start opens this, cards virtual"
-					: "Select+Start opens this menu";
+				if (is_snac) cohelp = CO_HELP("Guns and real memory cards - but no menu",
+					"Guns work - the pad cannot open this");
+				else cohelp = CO_HELP("Select+Start opens this; cards are virtual",
+					"Select+Start opens this menu");
 			}
 			else if (!strcasecmp(sel->name, "SNAC MemCard"))
 			{
-				cohelp = wide ? "Real cards need Pad1 or Pad2 set to SNAC first"
-					: "Needs Pad1 on SNAC";
+				cohelp = CO_HELP("Real cards need Pad1 or Pad2 on SNAC",
+					"Needs Pad1 on SNAC");
 			}
+			#undef CO_HELP
 		}
 	}
 

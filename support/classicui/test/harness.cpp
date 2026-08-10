@@ -10003,6 +10003,31 @@ static void assert_long_core_list_scrolls()
 		for (int i = 0; i < n + 4; i++) press(KEY_DOWN, 6);
 		frame(10);
 
+		/*
+		  Park the cursor on each SNAC row and draw, so their footer help goes through
+		  gfx_clip() and the run-wide clipped-copy guard measures it. That help is the only
+		  copy of ours chosen by a *value* rather than by a screen, and nothing had ever drawn
+		  it - so a sentence wider than the panel was invisible to every check we have.
+		*/
+		for (int pass = 0; pass < 2; pass++)
+		{
+			for (int i = 0; i < core_opts_tier_count(CO_TIER_SYSTEM); i++)
+			{
+				const core_opt *o = core_opt_tier_at(CO_TIER_SYSTEM, i);
+				if (!o) break;
+				if (strcasecmp(o->name, "Pad1") && strcasecmp(o->name, "Pad2")
+					&& strcasecmp(o->name, "SNAC MemCard")) continue;
+
+				// pass 0 draws the core's own default; pass 1 draws the SNAC value.
+				harness_set_opt(o->spec, pass ? (uint32_t)(o->nvals - 4) : 0, o->ex);
+
+				// Home, then down to it - no test-only accessor, just the keys a player has.
+				for (int u = 0; u < core_opts_tier_count(CO_TIER_SYSTEM) + 2; u++) press(KEY_UP, 3);
+				for (int d = 0; d < i; d++) press(KEY_DOWN, 3);
+				frame(4);
+			}
+		}
+
 		int bar = sel_bar_y();
 		printf("  %s: highlight at y=%d after walking to the bottom\n", canv[c].name, bar);
 		check(bar >= 0, "the cursor on the last row is drawn, not left below the panel");

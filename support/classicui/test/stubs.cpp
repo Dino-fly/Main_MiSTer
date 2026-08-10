@@ -684,6 +684,19 @@ static const char *fake_confstr_long[] =
 	"PSXLONG",
 	"FS1,CUECHD,Load CD",
 	"O[40:39],System Type,Auto,NTSC-U,NTSC-J,PAL",
+	/*
+	  The SNAC rows, drawn rather than merely scanned.
+	
+	  Their footer help is the only copy of ours chosen by a *value* rather than by a screen,
+	  and assert_no_clipped_copy() had never seen it: no fixture put one of these rows on the
+	  options screen while it was being drawn, so three sentences could sit over the panel
+	  width at 720p and 480p unnoticed. Keeping them here means the clip sweep measures them.
+	*/
+	"O[48:45],Pad1,Dualshock,Off,Digital,Analog,GunCon,NeGcon,Wheel-NegCon,"
+		"Wheel-Analog,Mouse,Justifier,SNAC-port1,Analog Joystick,Popn",
+	"O[52:49],Pad2,Dualshock,Off,Digital,Analog,GunCon,NeGcon,Wheel-NegCon,"
+		"Wheel-Analog,Mouse,Justifier,SNAC-port2,Analog Joystick,Popn",
+	"O[66],SNAC MemCard,Virtual,Real",
 	"O[1],Video Region,Auto,NTSC,PAL",
 	"O[2],TV System,Auto,NTSC,PAL",
 	"O[3],Auto Region,Off,On",
