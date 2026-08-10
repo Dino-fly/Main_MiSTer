@@ -166,6 +166,20 @@ int chome_rowdrop_n();
 const char *chome_rowdrop_site(int i);
 int chome_rowdrop_lost(int i);
 void chome_rowdrop_clear();
+
+/*
+  Where the marquee is standing: the instant its phase is measured from, and whether the
+  last composed frame had any scrolling text on it at all.
+
+  Read only so that a test knows where in the cycle it is - "hold still for the first
+  GFX_MARQ_HOLD_MS" is a claim about a window of time, and the window starts at the last
+  mark_dirty() rather than at any moment the harness can name for itself. Every assertion
+  built on these is still about pixels; without them the tests would have to guess how much
+  clock a press() had spent, and a test that guesses at an animation's phase is a test that
+  goes intermittent on the day somebody changes a settle count.
+*/
+unsigned long chome_marq_epoch();
+int chome_marq_live();
 #endif
 
 #endif

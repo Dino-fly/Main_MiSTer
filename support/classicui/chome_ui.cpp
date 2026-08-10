@@ -681,6 +681,37 @@ static int disc_spin_due = 0;
 */
 static int slide_due = 0;
 
+/*
+  And the marquee's repaint, which is the third flag of this shape and the third version of
+  the same argument. It means "the only thing that changed is that some scrolling text moved
+  one character", and that text is a line or two of glyphs - the narrowest band any of these
+  three has ever asked for.
+
+  It has to be a band, not a full frame, and the numbers are the reason. A marquee steps
+  every GFX_MARQ_STEP_MS, which is between five and six paints a second for as long as the
+  player leaves a long name under the cursor - not a burst, a resting state. A full repaint
+  measures 5.1ms on the device at 240p and scales with the canvas, so six a second is 3% of
+  the loop at 240p, around 24% at 1080p and around 36% at 1080p with the half-resolution
+  canvas turned off. That is a shelf that stutters because a title is long, on the display
+  most people own, which is precisely the regression the partial-repaint work existed to
+  stop. Two text lines out of 720 rows is under 2% of the copy.
+
+  `marq_epoch` is what the phase is measured from, and mark_dirty() moves it. That is the
+  whole of the focus story: every change of what is selected goes through mark_dirty() -
+  it has to, or the row the cursor moved to would not be drawn - so a marquee is always
+  measured from the moment the thing it is on became the thing it is on. A row gains focus
+  and shows its beginning for GFX_MARQ_HOLD_MS before anything moves, which is the
+  behaviour asked for; a row that loses focus stops being drawn through the marquee at all
+  on the very same frame.
+
+  Which is also why animate() must not use mark_dirty() for its timers - see mark_anim().
+  A Wi-Fi scan repaints every GFX_SPIN_MS for as long as it runs, and if each of those
+  repaints moved the epoch the marquee would be pinned at its first character on the one
+  screen whose contents are other people's network names.
+*/
+static int marq_due = 0;
+static unsigned long marq_epoch = 0;
+
 static uint32_t last_key = 0;
 static int key_run = 0;
 
@@ -718,8 +749,24 @@ static int browse_sys = -1;
 static char browse_rel[CH_PATH_LEN] = {};
 
 
-static void mark_dirty() { dirty = 1; }
+static void mark_dirty() { dirty = 1; marq_epoch = GetTimer(0); }
 static void mark_slide() { slide_due = 1; }
+
+/*
+  A full repaint that is not a change of state: an ease still easing, a timer that has run
+  out, an activity ring one position further round.
+
+  Identical to mark_dirty() except that it leaves marq_epoch alone, and that difference is
+  the only reason it exists. Everything in animate() repaints because the clock moved, not
+  because anything the player did changed what is on screen - and a marquee whose phase was
+  reset by every clock-driven repaint would never leave its first character on any screen
+  that has an animation running on it.
+
+  The rule for choosing between the two: mark_dirty() if the answer to "what is selected,
+  what screen is this, what does it say" changed, mark_anim() if only "how far through an
+  animation are we" changed.
+*/
+static void mark_anim() { dirty = 1; }
 
 /*
   The half-resolution framebuffer, asked for whenever this front-end owns the screen and
@@ -1369,6 +1416,142 @@ static int slide_band(int *y0, int *y1)
 }
 
 /*
+  The band the last composed frame scrolled text in, and how long until that text moves.
+
+  Recorded the same way and for the same reason as the card row's band above: the repaint
+  that follows a marquee step has to clip to something, and the only thing that knows where
+  the scrolling text ended up is the code that drew it. Rows rather than a rectangle,
+  because gfx_end() copies by the row in any case and because two lines of a list are two
+  bands one row apart - a rectangle would have to be their union anyway.
+
+  `next` is the earliest instant at which any of this frame's marquees changes its window.
+  Not a poll interval: gfx_marquee() is a pure function of the clock and can therefore say
+  exactly when it will next look different, so the repaint happens on the frame the text
+  moves and on no other. This is the disc's lesson (see disc_spin_sig) arrived at from the
+  other end - the disc asks every 16ms and throws away the ticks on which its angle has not
+  moved; the marquee is asked once and says when to come back.
+*/
+static struct { int y0, y1, on; unsigned long next_in; } marq_rc;
+static unsigned long marq_next = 0;
+
+static void marq_note(int y0, int y1, unsigned long next_in)
+{
+	if (!marq_rc.on)
+	{
+		marq_rc.y0 = y0;
+		marq_rc.y1 = y1;
+		marq_rc.next_in = next_in;
+		marq_rc.on = 1;
+		return;
+	}
+	if (y0 < marq_rc.y0) marq_rc.y0 = y0;
+	if (y1 > marq_rc.y1) marq_rc.y1 = y1;
+	if (next_in < marq_rc.next_in) marq_rc.next_in = next_in;
+}
+
+/*
+  Is one of this front-end's own panels sitting over the shelf?
+
+  It was spelled out inline in compose(), where it decides whether to lay a scrim over the
+  background. It is a function now because the marquee needs the same answer: the shelf's
+  title block is drawn *behind* every one of these panels, and a marquee running back there
+  is motion nobody can read that still asks for a repaint five times a second - which is the
+  exact shape of the cost this whole design is arranged to avoid, arrived at by accident.
+
+  The menu bar is deliberately not in the list, here as in compose(): the bar sits above the
+  title rather than over it, the title is fully legible with the bar up, and a player on the
+  bar is looking at the shelf.
+*/
+static int overlay_up()
+{
+	return (screen == SCR_SORT || screen == SCR_DISPLAY || screen == SCR_OPTIONS ||
+		screen == SCR_ABOUT || screen == SCR_WIFI || screen == SCR_PADS ||
+		screen == SCR_POWER || screen == SCR_INI || screen == SCR_PADTEST ||
+		screen == SCR_SET || screen == SCR_CORE || screen == SCR_DISC ||
+		screen == SCR_COVERS || screen == SCR_CLOSE);
+}
+
+static int marq_band(int *y0, int *y1)
+{
+	if (!marq_rc.on) return 0;
+	*y0 = marq_rc.y0;
+	*y1 = marq_rc.y1;
+	return 1;
+}
+
+/*
+  Fit a string to `maxpx`, scrolling it if the caller says this is the thing with focus.
+
+  The one entry point every marquee in this front-end goes through, and it takes `focused`
+  as an argument rather than working it out. That is the answer to "what does focusable mean
+  here", and it is a deliberate choice against the obvious alternative: gfx_clip() is called
+  from about sixty places buried in drawing code, and nothing down there knows whether it is
+  drawing the selected row - draw_listrow() would have had to be told, and so would
+  draw_rows_c_at(), and so would the browser. Threading a flag to all sixty would have put
+  the decision in sixty places and made "is this focused" a property of a text run instead
+  of a property of a list.
+
+  Every caller that matters already has the answer one variable away. draw_listrow() takes
+  `on`. draw_rows_c_at() computes `on`. draw_browse() computes `on`. The shelf's title block
+  is drawn from the committed selection and is therefore *always* the focused thing - there
+  is no unfocused version of it. So the information was never missing; it simply was not
+  where gfx_clip() was standing. Asking the caller costs one argument and keeps the
+  unfocused path byte-for-byte what it was.
+
+  `y` is the top of the text and the scale gives its height; both are needed because this is
+  also where the repaint band gets recorded, and recording it here rather than at each call
+  site is what makes it impossible to add a marquee and forget the repaint that makes it
+  move. A marquee with no band would scroll only when something else asked for a frame,
+  which is the failure that has already been paid for twice in this file - the disc badge
+  and the arriving cover art both landed correctly and stayed invisible.
+
+  The `site` is threaded through by hand, and it has to be. The clip log keys on the name of
+  the function that asked (chome_gfx.h), and assert_no_clipped_copy()'s allow-list is a
+  table of (site, text) pairs - "draw_card may cut a shelf's name, and nothing else may".
+  Left to the macro, every clip routed through here would arrive at that table calling
+  itself "marq_fit_at", the allow-list would match nothing, and the guard would report every
+  game title on the shelf as a sentence of ours that had been cut. So the caller's own name
+  is passed on, which is exactly what the gfx_clip() macro does one level further up.
+*/
+#ifdef CHOME_HOST_TEST
+#define marq_fit(s, scale, maxpx, focused, y) \
+	marq_fit_at((s), (scale), (maxpx), (focused), (y), __func__)
+#else
+#define marq_fit(s, scale, maxpx, focused, y) \
+	marq_fit_at((s), (scale), (maxpx), (focused), (y), 0)
+#endif
+
+static const char *marq_fit_at(const char *s, int scale, int maxpx, int focused, int y,
+	const char *site)
+{
+	(void)site;
+
+	if (!focused)
+	{
+#ifdef CHOME_HOST_TEST
+		return gfx_clip_at(s, scale, maxpx, site);
+#else
+		return gfx_clip(s, scale, maxpx);
+#endif
+	}
+
+	int scrolling = 0;
+	unsigned long next_in = 0;
+	unsigned long ms = GetTimer(0) - marq_epoch;
+
+#ifdef CHOME_HOST_TEST
+	const char *out = gfx_marquee_at(s, scale, maxpx, ms, &scrolling, &next_in, site);
+#else
+	const char *out = gfx_marquee(s, scale, maxpx, ms, &scrolling, &next_in);
+#endif
+
+	// Only a string that did not fit has anything to repaint for. gfx_text() damages one
+	// pixel past the cell on both axes (see gfx_text_w there), so the band matches.
+	if (scrolling) marq_note(y, y + 8 * scale + scale, next_in);
+	return out;
+}
+
+/*
   A card's two decorations, as functions rather than as literals, because the band is
   derived from them: the drop shadow, offset down and right by a fortieth of the height,
   and the focus ring, which sits CARD_RING pixels outside the selected card on every side
@@ -1698,7 +1881,22 @@ static void draw_title_block(const chome_profile *p)
 		snprintf(up, sizeof(up), "%s", e->label);
 	}
 	gfx_shout(up);
-	gfx_text_c(gfx_clip(up, p->ts_title, avail), p->w / 2, p->y_title, p->ts_title, COL_WHITE, COL_SHADOW);
+	/*
+	  Scrolled, and unconditionally: this line is the name of the thing the cursor is on and
+	  there is no version of this screen where it is not the focused element. It is also the
+	  string this front-end cuts most often and cares most about - a shelf of No-Intro dumps
+	  is a shelf of names longer than any canvas - and the card under the cursor cannot help,
+	  because a card is sized by its artwork and cuts the same name harder.
+
+	  Centred, which is why gfx_marquee() keeps the window the same number of characters at
+	  every offset. See the note there.
+
+	  Unconditionally except behind a panel, which is not a caveat about focus but about
+	  visibility: with one of our own panels up this line is behind a scrim, and a marquee
+	  there is motion nobody reads that still asks for a repaint. See overlay_up().
+	*/
+	gfx_text_c(marq_fit(up, p->ts_title, avail, !overlay_up(), p->y_title),
+		p->w / 2, p->y_title, p->ts_title, COL_WHITE, COL_SHADOW);
 
 	char meta[128] = {};
 	if (e->kind == ENT_GAME)
@@ -1758,7 +1956,15 @@ static void draw_title_block(const chome_profile *p)
 			if (e->nvar > 1) snprintf(line, sizeof(line), "%d/%d  %s", e->vsel + 1, e->nvar, file);
 			else snprintf(line, sizeof(line), "%s", file);
 
-			gfx_text_c(gfx_clip(line, p->ts_tiny, avail), p->w / 2, y, p->ts_tiny, COL_PANELLO, 0);
+			/*
+			  Scrolled on the same terms as the title above it, and it is the line that gains
+			  the most by it: this is the only place a player can tell two dumps of one game
+			  apart, and what tells them apart is at the very end of the name - "(Europe)" or
+			  "(USA) (Disc 1)", which is exactly what gets cut. The clip log has it losing up
+			  to thirty-two characters at 240p.
+			*/
+			gfx_text_c(marq_fit(line, p->ts_tiny, avail, !overlay_up(), y),
+				p->w / 2, y, p->ts_tiny, COL_PANELLO, 0);
 		}
 	}
 }
@@ -2855,6 +3061,10 @@ static void rowdrop_add(const char *site, int n, int drawn)
 	nrowdrops++;
 }
 
+// See the note in chome.h. Reads, no levers: nothing here can move the marquee.
+unsigned long chome_marq_epoch() { return marq_epoch; }
+int chome_marq_live() { return marq_rc.on; }
+
 int chome_rowdrop_n() { return nrowdrops; }
 void chome_rowdrop_clear() { nrowdrops = 0; }
 const char *chome_rowdrop_site(int i)
@@ -2912,7 +3122,10 @@ static void draw_rows_c_at(const panel_box *b, const char *const *rows, const ch
 		int lw = b->w - 12 * b->s - vw;
 		if (lw < b->w / 2) lw = b->w / 2;
 
-		gfx_text(gfx_clip(up, b->s, lw), b->x + 6 * b->s, y, b->s, on ? COL_WHITE : COL_INK, 0);
+		// The row under the cursor scrolls its label; the rest are cut as they always were.
+		// `on` is right here, which is the whole argument for marq_fit() taking it rather
+		// than trying to work it out from underneath.
+		gfx_text(marq_fit(up, b->s, lw, on, y), b->x + 6 * b->s, y, b->s, on ? COL_WHITE : COL_INK, 0);
 
 		if (v[0])
 		{
@@ -3499,8 +3712,11 @@ static int draw_listrow(const panel_box *b, int y, const list_row *r, int on, un
 		rx -= cw + 4 * s;
 	}
 
-	gfx_text(gfx_clip(r->title, s, rx - tx), tx, y, s, ink, 0);
-	if (r->sub) gfx_text(gfx_clip(r->sub, s, rx - tx), tx, y + 9 * s, s, dim, 0);
+	// Both lines of the selected row scroll: a Wi-Fi row's title is somebody's network name
+	// and its second line can be a whole sentence about the state of the join, and neither is
+	// a length this front-end chose.
+	gfx_text(marq_fit(r->title, s, rx - tx, on, y), tx, y, s, ink, 0);
+	if (r->sub) gfx_text(marq_fit(r->sub, s, rx - tx, on, y + 9 * s), tx, y + 9 * s, s, dim, 0);
 
 	return x + w - 4 * s - r->rsvd;
 }
@@ -8602,7 +8818,10 @@ static void draw_browse(const chome_profile *p)
 		if (bent[idx].isdir) strncat(nm, " ]", sizeof(nm) - strlen(nm) - 1);
 		gfx_shout(nm);
 
-		gfx_text(gfx_clip(nm, s2, p->w - p->inset * 2), p->inset, y, s2,
+		// File names off the card, which are the longest strings this front-end draws and the
+		// ones a player most needs to read to the end: two dumps of a game differ in the
+		// bracket at the very end of the name.
+		gfx_text(marq_fit(nm, s2, p->w - p->inset * 2, on, y), p->inset, y, s2,
 			on ? COL_WHITE : (bent[idx].isdir ? COL_PANELHI : COL_DIM), 0);
 	}
 
@@ -9036,6 +9255,11 @@ static void compose()
 	// behind for a slide to clip to.
 	slide_rc.on = 0;
 
+	// And by whatever scrolling text this frame draws; see marq_note(). Cleared here for the
+	// same reason - a screen with no marquee on it must leave no band behind, or a repaint
+	// would be asked for on behalf of text that is no longer drawn.
+	marq_rc.on = 0;
+
 	if (screen == SCR_BROWSE)
 	{
 		draw_browse(p);
@@ -9049,11 +9273,7 @@ static void compose()
 	draw_pips(p);
 	draw_position(p);
 
-	int overlay = (screen == SCR_SORT || screen == SCR_DISPLAY || screen == SCR_OPTIONS ||
-		screen == SCR_ABOUT || screen == SCR_WIFI || screen == SCR_PADS ||
-		screen == SCR_POWER || screen == SCR_INI || screen == SCR_PADTEST ||
-		screen == SCR_SET || screen == SCR_CORE || screen == SCR_DISC ||
-		screen == SCR_COVERS || screen == SCR_CLOSE);
+	int overlay = overlay_up();
 	// Black over a still of the game and COL_BGDARK over the front-end's own background, for
 	// the reason spelled out at ig_build_background(): over a photograph this colour is a
 	// floor and not a dim, and it was flattening every dark scene to grey.
@@ -9092,10 +9312,28 @@ static void compose()
 	if (osk_active()) osk_draw(p, using_pad);
 }
 
+/*
+  Turn the band marq_note() just recorded into a deadline.
+
+  Called after compose() rather than inside it, and that is not tidiness: compose() has to be
+  a pure function of the clock and the state - everything in this file that compares a partial
+  repaint against a full repaint of the same instant rests on composing one moment twice
+  drawing the same pixels - and a deadline is not a pixel. Setting it here keeps compose()
+  answering only the question "what does this instant look like".
+
+  Two composes of one instant set the same deadline, so this is idempotent as well as
+  invisible.
+*/
+static void marq_arm()
+{
+	if (marq_rc.on) marq_next = GetTimer(marq_rc.next_in);
+}
+
 static void render()
 {
 	gfx_stat_compose_begin();
 	compose();
+	marq_arm();
 	gfx_end();
 }
 
@@ -9123,6 +9361,7 @@ static void render_region(int x, int y, int w, int h)
 	gfx_clip_set(x, y, w, h);
 	compose();
 	gfx_clip_clear();
+	marq_arm();
 	gfx_end();
 }
 
@@ -12612,7 +12851,7 @@ static void animate()
 		bar_y += (bt - bar_y) * (k * 2.5 > 1 ? 1 : k * 2.5);
 		if (bar_y > 0.998) bar_y = 1;
 		if (bar_y < 0.002) bar_y = 0;
-		mark_dirty();
+		mark_anim();
 	}
 
 	double st = (screen == SCR_SUSPEND) ? 1 : 0;
@@ -12621,14 +12860,14 @@ static void animate()
 		strip_y += (st - strip_y) * (k * 2.5 > 1 ? 1 : k * 2.5);
 		if (strip_y > 0.998) strip_y = 1;
 		if (strip_y < 0.002) strip_y = 0;
-		mark_dirty();
+		mark_anim();
 	}
 
 	if (screen == SCR_LAUNCH)
 	{
 		curtain += k * 0.6;
 		if (curtain > 1) curtain = 1;
-		mark_dirty();
+		mark_anim();
 		if (GetTimer(0) - launch_at > 900)
 		{
 			// Return home first: a launch that cannot proceed must not re-fire
@@ -12641,8 +12880,8 @@ static void animate()
 	}
 	else curtain = 0;
 
-	if (!CheckTimer(nudge_until)) mark_dirty();
-	if (!CheckTimer(ig_close_until)) mark_dirty();
+	if (!CheckTimer(nudge_until)) mark_anim();
+	if (!CheckTimer(ig_close_until)) mark_anim();
 
 	/*
 	  A confirmation with a timer on it needs a repaint while it is up and one *more* when it
@@ -12654,7 +12893,7 @@ static void animate()
 	*/
 	if (co_promoted[0])
 	{
-		if (!CheckTimer(co_promoted_until)) mark_dirty();
+		if (!CheckTimer(co_promoted_until)) mark_anim();
 		else { co_news_clear(); mark_dirty(); }
 	}
 
@@ -12672,7 +12911,7 @@ static void animate()
 	if (ui_busy())
 	{
 		unsigned long ph = GetTimer(0) / GFX_SPIN_MS;
-		if (ph != anim_seen) { anim_seen = ph; mark_dirty(); }
+		if (ph != anim_seen) { anim_seen = ph; mark_anim(); }
 	}
 }
 
@@ -13620,11 +13859,27 @@ int chome_handle(uint32_t key)
 
 	animate();
 
+	/*
+	  And the scrolling text, which asks for a frame at the one instant its window changes.
+
+	  Not a rate: gfx_marquee() said when it would next look different and marq_arm() turned
+	  that into this deadline, so there is no tick to throw away and no frame painted
+	  byte-identical to the one before it. The disc arrives at the same place from the other
+	  direction - it asks sixty times a second and skips the ticks on which its angle has not
+	  moved - and the reason the marquee can do better is that its motion is a pure function
+	  of the clock with no accumulator in it.
+
+	  marq_rc.on is the last composed frame's answer to "is anything scrolling", so a screen
+	  with nothing long on it never reaches CheckTimer at all.
+	*/
+	if (marq_rc.on && CheckTimer(marq_next)) marq_due = 1;
+
 	if (dirty)
 	{
 		dirty = 0;
 		slide_due = 0;                 // a full repaint repaints the cards too
 		disc_spin_due = 0;             // a full repaint repaints the disc too
+		marq_due = 0;                  // and the scrolling text with them
 		render();
 	}
 	/*
@@ -13669,6 +13924,48 @@ int chome_handle(uint32_t key)
 			  the badge would hold a stale angle for up to a whole position after the
 			  shelf came to rest. Unknown forces the next tick to paint, which is exactly
 			  what the pending spin did before the skip existed.
+			*/
+			disc_drawn_sig = -1;
+		}
+	}
+	/*
+	  Before the disc, and this one is not a matter of taste - it is what stops the marquee
+	  starving. The spin tick fires every GFX_DISC_PART_MS and the chain is an else-if, so a
+	  marquee arm sitting below a spinning disc would never be served at all while a disc was
+	  in the drive: the text would freeze on the shelf exactly when a disc was on it, which
+	  reads as the front-end having stopped. The other way round costs the disc five of its
+	  sixty ticks a second, and the tick it loses is one it would very likely have skipped -
+	  the badge's angle only moves sixteen times a second at the slow rate.
+
+	  The spin is left pending rather than cleared, the same as the slide leaves it: the badge
+	  picks up the current angle on the next tick, a fraction of a position later.
+	*/
+	else if (marq_due)
+	{
+		marq_due = 0;
+
+		/*
+		  The same two escapes as the slide and the disc, for the same two reasons.
+
+		  ui_busy() means gfx_track's sweep may be crossing the screen, and that sweep is
+		  continuous in milliseconds: it would advance inside the band and not outside it, and
+		  the seam would sit there until something asked for a whole frame.
+
+		  And no band means the last composed frame scrolled nothing - which the arm above
+		  already tested, but the frame can change between the arm and here, and a
+		  render_region() of a rectangle nobody recorded is a repaint of whatever y0 and y1
+		  last happened to hold.
+		*/
+		int y0, y1;
+		if (ui_busy() || !marq_band(&y0, &y1)) render();
+		else
+		{
+			render_region(0, y0, gfx_w(), y1 - y0 + 1);
+
+			/*
+			  And the badge's signature is stale for the same reason it is after a slide: this
+			  frame replayed its draw under a clip that excluded it, so what it recorded never
+			  reached the screen. See the note in the slide arm above.
 			*/
 			disc_drawn_sig = -1;
 		}

@@ -15633,6 +15633,29 @@ static void measure_repaint_costs(const char *canvas)
 	perf_run(150);
 	perf_row(canvas, "idle shelf");
 
+	/*
+	  And an idle shelf with a title too long for it, which is the resting state the marquee
+	  introduced and therefore the one that had to be priced.
+
+	  This row is the argument for the band. Read it against "full repaints" below: the paints
+	  per tick tell you how often a marquee asks, and the rows column tells you what each ask
+	  costs. If the two rows' rows-per-paint were close, the feature would be five full
+	  repaints a second on a DE10-Nano for as long as a player left the cursor on a long name,
+	  and it would not be shippable at 1080p.
+
+	  Two and a half seconds of ticks, which is a whole opening hold plus a run of steps -
+	  short enough to stay under the 200-frame ceiling perf_row() needs and long enough that
+	  the hold does not dominate the average.
+	*/
+	select_titled("Yoshi");
+	frame(20);
+	perf_run(150);
+	perf_row(canvas, "shelf, longest title");
+	select_first_game();
+	press(KEY_RIGHT, 20);
+	press(KEY_RIGHT, 20);
+	frame(40);
+
 	// A full repaint per tick: the menu bar toggled with the clock moving, which marks
 	// dirty on every pass the way any structural change does.
 	gfx_stat_reset();
@@ -17031,6 +17054,653 @@ static void assert_config_check()
 	cfgrec_begin("MiSTer.ini", "1280x720@60.0", "MENU");
 	cfgrec_section("MiSTer", 1);
 	cfgrec_line("classicui=1", 4, 1);
+}
+
+/* ===================================================================== marquee ===
+
+  Text that does not fit, scrolled instead of only being cut, and marked with an ellipsis.
+
+  Three things have to be true for this to be a feature rather than a liability, and each of
+  them has failed somewhere in this front-end before:
+
+    - It has to move. An animation whose only frames are the ones something else asked for
+      is a still picture: the disc badge and the arriving cover art both landed correctly and
+      sat there, and both were found by eye rather than here. So the checks below never
+      accept a hash change on its own - they demand that the framebuffer was flipped as well
+      as that the pixels differ, which is the grab_seq lesson in stubs.cpp arrived at from
+      the drawing side.
+
+    - It has to stop. A marquee on every clipped string on screen, running whether anybody
+      is looking at it or not, is a full repaint five times a second on a DE10-Nano. So a
+      string only scrolls where the caller says it has focus, and a resting screen with
+      nothing focused-and-long on it must paint exactly as often as it did before this
+      existed, which is not at all.
+
+    - It has to be honest at rest. The window at offset 0 is byte-for-byte what gfx_clip()
+      returned before any of this, so every pinned frame in this file that does not move the
+      clock is unaffected by design rather than by luck.
+
+  gfx_marquee() is tested before the screens are, because everything the screens do rests on
+  it being a pure function of its arguments: two composes of one instant have to draw the
+  same window, or the partial-repaint comparisons elsewhere in this file - which force a full
+  repaint of a moment already on screen and demand byte identity - would start failing for a
+  reason that has nothing to do with the disc.
+*/
+
+// The mark, as one character, so a test can look for it inside a returned buffer.
+static int has_ellipsis(const char *s)
+{
+	for (const char *p = s; *p; p++) if (*p == CH_ELLIPSIS[0]) return 1;
+	return 0;
+}
+
+/*
+  How many pixels one string inks, drawn on a blank canvas at a given scale.
+
+  The only way to answer "is this glyph legible at 240p" with a number rather than an
+  opinion. gfx_begin()/gfx_end() around a direct draw is what the icon sheet further up this
+  file does; the full-canvas fill is what makes the count trustworthy, since gfx_end() only
+  copies rows something damaged.
+*/
+static int ink_of(const char *s, int scale)
+{
+	if (!gfx_begin()) return -1;
+	gfx_fill(0, 0, gfx_w(), gfx_h(), COL_BLACK);
+	gfx_text(s, 8, 8, scale, COL_WHITE, 0);
+	gfx_end();
+	return px_count(COL_WHITE);
+}
+
+/*
+  A .pf that claims every code from 0 upwards, which is the case CH_ELLIPSIS's degradation
+  story is about.
+
+  make_pf() above is 768 bytes, and LoadFont() reads that size as "chars 32 upwards" - so it
+  cannot reach code 5 and cannot test this. 1024 bytes with ink in the first 256 makes
+  LoadFont() start at code 0 instead (charrom.cpp), and every glyph including code 5 becomes
+  a solid six-column block. If the front-end were reading its ellipsis out of charfont[], the
+  mark would become that block and every cut string in the front-end would end in a domino.
+*/
+static void make_pf_from_zero(const char *path)
+{
+	unsigned char buf[1024];
+	for (int c = 0; c < 128; c++)
+		for (int r = 0; r < 8; r++)
+			buf[c * 8 + r] = (c == 32) ? 0x00 : 0xFC;
+
+	FILE *f = fopen(path, "wb");
+	if (!f) return;
+	fwrite(buf, 1, sizeof(buf), f);
+	fclose(f);
+}
+
+/*
+  A file on the card with a name far longer than any panel, and the browser it shows up in.
+
+  The vehicle for every on-screen check below, chosen after two others were tried and found
+  wanting. An SSID cannot do it: NET_SSID is 33 bytes, and 32 characters still fit the Wi-Fi
+  panel at 720p, so the row would simply not scroll and the test would pass by drawing
+  nothing. The fixture's own game titles cannot do it either - the longest is 36 characters,
+  which overruns a 240p title line by two, and a two-character marquee proves very little and
+  photographs as nothing at all.
+
+  A file name has no such ceiling, and a browser row is the widest text run in the front-end:
+  the whole canvas less the inset, at 720p and at 240p both. It is also exactly the kind of
+  string this feature is for - the end of a No-Intro name is where two dumps of one game
+  differ, and it is the end that gets cut.
+
+  Written into the Amiga folder, which is a *computer* system: those are excluded from the
+  shelf and only ever reached through the browser, which lists its directory when it opens
+  rather than from the library scan. So this file appears for exactly as long as the section
+  needs it and nothing above or below has to be rescanned to make it go away.
+*/
+#define MARQ_LONG_NAME \
+	"A Cracked Demo Disk With An Absurdly Long Name, For Testing (Europe) [a][!].adf"
+
+static void marq_put_long_file()
+{
+	mkpath(ROOT "/games/Amiga");
+	touch(ROOT "/games/Amiga", MARQ_LONG_NAME, 2048);
+}
+
+static void marq_drop_long_file()
+{
+	unlink(ROOT "/games/Amiga/" MARQ_LONG_NAME);
+}
+
+/*
+  Open the browser on that folder: the Computers card, the one computer system behind it, and
+  ENTER into its files.
+
+  By label rather than by a count of cards, for the reason select_folder() exists - the row of
+  leading folders grows as soon as a game has been played, and a hardcoded position would
+  quietly open something else instead of failing.
+*/
+static int marq_open_browser()
+{
+	harness_set_menu_core(1);
+	chome_leave();
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 80 && lib_scanning(); i++) frame(2);
+	frame(10);
+
+	if (!select_folder("Computers")) return 0;
+	press(KEY_ENTER, 14);                 // the Computers view: one card per computer system
+	frame(8);
+	press(KEY_ENTER, 14);                 // and into its files
+	frame(8);
+	return 1;
+}
+
+/*
+  How far past the start of the marquee's cycle the clock is standing.
+
+  marq_epoch moves on every mark_dirty(), so how far through the cycle a screen is after a
+  press() depends on that press's settle count - and a test that hardcoded a number there
+  would go intermittent the day somebody tuned one. Every duration below is measured against
+  this instead of assumed.
+*/
+static unsigned long marq_since() { return harness_now() - chome_marq_epoch(); }
+
+// What is left of the opening hold, less a margin - or 0 if the hold is already over, which
+// is a caller's cue that there was nothing here to measure rather than a licence to measure
+// the wrong thing.
+static unsigned long marq_hold_left(unsigned long margin)
+{
+	unsigned long since = marq_since();
+	if (since + margin >= GFX_MARQ_HOLD_MS) return 0;
+	return GFX_MARQ_HOLD_MS - since - margin;
+}
+
+/*
+  Let the clock run without pressing anything, and report whether the screen moved.
+
+  Two answers rather than one, and both are needed. A hash change on its own would accept a
+  repaint that redrew the same pixels somewhere else; a paint count on its own would accept a
+  repaint that changed nothing. So `*paints` is how many times the framebuffer was flipped,
+  the return value is whether the pixels in the band differ, and a marquee has to produce
+  both while a still screen must produce neither.
+*/
+static int marq_run(unsigned long ms, int y0, int y1, int *paints, int *worst_rows)
+{
+	unsigned long before = harness_fb_hash(y0, y1);
+	int flips = harness_present_count();
+	int worst = 0;
+
+	for (unsigned long t = 0; t < ms; t += 16)
+	{
+		harness_advance(16);
+		chome_handle(0);
+		if (harness_present_count() != flips && gfx_damage_rows() > worst) worst = gfx_damage_rows();
+	}
+
+	if (paints) *paints = harness_present_count() - flips;
+	if (worst_rows) *worst_rows = worst;
+	return harness_fb_hash(y0, y1) != before;
+}
+
+static void assert_marquee()
+{
+	printf("\n== marquee: text that does not fit scrolls, and the cut is an ellipsis ==\n");
+
+	enum { S_BROWSE = 8 };
+	const int was_prof = cfg.classicui_profile;
+
+	/* ------------------------------------------------------- the mark --- */
+
+	{
+		const char *t = "Super Mario World 2 - Yoshi's Island";
+		int narrow = gfx_text_w(t, 1) / 2;
+
+		const char *cut = gfx_clip(t, 1, narrow);
+		check(has_ellipsis(cut), "a string that does not fit is marked with the ellipsis");
+		check(!strchr(cut, '>'), "and not with the '>' it used to be marked with");
+		check(!strcmp(gfx_clip(t, 1, gfx_text_w(t, 1)), t),
+			"a string that fits gains no mark at all");
+
+		/*
+		  Legible at scale 1, which is the profile this front-end is actually for: 240p on a
+		  television. Three 2x2 dots is twelve pixels, the same ink as three of the ROM
+		  font's own full stops, and the reason the mark is not three single pixels - one
+		  pixel at 240p is a smudge, not punctuation. Asserted as the exact count, because
+		  "some ink" would also pass for a mark that had lost two dots to a bad bit pattern.
+		*/
+		int ink1 = ink_of(CH_ELLIPSIS, 1);
+		int ink2 = ink_of(CH_ELLIPSIS, 2);
+		printf("  the ellipsis inks %d pixels at scale 1 and %d at scale 2\n", ink1, ink2);
+		check(ink1 == 12, "the ellipsis is three 2x2 dots at scale 1 - punctuation, not three lit pixels");
+		check(ink2 == 48, "and it scales with the text around it");
+	}
+
+	/*
+	  And the mark under somebody else's font, which is the whole reason it lives in
+	  extra_glyphs[] rather than in charrom. See CH_ELLIPSIS in chome_gfx.h.
+	*/
+	{
+		static unsigned char before[256][8];
+		memcpy(before, charfont, sizeof(before));
+
+		mkpath(ROOT "/font");
+		make_pf_from_zero(ROOT "/font/fromzero.pf");
+
+		char rel[64];
+		snprintf(rel, sizeof(rel), "font/fromzero.pf");
+		check(LoadFont(rel) == 1, "a .pf that claims code 5 loads");
+		check(memcmp(before, charfont, sizeof(before)) != 0, "and really replaced the glyph table");
+
+		int ink1 = ink_of(CH_ELLIPSIS, 1);
+		printf("  under a font that fills every cell, the ellipsis still inks %d pixels\n", ink1);
+		check(ink1 == 12, "a loaded font cannot take the ellipsis away - it is ours, not charrom's");
+
+		FontRestoreBuiltin();
+		unlink(ROOT "/font/fromzero.pf");
+		check(!memcmp(before, charfont, sizeof(before)),
+			"and the built-in glyphs are back for every frame below this line");
+	}
+
+	/* ------------------------------------------------ gfx_marquee() --- */
+
+	/*
+	  The window, swept over a whole cycle at every tracking value and both text scales.
+
+	  What is established here is the contract the screens rely on: the window is always
+	  exactly as wide as the space, it starts as gfx_clip()'s answer, it walks the string one
+	  character at a time without skipping or overshooting, it ends on the tail with no mark
+	  on it, and it comes back to the beginning.
+	*/
+	{
+		const char *t = "Flat 3 Upstairs Back Bedroom 5GHz Guest Network";
+		int len = (int)strlen(t);
+		int bad_width = 0, bad_order = 0, bad_first = 0, bad_last = 0, bad_pure = 0;
+		int combos = 0, ends_seen = 0;
+
+		for (int k = -2; k <= 2; k++)
+		{
+			cfg.classicui_tracking = (int8_t)k;
+			for (int s = 1; s <= 2; s++)
+			{
+				// Two thirds of the room it wants, which cuts a third of the string off.
+				int maxpx = gfx_text_w(t, s) * 2 / 3;
+				int max = gfx_text_cols(maxpx, s);
+				if (max < 2 || max >= len) continue;
+				combos++;
+
+				int steps = len - max;
+				unsigned long cycle = GFX_MARQ_HOLD_MS
+					+ (unsigned long)steps * GFX_MARQ_STEP_MS + GFX_MARQ_HOLD_MS;
+
+				int sc = 0;
+				unsigned long nx = 0;
+				char zero[256];
+				snprintf(zero, sizeof(zero), "%s", gfx_marquee(t, s, maxpx, 0, &sc, &nx));
+				if (strcmp(zero, gfx_clip(t, s, maxpx))) bad_first++;
+				if (!sc) bad_first++;
+
+				int last_off = -1;
+				for (unsigned long ms = 0; ms < cycle; ms += 20)
+				{
+					sc = 0;
+					char keep[256];
+					snprintf(keep, sizeof(keep), "%s", gfx_marquee(t, s, maxpx, ms, &sc, &nx));
+
+					// Purity: the same instant twice is the same window.
+					if (strcmp(gfx_marquee(t, s, maxpx, ms, &sc, &nx), keep)) bad_pure++;
+
+					// Never wider than the space it was given, at any offset.
+					if (gfx_text_w(keep, s) > maxpx) bad_width++;
+
+					/*
+					  Which offset this is, read off the string rather than trusted: the
+					  window's first character is t[off], and the window is `max` cells at
+					  every offset - so its body is max-1 while the mark is there and max
+					  once the mark is gone.
+					*/
+					int off = -1;
+					for (int o = 0; o <= steps; o++)
+					{
+						int body = (o < steps) ? max - 1 : max;
+						if (!strncmp(keep, t + o, (size_t)body)) { off = o; break; }
+					}
+					if (off < 0) { bad_order++; continue; }
+
+					if (off == steps)
+					{
+						ends_seen++;
+						if (has_ellipsis(keep)) bad_last++;
+						if (strcmp(keep, t + steps)) bad_last++;
+					}
+					else if (!has_ellipsis(keep)) bad_order++;
+
+					// One character at a time, forwards only. The single backward step in a
+					// cycle is the snap home at the end of it, which is past `cycle`.
+					if (last_off >= 0 && off != last_off && off != last_off + 1) bad_order++;
+					last_off = off;
+				}
+
+				// And back where it started, one whole cycle on.
+				if (strcmp(gfx_marquee(t, s, maxpx, cycle, &sc, &nx), zero)) bad_order++;
+			}
+		}
+		cfg.classicui_tracking = 0;
+
+		printf("  %d width/scale combinations swept, %d instants ended on the tail\n",
+			combos, ends_seen);
+		check(combos >= 8, "there were combinations to sweep");
+		check(!bad_first, "the window at offset 0 is byte-for-byte what gfx_clip() returns");
+		check(!bad_width, "no offset ever draws wider than the space it was given");
+		check(!bad_order, "the window walks the string one character at a time and returns to the start");
+		check(ends_seen > 0 && !bad_last,
+			"and the last offset is the tail of the string, with no mark on it");
+		check(!bad_pure, "composing one instant twice gives the same window - gfx_marquee is pure");
+	}
+
+	/*
+	  And `next_in`, which is the whole reason the repaint can be exact rather than a poll.
+
+	  The claim is strong and worth checking as one: the window is the same at ms and at
+	  ms + next_in - 1, and different at ms + next_in. A next_in that was merely a safe
+	  under-estimate would pass a weaker test and would then repaint frames identical to the
+	  one before them, which is the cost this design exists to avoid.
+	*/
+	{
+		const char *t = "Flat 3 Upstairs Back Bedroom 5GHz Guest Network";
+		int maxpx = gfx_text_w(t, 1) * 2 / 3;
+		int early = 0, late = 0, n = 0;
+
+		for (unsigned long ms = 0; ms < 12000; ms += 37)
+		{
+			int sc = 0;
+			unsigned long nx = 0;
+			char now[256];
+			snprintf(now, sizeof(now), "%s", gfx_marquee(t, 1, maxpx, ms, &sc, &nx));
+			if (!sc || !nx) continue;
+			n++;
+
+			int sc2 = 0;
+			unsigned long nx2 = 0;
+			if (strcmp(now, gfx_marquee(t, 1, maxpx, ms + nx - 1, &sc2, &nx2))) early++;
+			if (!strcmp(now, gfx_marquee(t, 1, maxpx, ms + nx, &sc2, &nx2))) late++;
+		}
+
+		printf("  %d instants checked against their own next_in\n", n);
+		check(n > 200, "there were instants to check");
+		check(!early, "nothing changes before next_in says it will");
+		check(!late, "and it does change exactly then - a marquee repaint is never a wasted frame");
+	}
+
+	/* ------------------------------------------- a focused row, both profiles --- */
+
+	/*
+	  The browser, at 720p and then at 240p, with one file name that overruns the row by
+	  dozens of characters. Both profiles rather than one, because the two answers that matter
+	  scale differently: how much of the name is missing scales with the canvas, and what a
+	  repaint costs scales with it the other way.
+	*/
+	marq_put_long_file();
+
+	struct { int w, h, force; const char *name; } canv[] = {
+		{ 1280, 720, 1, "720p" },
+		{  320, 240, 3, "240p" },
+	};
+
+	for (int c = 0; c < 2; c++)
+	{
+		cfg.classicui_profile = (uint8_t)canv[c].force;
+		harness_set_fb(canv[c].w, canv[c].h);
+		gfx_shutdown();
+		theme_update(canv[c].w, canv[c].h, canv[c].force);
+
+		char what[192];
+		int paints = 0, rows = 0;
+
+		snprintf(what, sizeof(what), "%s: the browser opens on the Amiga folder", canv[c].name);
+		check(marq_open_browser() && chome_screen_id() == S_BROWSE, what);
+
+		// After the screen is up, not before: gfx_shutdown() above leaves gfx_h() at 0 until
+		// something composes a frame, and a band compared against rows 0..-1 compares nothing
+		// at all - which passes for "still" and fails for "moved".
+		int h = gfx_h();
+
+		/*
+		  Down onto the long name. The folder sorts before the files, so one press lands on
+		  it - and row 0, the folder, is the short row this test needs afterwards.
+		*/
+		press(KEY_DOWN, 8);
+		frame(4);
+
+		snprintf(what, sizeof(what), "%s: with the cursor on the long name, it is scrolling", canv[c].name);
+		check(chome_marq_live(), what);
+
+		snprintf(what, sizeof(what), "marquee-browser-%s-rest", canv[c].name);
+		dump(what);
+
+		/*
+		  The opening hold. Nothing may move for GFX_MARQ_HOLD_MS: a row that started
+		  scrolling the instant it gained focus would never show its beginning, which is the
+		  one part of a name a player is certain to want. Measured against the epoch and
+		  stopped two steps short of it, because the frame the hold ends on is the frame the
+		  first step lands on.
+		*/
+		unsigned long hold = marq_hold_left(2 * GFX_MARQ_STEP_MS);
+		snprintf(what, sizeof(what), "%s: the press left room inside the hold to measure", canv[c].name);
+		check(hold > 0, what);
+
+		int moved = marq_run(hold, 0, h - 1, &paints, &rows);
+		printf("  %s browser: %d paints during the opening hold\n", canv[c].name, paints);
+		snprintf(what, sizeof(what),
+			"%s: a newly focused row holds still long enough to read its beginning", canv[c].name);
+		check(!moved && !paints, what);
+
+		// And then it moves. Four steps' worth, so this cannot pass on one frame that
+		// happened to be repainted for some other reason.
+		moved = marq_run(5 * GFX_MARQ_STEP_MS, 0, h - 1, &paints, &rows);
+		printf("  %s browser: %d paints once it starts, worst %d rows of %d\n",
+			canv[c].name, paints, rows, h);
+
+		snprintf(what, sizeof(what),
+			"%s: the focused row's text really moves - the pixels differ, not only a hash", canv[c].name);
+		check(moved, what);
+		snprintf(what, sizeof(what),
+			"%s: and it moved four times over four steps, so it is a scroll and not a stray frame",
+			canv[c].name);
+		check(paints >= 4, what);
+
+		snprintf(what, sizeof(what), "marquee-browser-%s-mid", canv[c].name);
+		dump(what);
+
+		/*
+		  Every one of those paints was a band, not a frame. This is the check the whole design
+		  exists for: a marquee that repainted the screen would be five full repaints a second
+		  for as long as a player left the cursor on a long name, which on a DE10-Nano at 1080p
+		  is most of the loop.
+		*/
+		snprintf(what, sizeof(what),
+			"%s: and each paint was a band of rows, not the whole screen", canv[c].name);
+		check(rows > 0 && rows < h / 4, what);
+
+		/*
+		  Up onto the folder's short name. Nothing on screen is now both focused and too long,
+		  so the screen has to go completely still - including the row that was scrolling a
+		  moment ago, which is the half of "focus-driven" that is easy to get wrong.
+		*/
+		press(KEY_UP, 8);
+		frame(4);
+		snprintf(what, sizeof(what),
+			"%s: with the cursor off it, nothing on the screen is scrolling", canv[c].name);
+		check(!chome_marq_live(), what);
+
+		snprintf(what, sizeof(what), "marquee-browser-%s-focus-left", canv[c].name);
+		dump(what);
+
+		moved = marq_run(2 * GFX_MARQ_HOLD_MS + 8 * GFX_MARQ_STEP_MS, 0, h - 1, &paints, &rows);
+		printf("  %s browser: %d paints over two full holds with focus on a name that fits\n",
+			canv[c].name, paints);
+		snprintf(what, sizeof(what),
+			"%s: moving the cursor off the long row stops it scrolling, and the screen goes still",
+			canv[c].name);
+		check(!moved && !paints, what);
+
+		/*
+		  And back onto the long name, which has to show its beginning again rather than
+		  resuming where it had got to - then run a whole cycle and find that frame again.
+		*/
+		press(KEY_DOWN, 8);
+		snprintf(what, sizeof(what),
+			"%s: the press that regained focus restarted the cycle at its beginning", canv[c].name);
+		check(marq_since() < GFX_MARQ_HOLD_MS, what);
+
+		unsigned long rest = harness_fb_hash(0, h - 1);
+
+		marq_run(GFX_MARQ_HOLD_MS + 4 * GFX_MARQ_STEP_MS, 0, h - 1, &paints, &rows);
+		snprintf(what, sizeof(what), "%s: and mid-cycle it is somewhere else", canv[c].name);
+		check(harness_fb_hash(0, h - 1) != rest, what);
+
+		/*
+		  One whole cycle of this particular string, worked out the way the front-end does it:
+		  the characters that did not fit are the steps, and the cycle is the two holds plus
+		  one step each. Three of them looked for, so a cycle whose length this recomputed
+		  slightly differently still finds the frame.
+		*/
+		unsigned long cycle_ms;
+		{
+			const chome_profile *p = theme_get();
+			char nm[192];
+			snprintf(nm, sizeof(nm), "  %s", MARQ_LONG_NAME);
+			gfx_shout(nm);
+			int lost = (int)strlen(nm) - gfx_text_cols(p->w - p->inset * 2, p->ts_ui);
+			if (lost < 1) lost = 1;
+			cycle_ms = 2 * GFX_MARQ_HOLD_MS + (unsigned long)lost * GFX_MARQ_STEP_MS;
+			printf("  %s browser: %d characters overrun the row, so a cycle is %lu ms\n",
+				canv[c].name, lost, cycle_ms);
+		}
+
+		int came_home = 0;
+		for (unsigned long t = 0; t < 3 * cycle_ms && !came_home; t += 16)
+		{
+			harness_advance(16);
+			chome_handle(0);
+			if (harness_fb_hash(0, h - 1) == rest) came_home = 1;
+		}
+		snprintf(what, sizeof(what),
+			"%s: the scroll returns to the start - the resting frame comes back", canv[c].name);
+		check(came_home, what);
+
+		press(KEY_ESC, 10);                   // out of the browser
+		press(KEY_ESC, 10);                   // out of the Computers view
+		frame(6);
+	}
+
+	marq_drop_long_file();
+
+	/* ------------------------------------------------- 240p, the shelf --- */
+
+	/*
+	  The shelf's title line at 240p, which is the string this front-end cuts most often: the
+	  name of the game under the cursor, on the canvas where a No-Intro dump is wider than
+	  the screen. It is drawn from the committed selection and there is no version of the
+	  shelf where it is not the focused thing, so it scrolls unconditionally.
+
+	  240p rather than 720p because that is where it actually clips - at 720p the title line
+	  holds fifty characters and most of the fixture fits inside them.
+	*/
+	{
+		cfg.classicui_profile = 3;
+		harness_set_fb(320, 240);
+		gfx_shutdown();
+		theme_update(320, 240, 3);
+
+		harness_set_menu_core(1);
+		chome_leave();
+		press(KEY_MENU, 20);
+		for (int i = 0; i < 80 && lib_scanning(); i++) frame(2);
+		frame(20);
+
+		check(select_titled("Yoshi"), "the longest-named fixture game is on the shelf");
+		frame(10);
+
+		const chome_profile *p = theme_get();
+		int h = gfx_h();
+		int ty0 = p->y_title, ty1 = p->y_title + 9 * p->ts_title;
+		int paints = 0, rows = 0;
+
+		check(chome_marq_live(), "and its title is too long for 240p, so it scrolls");
+		dump("marquee-240p-shelf-rest");
+
+		check(marq_since() < GFX_MARQ_HOLD_MS, "the clock is standing inside the title's opening hold");
+		unsigned long rest = harness_fb_hash(ty0, ty1);
+
+		int moved = marq_run(GFX_MARQ_HOLD_MS + 4 * GFX_MARQ_STEP_MS, ty0, ty1, &paints, &rows);
+		printf("  240p title line: %d paints, worst %d rows of %d\n", paints, rows, gfx_h());
+		check(moved, "the shelf title scrolls at 240p");
+		check(rows > 0 && rows <= 2 + 9 * p->ts_title,
+			"and it repaints the title line only - not the cards, not the screen");
+		dump("marquee-240p-shelf-mid");
+
+		/*
+		  The travel of this particular title is one character, and that is the fixture rather
+		  than the code: the longest name on this card overruns a 240p title line by one. So the
+		  way to show that the shelf keeps cycling is to let two whole cycles pass and count the
+		  window changes in them - a step and a snap home in each. The browser above is where a
+		  long marquee is exercised; what this block is for is the two claims only the shelf can
+		  make, that its title needs nobody to tell it that it has focus and that its repaint is
+		  the title line rather than the cards.
+
+		  The cycle is estimated from the name the file carries, which is longer than the title
+		  the library files it under - so this over-counts, and everything below simply waits a
+		  little longer than it strictly has to.
+		*/
+		unsigned long cycle_ms;
+		{
+			int lost = (int)strlen("Super Mario World 2 - Yoshi's Island (Europe)")
+				- gfx_text_cols(p->w - p->inset * 2, p->ts_title);
+			if (lost < 1) lost = 1;
+			cycle_ms = 2 * GFX_MARQ_HOLD_MS + (unsigned long)lost * GFX_MARQ_STEP_MS;
+		}
+
+		int cycling = 0;
+		marq_run(2 * cycle_ms, ty0, ty1, &cycling, &rows);
+		printf("  240p title line: %d window changes over two whole cycles\n", cycling);
+		check(cycling >= 3, "and it keeps cycling - a step and a snap home in each turn of it");
+
+		/*
+		  And home again, compared against the resting frame taken before the clock was moved at
+		  all. The whole title line, pixel for pixel: the strongest form of "the scroll returns
+		  to the start" available from here.
+		*/
+		int came_home = 0;
+		for (unsigned long t = 0; t < 3 * cycle_ms && !came_home; t += 16)
+		{
+			harness_advance(16);
+			chome_handle(0);
+			if (harness_fb_hash(ty0, ty1) == rest) came_home = 1;
+		}
+		check(came_home, "and the title line comes back to the frame it started from");
+
+		/*
+		  A card whose name fits scrolls nothing, and the shelf then costs exactly what it
+		  always cost. This is assert_repaint_costs()'s idle claim restated in the one place
+		  this feature could have broken it: the leading folders are named in words we chose,
+		  they fit at every profile, and parked on one the front-end has to be as still as it
+		  was before any of this existed.
+		*/
+		for (int i = 0; i < 30; i++) press(KEY_LEFT, 2);
+		frame(20);
+		check(!chome_marq_live(), "a card whose name fits is not scrolled");
+		dump("marquee-240p-title-fits");
+
+		moved = marq_run(2 * GFX_MARQ_HOLD_MS + 10 * GFX_MARQ_STEP_MS, 0, h - 1, &paints, &rows);
+		printf("  parked on a name that fits: %d paints over two full holds\n", paints);
+		check(!moved && !paints,
+			"a title that fits gains no ellipsis and is never scrolled - an idle shelf still paints nothing");
+	}
+
+	cfg.classicui_profile = (uint8_t)was_prof;
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, was_prof);
+	chome_leave();
+	press(KEY_MENU, 20);
+	frame(8);
 }
 
 /* ================================================================= clipped copy ===
@@ -20296,6 +20966,25 @@ int main()
 	assert_rip_screen();
 
 	assert_config_check();
+
+	/*
+	  The marquee, before the clipped-copy sweep rather than after it.
+
+	  It has to be before, because the sweep reads the truncation log every section above it
+	  left behind and this section's own clips belong in that reading: a marquee is still a
+	  cut string, and the day a sentence of ours is switched over to one the guard has to
+	  fail rather than shrug. It also has to be before assert_typography(), which moves the
+	  advance the whole front-end draws at - its clips would be recorded against widths no
+	  screen actually has.
+
+	  The clips it makes on a screen arrive under the drawing function's name, exactly as they
+	  would if a player had been looking - marq_fit() passes the caller's __func__ down for
+	  that reason - so a long SSID lands as data under draw_listrow and the shelf title lands
+	  in draw_title_block's existing allowance. Only the direct sweeps of gfx_marquee() itself
+	  are skipped, under a site beginning "assert_", the same as assert_typography()'s two
+	  hundred measurements.
+	*/
+	assert_marquee();
 
 	/*
 	  Second to last: it reads the truncations every section above it recorded, so it has

@@ -950,20 +950,32 @@ void gfx_track(int x, int y, int w, int h, int nseg, int done, int live, unsigne
 
 /* ---------------------------------------------------------------- text ---- */
 
-// Up/down/left/right arrows in the same column-major format as charrom:
-// byte n is column n, bit y is row y.
-static const unsigned char extra_glyphs[5][8] =
+/*
+  Up/down/left/right arrows and the ellipsis, in the same column-major format as charrom:
+  byte n is column n, bit y is row y.
+
+  Ours rather than the font's, and consulted first - see CH_ELLIPSIS in chome_gfx.h for why
+  that matters to a player who has put a .pf on the card. The ellipsis is three 2x2 dots on
+  rows 5 and 6, which is where charrom's own '.' sits (charrom.cpp code 46, columns 2-3 at
+  0x60), so it lands on the same baseline and carries the same ink.
+*/
+static const unsigned char extra_glyphs[6][8] =
 {
 	{ 0, 0, 0, 0, 0, 0, 0, 0 },
 	{ 0x00, 0x40, 0x60, 0x70, 0x70, 0x60, 0x40, 0x00 }, // 1 up
 	{ 0x00, 0x04, 0x0C, 0x1C, 0x1C, 0x0C, 0x04, 0x00 }, // 2 down
 	{ 0x00, 0x18, 0x3C, 0x7E, 0x7E, 0x00, 0x00, 0x00 }, // 3 left
-	{ 0x00, 0x00, 0x00, 0x7E, 0x7E, 0x3C, 0x18, 0x00 }  // 4 right
+	{ 0x00, 0x00, 0x00, 0x7E, 0x7E, 0x3C, 0x18, 0x00 }, // 4 right
+	{ 0x60, 0x60, 0x00, 0x60, 0x60, 0x00, 0x60, 0x60 }  // 5 ellipsis
 };
+
+// The mark gfx_clip() writes over the character it had to drop. As a char rather than as
+// the CH_ELLIPSIS string, because that is what goes into a buffer one byte at a time.
+#define ELLIPSIS_CH ((char)5)
 
 static void draw_glyph(unsigned char code, int x, int y, int s, uint32_t col)
 {
-	const unsigned char *g = (code >= 1 && code <= 4) ? extra_glyphs[code] : charfont[code];
+	const unsigned char *g = (code >= 1 && code <= 5) ? extra_glyphs[code] : charfont[code];
 
 	for (int gx = 0; gx < 8; gx++)
 	{
@@ -1133,7 +1145,102 @@ const char *gfx_clip(const char *s, int scale, int maxpx)
 
 	memcpy(buf, s, max);
 	buf[max] = 0;
-	if (max >= 1) buf[max - 1] = '>';
+	if (max >= 1) buf[max - 1] = ELLIPSIS_CH;
+	return buf;
+}
+
+/*
+  The scrolling window. See the note above GFX_MARQ_HOLD_MS in chome_gfx.h for the shape of
+  the cycle and why it steps by whole characters; what is worth saying here is the
+  arithmetic.
+
+  `steps` is exactly gfx_clip()'s `lost`: the number of characters that did not fit, and
+  therefore the number of single-character shifts it takes to bring the tail flush with the
+  right-hand edge. So offset 0 is gfx_clip()'s answer and offset `steps` is the tail, and
+  nothing in between is reachable any other way.
+
+  The window is always exactly `max` cells wide, at every offset, and that is not an
+  accident - about half the callers here draw through gfx_text_c(), which centres on the
+  measured width. A window that lost a cell when the ellipsis went away would re-centre the
+  whole title on the frame it landed, which reads as the text lurching sideways rather than
+  as it arriving. So while there is more text to the right the window is (max - 1)
+  characters plus the mark, and on the last step, where there is not, it is max characters
+  and no mark.
+*/
+#ifdef CHOME_HOST_TEST
+const char *gfx_marquee_at(const char *s, int scale, int maxpx, unsigned long ms,
+	int *scrolling, unsigned long *next_in, const char *site)
+#else
+const char *gfx_marquee(const char *s, int scale, int maxpx, unsigned long ms,
+	int *scrolling, unsigned long *next_in)
+#endif
+{
+	static char buf[256];
+	if (!s) return "";
+
+	int max = gfx_text_cols(maxpx, scale);
+	if (max < 1) max = 1;
+	if (max > (int)sizeof(buf) - 2) max = (int)sizeof(buf) - 2;
+
+	int len = (int)strlen(s);
+	if (len <= max)
+	{
+		// Nothing is cut, so there is nothing to scroll and nothing to say about when it
+		// next moves. Both out-parameters are left exactly as the caller had them.
+		snprintf(buf, sizeof(buf), "%s", s);
+		return buf;
+	}
+
+#ifdef CHOME_HOST_TEST
+	cliplog_add(s, site, scale, maxpx, len - max);
+#endif
+
+	if (scrolling) *scrolling = 1;
+
+	unsigned long steps = (unsigned long)(len - max);
+	unsigned long travel = steps * GFX_MARQ_STEP_MS;
+	unsigned long cycle = GFX_MARQ_HOLD_MS + travel + GFX_MARQ_HOLD_MS;
+	unsigned long t = ms % cycle;
+
+	unsigned long off, until;
+	if (t < GFX_MARQ_HOLD_MS)
+	{
+		off = 0;
+		until = GFX_MARQ_HOLD_MS - t;
+	}
+	else if (t < GFX_MARQ_HOLD_MS + travel)
+	{
+		unsigned long u = t - GFX_MARQ_HOLD_MS;
+		// +1 because the first step *out* of the opening hold has already happened by the
+		// time u is zero: u == 0 is the instant the hold ended.
+		off = u / GFX_MARQ_STEP_MS + 1;
+
+		/*
+		  The step that arrives at the tail is where the closing hold begins, not a step with
+		  another step after it. Saying otherwise would make `next_in` promise a change that
+		  never comes - the window would be asked to repaint one frame identical to the one
+		  before it, every cycle, which is exactly the wasted paint this whole arrangement is
+		  built to make impossible.
+		*/
+		if (off >= steps) { off = steps; until = cycle - t; }
+		else until = GFX_MARQ_STEP_MS - (u % GFX_MARQ_STEP_MS);
+	}
+	else
+	{
+		off = steps;
+		until = cycle - t;
+	}
+
+	if (next_in) *next_in = until;
+
+	int body = (off < steps) ? max - 1 : max;
+	memcpy(buf, s + off, (size_t)body);
+	buf[body] = 0;
+	if (off < steps)
+	{
+		buf[body] = ELLIPSIS_CH;
+		buf[body + 1] = 0;
+	}
 	return buf;
 }
 
