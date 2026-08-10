@@ -44,6 +44,30 @@ assume a release means master moved - it never has.
 deliberate: beta 2 nearly shipped a rebuild nobody had tested, under notes describing hardware
 tests of a different binary. Quote the md5 of the build you actually tested.
 
+## Finished work is merged straight into `classic-ui`. No pull requests.
+
+One developer, no reviewer. A PR here is a review ceremony with nobody on the other side of
+it, and it leaves a branch and a worktree behind afterwards - which is how 22 worktrees and 45
+stale branches accumulated by 2026-08-10, several of them carrying the owner's real name.
+
+So: when a change is done, merge it (`--no-ff`, so the feature stays one identifiable merge),
+then delete the branch **and** its worktree, locally and on the fork.
+
+"Done" still means tested, and that has not relaxed:
+
+- the host harness passes with no new failures, and new behaviour has new checks;
+- the ARM cross-compile is clean, with `make clean` first if a header moved;
+- anything the harness cannot reach - `snacpad.cpp` used not to be in it, the fabric still
+  is not, the framebuffer never will be - either goes to the device or is reported as
+  unverified, in those words.
+
+Merging directly removes the review gate, not the evidence. A good habit that survived from
+the PR era: prove a fix can fail. Revert it and confirm the new check goes red, especially when
+the test was written after the diagnosis.
+
+Talking to *users* is unchanged - issue comments and anything else a third party reads still
+get drafted and approved before posting.
+
 ## Branches worth keeping
 
 - **`classic-ui`** - the release line and the fork's default branch on GitHub. Everything
