@@ -14,7 +14,7 @@ provenance from a commit message.
 
 ## What it is
 
-    12,761 rows, 455,267 bytes, format "#classicui-disctitles 1"
+    15,085 rows, 530,628 bytes, format "#classicui-disctitles 1"
 
 A magic line, then `KEY<TAB>Title` rows sorted by byte order over keys normalised to
 `A-Z0-9`. `SLES01506` is `Metal Gear Solid`. The format, the normalisation and the sort
@@ -29,19 +29,38 @@ says nothing about it in the log.
 
     python3 support/classicui/tools/disctitles.py --fetch -o disctitles.generated.txt
 
-Cut on **2026-08-06** from the four Redump DATs the `--fetch` path downloads:
+Cut on **2026-08-11** from the five Redump DATs the `--fetch` path downloads:
 
-| Source | URL | Keys reported |
-|---|---|---|
-| PlayStation | `https://redump.info/datfile/psx/serial` | 11,854 |
-| Mega CD | `https://redump.info/datfile/mcd/serial` | 452 |
-| PC Engine CD | `https://redump.info/datfile/pce/serial` | 479 |
-| Neo Geo CD | `https://redump.info/datfile/ngcd/serial` | 134 |
+| Source | URL | DAT cut | Keys reported |
+|---|---|---|---|
+| PlayStation | `https://redump.info/datfile/psx/serial` | 2026-08-10 | 11,854 |
+| Mega CD | `https://redump.info/datfile/mcd/serial` | 2026-08-04 | 452 |
+| PC Engine CD | `https://redump.info/datfile/pce/serial` | 2026-07-27 | 479 |
+| Neo Geo CD | `https://redump.info/datfile/ngcd/serial` | 2026-07-24 | 134 |
+| Saturn | `https://redump.info/datfile/ss/serial` | 2026-08-09 | 2,357 |
 
-Those counts sum to more than the 12,761 rows that came out, and the difference is not a
+Those counts sum to more than the 15,085 rows that came out, and the difference is not a
 loss: a key can be counted twice at the source — a region-suffix-stripped form that an
 exact serial already claims, or the same serial in two DATs — and `write()` collapses
 each of those to one row. See `add()` and `write()` in the generator.
+
+**Saturn was added on 2026-08-11**, with the reader that can key on it. It contributes
+2,324 rows and 75 KB, and it collides with nothing: of its keys, **zero** were already
+claimed by the other four systems, so the addition is strictly additive and no existing
+title changed. Sega's `T-` codes carry a region letter on Saturn (`T-1809G`) and not on
+Mega CD (`T-81027`), which is what keeps the two apart.
+
+### Why some rows can never match, and are shipped anyway
+
+PC Engine CD and Neo Geo CD contribute 613 rows that **no disc can ever key into**. Their
+Redump serials are catalogue codes read off the printed disc: a PCE CD disc has no ISO9660
+filesystem and no product code anywhere in its data, and a Neo Geo CD disc's only in-data
+identifier is a volume label that is a house code (`DD_CD`, `B4CD`, `C205`) or a mastering
+default (`UNTITLED`, `CD_DATA`) more often than a name. The firmware therefore asks nothing
+about those two systems — see `disc_scrape_name()` — and these rows sit here at a cost of
+about 25 KB because generating them is free, because a hand-added line for such a disc
+belongs beside them, and because nothing would have to be regenerated if a route to those
+keys is ever found. They are not evidence that the systems work.
 
 Note the `/serial` suffix on those URLs. It is mandatory: without it Redump generates the
 DAT with no `<serial>` elements at all and the script finds nothing. Note the domain too
@@ -67,10 +86,10 @@ Two things follow from taking it at its word:
   cut at 63 characters. No hashes, no track layouts, no dumper credits — none of the part
   of Redump's work that took the effort.
 - If that intent is ever withdrawn or disputed, the replacement is already supported and
-  needs no new code: MAME's `hash/psx.xml`, `megacd.xml`, `pcecd.xml` and `neocd.xml` are
-  CC0 1.0 — stated in MAME's `COPYING`, in `hash/README.md` and in each file — and
-  `tools/disctitles.py` reads them. The cost is coverage: roughly 2,800 PlayStation
-  serials against Redump's 11,854. Regenerate from those and commit.
+  needs no new code: MAME's `hash/psx.xml`, `megacd.xml`, `pcecd.xml`, `neocd.xml` and
+  `saturn.xml` are CC0 1.0 — stated in MAME's `COPYING`, in `hash/README.md` and in each
+  file — and `tools/disctitles.py` reads them. The cost is coverage: roughly 2,800
+  PlayStation serials against Redump's 11,854. Regenerate from those and commit.
   (`libretro-database` also works and is CC-BY-SA-4.0, which is viral and would attach
   ShareAlike to the result. DuckStation's `gamedb.yaml` is the most convenient shape of
   all and is CC BY-NC-**ND** — deliberately unsupported.)
@@ -84,7 +103,7 @@ python3 support/classicui/tools/disctitles.py --fetch \
 ```
 
 Then look at the diff, which is half the reason the format is text: a refresh should read
-as the few hundred rows that changed rather than as 445 KB of moved bytes. Redump gains
+as the few hundred rows that changed rather than as 518 KB of moved bytes. Redump gains
 discs every month, so a stale table costs coverage and nothing else — a key it does not
 have reads as the serial, exactly as it did before any of this existed.
 
@@ -97,7 +116,7 @@ is one file, so a table on the card is a second one that many people will never 
 
 The judgement was that this is not worth the complication. The benefits are the one-file
 install promise and there being no missing-file case to handle; against that, it puts
-~445 KB into a ~1.3 MB binary for every user whether they own a disc drive or not, adds a
+~518 KB into a ~1.3 MB binary for every user whether they own a disc drive or not, adds a
 linker-name coupling between a filename and a symbol spelled out in C++, and means a
 newer table cannot be installed without a toolchain. The card file already works, is
 already searched in place with no heap, and can be replaced by anyone with a text editor.

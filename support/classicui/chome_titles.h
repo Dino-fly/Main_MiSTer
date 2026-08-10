@@ -78,26 +78,42 @@
 
   ------------------------------------------------ which discs this helps today ---
 
-  Be clear about this, because the table covers four systems and the firmware does
-  not yet hand it four kinds of key:
+  Be clear about this, because the table covers five systems and only three of them
+  can be handed a key. The split is not a to-do list any more - it is what reading
+  the discs settled.
 
     PlayStation   works. disc_serial_at() digs a real serial out of the filesystem,
                   and Redump's PlayStation set is ~10,600 serials deep. This is the
                   case the whole thing was built for.
-    PC Engine CD  works only as far as the volume label goes. Those discs carry no
-                  serial that disc_serial_at() looks for, so the key is the label,
-                  and whether a label matches a Redump catalogue code is a per-disc
-                  accident. Rows are generated for them anyway.
-    Neo Geo CD    the same.
-    Mega CD       generated for, and not yet reachable. The identifier is the
-                  product code in the disc header at 0x180 ("GM MK-4407 -00"), which
-                  physical_disc.cpp reads and chome_disc.cpp does not - it only digs
-                  out PlayStation serials. Teaching disc_serial_at() to read that
-                  header is a small change to identification and deliberately not
-                  bundled in here; the table is already sorted and waiting for it.
+    Mega CD       works. The identifier is the product code in the disc header at
+                  0x180 ("GM MK-4407 -00"); disc_megacd_serial_at() reads it and
+                  normalises it, and modelling every disc in Redump's Mega CD set
+                  through that reader resolves 491 of 491.
+    Saturn        works. A ten-byte product number at 0x20 of the disc header -
+                  "GS-9061", "MK-81088", "T-1809G" - read by disc_saturn_serial_at().
+                  2,300 of 2,385 resolve; the rest are magazine and demo discs where
+                  one catalogue number covers thirty volumes, so no key could tell
+                  them apart and inventing one would name all thirty wrongly.
+    PC Engine CD  cannot be helped, and the rows exist only because generating them
+                  is free. Those discs have no ISO9660 filesystem at all - so no
+                  volume label either - and no product code anywhere in their data.
+                  The one in-data string is a 22-byte free-text program name, which
+                  is blank or "SAMPLE PROGRAM" on a third of discs and an internal
+                  codename on much of the rest. Redump's catalogue codes for this
+                  system are read off the printed disc, which a drive cannot see.
+    Neo Geo CD    the same verdict for the same reason. There is a volume label, but
+                  of fifteen real discs read it is a house code or a mastering
+                  default more often than a name: "DD_CD", "B4CD", "CR2CD",
+                  "CD_DATA", "C205", "20111222_1507", "UNTITLED".
 
-  The generator writes rows for all four so that nothing has to be regenerated when
-  that last gap is closed.
+  So disc_serial_for() returns nothing for the last two, and disc_scrape_name() asks
+  the database nothing about them. That is a decision and not a gap - see the note on
+  it in chome_disc.cpp, and the checks in assert_disc_serials() that pin it so a later
+  edit cannot quietly start spending the request allowance on them again.
+
+  The generator writes rows for all five anyway. They cost about 25 KB, they are what
+  a hand-added line for one of those discs would sit beside, and they mean nothing has
+  to be regenerated if a route to those two keys is ever found.
 
   ------------------------------------------------------------- what it is not ---
 

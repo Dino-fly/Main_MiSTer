@@ -3127,6 +3127,456 @@ static void assert_physical_disc()
 }
 
 /*
+  What identifier each console's disc actually carries, and - just as much the point -
+  which consoles are asked for nothing at all.
+
+  Every fixture below is the real header bytes at the real offset, so these are checks
+  on the parse and not on a restatement of it. The Saturn and Mega CD offsets are the
+  ones support/physical_disc/physical_disc.cpp reads in this same tree, which is a second
+  implementation of the same specification.
+
+  The negative checks are the ones worth keeping honest. A disc whose system this cannot
+  key on must come back with an *empty* serial, because the serial is what goes out to
+  ScreenScraper as a name - and an unmatchable name is not a free question. It spends the
+  account's unmatched allowance, which is the scarce one, and caches a miss against a key
+  that was never going to work. So "PC Engine CD asks for nothing" is asserted here in as
+  many words, and a later edit that starts sending its volume label has to delete a check
+  that says why rather than quietly widen a switch.
+*/
+static void assert_disc_serials()
+{
+	printf("\n== physical disc: the identifier each console presses onto it ==\n");
+
+	const int L = 0;
+	char ser[DISC_SERIAL_LEN];
+
+	/* ------------------------------------------------------------- Saturn --- */
+
+	{
+		/*
+		  The Saturn header: the maker id at 0x00, then a ten-byte product number at
+		  0x20. Space-padded in the field, and Redump's own notation once trimmed, so
+		  nothing is rewritten on the way out.
+		*/
+		fake_disc d; memset(&d, 0, sizeof(d));
+		fake_put(&d, L, 0, "SEGA SEGASATURN ", 16, 0);
+		fake_put(&d, L, 0, "SEGA ENTERPRISES", 16, 0x10);
+		fake_put(&d, L, 0, "GS-9061   ", 10, 0x20);
+		fake_put(&d, L, 0, "V1.000", 6, 0x2A);
+		fake_put(&d, L, 0, "19950728", 8, 0x30);
+		disc_set_reader(fake_read, &d);
+
+		check(disc_identify_at(L) == DISC_T_SATURN, "a Saturn header is still a Saturn disc");
+
+		memset(ser, 0, sizeof(ser));
+		check(disc_saturn_serial_at(L, ser, sizeof(ser)) > 0 && !strcmp(ser, "GS-9061"),
+			"and its product number reads GS-9061 out of the ten bytes at 0x20");
+
+		// The version sits at 0x2A, immediately after the field. Reading eleven bytes
+		// instead of ten would drag the V in with it.
+		check(!strchr(ser, 'V'), "with the version beside it left where it is");
+
+		memset(ser, 0, sizeof(ser));
+		check(disc_serial_for(DISC_T_SATURN, L, ser, sizeof(ser)) > 0 && !strcmp(ser, "GS-9061"),
+			"and the typed reader routes a Saturn disc to it");
+	}
+
+	{
+		// A third-party code, which is the common case: T for a licensee, then a
+		// publisher number and a region letter.
+		fake_disc d; memset(&d, 0, sizeof(d));
+		fake_put(&d, L, 0, "SEGA SEGASATURN ", 16, 0);
+		fake_put(&d, L, 0, "T-1809G   ", 10, 0x20);
+		disc_set_reader(fake_read, &d);
+
+		memset(ser, 0, sizeof(ser));
+		check(disc_saturn_serial_at(L, ser, sizeof(ser)) > 0 && !strcmp(ser, "T-1809G"),
+			"a licensee's Saturn code comes out whole, region letter included");
+	}
+
+	{
+		// Sega's own catalogue number. Redump writes this one three ways and the disc
+		// only ever writes it this way - see key_forms() in tools/disctitles.py.
+		fake_disc d; memset(&d, 0, sizeof(d));
+		fake_put(&d, L, 0, "SEGA SEGASATURN ", 16, 0);
+		fake_put(&d, L, 0, "MK-81088  ", 10, 0x20);
+		disc_set_reader(fake_read, &d);
+
+		memset(ser, 0, sizeof(ser));
+		check(disc_saturn_serial_at(L, ser, sizeof(ser)) > 0 && !strcmp(ser, "MK-81088"),
+			"and so does a Sega-published one");
+	}
+
+	{
+		// Not a Saturn disc: the reader must refuse rather than return whatever
+		// happens to sit at 0x20 of somebody else's sector.
+		fake_disc d; memset(&d, 0, sizeof(d));
+		fake_put(&d, L, 0, "SEGADISCSYSTEM", 14, 0);
+		fake_put(&d, L, 0, "NOTASATURN", 10, 0x20);
+		disc_set_reader(fake_read, &d);
+
+		memset(ser, 0, sizeof(ser));
+		check(disc_saturn_serial_at(L, ser, sizeof(ser)) == 0 && !ser[0],
+			"the Saturn reader refuses a disc that is not one, rather than reading 0x20 blind");
+	}
+
+	/* ------------------------------------------------------------ Mega CD --- */
+
+	{
+		/*
+		  "GM MK-4407 -00" is Sonic CD as the disc spells it. Redump spells the same
+		  disc "MK-4407-50". Both ends of that disagreement have to be dealt with or
+		  the table is a table of misses, and this is the end that lives here.
+		*/
+		fake_disc d; memset(&d, 0, sizeof(d));
+		fake_put(&d, L, 0, "SEGADISCSYSTEM  ", 16, 0);
+		fake_put(&d, L, 0, "SEGA MEGA DRIVE ", 16, 0x100);
+		fake_put(&d, L, 0, "GM MK-4407 -00", 14, 0x180);
+		disc_set_reader(fake_read, &d);
+
+		check(disc_identify_at(L) == DISC_T_MEGACD, "a Mega CD header is still a Mega CD disc");
+
+		memset(ser, 0, sizeof(ser));
+		check(disc_megacd_serial_at(L, ser, sizeof(ser)) > 0 && !strcmp(ser, "MK-4407"),
+			"and \"GM MK-4407 -00\" at 0x180 becomes MK-4407: the media type and the revision go");
+
+		memset(ser, 0, sizeof(ser));
+		check(disc_serial_for(DISC_T_MEGACD, L, ser, sizeof(ser)) > 0 && !strcmp(ser, "MK-4407"),
+			"and the typed reader routes a Mega CD disc to it");
+	}
+
+	{
+		/*
+		  Every other spelling this field is known to take on a real disc, from the
+		  match table of an emulator that keys on it. Two of these six are outright
+		  malformed, and they are in here because a fixed-offset parse gets exactly
+		  those two wrong while looking perfectly correct on the other four.
+		*/
+		static const struct { const char *field; const char *want; const char *why; } sp[] =
+		{
+			{ "GM MK-4407-00 ", "MK-4407",
+			  "Sonic CD (Europe) writes the code flush left and pads the other end" },
+			{ "GM  T-81025-00", "T-81025",
+			  "Mortal Kombat pads in front of the code instead, and must not come back empty" },
+			{ "GM T-127015-00", "T-127015",
+			  "a nine-character code fills the field and keeps every digit" },
+			{ "GM T-111065 -0", "T-111065",
+			  "and one whose revision fell off the end still yields the code before it" },
+		};
+
+		for (size_t i = 0; i < sizeof(sp) / sizeof(sp[0]); i++)
+		{
+			fake_disc d; memset(&d, 0, sizeof(d));
+			fake_put(&d, L, 0, "SEGADISCSYSTEM  ", 16, 0);
+			fake_put(&d, L, 0, sp[i].field, 14, 0x180);
+			disc_set_reader(fake_read, &d);
+
+			memset(ser, 0, sizeof(ser));
+			int n = disc_megacd_serial_at(L, ser, sizeof(ser));
+			check(n > 0 && !strcmp(ser, sp[i].want), sp[i].why);
+		}
+	}
+
+	{
+		/*
+		  A European pressing, where the two digits are a country code (50 = Europe)
+		  rather than a revision. They occupy the same slot, and they come off the same
+		  way - which is right rather than merely convenient: the generator strips the
+		  same two digits off the Redump side, so both ends land on the same key. A
+		  reader that kept them here would key on MK156950 while the table said MK1569.
+		*/
+		fake_disc d; memset(&d, 0, sizeof(d));
+		fake_put(&d, L, 0, "SEGADISCSYSTEM  ", 16, 0);
+		fake_put(&d, L, 0, "GM MK-1569 -50", 14, 0x180);
+		disc_set_reader(fake_read, &d);
+
+		memset(ser, 0, sizeof(ser));
+		check(disc_megacd_serial_at(L, ser, sizeof(ser)) > 0 && !strcmp(ser, "MK-1569"),
+			"a country code sits in the revision's two digits and comes off with it");
+	}
+
+	{
+		// A header that is all padding, and one mangled so badly that only a prefix
+		// survives. Either would go out as the disc's name and spend a request.
+		static const char *const junk[] = { "              ", "GM MK- 4430  -" };
+
+		for (size_t i = 0; i < sizeof(junk) / sizeof(junk[0]); i++)
+		{
+			fake_disc d; memset(&d, 0, sizeof(d));
+			fake_put(&d, L, 0, "SEGADISCSYSTEM  ", 16, 0);
+			fake_put(&d, L, 0, junk[i], 14, 0x180);
+			disc_set_reader(fake_read, &d);
+
+			memset(ser, 0, sizeof(ser));
+			check(disc_megacd_serial_at(L, ser, sizeof(ser)) == 0 && !ser[0],
+				i ? "a code mangled down to \"MK-\" is refused rather than sent as a name"
+				  : "and a blank product code is no code at all");
+		}
+	}
+
+	/* ------------------------------------ the ones we deliberately refuse --- */
+
+	/*
+	  PC Engine CD and Neo Geo CD carry no product code anywhere in their data. Redump
+	  keys them on a catalogue number read off the disc's printed ring, which is not
+	  something a drive can hand us.
+
+	  So they must ask for nothing. This is the same call the existing code already makes
+	  for a .npc in ss_system_id() and for the same reason: a confidently wrong match is
+	  worse than no match, and here it is also paid for out of a daily allowance.
+	*/
+	{
+		// Both sectors, because the search spans the pair and gives up if either
+		// read fails - see the PC Engine case in disc_identify_at().
+		fake_disc d; memset(&d, 0, sizeof(d));
+		fake_put(&d, L, 0, "NOTHINGUSEFUL", 13, 0);
+		fake_put(&d, L + 1, 0, "PC Engine CD-ROM SYSTEM", 23, 40);
+		disc_set_reader(fake_read, &d);
+
+		check(disc_identify_at(L) == DISC_T_PCECD, "a PC Engine CD is identified");
+
+		memset(ser, 0xAA, sizeof(ser));
+		check(disc_serial_for(DISC_T_PCECD, L, ser, sizeof(ser)) == 0 && !ser[0],
+			"and is asked for no serial at all: nothing in its data is one");
+	}
+
+	{
+		fake_disc d; memset(&d, 0, sizeof(d));
+		static const char *const files[] = { "IPL.TXT", "ABS.TXT" };
+		fake_iso(&d, L, "NEO GEO CD", "NGCD", files, 2);
+		disc_set_reader(fake_read, &d);
+
+		check(disc_identify_at(L) == DISC_T_NEOGEO, "a Neo Geo CD is identified");
+
+		memset(ser, 0xAA, sizeof(ser));
+		check(disc_serial_for(DISC_T_NEOGEO, L, ser, sizeof(ser)) == 0 && !ser[0],
+			"and it too is asked for nothing rather than sent under a volume label");
+	}
+
+	{
+		// 3DO and CD-i have no shelf row, so nothing would scrape them anyway - but the
+		// dispatcher is the layer that has to say so, not the caller.
+		fake_disc d; memset(&d, 0, sizeof(d));
+		fake_put(&d, L, 0, "\x01\x5A\x5A\x5A\x5A\x5A", 6, 0);
+		disc_set_reader(fake_read, &d);
+
+		memset(ser, 0xAA, sizeof(ser));
+		check(disc_serial_for(DISC_T_3DO, L, ser, sizeof(ser)) == 0 && !ser[0],
+			"a 3DO disc is asked for nothing");
+	}
+
+	/* ------------------------------ PlayStation, unchanged and still there --- */
+
+	{
+		// The path that is in the field. It must behave exactly as it did, including
+		// through the new dispatcher.
+		fake_disc d; memset(&d, 0, sizeof(d));
+		static const char *const none[] = { "" };
+		fake_iso(&d, L, "PLAYSTATION", "PLAYSTATION", none, 0);
+		fake_put(&d, L + 20, 0, "BOOT = cdrom:\\SLUS_006.26;1", 27, 100);
+		disc_set_reader(fake_read, &d);
+
+		memset(ser, 0, sizeof(ser));
+		check(disc_serial_for(DISC_T_PSX, L, ser, sizeof(ser)) > 0 && !strcmp(ser, "SLUS-00626"),
+			"a PlayStation disc still reads SLUS-00626, through the dispatcher");
+
+		// An unidentified disc keeps the loose Sony scan, which is the one case where
+		// looking for a serial we have no signature for is still worth the reads.
+		memset(ser, 0, sizeof(ser));
+		check(disc_serial_for(DISC_T_UNKNOWN, L, ser, sizeof(ser)) > 0 && !strcmp(ser, "SLUS-00626"),
+			"and an unidentified disc is still scanned for one");
+	}
+
+	/* ------------------------------------ which platform gets asked about --- */
+
+	/*
+	  The shelf row a disc is filed under and the platform the database knows it by are
+	  different answers, and sending the first one was three consoles' worth of requests
+	  that could not match: Mega-CD is systeme 20 and Mega Drive is systeme 1.
+	*/
+	check(disc_scrape_id(DISC_T_MEGACD) && !strcmp(disc_scrape_id(DISC_T_MEGACD), "megacd"),
+		"a Mega CD disc is scraped as megacd, not as the md shelf row it is filed under");
+	check(disc_scrape_id(DISC_T_PCECD) && !strcmp(disc_scrape_id(DISC_T_PCECD), "pcecd"),
+		"a PC Engine CD as pcecd, not tg16");
+	check(disc_scrape_id(DISC_T_NEOGEO) && !strcmp(disc_scrape_id(DISC_T_NEOGEO), "neogeocd"),
+		"a Neo Geo CD as neogeocd, not neogeo");
+	check(disc_scrape_id(DISC_T_SATURN) && !strcmp(disc_scrape_id(DISC_T_SATURN), "saturn"),
+		"and Saturn has a platform to be scraped as, though no core can be handed the drive");
+	check(disc_system_id(DISC_T_SATURN) == 0,
+		"which is exactly the answer disc_system_id() must keep giving instead");
+	check(disc_scrape_id(DISC_T_MDPLUS) && !strcmp(disc_scrape_id(DISC_T_MDPLUS), "md"),
+		"a Mega Drive+ disc is a Mega Drive game and is scraped as one");
+	check(disc_scrape_id(DISC_T_3DO) == 0 && disc_scrape_id(DISC_T_CDI) == 0 &&
+		disc_scrape_id(DISC_T_AUDIO) == 0 && disc_scrape_id(DISC_T_UNKNOWN) == 0,
+		"and the discs with no shelf row are scraped as nothing");
+
+	/*
+	  Every platform this now names has to exist in both tables, or the fix is a string
+	  nothing resolves. ss_system_id() is where a name becomes a systemeid.
+	*/
+	{
+		const int types[] = { DISC_T_PSX, DISC_T_SATURN, DISC_T_MEGACD,
+			DISC_T_PCECD, DISC_T_NEOGEO, DISC_T_MDPLUS, DISC_T_SNES };
+		int named = 0, resolved = 0;
+		for (size_t i = 0; i < sizeof(types) / sizeof(types[0]); i++)
+		{
+			const char *id = disc_scrape_id(types[i]);
+			if (!id) continue;
+			named++;
+
+			int onshelf = 0;
+			for (int s = 0; s < lib_sys_count(); s++)
+			{
+				const chome_sys *c = lib_sys(s);
+				if (c && !strcmp(c->id, id)) { onshelf = 1; break; }
+			}
+			if (onshelf && ss_system_id(id, 0)) resolved++;
+		}
+		check(named == 7 && resolved == 7,
+			"and all seven are shelf systems with a ScreenScraper id behind them");
+	}
+
+	/* --------------------------------- and what is put in the request ---- */
+
+	/*
+	  disc_scrape_name(), which is the string that actually goes out - and is not the
+	  string on screen. Driven through the state machine rather than called on its own,
+	  because the whole point is what it answers for a disc that has just been read.
+	*/
+	{
+		const char *path = ROOT "/classicui/disctitles.txt";
+		mkpath(ROOT "/classicui");
+
+		FILE *f = fopen(path, "wb");
+		if (f)
+		{
+			fprintf(f, "#classicui-disctitles 1\n");
+			fprintf(f, "GS9061\tHideo Nomo World Series Baseball\n");
+			fprintf(f, "MK4407\tSonic the Hedgehog CD\n");
+			fclose(f);
+		}
+		disc_titles_forget();
+
+		{
+			// A Saturn disc the table knows: the proper title goes out, not the label.
+			fake_disc d; memset(&d, 0, sizeof(d));
+			fake_put(&d, L, 0, "SEGA SEGASATURN ", 16, 0);
+			fake_put(&d, L, 0, "GS-9061   ", 10, 0x20);
+			disc_set_reader(fake_read, &d);
+
+			disc_ingest_present(1);
+			disc_ingest_identify(L);
+			check(!strcmp(disc_serial(), "GS-9061"), "a Saturn disc arrives carrying GS-9061");
+			check(disc_scrape_name() && !strcmp(disc_scrape_name(), "Hideo Nomo World Series Baseball"),
+				"and is asked about by its proper name");
+
+			disc_ingest_present(0);
+			(void)disc_take_dirty();
+		}
+
+		{
+			/*
+			  The disc that started this. A Saturn disc whose serial the table does not
+			  know, but which has a volume label - and the label is what used to go out.
+			  It must not: no volume label was ever indexed as a rom name, and the miss
+			  is charged against the unmatched allowance twice over.
+			*/
+			fake_disc d; memset(&d, 0, sizeof(d));
+			fake_put(&d, L, 0, "SEGA SEGASATURN ", 16, 0);
+			fake_put(&d, L, 0, "MK-81088  ", 10, 0x20);
+			fake_iso(&d, L, "SEGARALLY_CHAMPIONSHIP", 0, 0, 0);
+			disc_set_reader(fake_read, &d);
+
+			disc_ingest_present(1);
+			disc_ingest_identify(L);
+
+			check(!strcmp(disc_label(), "SEGARALLY CHAMPIONSHIP"),
+				"an unknown Saturn disc still shows its volume label on screen");
+			check(!strcmp(disc_display_name(), "SEGARALLY CHAMPIONSHIP"),
+				"which is what the player sees, and is right");
+			check(disc_scrape_name() && !strcmp(disc_scrape_name(), "MK-81088"),
+				"but the database is asked about the serial instead, never the label");
+
+			disc_ingest_present(0);
+			(void)disc_take_dirty();
+		}
+
+		{
+			// A Mega CD disc, end to end: header field to key to title.
+			fake_disc d; memset(&d, 0, sizeof(d));
+			fake_put(&d, L, 0, "SEGADISCSYSTEM  ", 16, 0);
+			fake_put(&d, L, 0, "GM MK-4407 -00", 14, 0x180);
+			disc_set_reader(fake_read, &d);
+
+			disc_ingest_present(1);
+			disc_ingest_identify(L);
+			check(!strcmp(disc_serial(), "MK-4407"), "a Mega CD disc arrives carrying MK-4407");
+			check(!strcmp(disc_display_name(), "Sonic the Hedgehog CD"),
+				"and is named from the table, which is what this console could never do before");
+			check(disc_scrape_name() && !strcmp(disc_scrape_name(), "Sonic the Hedgehog CD"),
+				"and is asked about under that name");
+
+			disc_ingest_present(0);
+			(void)disc_take_dirty();
+		}
+
+		{
+			/*
+			  A Neo Geo CD disc. Its volume label is per-game and looks almost usable -
+			  and of fifteen real discs read, "DD_CD" is one of the better ones: the set
+			  also holds "B4CD", "CR2CD", "C205", a PowerISO timestamp and a flat
+			  "UNTITLED". None of them is a rom name and no serial exists in the data at
+			  all, so this console asks for nothing.
+			*/
+			fake_disc d; memset(&d, 0, sizeof(d));
+			static const char *const files[] = { "IPL.TXT" };
+			fake_iso(&d, L, "DD_CD", "NGCD", files, 1);
+			disc_set_reader(fake_read, &d);
+
+			disc_ingest_present(1);
+			disc_ingest_identify(L);
+
+			check(disc_type() == DISC_T_NEOGEO && !disc_serial()[0],
+				"a Neo Geo CD disc arrives with no serial");
+			// "DD CD" rather than "DD_CD": disc_label_at() reads an ISO label's
+			// underscores as the spaces they stand in for, which for a house code
+			// makes an already-unusable string one step further from a game's name.
+			check(!strcmp(disc_display_name(), "DD CD"),
+				"its label is still what the player is shown, for want of anything better");
+			check(disc_scrape_name() == 0,
+				"and nothing at all is asked of the database, which is the considered answer");
+
+			disc_ingest_present(0);
+			(void)disc_take_dirty();
+		}
+
+		{
+			// A PC Engine CD disc has no ISO filesystem, so not even a label - which is
+			// the same refusal arrived at one step earlier.
+			fake_disc d; memset(&d, 0, sizeof(d));
+			fake_put(&d, L, 0, "NOTHINGUSEFUL", 13, 0);
+			fake_put(&d, L + 1, 0, "PC Engine CD-ROM SYSTEM", 23, 40);
+			disc_set_reader(fake_read, &d);
+
+			disc_ingest_present(1);
+			disc_ingest_identify(L);
+
+			check(disc_type() == DISC_T_PCECD && !disc_serial()[0] && !disc_label()[0],
+				"a PC Engine CD disc has neither serial nor label - it has no filesystem");
+			check(disc_scrape_name() == 0, "so it too asks for nothing");
+
+			disc_ingest_present(0);
+			(void)disc_take_dirty();
+		}
+
+		unlink(path);
+		disc_titles_forget();
+	}
+
+	disc_reset_reader();
+}
+
+/*
   The disc title table: chome_titles.cpp, and disc_display_name() on top of it.
 
   The fixture is built here rather than committed, and it is deliberately *big* -
@@ -19410,6 +19860,7 @@ int main()
 	assert_art_fetch_order();
 	assert_pack_provenance();
 	assert_physical_disc();
+	assert_disc_serials();
 	// Directly after it, because it drives the same state machine with the same fake
 	// discs, and before every section that draws or logs a disc name: it puts a title
 	// table on the card and takes it away again, and anything running in between would

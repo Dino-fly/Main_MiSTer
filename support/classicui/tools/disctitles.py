@@ -108,7 +108,13 @@ MAGIC = "#classicui-disctitles 1"
 TITLE_MAX = 63
 
 REDUMP = "https://redump.info/datfile/%s/serial"
-REDUMP_SYSTEMS = ["psx", "mcd", "pce", "ngcd"]
+
+# psx, mcd and ss are the three the firmware can key on exactly - it reads a serial off
+# those discs. pce and ngcd are fetched too and keyed on whatever the disc's volume label
+# happens to be, which is a per-disc accident; see "which discs this helps" in
+# chome_titles.h. Adding a system here is free, so the table is built for more than the
+# reader can currently use rather than being regenerated every time the reader learns one.
+REDUMP_SYSTEMS = ["psx", "mcd", "pce", "ngcd", "ss"]
 
 
 # ---------------------------------------------------------------------- keys ---
@@ -132,8 +138,38 @@ def key_forms(serial):
     The reduced form is only offered when it still looks like an identifier - at
     least six characters and containing a letter. Without that guard "4432-50"
     reduces to "4432", a four-digit key that would collide with anything.
+
+    Two more forms exist for Sega's own catalogue numbers, and they are the difference
+    between the Saturn and Mega CD readers working and not working at all.
+
+    The reason is that **Redump's serial is not read out of the disc header.** Redump's
+    own dumping guide says it is transcribed from "the serial/identification code on the
+    disc label", so it agrees with the header only where Sega happened to silk-screen the
+    same string - and for its own releases it did not. Three notations for one field:
+
+        header "GM MK-4407 -00"  Sonic CD          Redump "4407"       MK- not printed
+        header "MK-81084      "  Exhumed (EU)      Redump "81084-50"   MK- gone, region added
+        header "MK-81009      "  Panzer Dragoon EU Redump "MK81009-50" hyphen dropped instead
+        header "GM  T-81025-00"  Mortal Kombat     Redump "T-81025"    agrees
+        header "GM G-6021  -00"  Sonic CD (JP)     Redump "G-6021"     agrees
+
+    Third-party (T-) and Japanese Sega (G-, GS-) codes agree and need nothing. Sega's own
+    MK- catalogue numbers never do. So after removing a trailing two-digit country code,
+    a code that is nothing but four or five digits also yields itself with MK in front -
+    which is what the disc will say - and one that already has letters yields itself.
+
+    Both are reduced forms, so an exact serial from any source still wins over either.
+    Measured against every disc in the two Sega DATs, modelling each disc's header field
+    from its Redump serial, this takes the hit rate from 68.9% to 99.0% on Mega CD and
+    from 76.7% to 99.8% on Saturn. What is left is the demo and magazine discs, where one
+    catalogue number really does cover twenty volumes and no key could separate them.
+
+    Neither rule can touch the other systems. A PlayStation serial's trailing part is
+    five digits ("SLES-01506") and never two; PC Engine and Neo Geo codes carry letters
+    throughout, so the digits-only test refuses them.
     """
     serial = re.sub(r"\([^)]*\)", " ", serial)        # MAME writes "NGCD-083 (JPN)"
+    serial = serial.replace("#", " ")                 # Redump writes "# 4903" for Night Trap
     parts = [p for p in re.split(r"[\s\-_.]+", serial) if p]
     if not parts:
         return []
@@ -143,10 +179,24 @@ def key_forms(serial):
         return []
 
     forms = [full]
-    if len(parts) > 2:
-        base = normalise("".join(parts[:-1]))
-        if base != full and len(base) >= 6 and any("A" <= c <= "Z" for c in base):
+
+    def reduce_to(base):
+        if base and base != full and len(base) >= 6 and any("A" <= c <= "Z" for c in base) \
+                and base not in forms:
             forms.append(base)
+
+    if len(parts) > 2:
+        reduce_to(normalise("".join(parts[:-1])))
+
+    # A Sega country code sits in the same two digits a Mega Drive revision does, so it
+    # is removed the same way, and what is left is the catalogue number the disc carries.
+    core = parts[:-1] if len(parts) > 1 and re.fullmatch(r"\d\d", parts[-1]) else parts
+    core = normalise("".join(core))
+
+    reduce_to(core)
+    if re.fullmatch(r"\d{4,5}", core):
+        reduce_to("MK" + core)
+
     return forms
 
 
@@ -373,6 +423,22 @@ SELFTEST_REDUMP = """<?xml version="1.0"?>
  <game name="No Serial Here (USA)">
   <category>Games</category>
  </game>
+ <game name="Panzer Dragoon (Japan)">
+  <category>Games</category>
+  <serial>GS-9032</serial>
+ </game>
+ <game name="Clockwork Knight (Europe)">
+  <category>Games</category>
+  <serial>MK81007-50</serial>
+ </game>
+ <game name="Guardian Heroes (USA)">
+  <category>Games</category>
+  <serial>81035</serial>
+ </game>
+ <game name="Batman Forever (Europe)">
+  <category>Games</category>
+  <serial>4432-50</serial>
+ </game>
 </datafile>
 """
 
@@ -399,9 +465,16 @@ game (
 SELFTEST_TSV = "SCES 00001\tMy Own Correction\n"
 
 SELFTEST_WANT = """#classicui-disctitles 1
+443250\tBatman Forever
 44325001\tNameless Disc
+81035\tGuardian Heroes
+GS9032\tPanzer Dragoon
 MK4407\tSonic the Hedgehog CD
 MK440750\tSonic the Hedgehog CD
+MK4432\tBatman Forever
+MK81007\tClockwork Knight
+MK8100750\tClockwork Knight
+MK81035\tGuardian Heroes
 NGCD030\t2020 Super Baseball
 SCES00001\tMy Own Correction
 SLES01506\tMetal Gear Solid
@@ -413,14 +486,26 @@ SLUS00594\tFinal Fantasy VII
 def selftest():
     """
     Covers the things that are easy to get quietly wrong: multi-serial fields, the
-    space-versus-dash disagreement, the reduced Sega code, a game with no serial at
+    space-versus-dash disagreement, the reduced Sega codes, a game with no serial at
     all, and the sort order the device depends on.
 
-    Two of the expected rows are about the guards rather than about any real disc.
-    "MK-4407-50" reduces to MK4407, which is what a Mega CD header would give;
-    "4432-50-01" reduces to 443250, which has no letter in it and is therefore
-    *refused*, so only its full form 44325001 appears. If 443250 ever shows up here
-    the reduction has started inventing keys that could match anything.
+    Most of the expected rows are about the guards rather than about any real disc:
+
+      "MK-4407-50"  reduces to MK4407, which is what a Mega CD header would give.
+      "MK81007-50"  reduces to MK81007 through the two-digit rule, which is what a
+                    Saturn header gives - Redump writes that one without the dash.
+      "81035"       gains MK81035 as well, which is what the disc says, while keeping
+                    81035 so the Redump notation still resolves.
+      "GS-9032"     has nothing added: two parts, last one four digits, so no rule
+                    fires and only the full form appears. This is the row that fails
+                    if the Sega rules ever start firing on ordinary serials.
+      "4432-50"     reduces to 4432, which has no letter and is therefore *refused* -
+                    so 443250 appears and 4432 does not. What it does gain is MK4432,
+                    which is what that disc's header says. Likewise "4432-50-01" gives
+                    44325001 alone. If a bare 4432 ever shows up here the reduction has
+                    started inventing keys that could match anything.
+      "NGCD-030 (JPN)"  MAME's parenthesised region must be stripped whole, not turned
+                    into characters: an NGCD030JPN row matches no disc ever pressed.
     """
     out = ({}, {})
     for text in (SELFTEST_REDUMP, SELFTEST_MAME, SELFTEST_CMP, SELFTEST_TSV):

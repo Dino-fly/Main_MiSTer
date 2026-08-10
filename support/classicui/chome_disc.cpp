@@ -327,6 +327,206 @@ int disc_serial_at(int data_lba0, char *out, int outsz)
 	return 0;
 }
 
+/* ------------------------------------------------------- the Sega header ---- */
+
+/*
+  Saturn and Mega CD both open their first data sector with a fixed-width header, and
+  both put a product code in it. That is the whole reason this section exists: those
+  two discs carry an identifier as exact as a PlayStation serial, and until now nothing
+  read it, so they went out to the world under their ISO volume label instead.
+
+  Read out of the *raw* sector at offset 16, which is not a detail to gloss over. It is
+  the same read disc_identify_at() already made and the same offset it matched the
+  signature at, so the bytes below are by construction the bytes that were identified -
+  rather than a second read through read_user(), which resolves a Mode 2 sector at a
+  different offset and would silently hand back the header shifted by eight.
+
+  Both fields are fixed width and space-padded, so trimming is the whole of the parse.
+  Everything that is not printable ASCII becomes a space first: this string is drawn on
+  screen and used as a filename for the cached artwork, and a disc with a torn header is
+  not a reason to write control characters into either.
+*/
+static int sega_field(const uint8_t *user, int off, int len, char *out, int outsz)
+{
+	if (!out || outsz < 2 || len <= 0 || off + len > DISC_USER_SIZE) return 0;
+	if (len > outsz - 1) len = outsz - 1;
+
+	int n = 0;
+	for (int i = 0; i < len; i++)
+	{
+		unsigned char c = user[off + i];
+		out[n++] = (c < 0x20 || c > 0x7E) ? ' ' : (char)c;
+	}
+	out[n] = 0;
+
+	while (n > 0 && out[n - 1] == ' ') out[--n] = 0;
+
+	int lead = 0;
+	while (out[lead] == ' ') lead++;
+	if (lead) memmove(out, out + lead, (size_t)(n - lead) + 1);
+
+	return (int)strlen(out);
+}
+
+/*
+  Whether what came out of a header field is worth calling an identifier.
+
+  Four characters and at least one digit. Every real product code on either console has
+  digits in it, and the two shapes this rejects are the two that actually turn up: a
+  field that is all padding, and one whose digits were mangled badly enough that only a
+  prefix survives ("MK-"). Returning either would be worse than returning nothing - the
+  caller has no way to tell a bad code from a good one, so it would go out to
+  ScreenScraper as the disc's name, spend an unmatched request, and cache the miss.
+*/
+static int sega_plausible(const char *s)
+{
+	if ((int)strlen(s) < 4) return 0;
+	for (; *s; s++) if (*s >= '0' && *s <= '9') return 1;
+	return 0;
+}
+
+/*
+  Saturn: "SEGA SEGASATURN " at 0x00, then the maker id, then a ten-byte product number
+  at 0x20 - "GS-9061", "MK-81088", "T-1809G" - with the version at 0x2A and the release
+  date at 0x30 immediately behind it. Left-aligned and space-padded, and already the
+  form Redump records for a Japanese disc, so nothing is rewritten on the way out.
+
+  Confirmed against support/physical_disc/physical_disc.cpp in this same tree, which
+  reads the identical offset and width for its save-folder name; against the field table
+  in Sega's own Disc Format Standards as reproduced by three emulators and two dumping
+  tools; and against the header written out verbatim in Lobotomy Software's released
+  source for Exhumed, which is a real European disc and says "MK-81084  ".
+*/
+int disc_saturn_serial_at(int data_lba0, char *out, int outsz)
+{
+	if (!out || outsz < 2) return 0;
+	out[0] = 0;
+	if (data_lba0 < 0) return 0;
+
+	uint8_t raw[DISC_RAW_SIZE];
+	if (read_raw(data_lba0, raw)) return 0;
+	if (memcmp(raw + 16, "SEGA SEGASATURN", 15)) return 0;
+
+	if (!sega_field(raw + 16, 0x20, 10, out, outsz)) return 0;
+	if (!sega_plausible(out)) { out[0] = 0; return 0; }
+
+	return (int)strlen(out);
+}
+
+/*
+  Mega CD: "SEGADISCSYSTEM" at 0x00, then - 0x100 further in - the ordinary Mega Drive
+  ROM header, whose fourteen-byte serial field at 0x180 nominally reads
+
+      "GM MK-4407 -00"
+       ^^ ^^^^^^^^ ^^
+       |  |        +-- revision, or a country code in the same two digits
+       |  +----------- the product code, padded to eight
+       +-------------- media type: GM for a game, AI for the education titles
+
+  and in practice does not. Real discs, from a matcher that keys on this exact field:
+
+      "GM MK-4407 -00"   Sonic CD (USA)
+      "GM MK-4407-00 "   Sonic CD (Europe)     - flush left, padded on the right instead
+      "GM  T-81025-00"   Mortal Kombat         - two spaces, the code right-aligned
+      "GM T-127015-00"   Lunar                 - a nine-character code, no padding at all
+      "GM T-111065 -0"   Mad Dog II            - malformed: the revision fell off the end
+      "GM MK- 4430  -"   Yumemi Mystery Mansion- malformed: the digits are inside the pad
+
+  So this cannot be parsed by fixed sub-offsets, and trying to would give the wrong
+  answer on two of those six. What is invariant is that the product code is one run of
+  non-space characters: the padding is always beside it and never inside it, except on
+  the discs that are broken anyway. Hence - trim, drop the media type, take the first
+  word, then drop a revision if one is still attached to it.
+
+  The revision is only removed when the tail is a dash and exactly two digits, which is
+  what stops "T-81027" being eaten by its own last five.
+
+  What comes out is the code as the disc carries it. Redump does not write it that way -
+  its serial is transcribed from the printed disc face, and for Sega's own releases that
+  face says "4407" where the header says "MK-4407" - so the two are reconciled at the
+  other end, in key_forms() in tools/disctitles.py, which names this case and measures it.
+*/
+static void megacd_trim(char *s)
+{
+	int n = (int)strlen(s);
+
+	// The media type, only when it really looks like one: two capitals then a space.
+	if (n > 3 && s[0] >= 'A' && s[0] <= 'Z' && s[1] >= 'A' && s[1] <= 'Z' && s[2] == ' ')
+	{
+		memmove(s, s + 3, (size_t)(n - 3) + 1);
+		n -= 3;
+	}
+
+	// Whatever padding that left in front, before the first word is taken - or the
+	// "GM  T-81025-00" spelling would yield an empty one.
+	int lead = 0;
+	while (s[lead] == ' ') lead++;
+	if (lead) { memmove(s, s + lead, (size_t)(n - lead) + 1); n -= lead; }
+
+	// The code is one word. Everything past the first space is padding or a detached
+	// revision, and on a malformed field it is the part that is wrong.
+	char *sp = strchr(s, ' ');
+	if (sp) { *sp = 0; n = (int)(sp - s); }
+
+	// The revision, and nothing that merely ends in digits.
+	if (n > 3 && s[n - 3] == '-' && s[n - 2] >= '0' && s[n - 2] <= '9' &&
+		s[n - 1] >= '0' && s[n - 1] <= '9')
+	{
+		n -= 3;
+		s[n] = 0;
+	}
+}
+
+int disc_megacd_serial_at(int data_lba0, char *out, int outsz)
+{
+	if (!out || outsz < 2) return 0;
+	out[0] = 0;
+	if (data_lba0 < 0) return 0;
+
+	uint8_t raw[DISC_RAW_SIZE];
+	if (read_raw(data_lba0, raw)) return 0;
+	if (memcmp(raw + 16, "SEGADISCSYSTEM", 14)) return 0;
+
+	if (!sega_field(raw + 16, 0x180, 14, out, outsz)) return 0;
+	megacd_trim(out);
+	if (!sega_plausible(out)) { out[0] = 0; return 0; }
+
+	return (int)strlen(out);
+}
+
+/*
+  The serial for a disc we have already identified, which is the only form the rest of
+  the front-end asks in.
+
+  Typed rather than tried-in-turn, and that is the point of it. The old code ran the
+  PlayStation scan against every disc whatever it was - up to forty-nine sector reads on
+  a Saturn disc that could never contain a Sony prefix - and then fell back to the volume
+  label for the systems it had nothing for. Dispatching on the type it has already
+  established costs one read for the Sega discs, none for the systems this cannot answer
+  for, and it is what stops a disc being described by a key belonging to another console.
+
+  UNKNOWN keeps the PlayStation scan. A disc that failed every signature but still has a
+  Sony serial written into it is better identified than not, and it is exactly the case
+  the scan was written to be loose about.
+
+  PC Engine CD and Neo Geo CD return nothing on purpose - see disc_display_name().
+*/
+int disc_serial_for(int type, int data_lba0, char *out, int outsz)
+{
+	if (!out || outsz < 2) return 0;
+	out[0] = 0;
+
+	switch (type)
+	{
+	case DISC_T_PSX:
+	case DISC_T_UNKNOWN: return disc_serial_at(data_lba0, out, outsz);
+	case DISC_T_SATURN:  return disc_saturn_serial_at(data_lba0, out, outsz);
+	case DISC_T_MEGACD:  return disc_megacd_serial_at(data_lba0, out, outsz);
+	}
+
+	return 0;
+}
+
 /* ------------------------------------------------------------ names, cores --- */
 
 const char *disc_type_name(int type)
@@ -408,6 +608,40 @@ const char *disc_system_id(int type)
 	return disc_console_id(type);
 }
 
+/*
+  Which shelf system to ask the *database* about - a third question, and the third
+  different answer, which is why it is a third function rather than an argument to one
+  of the two above.
+
+  disc_console_id() answers "md" for a Mega CD disc because the Mega Drive row is where
+  a player looks for Sega and where a copy is filed. To ScreenScraper that is the wrong
+  platform outright: Mega-CD is systeme 20 and Mega Drive is systeme 1, they hold
+  different games, and asking the cartridge platform for a CD game is a request that
+  cannot match. The same held for PC Engine CD asked as tg16 and Neo Geo CD asked as
+  neogeo. Three consoles were quietly scraping against the platform next door.
+
+  Nothing about the folder or the core changes here - both of those still go through
+  disc_console_id(), which is why that stayed exactly as it was. This is only ever read
+  by the artwork request.
+
+  Mega Drive+ is the one disc that genuinely belongs to the cartridge platform: it is a
+  Mega Drive ROM carried on a CD, and the game it holds is a Mega Drive game.
+*/
+const char *disc_scrape_id(int type)
+{
+	switch (type)
+	{
+	case DISC_T_PSX:    return "psx";
+	case DISC_T_SATURN: return "saturn";
+	case DISC_T_MEGACD: return "megacd";
+	case DISC_T_PCECD:  return "pcecd";
+	case DISC_T_NEOGEO: return "neogeocd";
+	case DISC_T_MDPLUS: return "md";
+	case DISC_T_SNES:   return "snes";
+	}
+	return 0;
+}
+
 int disc_capable_systems(const char **out, int max)
 {
 	if (!out || max <= 0) return 0;
@@ -483,6 +717,56 @@ const char *disc_display_name()
 	return disc_type_name(dtype);
 }
 
+/*
+  What to put in the *request*, which is not what to put on the screen - and the two had
+  been the same string, which is the bug this fixes.
+
+  disc_display_name() above prefers the volume label, correctly: a label is the closest
+  thing to a human name a disc offers, and showing "SEGARALLY CHAMPIONSHIP" beats showing
+  "MK-81088". But that same string was then sent to ScreenScraper as a rom name, and a
+  volume label is not a rom name. jeuInfos.php matches romnom exactly, against filenames;
+  no label was ever indexed as one, so the request could not match. It still cost the
+  account a request, and a failed match is charged twice over - once to the day's total
+  and once to the unmatched allowance, which is roughly a tenth the size and is the one
+  that runs out. That is how a disc nobody could identify became the expensive kind of
+  disc.
+
+  So the order here is the opposite of the display's, and the bottom of it is nothing:
+
+    the title, when the table resolved one from either identifier. An exact name, and
+    the case the whole title table exists to produce.
+
+    else the serial, which is exact and is at least a string the database could hold.
+
+    else NOTHING, and this is the part that had to be written down. PC Engine CD discs
+    have no ISO filesystem at all, so they have no label either and this was already the
+    outcome. Neo Geo CD discs do have one, and reading fifteen of them is what settled
+    it: "DD_CD", "B4CD", "CR2CD", "CD_DATA", "C205", "20111222_1507" and one flat
+    "UNTITLED" - house codes, a mastering default and a timestamp. Sending those spends
+    the scarce allowance to learn nothing, and "UNTITLED" is worse than nothing, because
+    the artwork cache is keyed on this string and two different discs would share one
+    picture.
+
+  Returning 0 is therefore a real answer and callers must treat it as "do not ask",
+  rather than falling back to something they happen to have.
+*/
+const char *disc_scrape_name()
+{
+	if (dserial[0])
+	{
+		const char *t = disc_title_for(dserial);
+		return (t && t[0]) ? t : dserial;
+	}
+
+	if (dlabel[0])
+	{
+		const char *t = disc_title_for(dlabel);
+		if (t && t[0]) return t;
+	}
+
+	return 0;
+}
+
 static int identify_pending = 0;
 
 static void disc_forget()
@@ -541,7 +825,10 @@ void disc_ingest_identify(int lba0)
 	dstate = (dtype == DISC_T_UNKNOWN) ? DISC_UNKNOWN : DISC_READY;
 
 	disc_label_at(lba0, dlabel, sizeof(dlabel));
-	disc_serial_at(lba0, dserial, sizeof(dserial));
+
+	// After the type, and given it: which identifier a disc carries is a fact about
+	// which console pressed it. See disc_serial_for().
+	disc_serial_for(dtype, lba0, dserial, sizeof(dserial));
 	ddirty = 1;
 }
 
