@@ -11802,7 +11802,20 @@ static void draw_running_warning(const chome_profile *p)
 	  is 13 tall - so drawn at the top it was entirely hidden bar one line of red, which
 	  is how Dinofly found it. Every panel already respects safe_y; this did not.
 	*/
-	int y = p->safe_y;
+	/*
+	  Under the menu bar, not on top of it.
+
+	  It used to sit at p->safe_y, which is exactly where draw_menubar() puts the bar - so
+	  the warning covered Display, Options, Power, Close Game and the running core's entry,
+	  and the player could see the message but not the navigation it was sitting on. Found on
+	  a CRT with the Options panel open behind it.
+
+	  p->bar_h below the safe edge clears the bar whether or not the bar is currently drawn:
+	  the band is a fixed place on the screen either way, which is worth more than tucking it
+	  up when the bar happens to be hidden. Panels are centred, so a band this shallow at the
+	  top does not reach them.
+	*/
+	int y = p->safe_y + p->bar_h;
 
 	gfx_fill(0, y, p->w, h, COL_RED);
 	gfx_fill(0, y + h, p->w, (s > 1) ? 2 : 1, COL_SHADOW);

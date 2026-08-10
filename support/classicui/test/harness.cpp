@@ -13921,8 +13921,17 @@ static void assert_ingame()
 	  where 6% of 240 lines put the whole band behind the bezel.
 	*/
 	frame(6);
-	check(band_red_at(theme_get()->safe_y),
+	check(band_red_at(theme_get()->safe_y + theme_get()->bar_h),
 		"and warns across the top that the game is still playing");
+	/*
+	  Under the bar, not over it. The band used to be drawn at safe_y - exactly where
+	  draw_menubar() puts the bar - so the warning covered every entry on it and the player
+	  could read the message but not reach the navigation beneath it. Both rows are asserted
+	  because only the pair states the placement: red where it belongs, and no red where the
+	  bar's own entries are.
+	*/
+	check(!band_red_at(theme_get()->safe_y + theme_get()->bar_h / 2),
+		"and it does not cover the menu bar it used to be drawn on top of");
 	dump("still-playing-warning");
 
 	/*
@@ -14705,7 +14714,9 @@ static void assert_overscan()
 	frame(16);
 
 	check(chome_ingame_active(), "the in-game menu opens at 240p");
-	check(band_red_at(p->safe_y), "the still-playing band is inside the safe area");
+	check(band_red_at(p->safe_y + p->bar_h), "the still-playing band is inside the safe area");
+	check(!band_red_at(p->safe_y + p->bar_h / 2),
+		"and clears the menu bar rather than covering its entries");
 	check(!band_red_at(0), "and not at the very top, where a television hides it");
 	dump("overscan-still-playing");
 
