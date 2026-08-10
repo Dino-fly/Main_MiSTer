@@ -141,10 +141,37 @@ void lib_rescan();
 // 1 when this session's index came from the cache rather than a scan.
 int  lib_index_cached();
 
-// Advances the background scan by one slice. Returns 1 while still scanning.
+/*
+  Advances the background scan by one slice. Returns 1 while still scanning.
+
+  A slice is bounded work, not a whole system: see the comment above scan_walk() in
+  chome_lib.cpp for what it is bounded by and why the frame loop has to get back in.
+  So this returns 1 many times per system on a big card, and a caller that waits for
+  a scan must wait on lib_scanning() rather than count calls.
+*/
 int  lib_scan_step();
 int  lib_scanning();
 int  lib_scan_progress();     // items found so far
+
+// The system being walked, for the shelf to name while it waits; -1 when the scan is
+// not running or is between systems.
+int  lib_scan_sys();
+
+// Slices taken so far and the worst slice's cost against the budget. Any pointer may
+// be null. For the harness and for the end-of-scan log line.
+void lib_scan_stats(int *slices, long *cost_max, long *budget);
+
+/*
+  Test hook: the work one slice may do, in the cost units chome_lib.cpp weighs the walk
+  in. 0 puts the shipped budget back.
+
+  Same arrangement, and the same reason, as chome_rip.h's rip_test hooks: the property
+  worth asserting is that the library is *independent* of the slice size - a scan cut
+  into three thousand pieces has to produce the game order a scan done in one piece
+  produces, or the shelf reorders itself for no reason a player can see. That is only
+  checkable if a test can drive the walk at both.
+*/
+void lib_scan_test_budget(long budget);
 
 int  lib_sys_count();
 const chome_sys *lib_sys(int i);

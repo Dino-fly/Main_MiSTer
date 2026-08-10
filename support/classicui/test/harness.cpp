@@ -13796,6 +13796,524 @@ static void assert_index_cache()
 	check(lib_item_count() == scanned, "restored to the original library");
 }
 
+/* ------------------------------------------------ library scan slices ----- */
+
+/*
+  An order-sensitive fingerprint of the whole index: system, kind, path, title and
+  grouping key of every item, in the order the scan produced them.
+
+  This is the load-bearing safety property of the re-slicing, and it is the same
+  shape as the byte-identity checks elsewhere in this file. A scan cut into smaller
+  slices must produce *exactly* the library the old whole-system slice produced -
+  same games, same order, same system assignment - because the order is what the
+  shelf's own order is derived from, and every pinned frame in this run would move
+  if it changed. The player would see their shelf reorder for no reason they could
+  see, which is worse than the stall being fixed.
+
+  32-bit arithmetic on purpose: the number is quoted as a literal below and has to
+  mean the same thing on the ARM build as on the host.
+*/
+static uint32_t lib_fingerprint()
+{
+	uint32_t h = 2166136261u;
+	for (int i = 0; i < lib_item_count(); i++)
+	{
+		chome_item *it = lib_item(i);
+		char rec[CH_PATH_LEN + CH_TITLE_LEN + 64];
+		snprintf(rec, sizeof(rec), "%d|%d|%s|%s|%u|",
+			(int)it->sysidx, (int)it->kind, it->path, it->title, (unsigned)it->key);
+		for (const char *p = rec; *p; p++) { h ^= (unsigned char)*p; h *= 16777619u; }
+	}
+	h ^= (uint32_t)lib_item_count();
+	return h * 16777619u;
+}
+
+/*
+  And the shelf the index turns into, which is where the dedup grouping lives: the
+  item fingerprint above cannot see whether three dumps of one game collapsed to one
+  card, or which of them the card settled on. Both views the player actually lands
+  on, at the default sort.
+*/
+static uint32_t view_fingerprint(int v, int sysidx, int sort)
+{
+	uint32_t h = 2166136261u;
+	int n = lib_view_build(v, sysidx, sort);
+	for (int i = 0; i < n; i++)
+	{
+		const chome_entry *e = lib_view_entry(i);
+		char rec[CH_TITLE_LEN + 96];
+		snprintf(rec, sizeof(rec), "%d|%s|%d|%d|%d|%d|%d|%d|",
+			(int)e->kind, e->label, e->view, e->sysidx, e->count,
+			e->nvar, e->vsel, (int)e->dup);
+		for (const char *p = rec; *p; p++) { h ^= (unsigned char)*p; h *= 16777619u; }
+	}
+	h ^= (uint32_t)n;
+	return h * 16777619u;
+}
+
+static unsigned long scan_us()
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (unsigned long)ts.tv_sec * 1000000UL + (unsigned long)(ts.tv_nsec / 1000);
+}
+
+/*
+  How far past the budget one slice may legitimately land. The bound is checked before
+  a unit of work is started, not after, so a slice that was one unit under the budget
+  still finishes whatever it began: at worst reading romsets.xml and opening the folder
+  it belongs to, which is the most expensive thing the walk starts in one go. Anything
+  beyond this is a slice that ignored the bound, which is the freeze coming back.
+*/
+#define SCAN_SLICE_SLOP 300
+
+/*
+  A card the size the review's R3 entry names: a SNES folder of a couple of thousand
+  zips, which is the shape that made the stall worth fixing. Every zip is a real
+  archive, because opening the central directory of each one is the cost being
+  measured - a stand-in for the zip reader would price the wrong thing.
+
+  It is built here and torn down at the end of the section, the same way
+  assert_index_cache() borrows the card: the item fingerprint of the ordinary fixture
+  is pinned by several dozen other sections and must come back unchanged.
+*/
+#define STRESS_DIR   ROOT "/games/SNES/Stress"
+#define STRESS_ZIPS  2000
+#define STRESS_LOOSE 300
+
+static void stress_build()
+{
+	mkpath(STRESS_DIR);
+	mkpath(STRESS_DIR "/B");
+
+	char name[64], inner[64];
+	for (int i = 0; i < STRESS_ZIPS; i++)
+	{
+		snprintf(name, sizeof(name), "Zipped Game %04d (USA).zip", i);
+		snprintf(inner, sizeof(inner), "Zipped Game %04d (USA).sfc", i);
+		make_zip((i & 3) ? STRESS_DIR : STRESS_DIR "/B", name, inner, 64);
+	}
+	for (int i = 0; i < STRESS_LOOSE; i++)
+	{
+		snprintf(name, sizeof(name), "Loose Game %04d (USA).sfc", i);
+		touch((i & 1) ? STRESS_DIR : STRESS_DIR "/B", name, 64);
+	}
+}
+
+static void stress_remove()
+{
+	char cmd[512];
+	snprintf(cmd, sizeof(cmd), "rm -rf %s", STRESS_DIR);
+	if (system(cmd)) {}
+}
+
+/*
+  One full scan, driven straight through lib_scan_step() with no frame loop, timed
+  per slice. Returns the fingerprint; fills in the slice count and the worst and
+  total slice times.
+
+  Real microseconds, not the virtual clock, and reported as ratios rather than
+  device milliseconds - the same discipline as assert_repaint_costs(). The number
+  that matters is the *worst* slice, because that is the length of the freeze a
+  player sees; an average hides it completely.
+*/
+/*
+  `run` is the longest stretch of consecutive slices spent inside one system, and it is
+  the number R3 is actually about. "More slices than there are systems" can be true of a
+  walk that still does one system per slice, on a card with more systems than the check
+  guessed; this cannot. A walk whose slice is a whole system has a longest run of 1,
+  whatever the card looks like, and a card whose entire library sits in one folder - the
+  card that made this a freeze - is precisely the one where yielding between systems buys
+  nothing.
+*/
+static uint32_t scan_timed(long budget, int *slices, unsigned long *worst,
+                           unsigned long *total, int *run)
+{
+	lib_scan_test_budget(budget);
+	lib_rescan();
+
+	int n = 0, best = 0, cur = 0, prev = -2;
+	unsigned long w = 0, t = 0;
+
+	while (lib_scanning() && n < 2000000)
+	{
+		int sys = lib_scan_sys();
+		if (sys >= 0 && sys == prev) cur++;
+		else cur = (sys >= 0) ? 1 : 0;
+		if (cur > best) best = cur;
+		prev = sys;
+
+		unsigned long t0 = scan_us();
+		lib_scan_step();
+		unsigned long dt = scan_us() - t0;
+		if (dt > w) w = dt;
+		t += dt;
+		n++;
+	}
+
+	if (slices) *slices = n;
+	if (worst) *worst = w;
+	if (total) *total = t;
+	if (run) *run = best;
+	return lib_fingerprint();
+}
+
+/*
+  The same scan through the real frame loop instead, which is the number that decides
+  the budget: chome_handle() rebuilds the shelf view after every slice, and that is
+  O(n log n) in the library, so a budget small enough to be invisible to a player is
+  also a budget that pays for a re-sort thousands of times. Returns frames spent, and
+  fills in the worst single frame - a frame here is a slice plus everything the front
+  end does with it, which is what actually freezes the picture.
+*/
+static int scan_framed(long budget, unsigned long *worst, unsigned long *total)
+{
+	lib_scan_test_budget(budget);
+	lib_rescan();
+
+	int frames = 0;
+	unsigned long w = 0, t = 0;
+	while (lib_scanning() && frames < 200000)
+	{
+		unsigned long t0 = scan_us();
+		harness_advance(16);
+		chome_handle(0);
+		unsigned long dt = scan_us() - t0;
+		if (dt > w) w = dt;
+		t += dt;
+		frames++;
+	}
+
+	if (worst) *worst = w;
+	if (total) *total = t;
+	return frames;
+}
+
+static void assert_scan_slices()
+{
+	printf("\n== library scan slices (host times: read ratios, not milliseconds) ==\n");
+
+	/*
+	  Where the cursor was, before anything here moves it. The shelf position is inherited
+	  by design - "re-entry keeps the previous shelf position", see select_first_game() -
+	  and this section is the only one that drives the shelf during a scan, so it is the
+	  only one that has to walk the cursor back.
+
+	  Not tidiness. assert_config_check() presses DOWN on the shelf and asserts the shelf is
+	  still up, which is only true over a *folder*: down over a game opens the suspend strip.
+	  A section that moved the cursor by one and left it there breaks a check eight thousand
+	  lines away with nothing on screen to connect the two, which is how this note came to
+	  be written.
+	*/
+	int was_sel = chome_sel_index();
+	int was_screen = chome_screen_id();
+
+	// The fixture card as every other section has it, so the section can prove it
+	// handed it back.
+	lib_scan_test_budget(0);
+	lib_rescan();
+	for (int i = 0; i < 40000 && lib_scanning(); i++) lib_scan_step();
+	int fixture_items = lib_item_count();
+	uint32_t fixture_fp = lib_fingerprint();
+	uint32_t fixture_root = view_fingerprint(VIEW_ROOT, -1, SORT_TITLE);
+	uint32_t fixture_all = view_fingerprint(VIEW_ALL, -1, SORT_TITLE);
+	printf("  fixture: %d items, index fp %08x, root view fp %08x\n",
+		fixture_items, fixture_fp, fixture_root);
+
+	/*
+	  The fixture card's own fingerprint, as a literal.
+
+	  This number was read off the build *before* the walk was re-sliced - the one whose
+	  slice was a whole system and whose recursion was the C stack. It is the only check
+	  in this section that ties the new walk to the old code rather than to itself, so it
+	  is the one that would catch a re-slicing that reordered the library consistently at
+	  every slice size. If a fixture is deliberately added to build_fake_sd() this has to
+	  be re-read from a whole-system build, not merely updated to whatever comes out.
+	*/
+	check(fixture_fp == 0xc7a55e8c,
+		"the sliced walk produces the library the whole-system walk produced, item for item");
+	check(fixture_root == 0x4996a030, "and the shelf it builds, card for card and group for group");
+
+	stress_build();
+
+	/*
+	  The sweep. Every slice size the walk can be driven at, on a card the shape the
+	  review's R3 entry names - a couple of thousand zipped ROMs in one folder, which is
+	  where the cost is, because each one has its central directory opened and read.
+
+	  The first row is the walk with no bound at all: one call does the entire scan, which
+	  is what the old code did per system and is the "before" figure. The last is a bound
+	  of one cost unit, which yields at every opportunity there is.
+	*/
+	printf("  budget  slices  worst slice  walk total    frames  worst frame  wall total\n");
+
+	static const long budgets[] = { 1 << 28, 12000, 6000, 3000, 1500, 600, 1 };
+	uint32_t fp0 = 0;
+	int rows = 0;
+	unsigned long whole_walk = 0;
+
+	for (size_t i = 0; i < sizeof(budgets) / sizeof(budgets[0]); i++)
+	{
+		int slices = 0;
+		unsigned long worst = 0, total = 0;
+		uint32_t fp = scan_timed(budgets[i], &slices, &worst, &total, 0);
+
+		if (!i) whole_walk = total;
+
+		/*
+		  The frame-loop figure only for the sizes worth shipping. A budget of 1 through
+		  chome_handle() is tens of thousands of shelf re-sorts over a 2300-game library
+		  and would dominate this section's own runtime - which is the finding, not an
+		  obstacle to it: see the walk-total column instead.
+		*/
+		unsigned long fworst = 0, ftotal = 0;
+		int frames = 0;
+		if (budgets[i] >= 600) frames = scan_framed(budgets[i], &fworst, &ftotal);
+
+		if (frames)
+		{
+			printf("  %6ld  %6d  %11lu  %10lu  %8d  %11lu  %10lu\n",
+				budgets[i], slices, worst, total, frames, fworst, ftotal);
+		}
+		else
+		{
+			printf("  %6ld  %6d  %11lu  %10lu         -            -           -\n",
+				budgets[i], slices, worst, total);
+		}
+
+		if (!rows++) fp0 = fp;
+		else if (fp != fp0)
+		{
+			char what[160];
+			snprintf(what, sizeof(what), "budget %ld produces the same library as one unbounded slice",
+				budgets[i]);
+			check(0, what);
+		}
+	}
+
+	/*
+	  One assertion for the whole sweep, because it is the property the budget being a
+	  free parameter rests on: slicing the walk finer cannot change what it finds or the
+	  order it finds it in. Fifty-something separate checks saying the same thing would
+	  bury it.
+	*/
+	check(rows == (int)(sizeof(budgets) / sizeof(budgets[0])),
+		"every slice size from unbounded down to one entry produces an identical library");
+
+	/*
+	  And the shipped budget against the walk it divides, which is the finding R3 named
+	  stated as a check rather than as a column of numbers.
+
+	  Two claims, both about the *shape* of the division rather than about host
+	  milliseconds - a machine four times as fast would move every number in the table
+	  above and neither of these:
+
+	    the worst slice is a small fraction of the whole walk, so the walk really is
+	    divided and not merely renamed. Before this change the worst slice *was* the walk,
+	    because the slice was a whole system and one system held every game;
+
+	    and it is divided *inside* a system. One slice per system is what R3 found; a card
+	    whose whole library sits in one folder is exactly the card that made it a freeze,
+	    and it is not helped at all by yielding between systems.
+	*/
+	int shipped_slices = 0, shipped_run = 0;
+	unsigned long shipped_worst = 0, shipped_total = 0;
+	scan_timed(0, &shipped_slices, &shipped_worst, &shipped_total, &shipped_run);
+
+	printf("  shipped: %d slices, worst slice %lu us against %lu us for the whole walk;"
+		" longest run inside one system %d, over %d systems\n",
+		shipped_slices, shipped_worst, whole_walk, shipped_run, lib_sys_count());
+
+	check(shipped_worst * 8 < whole_walk,
+		"the worst slice is a fraction of the walk rather than the whole of it");
+	check(shipped_run > 1,
+		"and the walk is divided inside a system, not merely between systems");
+
+	// And the shelf built from it, at the shipped budget, against one unbounded slice.
+	scan_timed(1 << 28, 0, 0, 0, 0);
+	uint32_t whole_root = view_fingerprint(VIEW_ROOT, -1, SORT_TITLE);
+	uint32_t whole_sys = view_fingerprint(VIEW_SYSTEMS, -1, SORT_TITLE);
+	scan_timed(0, 0, 0, 0, 0);
+	check(view_fingerprint(VIEW_ROOT, -1, SORT_TITLE) == whole_root,
+		"the shelf a sliced scan builds is the shelf a whole-system scan built");
+	check(view_fingerprint(VIEW_SYSTEMS, -1, SORT_TITLE) == whole_sys,
+		"and so is the systems list, with the same counts behind each folder");
+
+	/*
+	  Responsiveness, which is the whole point and is not implied by the scan finishing:
+	  the pad has to be serviced *between* slices and the picture has to keep arriving.
+
+	  Driven through chome_handle() at the shipped budget, on the big card, with the scan
+	  deliberately left running. A press that lands while the walk is mid-folder has to
+	  move the selection on the frame it lands, and the framebuffer has to be flipped
+	  while the scan is still going - a shelf that only repainted at the end would look
+	  exactly like the freeze this replaced.
+	*/
+	lib_scan_test_budget(0);
+	harness_set_menu_core(1);
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 0);
+	chome_leave();
+	lib_rescan();
+	press(KEY_MENU, 0);
+
+	int scan_slices_seen = 0;
+	long cost_max = 0, budget_now = 0;
+
+	/*
+	  Frame by frame from the first one, because the scan is short in host time even on
+	  this card - 2300 games in a couple of dozen slices - and a fixed wait long enough to
+	  be interesting would be long enough to miss the whole thing. Everything asserted
+	  here is asserted from inside the loop, while lib_scanning() is true.
+	*/
+	int flips0 = harness_present_count();
+	int painted_mid = 0, alive = 0, moved_at = -1, frames = 0;
+
+	while (lib_scanning() && frames < 200000)
+	{
+		if (harness_present_count() > flips0) painted_mid = 1;
+
+		if (!alive && lib_view_count() >= 3)
+		{
+			int before = chome_sel_index();
+			chome_handle(KEY_RIGHT);
+			harness_advance(16);
+			chome_handle(KEY_RIGHT | UPSTROKE);
+			harness_advance(16);
+			chome_handle(0);
+			frames += 2;
+			if (chome_sel_index() != before) { alive = 1; moved_at = frames; }
+			continue;
+		}
+
+		harness_advance(16);
+		chome_handle(0);
+		frames++;
+	}
+
+	lib_scan_stats(&scan_slices_seen, &cost_max, &budget_now);
+
+	check(frames > 1, "a big card's scan spans many frames rather than one long one");
+	check(painted_mid, "the picture keeps arriving while the scan runs");
+	check(alive, "and a press mid-scan moves the selection on the frame it lands");
+	printf("  %d frames, %d slices; the pad was answered on frame %d of the scan\n",
+		frames, scan_slices_seen, moved_at);
+
+	printf("  shipped budget %ld: %d slices, worst slice %ld cost units\n",
+		budget_now, scan_slices_seen, cost_max);
+	check(cost_max <= budget_now + SCAN_SLICE_SLOP,
+		"no slice overran the budget by more than the one entry it was allowed to start");
+
+	stress_remove();
+	lib_scan_test_budget(0);
+	lib_rescan();
+	for (int i = 0; i < 40000 && lib_scanning(); i++) lib_scan_step();
+
+	/*
+	  What the player is told while it happens, at 240p - the one profile with nothing to
+	  tell them.
+
+	  At 720p and 480p draw_position() already reads "n / m SCANNING" and the count climbs,
+	  which is honest progress and became legible for the first time here: while a slice was
+	  a whole system the frame loop never ran during a walk, so nobody ever saw it move. At
+	  240p that line does not exist at all (draw_position() returns before it), and the
+	  re-slicing is what made that a gap: the shelf is now live *during* a scan, so a CRT
+	  player watches cards appear one at a time with nothing on screen to say why.
+
+	  Read inside the Computers view, on one of its browse cards, and both of those choices
+	  are what make the check mean anything.
+
+	  A browse card's meta line is the fixed sentence "BROWSE DISKS AND TAPES" - no count in
+	  it - so a difference in that band cannot be the library growing. And the Computers view
+	  is built from the systems table rather than from the index (see lib_view_build()), so it
+	  does not change at all while a scan runs: the same cards, in the same order, whatever
+	  the walk has found. Every other shelf fails one of those two tests. The first attempt
+	  read the *root* Computers folder, whose line is "n SYSTEMS", and it passed against a
+	  build with the notice removed - the count alone was moving it.
+
+	  Parked before the rescan rather than after it, too: the whole fixture card is 132 slices
+	  at the finest slice there is, and select_folder() rewinds with forty presses, so
+	  navigating during a scan finishes the scan. The cursor keeps its index across a rescan.
+	*/
+	harness_set_fb(320, 240);
+	gfx_shutdown();
+	theme_update(320, 240, 0);
+	chome_leave();
+	press(KEY_MENU, 6);
+
+	const chome_profile *lp = theme_get();
+	int m0 = lp->y_meta, m1 = lp->y_meta + 8 * lp->ts_ui;
+	int t0 = lp->y_title, t1 = lp->y_title + 8 * lp->ts_title;
+
+	check(select_folder("Computers"), "the Computers folder is on the 240p shelf");
+	press(KEY_ENTER, 10);
+	frame(8);
+
+	const chome_entry *be = lib_view_entry(chome_sel_index());
+	check(be && be->kind == ENT_BROWSE, "and behind it a browse card, whose line carries no count");
+	check(!lib_scanning(), "nothing is being scanned, which is the quiet reading");
+	unsigned long meta_quiet = harness_fb_hash(m0, m1);
+	unsigned long title_quiet = harness_fb_hash(t0, t1);
+
+	lib_scan_test_budget(1);            // the finest slice there is, so the scan lasts
+	lib_rescan();
+	frame(4);
+
+	check(lib_scanning(), "a scan is running under the same card");
+	check(harness_fb_hash(m0, m1) != meta_quiet,
+		"320x240: the shelf says so, on the one canvas with no position line to say it");
+	check(harness_fb_hash(t0, t1) == title_quiet,
+		"and the line above it is untouched, so that difference is the notice and not the shelf moving");
+
+	lib_scan_test_budget(0);
+	for (int i = 0; i < 40000 && lib_scanning(); i++) frame(1);
+	frame(8);
+	check(harness_fb_hash(m0, m1) == meta_quiet, "and it stops saying it when the scan ends");
+	press(KEY_ESC, 10);
+
+	// The fixture card, one more time, against the numbers taken at the top.
+	lib_scan_test_budget(0);
+	lib_rescan();
+	for (int i = 0; i < 40000 && lib_scanning(); i++) lib_scan_step();
+	check(lib_item_count() == fixture_items, "the stress card is off the fixture again");
+	check(lib_fingerprint() == fixture_fp, "and the fixture library is byte-identical to before");
+	check(view_fingerprint(VIEW_ROOT, -1, SORT_TITLE) == fixture_root, "the root shelf too");
+	check(view_fingerprint(VIEW_ALL, -1, SORT_TITLE) == fixture_all, "and every game in one list");
+
+	/*
+	  And everything the section borrowed, handed back: the canvas, the shelf position, and
+	  the entry list itself.
+
+	  The last of those is not obvious. view_fingerprint() builds views through
+	  lib_view_build(), which writes the one entry array the front-end draws from - so the
+	  checks above leave the shelf holding a list of every game while the front-end still
+	  believes it is showing the root. A folder opened and closed puts that right, because
+	  nav_push() and nav_pop() each rebuild the view from the front-end's own state, and
+	  nav_pop() restores the cursor it saved on the way in.
+	*/
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 0);
+	chome_leave();
+	press(KEY_MENU, 6);
+
+	// Rewound first, so the folder opened below is entry 0 - Favourites, which is always a
+	// folder. Opening whatever `was_sel` happens to be would launch a game.
+	for (int i = 0; i < 60; i++) press(KEY_LEFT, 1);
+	press(KEY_ENTER, 8);
+	press(KEY_ESC, 8);
+	for (int i = 0; i < was_sel; i++) press(KEY_RIGHT, 1);
+	frame(6);
+
+	check(chome_sel_index() == was_sel, "the section hands the shelf position back");
+	if (was_screen != chome_screen_id())
+	{
+		printf("  note: the front-end was on screen %d on the way in and is on %d on the way out\n",
+			was_screen, chome_screen_id());
+	}
+}
+
 // Bright pixels in the top or bottom overscan margin. The wallpaper is dark and
 // every panel is the light ink-on-panel pair, so brightness means furniture.
 static int margin_bright(const chome_profile *p, int top)
@@ -17497,8 +18015,25 @@ static void assert_config_check()
 
 		unsigned long clean = harness_fb_hash(0, 720);
 
+		/*
+		  Back to the shelf, and then *only* down if that has not already got there.
+
+		  The down was unconditional and the section passed for months, on an accident: it
+		  is there to come down off the menu bar, and it happened to be harmless on the
+		  shelf because the cursor happened to be parked on a folder, where down does
+		  nothing (see the SCR_HOME arm of the up/down handler - down over a *game* opens
+		  the suspend strip and the check below then fails, complaining about a
+		  configuration notice).
+
+		  Sizing the library scan's slice is what found it. That changed how many frames a
+		  scan spends, which changed how far several sections above this one get, which
+		  moved the cursor - and the failure arrived here, eight thousand lines from
+		  anything to do with either. Made conditional rather than re-parked, because
+		  "get back to the shelf" is what the two lines are for and neither of them should
+		  care what is under the cursor when they run.
+		*/
 		for (int i = 0; i < 4 && chome_screen_id() != 0; i++) press(KEY_ESC, 10);
-		press(KEY_DOWN, 14);
+		if (chome_screen_id() != 0) press(KEY_DOWN, 14);
 		frame(6);
 
 		cfgrec_begin("MiSTer.ini", "1280x720@60.0", "MENU");
@@ -18651,6 +19186,9 @@ int main()
 	assert_disc_shelf_slots();
 	assert_video();
 	assert_index_cache();
+	// Directly after it: it borrows and hands back the fake card exactly the way that
+	// one does, and it needs the library that one leaves to prove it did.
+	assert_scan_slices();
 
 	walk_profile("hd", 1, 1280, 720);
 	walk_profile("sd", 2, 640, 480);

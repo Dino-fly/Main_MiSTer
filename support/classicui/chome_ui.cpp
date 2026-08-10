@@ -642,6 +642,17 @@ static unsigned long launch_at = 0;
 static unsigned long nudge_until = 0;
 static unsigned long last_ms = 0;
 
+/*
+  How often the shelf is rebuilt from a library that is still being read, and how many
+  items it held when it last was. 200 ms is five growth steps a second, which on a card
+  that takes a while looks like the shelf filling in and costs one re-sort in twelve
+  frames rather than one in every frame. See the scan block in chome_handle().
+*/
+#define SCAN_VIEW_MS 200
+static unsigned long scan_view_until = 0;
+static int scan_view_items = -1;
+static int scan_view_running = 0;
+
 static int dirty = 1;
 
 /*
@@ -1879,9 +1890,39 @@ static void draw_title_block(const chome_profile *p)
 	if (!e)
 	{
 		gfx_text_c(lib_scanning() ? "SCANNING..." : "NO GAMES FOUND", p->w / 2, p->y_title, p->ts_title, COL_WHITE, COL_SHADOW);
+
+		/*
+		  The meta line under it says the same thing twice over on purpose: what to do
+		  when the scan found nothing, and how far the scan has got while it is still
+		  looking.
+
+		  The progress half only became worth drawing when the slice got small enough to
+		  draw it. While a whole system was one slice the frame loop never ran during a
+		  walk, so this screen was a still picture reading "SCANNING..." for as long as
+		  the card took - the item count behind it moved in jumps nobody ever saw. Now
+		  the loop runs between slices, and a first boot on a big card sits here for a
+		  while, so "SCANNING..." on its own is no longer an honest amount to say: it
+		  cannot be told apart from a hang. The system being walked is the part that
+		  visibly advances even on a folder that yields no games at all, which is the
+		  case a bare item count says nothing about.
+		*/
 		if (!lib_scanning())
 		{
 			gfx_text_c(gfx_clip("PUT ROMS IN /MEDIA/FAT/GAMES", p->ts_ui, avail), p->w / 2, p->y_meta, p->ts_ui, COL_DIM, 0);
+		}
+		else
+		{
+			char sc[CH_TITLE_LEN + 48];
+			const chome_sys *s = lib_sys(lib_scan_sys());
+			int found = lib_scan_progress();
+
+			// Built and shouted the way the meta line below is, so classicui_caps=0
+			// leaves it in the player's own font rather than shouting on one screen.
+			if (s) snprintf(sc, sizeof(sc), "%s  -  %d FOUND", s->name, found);
+			else snprintf(sc, sizeof(sc), "%d FOUND", found);
+			gfx_shout(sc);
+
+			gfx_text_c(gfx_clip(sc, p->ts_ui, avail), p->w / 2, p->y_meta, p->ts_ui, COL_DIM, 0);
 		}
 		return;
 	}
@@ -1937,6 +1978,24 @@ static void draw_title_block(const chome_profile *p)
 	else
 	{
 		snprintf(meta, sizeof(meta), "%d GAMES", e->count);
+	}
+
+	/*
+	  At 240p only, and only while the library is still being read: this is the one
+	  profile with no position line (draw_position() returns before it), so it is the
+	  one profile where nothing else on a *populated* shelf says a scan is running.
+
+	  That gap is the re-sliced scan's own doing and belongs to it. While a slice was a
+	  whole system the frame loop never ran during a walk, so a shelf could not grow
+	  under a player - they saw a frozen picture and then a finished library. Now the
+	  shelf is live throughout, and on a CRT the cards appearing one by one with no
+	  explanation reads as the front-end losing its place. Appended rather than given a
+	  row of its own, because 240p has no row to spare and this is temporary text.
+	*/
+	if (p->id == PROF_LO && lib_scanning())
+	{
+		size_t n = strlen(meta);
+		snprintf(meta + n, sizeof(meta) - n, "%sSCANNING", n ? "  -  " : "");
 	}
 
 	gfx_shout(meta);
@@ -13990,12 +14049,51 @@ int chome_handle(uint32_t key)
 	}
 
 	// Background work: one scan slice and one art decode per frame.
-	if (lib_scanning())
+	if (!lib_scanning()) scan_view_running = 0;
+	else
 	{
-		lib_scan_step();
+		int first = !scan_view_running;
+		scan_view_running = 1;
+
+		int more = lib_scan_step();
+		int found = lib_item_count();
 		art_init(theme_get()->sel_w, theme_get()->sel_h);
-		view_rebuild(1);
-		if (ig_active) ig_select_running();     // findable once its system is in
+
+		/*
+		  The shelf catches up with the walk a few times a second, not after every slice.
+
+		  This used to be unconditional, and it was affordable only because a slice was a
+		  whole system: thirty rebuilds for a whole card. Now that the walk is sliced small
+		  enough to keep this loop alive (see scan_walk() in chome_lib.cpp) it would run
+		  per slice, and measurement says that is the wrong place to spend the frame:
+		  lib_view_build() regroups and re-sorts every card in the library, which on a
+		  2300-game card is several times what the slice itself costs and several times a
+		  full repaint. Slicing the walk and then paying for a re-sort on every slice
+		  replaces one long freeze with a permanently heavy frame - the picture moves, but
+		  it moves badly, and the scan takes many times longer to finish.
+
+		  So the rebuild is throttled on the same argument as the activity ring further down
+		  this file - painted at the rate it moves rather than at the frame rate, because a
+		  repaint here is a full compose and a blit - which is the idiom this front-end
+		  already reaches for when a job runs for a while. Often enough that the shelf
+		  visibly grows, rarely enough that it is not the frame's main expense. A shelf that
+		  re-sorted sixty times a second would also reorder under the player's cursor sixty
+		  times a second, which is not a feature.
+
+		  Three things are not throttled. A slice that found nothing cannot have changed the
+		  view, so it does not even wait for the timer; the slice that *finishes* the scan
+		  always rebuilds, or the last games found would sit outside the shelf until
+		  something unrelated happened to rebuild it; and so does the slice that starts one,
+		  so that "SCANNING" appears on the frame the scan begins rather than up to a fifth
+		  of a second later - which for a card that scans quickly would be never.
+		*/
+		if (first || !more || (found != scan_view_items && CheckTimer(scan_view_until)))
+		{
+			scan_view_until = GetTimer(SCAN_VIEW_MS);
+			scan_view_items = found;
+			view_rebuild(1);
+			if (ig_active) ig_select_running();  // findable once its system is in
+		}
 	}
 
 	// Re-assert the claim on the analog output every frame. It is free once held,

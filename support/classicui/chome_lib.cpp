@@ -1133,34 +1133,192 @@ static int idx_load()
 static int scan_sys = 0;
 static int scanning = 0;
 
-static void scan_dir(int sysidx, const char *root, const char *rel, int depth)
+/*
+  The walk, sliced small enough that the frame loop keeps running through it.
+
+  What this replaces, and why. lib_scan_step() is called once per frame and was
+  documented as "one slice per frame", but the slice was a whole *system*: a full
+  recursive walk of one games folder, a second opendir per directory for
+  dir_has_playlist(), and - the expensive part - zip_playables() opening the central
+  directory of every archive it passes. On a card with a couple of thousand zipped
+  ROMs in one folder that is thousands of reads off an SD card inside one call from
+  the frame loop, so the picture froze and the pad went dead for seconds at a time,
+  on first boot and on every Options > Rescan Library.
+
+  It was never felt in development because the index cache hides it on ordinary
+  boots, and it cannot be seen in CPU time at all: the firmware busy-polls, so it
+  sits at 100% of one core whether it is drawing, scanning or idle. The same trap
+  the repaint counters in chome_gfx.cpp were written for - the only way to see this
+  work is to time it.
+
+  The recursion is now an explicit stack of *open* directories. That choice is the
+  whole safety argument:
+
+    Keeping the DIR* handles open across frames means a paused walk resumes exactly
+    where it stopped, in the same readdir order, so the traversal is the same
+    depth-first, in-place order the recursion produced - a subdirectory's games
+    still land between the parent entries that bracket it. The library therefore
+    comes out identical whatever the slice size is, which matters because the shelf
+    is ordered from the index and a re-slicing that reordered games would make the
+    player's shelf shuffle itself for no visible reason. assert_scan_slices() pins
+    that: the same library fingerprint at seven slice sizes from unbounded down to
+    one cost unit, and the same fingerprint again against a literal read off the
+    whole-system build.
+
+    The alternative - reopening the directory each slice and skipping N entries -
+    would be both quadratic and unfounded, since readdir order is only guaranteed
+    stable for one open handle.
+
+  The stack is at most one frame per depth level, and the walk stops at depth 3 as
+  it always did, so this holds at most four descriptors open between frames plus the
+  transient one dir_has_playlist() takes. That is the cost of the design and it is
+  the reason lib_init_common() has to unwind it: Rescan Library is reachable *from
+  the shelf while a scan is running*, and restarting a scan over a live stack would
+  leak every open handle.
+*/
+#define SCAN_DEPTH_MAX 3
+#define SCAN_STACK_MAX (SCAN_DEPTH_MAX + 1)
+
+/*
+  What a slice may spend, in units weighted by what the work actually costs off an SD
+  card rather than by entry count.
+
+  The weights are read off what each branch does rather than timed one by one: a bare
+  entry is a readdir out of a buffer the kernel already filled, while a zip is an open
+  and two reads at the far end of a file, and a directory is an opendir plus a stat plus
+  dir_has_playlist() sweeping the whole thing. Those are not the same size and counting
+  entries alone would price a slice of 400 archives and a slice of 400 filenames the
+  same. The ratio between the three is a judgement; what is measured is the *budget*
+  they add up to, in assert_scan_slices().
+
+  SCAN_BUDGET is sized by the number of *card reads* a slice may do, and deliberately
+  not by how long a slice takes on a development host. The two disagree by two orders of
+  magnitude and the host is the misleading one: a zip's central directory is about ten
+  microseconds there, because the file was written a moment ago and is in the page cache,
+  while on the device it is a seek and a read on an SD card through FAT. Nothing in this
+  tree measures that latency - the review's R3 entry asks for it, and it is the one number
+  that decides how bad the stall really was - so the budget is set on the quantity that
+  *is* known: at 30 units an archive, 600 lets a slice open twenty of them. Twenty card
+  reads is a few frames even at a pessimistic latency, and the whole scan still does
+  exactly as many reads as it always did.
+
+  It does not go lower than that because the per-slice overhead is real, and measuring it
+  is what found the second half of this bug: chome_ui.cpp rebuilt the shelf view after
+  every slice, which is O(n log n) in the whole library. On the host, at every budget from
+  1500 down, the worst *frame* stopped falling at around seven milliseconds while the
+  worst slice kept shrinking - the frame had stopped being about the walk. Slicing alone
+  would have traded one long freeze for a permanently heavy frame; that rebuild is now
+  throttled, and the two changes only work together.
+*/
+#define SCAN_COST_ENTRY   1      // readdir plus the name work for one entry
+#define SCAN_COST_STAT    3      // one stat, for an entry readdir would not type
+#define SCAN_COST_DIR    30      // opendir + stat + dir_has_playlist()'s own sweep
+#define SCAN_COST_ZIP    30      // opening one archive's central directory
+#define SCAN_COST_ROMSET  9      // up to three stats to tell a romset from a folder
+#define SCAN_COST_SYS     8      // resolving a system's games folder, whether it exists
+#define SCAN_COST_XML   200      // romsets.xml, read whole before the folder is walked
+#define SCAN_BUDGET     600
+
+// The budget in force. A variable only so the harness can drive the walk at every slice
+// size it can be driven at and prove the library does not depend on which one. See
+// lib_scan_test_budget().
+static long scan_budget = SCAN_BUDGET;
+
+struct scan_frame
 {
-	if (depth > 3 || nitems >= CH_MAX_ITEMS) return;
-
+	DIR *d;
 	char full[1024];
-	if (rel[0]) snprintf(full, sizeof(full), "%s/%s", root, rel);
-	else snprintf(full, sizeof(full), "%s", root);
+	char rel[CH_PATH_LEN];
+	int has_playlist;
+	int depth;
+};
 
-	DIR *d = opendir(full);
-	if (!d) return;
+static scan_frame scan_stack[SCAN_STACK_MAX];
+static int scan_sp = 0;
+static char scan_root[1024];     // the games folder the open frames belong to
+static int scan_before = 0;      // nitems when this system's walk started
+static long scan_cost = 0;       // spent in the current slice
 
-	idx_note_dir(full);
+// Reported so the device can size its own scan without a stopwatch, and so the
+// harness can assert the frame loop is being let back in. See lib_scan_stats().
+static int scan_slices = 0;
+static long scan_cost_max = 0;
+
+/*
+  Push one directory: the equivalent of entering scan_dir(). Every reason the old
+  function had to return immediately - too deep, index full, unreadable folder - is a
+  reason not to push, and produces exactly the same library.
+*/
+static int scan_push(const char *rel, int depth)
+{
+	if (depth > SCAN_DEPTH_MAX || scan_sp >= SCAN_STACK_MAX) return 0;
+	if (nitems >= CH_MAX_ITEMS) return 0;
+
+	scan_frame *f = &scan_stack[scan_sp];
+
+	if (rel[0]) snprintf(f->full, sizeof(f->full), "%s/%s", scan_root, rel);
+	else snprintf(f->full, sizeof(f->full), "%s", scan_root);
+
+	f->d = opendir(f->full);
+	if (!f->d) return 0;
+
+	snprintf(f->rel, sizeof(f->rel), "%s", rel);
+	f->depth = depth;
+
+	idx_note_dir(f->full);
 
 	// Once per directory, not once per file: see dir_has_playlist().
-	int has_playlist = dir_has_playlist(full);
+	f->has_playlist = dir_has_playlist(f->full);
+	scan_cost += SCAN_COST_DIR;
 
-	struct dirent *de;
-	while ((de = readdir(d)))
+	scan_sp++;
+	return 1;
+}
+
+static void scan_pop()
+{
+	if (scan_sp <= 0) return;
+	scan_sp--;
+	closedir(scan_stack[scan_sp].d);
+	scan_stack[scan_sp].d = 0;
+}
+
+static void scan_unwind()
+{
+	while (scan_sp > 0) scan_pop();
+}
+
+/*
+  Walk the open tree until the budget runs out or it is finished. The body is the old
+  loop body unchanged, with the one recursive call replaced by a push - and the next
+  pass then works on the child, which is what keeps the order depth-first in place.
+*/
+static void scan_walk()
+{
+	while (scan_sp > 0 && scan_cost < scan_budget)
 	{
+		scan_frame *f = &scan_stack[scan_sp - 1];
+
+		struct dirent *de = readdir(f->d);
+		if (!de) { scan_pop(); continue; }
+
 		if (de->d_name[0] == '.') continue;
-		if (nitems >= CH_MAX_ITEMS) break;
+
+		/*
+		  A full index stopped the old walk by breaking out of every loop on the way
+		  home, so nothing further was read at any depth. Unwinding says the same
+		  thing, and the whole scan then finishes on the next pass.
+		*/
+		if (nitems >= CH_MAX_ITEMS) { scan_unwind(); return; }
+
+		scan_cost += SCAN_COST_ENTRY;
 
 		char childrel[CH_PATH_LEN];
-		if (rel[0]) snprintf(childrel, sizeof(childrel), "%s/%s", rel, de->d_name);
+		if (f->rel[0]) snprintf(childrel, sizeof(childrel), "%s/%s", f->rel, de->d_name);
 		else snprintf(childrel, sizeof(childrel), "%s", de->d_name);
 
 		char childfull[1024];
-		snprintf(childfull, sizeof(childfull), "%s/%s", full, de->d_name);
+		snprintf(childfull, sizeof(childfull), "%s/%s", f->full, de->d_name);
 
 		int isdir;
 		if (de->d_type == DT_DIR) isdir = 1;
@@ -1168,6 +1326,7 @@ static void scan_dir(int sysidx, const char *root, const char *rel, int depth)
 		else
 		{
 			struct stat st;
+			scan_cost += SCAN_COST_STAT;
 			if (stat(childfull, &st)) continue;
 			isdir = S_ISDIR(st.st_mode) ? 1 : 0;
 		}
@@ -1181,7 +1340,7 @@ static void scan_dir(int sysidx, const char *root, const char *rel, int depth)
 			  the ~950 real ones, so the shelf skips them; they are still on the card and
 			  still reachable from the classic browser.
 			*/
-			if (systems[sysidx].mra && de->d_name[0] == '_') continue;
+			if (systems[scan_sys].mra && de->d_name[0] == '_') continue;
 
 			/*
 			  A romset can be a folder of member files rather than an archive of them -
@@ -1189,33 +1348,39 @@ static void scan_dir(int sysidx, const char *root, const char *rel, int depth)
 			  something to walk into. The loader takes either: file_io opens
 			  "romset/prom" and "romset.zip/prom" alike.
 			*/
-			if (systems[sysidx].romset && dir_is_romset(childfull))
+			if (systems[scan_sys].romset)
 			{
-				char buf[CH_TITLE_LEN];
-				const char *title = romset_title(full, de->d_name, buf, sizeof(buf));
-				if (title) add_item(sysidx, childrel, title);
-				continue;
+				scan_cost += SCAN_COST_ROMSET;
+				if (dir_is_romset(childfull))
+				{
+					char buf[CH_TITLE_LEN];
+					const char *title = romset_title(f->full, de->d_name, buf, sizeof(buf));
+					if (title) add_item(scan_sys, childrel, title);
+					continue;
+				}
 			}
 
-			scan_dir(sysidx, root, childrel, depth + 1);
+			// `f` is stale past here: the child is the top of the stack now.
+			scan_push(childrel, f->depth + 1);
 		}
-		else if (ext_matches(de->d_name, systems[sysidx].ext))
+		else if (ext_matches(de->d_name, systems[scan_sys].ext))
 		{
 			// A track beside its cue is part of a game, not a game. dir_has_playlist().
-			if (has_playlist && ext_is_part(de->d_name)) continue;
+			if (f->has_playlist && ext_is_part(de->d_name)) continue;
 
-			if (systems[sysidx].romset)
+			if (systems[scan_sys].romset)
 			{
 				char buf[CH_TITLE_LEN];
-				const char *title = romset_title(full, de->d_name, buf, sizeof(buf));
-				if (title) add_item(sysidx, childrel, title);
+				const char *title = romset_title(f->full, de->d_name, buf, sizeof(buf));
+				if (title) add_item(scan_sys, childrel, title);
 			}
-			else add_item(sysidx, childrel, de->d_name);
+			else add_item(scan_sys, childrel, de->d_name);
 		}
-		else if (is_zip_name(de->d_name) && !sys_takes_zip(sysidx))
+		else if (is_zip_name(de->d_name) && !sys_takes_zip(scan_sys))
 		{
 			char inner[ZIP_MAX_ENTRIES][CH_PATH_LEN];
-			int n = zip_playables(childfull, systems[sysidx].ext, inner, ZIP_MAX_ENTRIES);
+			scan_cost += SCAN_COST_ZIP;
+			int n = zip_playables(childfull, systems[scan_sys].ext, inner, ZIP_MAX_ENTRIES);
 
 			for (int i = 0; i < n; i++)
 			{
@@ -1228,47 +1393,113 @@ static void scan_dir(int sysidx, const char *root, const char *rel, int depth)
 				  not be - so the title comes from the zip. A multi-ROM archive has to
 				  name each entry instead, or they would all read the same.
 				*/
-				add_item(sysidx, p, (n == 1) ? de->d_name : inner[i]);
+				add_item(scan_sys, p, (n == 1) ? de->d_name : inner[i]);
 			}
 		}
 	}
+}
 
-	closedir(d);
+// Drop any open walk. Called wherever a scan starts or is abandoned.
+static void scan_reset()
+{
+	scan_unwind();
+	scan_cost = 0;
+	scan_before = 0;
 }
 
 int lib_scan_step()
 {
 	if (!scanning) return 0;
 
-	if (scan_sys >= nsys)
+	scan_cost = 0;
+	scan_slices++;
+
+	for (;;)
 	{
-		scanning = 0;
-		for (int i = 0; i < nitems; i++) state_apply(&items[i]);
-		recent_resolve();
-		printf("ClassicUI: scan complete, %d items\n", nitems);
-		idx_save();
-		return 0;
+		// Resume, or finish, whatever tree is already open.
+		if (scan_sp > 0)
+		{
+			scan_walk();
+			if (scan_sp > 0) break;              // out of budget, mid-system
+
+			printf("ClassicUI: %s -> %d items\n",
+				systems[scan_sys].name, nitems - scan_before);
+			scan_sys++;
+		}
+
+		if (scan_sys >= nsys)
+		{
+			scanning = 0;
+			if (scan_cost > scan_cost_max) scan_cost_max = scan_cost;
+			for (int i = 0; i < nitems; i++) state_apply(&items[i]);
+			recent_resolve();
+			printf("ClassicUI: scan complete, %d items in %d slices (worst slice %ld of %ld)\n",
+				nitems, scan_slices, scan_cost_max, scan_budget);
+			idx_save();
+			return 0;
+		}
+
+		if (scan_cost >= scan_budget) break;
+
+		/*
+		  Start the next system. A system with no games folder on this card costs
+		  almost nothing, so several of them are cleared in one slice rather than one
+		  per frame - which is what the old code did, and the reason a card of mostly
+		  absent systems took thirty frames to find that out.
+		*/
+		scan_cost += SCAN_COST_SYS;
+		if (lib_sys_games_dir(scan_sys, scan_root, sizeof(scan_root)))
+		{
+			scan_before = nitems;
+
+			// Romset titles come out of romsets.xml, which has to be read before the
+			// folder is walked so every entry can be looked up as it is found.
+			if (systems[scan_sys].romset)
+			{
+				neogeo_scan_xml(scan_root);
+				scan_cost += SCAN_COST_XML;
+			}
+
+			if (scan_push("", 0)) continue;
+
+			// An unreadable games folder: the old code reported it as an empty one.
+			printf("ClassicUI: %s -> %d items\n", systems[scan_sys].name, nitems - scan_before);
+		}
+		scan_sys++;
 	}
 
-	char root[1024];
-	if (lib_sys_games_dir(scan_sys, root, sizeof(root)))
-	{
-		int before = nitems;
-
-		// Romset titles come out of romsets.xml, which has to be read before the
-		// folder is walked so every entry can be looked up as it is found.
-		if (systems[scan_sys].romset) neogeo_scan_xml(root);
-
-		scan_dir(scan_sys, root, "", 0);
-		printf("ClassicUI: %s -> %d items\n", systems[scan_sys].name, nitems - before);
-	}
-
-	scan_sys++;
+	if (scan_cost > scan_cost_max) scan_cost_max = scan_cost;
 	return 1;
 }
 
 int lib_scanning() { return scanning; }
 int lib_scan_progress() { return nitems; }
+
+/*
+  Which system the walk is inside, for the shelf to name while it waits, and -1 when
+  the scan is not running or is between systems. The item count on its own is not
+  honest progress on a big card: it crawls for a minute with nothing to say how much
+  is left, and it was never seen at all while a whole system was one frozen slice.
+*/
+int lib_scan_sys()
+{
+	if (!scanning || scan_sp <= 0 || scan_sys < 0 || scan_sys >= nsys) return -1;
+	return scan_sys;
+}
+
+// Slices taken by the scan so far, and the worst slice's cost. The harness asserts
+// on the first of these; the log line at the end of a scan reports both.
+void lib_scan_stats(int *slices, long *cost_max, long *budget)
+{
+	if (slices) *slices = scan_slices;
+	if (cost_max) *cost_max = scan_cost_max;
+	if (budget) *budget = scan_budget;
+}
+
+void lib_scan_test_budget(long b)
+{
+	scan_budget = b > 0 ? b : SCAN_BUDGET;
+}
 
 /* ----------------------------------------------- installation naming ------ */
 
@@ -1444,6 +1675,17 @@ static void lib_init_common(int use_cache)
 	idx_ndirs = 0;
 	idx_truncated = 0;
 	idx_from_cache = 0;
+
+	/*
+	  Before anything else, and unconditionally: Rescan Library is reachable from the
+	  shelf *while a scan is running*, and the walk now holds open directory handles
+	  between frames. Starting a second scan over a live stack would leak one
+	  descriptor per open level and leave the new walk reading the old card's
+	  directories, so the stack is dropped here whichever way this call arrived.
+	*/
+	scan_reset();
+	scan_slices = 0;
+	scan_cost_max = 0;
 
 	lib_load_systems();
 
