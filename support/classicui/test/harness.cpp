@@ -10233,6 +10233,92 @@ static int sysidx_of(const char *id)
 }
 
 
+
+/*
+  The SNAC-ownership rows are staged until the menu closes, and the reason is the pad.
+
+  Choosing SNAC-port1 is how you tell the core to read the SNAC port itself - so writing it
+  the instant it is selected destroys the uinput pad the player just used to select it, and
+  they cannot move off the value they landed on. Reported from hardware: the earlier fix
+  (releasing held buttons before the device goes) stopped the value cycling by itself, but
+  could not fix this, because the pad is genuinely gone by design. The problem was *when*.
+
+  What has to hold: the row shows the player's choice immediately, the core is NOT told
+  while the menu is up, and it is told on the way out.
+*/
+static void assert_snac_row_is_staged()
+{
+	printf("\n== the SNAC rows wait for the way out ==\n");
+
+	harness_set_menu_core(0);
+	harness_set_confstr_table(0);
+	harness_set_confstr(6);
+	harness_set_osd_mask(0x0000);
+	core_opts_scan();
+	core_opts_pending_clear();
+
+	// A Pad1-shaped row on the fixture core, and an ordinary row to contrast with.
+	static const char *psx[] =
+	{
+		"PSXSTAGE", "FS1,BIN,Load ROM",
+		"O[48:45],Pad1,Dualshock,Off,Digital,Analog,GunCon,NeGcon,Wheel-NegCon,"
+			"Wheel-Analog,Mouse,Justifier,SNAC-port1,Analog Joystick,Popn",
+		"O[40:39],System Type,Auto,NTSC,PAL",
+		0
+	};
+	harness_set_confstr_table(psx);
+	core_opts_scan();
+
+	const core_opt *pad1 = 0, *sys = 0;
+	for (int i = 0; i < core_opts_count(); i++)
+	{
+		const core_opt *o = core_opt_at(i);
+		if (!strcasecmp(o->name, "Pad1")) pad1 = o;
+		if (!strcasecmp(o->name, "System Type")) sys = o;
+	}
+	check(pad1 && sys, "the fixture offers Pad1 and an ordinary row beside it");
+	if (!pad1 || !sys) { harness_set_confstr(1); return; }
+
+	harness_set_opt("[48:45]", 0, 0);
+	harness_set_opt("[40:39]", 0, 0);
+
+	// An ordinary row still applies at once - that is what the footer promises.
+	core_opt_set(sys, 2);
+	check(harness_opt_val("[40:39]", 0) == 2, "an ordinary core option is still written at once");
+
+	// Pad1 is not.
+	core_opt_set(pad1, 10);                    // SNAC-port1
+	check(harness_opt_val("[48:45]", 0) == 0,
+		"choosing SNAC-port1 does not reach the core while the menu is open");
+	check(core_opt_value(pad1) == 10,
+		"but the row shows the choice, so the player sees what they picked");
+	check(core_opts_pending(), "and it is held as pending");
+
+	/*
+	  Walking on through the values must not leak any of them to the core either - that is
+	  the whole point, since every one of them would have been a separate hand-over.
+	*/
+	core_opt_set(pad1, 11);
+	core_opt_set(pad1, 12);
+	check(harness_opt_val("[48:45]", 0) == 0, "nor does walking past it through other values");
+	check(core_opt_value(pad1) == 12, "the row still tracks the cursor");
+
+	// The way out is what applies it.
+	core_opts_pending_apply();
+	check(harness_opt_val("[48:45]", 0) == 12, "closing the menu writes the staged value");
+	check(!core_opts_pending(), "and nothing is left pending");
+
+	// And abandoning it leaves the core untouched.
+	harness_set_opt("[48:45]", 0, 0);
+	core_opt_set(pad1, 10);
+	core_opts_pending_clear();
+	core_opts_pending_apply();
+	check(harness_opt_val("[48:45]", 0) == 0, "a discarded choice never reaches the core");
+
+	harness_set_confstr(1);
+	harness_set_menu_core(1);
+}
+
 /*
   The exact shape a player reported from a television: SMS, a game running, 16 rows on the
   System & Sound page, and the cursor walking off the bottom into nothing.
@@ -19414,6 +19500,7 @@ int main()
 	assert_long_core_list_scrolls();
 	assert_sms_shaped_page_scrolls();
 	assert_snac_ownership();
+	assert_snac_row_is_staged();
 	assert_core_option_word_forms();
 	assert_per_game_core_options();
 	assert_core_option_for_all_games();

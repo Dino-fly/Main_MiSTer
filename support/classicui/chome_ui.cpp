@@ -12413,6 +12413,18 @@ static void ig_close(int restore_video)
 	if (!ig_active) return;
 	ig_active = 0;
 
+	/*
+	  The staged SNAC-ownership rows land here, on every way out of the menu - back to the
+	  game, quitting to the shelf, or handing the screen to the classic OSD. That is the
+	  whole point of staging them: applying one takes the player's pad away, so it happens
+	  when they have finished needing it to navigate with. See co_is_snac_owner_row().
+
+	  Before freeze_release() and ig_mute_release() below on purpose. Handing the port over
+	  is a change the core should see while it is still held still, not while it is running
+	  again and reading a port that is changing hands underneath it.
+	*/
+	core_opts_pending_apply();
+
 	ss_pause_release(ig_paused);
 	ig_paused = 0;
 

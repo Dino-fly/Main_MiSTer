@@ -311,9 +311,83 @@ const core_opt *core_opt_tier_at(int tier, int idx)
   lands on a setting the player was not looking at. The stock OSD gets this right at
   menu.cpp:2593 (int ex = (p[0] == 'o')) and this file did not.
 */
+/*
+  The rows that decide who reads the SNAC port, and why they are not written immediately.
+
+  Every other core option applies the moment it is changed, which is the right behaviour and
+  what the screen's footer promises. These four cannot, because of what they do to the pad
+  the player is holding: choosing SNAC-port1 is how you tell the core to read the port
+  itself, so the instant it is written our reader lets go, the uinput pad disappears, and
+  the player has just used that pad to arrive at a value they can no longer move off. To
+  correct a mistake they would have to find a second controller.
+
+  Reported from hardware, and the earlier fix - releasing held buttons before destroying the
+  device - only cured the stuck direction. It could not fix this, because the pad is
+  genuinely gone by design; the problem is *when*.
+
+  So these are staged and written when the menu closes. Browsing the values costs nothing,
+  the choice takes effect on the way out, and one press of B abandons it.
+
+  Matched by name rather than by value: a change *away* from SNAC is staged too. That is
+  deliberate - it keeps the rule "this row applies when you leave" true in both directions
+  rather than only in the interesting one, and a player who is on a USB pad because the core
+  owns the port loses nothing by the wait.
+*/
+static int co_is_snac_owner_row(const core_opt *o)
+{
+	if (!o) return 0;
+	return !strcasecmp(o->name, "Pad1") || !strcasecmp(o->name, "Pad2")
+		|| !strncasecmp(o->name, "Pad ", 4) || !strcasecmp(o->name, "SNAC")
+		|| !strcasecmp(o->name, "USERIO");
+}
+
+#define CO_PEND_MAX 8
+static struct { char spec[12]; uint8_t ex; uint8_t set; int value; } co_pend[CO_PEND_MAX];
+
+static int co_pend_find(const core_opt *o)
+{
+	for (int i = 0; i < CO_PEND_MAX; i++)
+	{
+		if (co_pend[i].set && co_pend[i].ex == o->ex && !strcmp(co_pend[i].spec, o->spec)) return i;
+	}
+	return -1;
+}
+
+void core_opts_pending_clear()
+{
+	for (int i = 0; i < CO_PEND_MAX; i++) co_pend[i].set = 0;
+}
+
+int core_opts_pending()
+{
+	for (int i = 0; i < CO_PEND_MAX; i++) if (co_pend[i].set) return 1;
+	return 0;
+}
+
+/*
+  Write the staged rows and forget them. Called when the menu closes, so the core learns
+  about the change at the moment the player stops needing the pad to navigate with.
+*/
+void core_opts_pending_apply()
+{
+	for (int i = 0; i < CO_PEND_MAX; i++)
+	{
+		if (!co_pend[i].set) continue;
+		user_io_status_set(co_pend[i].spec, (uint32_t)co_pend[i].value, co_pend[i].ex);
+		printf("ClassicUI: applying staged core option [%s] = %d on the way out\n",
+			co_pend[i].spec, co_pend[i].value);
+		co_pend[i].set = 0;
+	}
+}
+
 int core_opt_value(const core_opt *o)
 {
 	if (!o) return 0;
+
+	// A staged value is what the player chose, so it is what the row must show.
+	int p = co_pend_find(o);
+	if (p >= 0) return (co_pend[p].value < o->nvals) ? co_pend[p].value : 0;
+
 	uint32_t v = user_io_status_get(o->spec, o->ex);
 	return (v < o->nvals) ? (int)v : 0;
 }
@@ -323,6 +397,30 @@ void core_opt_set(const core_opt *o, int value)
 	if (!o || o->nvals < 2) return;
 	if (value < 0) value = o->nvals - 1;
 	if (value >= o->nvals) value = 0;
+
+	// Staged, not written - see co_is_snac_owner_row() above for why these four wait.
+	if (co_is_snac_owner_row(o))
+	{
+		int p = co_pend_find(o);
+		if (p < 0)
+		{
+			for (int i = 0; i < CO_PEND_MAX && p < 0; i++) if (!co_pend[i].set) p = i;
+		}
+		if (p >= 0)
+		{
+			snprintf(co_pend[p].spec, sizeof(co_pend[p].spec), "%s", o->spec);
+			co_pend[p].ex = o->ex;
+			co_pend[p].value = value;
+			co_pend[p].set = 1;
+			printf("ClassicUI: core option %s = %s (staged until the menu closes)\n",
+				o->name, o->vals[value]);
+			return;
+		}
+		// No room to stage it. Writing it now is worse than losing it: it would take the
+		// player's pad away mid-list. Refuse, and say so rather than appearing to work.
+		printf("ClassicUI: cannot stage %s - too many pending, left unchanged\n", o->name);
+		return;
+	}
 
 	user_io_status_set(o->spec, (uint32_t)value, o->ex);
 	printf("ClassicUI: core option %s = %s\n", o->name, o->vals[value]);

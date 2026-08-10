@@ -62,6 +62,15 @@ int  core_opts_tier_count(int tier);
 const core_opt *core_opt_tier_at(int tier, int i);
 
 int  core_opt_value(const core_opt *o);
+
+/*
+  The SNAC-ownership rows are staged rather than written, because applying one takes away the
+  pad the player is navigating with - see co_is_snac_owner_row() in chome_core.cpp. These are
+  the flush and the discard; the menu calls one of them on every way out.
+*/
+void core_opts_pending_apply();
+void core_opts_pending_clear();
+int  core_opts_pending();
 void core_opt_set(const core_opt *o, int value);
 
 // Writes the core's own config, the same file the classic OSD writes.
