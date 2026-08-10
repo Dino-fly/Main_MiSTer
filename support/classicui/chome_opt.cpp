@@ -92,6 +92,44 @@ static const opt_def opts[] =
 	  "The button list a pad shows the first time in a game.",
 	  OG_PADS, OPT_LIST, 0, 0, 10, 1, 0, 6, 0, ch_popup, NCH(ch_popup), &cfg.controller_info, 0, OW_NOW },
 
+	/*
+	  Physical discs, and this row is the whole of how the feature is reached.
+
+	  It was gated on classicui_disc and offered nowhere, so the only way to turn optical
+	  disc support on was to edit MiSTer.ini with a keyboard - which is precisely the thing
+	  this front-end exists to remove. A feature with no control is not an opt-in, it is a
+	  feature only its author has.
+
+	  First in the OG_MENU block rather than beside the typography rows: this is the one row
+	  in the group that turns a *feature* on, and the four that follow it are all about how
+	  the menu already looks - the last two of them are written to be read next to the Font
+	  row underneath the table (see their own comments), so nothing may be inserted between
+	  them and it.
+
+	  In OG_MENU at all, and not in a group of its own, because every consequence of this
+	  setting is something *this menu* does: a badge on the shelf, the screen behind it, and
+	  a helper process the front-end owns. No core and no game behaves differently. A
+	  one-row "Disc Drive" group would buy a caption and cost a section the player goes
+	  looking for and does not find.
+
+	  rec is def, which is 0, so a machine with the drive turned on reads amber and the
+	  footer says "Usually Off". That is not a nag by accident - chome_disc.h states the
+	  opinion this colour is reporting: the feature stays opt-in until it has been proven
+	  against a range of drives and discs. A player who turned it on deliberately is being
+	  told they are away from the shipped default, which they are.
+
+	  OW_NOW, and it is honest in both directions rather than only in the interesting one.
+	  disc_poll() re-reads cfg.classicui_disc every pass, so turning it on starts the drive
+	  probe on the next frame with no relaunch and no rescan - the library is files on the
+	  card and a disc was never in it. Turning it *off* used to leave the helper holding
+	  /dev/sr0 with nobody reading what it wrote; disc_poll() now hands the drive back when
+	  the flag goes away, which is what makes OW_NOW true rather than half true. See the
+	  note at the top of disc_poll().
+	*/
+	{ "classicui_disc", "Physical Disc",
+	  "Finds a game disc in a USB drive and offers to play it.",
+	  OG_MENU, OPT_LIST, 0, 0, 1, 1, 0, 0, 0, ch_offon, NCH(ch_offon), &cfg.classicui_disc, 0, OW_NOW },
+
 	{ "classicui_overscan", "TV Edge Margin",
 	  "Keeps this menu clear of the edges of a TV.",
 	  OG_MENU, OPT_NUMBER, 0, 0, 15, 1, "%", 6, 6, 0, 0, &cfg.classicui_overscan, 0, OW_NOW },

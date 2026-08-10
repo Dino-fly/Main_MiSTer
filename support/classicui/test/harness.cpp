@@ -2968,6 +2968,67 @@ static void assert_physical_disc()
 		check(disc_refork_due(quick_deaths, last_fork, refork_at) == 1,
 			"a helper that ran a while before dying is not held to the backoff");
 	}
+
+	/*
+	  And giving the drive back, which only became a question when classicui_disc became a
+	  row on Options > More Settings.
+
+	  While the only way to change that flag was a keyboard and a reboot, disc_poll()
+	  returning on a false flag was complete: the value it read on the first frame was the
+	  value it would read for the life of the process. A player can now turn it off with a
+	  pad, and a bare return would leave the helper process alive with /dev/sr0 open and
+	  nothing reading what it wrote - the badge frozen on the last disc it identified, the
+	  device unavailable to a core or to a rip, and the feature reporting itself as off. A
+	  feature that is switched off and still running is the exact shape this front-end must
+	  not have, and it is what would have made OW_NOW on that row true in one direction only.
+
+	  disc_release_due() is the decision, pure and above the CHOME_HOST_TEST split for the
+	  same reason disc_probe_due() and disc_refork_due() are: no fork() and no device node
+	  in here. Asserted directly *and* through the harness's disc_poll(), which asks it
+	  rather than restating it - so the second block is an assertion about the shipped
+	  decision and not about a copy of it living in the stub.
+	*/
+	{
+		check(disc_release_due(1, 1, 1) == 0 && disc_release_due(1, 0, 0) == 0,
+			"nothing is handed back while the setting is on");
+		check(disc_release_due(0, 0, 0) == 0,
+			"nor when it is off and there was never a drive to hand back");
+		check(disc_release_due(0, 1, 0) == 1,
+			"a latched drive is handed back when the setting goes off");
+		/*
+		  The latch and the process are set and cleared in different places, so either one
+		  outliving the flag is a drive nobody has given back. This is the half that would
+		  have been missed by testing `watching` alone: disc_watch_stop() clears the latch
+		  and then kills the helper, so a stop interrupted between the two leaves exactly
+		  this state.
+		*/
+		check(disc_release_due(0, 0, 1) == 1, "and so is a helper still alive without it");
+	}
+
+	{
+		uint8_t was = cfg.classicui_disc;
+
+		cfg.classicui_disc = 1;
+		check(disc_watch_start() && disc_watching(), "the drive is being watched");
+
+		disc_poll();
+		check(disc_watching(), "and a poll with the setting on leaves it that way");
+
+		// The press on the Settings screen, in the only form a host test can stage it:
+		// cfg is what disc_poll() reads, and the screen's own writer sets exactly this.
+		cfg.classicui_disc = 0;
+		disc_poll();
+		check(!disc_watching(), "turning the setting off hands the drive back on the next poll");
+
+		// Idempotent, because this runs every frame for as long as the machine is on: the
+		// guard in disc_poll() is what keeps a card with the feature off from unlinking a
+		// state file and forgetting a disc sixty times a second, for ever.
+		disc_poll();
+		check(!disc_watching() && !disc_release_due(0, 0, 0),
+			"and asks for nothing more on every frame after that");
+
+		cfg.classicui_disc = was;
+	}
 }
 
 /*
@@ -18998,6 +19059,13 @@ int main()
 		uint8_t was_rumble = cfg.rumble;
 		uint8_t was_vscale = cfg.vscale_mode;
 		uint8_t was_bright = cfg.video_brightness;
+		/*
+		  And the disc flag, which this block now writes through the table. It has to go back
+		  for a stronger reason than the four above: left on, every later section would have a
+		  front-end that probes for a drive and can put a badge on the shelf, so a section
+		  about something else entirely would be composing a different screen.
+		*/
+		uint8_t was_disc = cfg.classicui_disc;
 
 		/*
 		  A fixture with one of each thing the model has to survive:
@@ -19163,6 +19231,80 @@ int main()
 		check(opt_wrote_live(), "both of those are true for this session already, and the screen says so");
 		check(!opt_dirty() && opt_apply(path, 0, 0) == 0, "and there is nothing left to write");
 
+		/* ------------------------------------------------- physical disc support --- */
+
+		/*
+		  classicui_disc, which had no row anywhere until now.
+
+		  The whole optical-disc feature was gated on it and offered on no screen, so the
+		  only way to turn it on was to edit MiSTer.ini with a keyboard - on a front-end
+		  whose entire purpose is that a television and a controller are enough. A feature
+		  reachable only by its author is not opt-in, and a setting that exists only in a
+		  file fails the objective this front-end is measured against.
+
+		  Written through this table rather than through a screen of its own because it is
+		  exactly what the table is for: a MiSTer.ini key whose value is 0 or 1 inside the
+		  range cfg.cpp declares, with a uint8_t behind it. See chome_opt.h's three rules.
+
+		  The fixture is what makes the last check here worth having. SRC *ends inside
+		  [NES]*, so a writer that appended classicui_disc to the end of the file would put
+		  it in a core section, where cfg.cpp's parser would read it for the NES core and
+		  never for the menu - and the front-end would report the setting as on while the
+		  disc feature stayed off on the shelf, with nothing on screen able to explain it.
+		  That is the single most expensive trap in this project and it has cost it several
+		  bugs; the assertion is that this key lands under a [MiSTer] header of its own.
+		*/
+		{
+			int i_disc = opt_find("classicui_disc");
+			check(i_disc >= 0, "physical disc support has a row on the settings screen");
+
+			const opt_def *od = (i_disc >= 0) ? opt_at(i_disc) : 0;
+			check(od && od->kind == OPT_LIST && od->lo == 0 && od->hi == 1,
+				"offered as a two-value list inside the range cfg.cpp declares");
+			check(od && od->def == 0 && od->rec == 0,
+				"off is both the firmware default and what this menu recommends");
+			/*
+			  Which is what puts a machine with a drive in amber, deliberately: chome_disc.h
+			  states the opinion the colour is reporting - the feature stays opt-in until it
+			  has been proven against a range of drives and discs.
+			*/
+			check(od && od->when == OW_NOW,
+				"and it says it takes effect now, which disc_poll() is what makes true");
+			/*
+			  Not scaler_only, and that is not a detail: the machine most likely to have a
+			  USB optical drive attached is a SuperStation One on an analog set, which is
+			  precisely the machine that drops every scaler_only row from this list.
+			*/
+			check(od && !od->scaler_only, "and it is offered on a machine with no scaler");
+
+			put_file(path, SRC);
+			opt_load(path);
+
+			check(!opt_present(i_disc) && opt_value(i_disc) == 0,
+				"a card that has never heard of the setting reads it as off");
+			check(opt_is_rec(i_disc), "and is not flagged for it");
+
+			check(opt_step_by(i_disc, 1) && opt_value(i_disc) == 1,
+				"one press turns physical disc support on");
+			check(!opt_is_rec(i_disc), "which is away from the default, and says so");
+			check(opt_dirty() == 1 && cfg.classicui_disc == 0,
+				"staged only - nothing has been written and nothing is live yet");
+
+			check(opt_apply(path, 0, 0) == 1, "and saving writes it");
+			check(slurp_file(path, now, sizeof(now)) > 0
+				&& strstr(now, "[MiSTer]\r\nclassicui_disc=1\r\n") != 0,
+				"under a [MiSTer] header of its own, not appended into the [NES] section the file ends in");
+			check(!strstr(now, "[NES]\r\ncontroller_info=0\r\nclassicui_disc"),
+				"which is the one place it would have been silently ignored");
+			check(cfg.classicui_disc == 1 && opt_wrote_live(),
+				"the running front-end is told, so the drive is looked for without a relaunch");
+
+			// Back off again through the same row, which is the direction disc_poll() had
+			// no answer for until disc_release_due() - see assert_physical_disc().
+			check(opt_step_by(i_disc, -1) && opt_apply(path, 0, 0) == 1 && cfg.classicui_disc == 0,
+				"and turning it off again goes through the same row and the same writer");
+		}
+
 		/* ------------------------------------------------------------ the screen --- */
 
 		harness_set_menu_core(1);
@@ -19301,6 +19443,28 @@ int main()
 		dump("set-9-240p-scrolled");
 		check(panel_hash() != h_top, "a list too long for the panel scrolls to the cursor");
 
+		/*
+		  And the Physical Disc row itself, on the canvas his CRT gets, with its sentence
+		  under it - the frame that is the whole answer to "the only way to turn disc support
+		  on is a keyboard".
+
+		  Walked to by index from the top of the list, which is only the table's index while
+		  every row is in the view, so that is asserted rather than hoped for: the scaler-only
+		  rows are dropped on a machine with no scaler and the walk would land elsewhere.
+		*/
+		{
+			int i_disc = opt_find("classicui_disc");
+			int vw[OPT_MAX];
+			check(opt_view(vw, OPT_MAX, 1) == opt_count() && i_disc >= 0
+				&& vw[i_disc] == i_disc, "the row's place in the list is the table's own order");
+
+			press(KEY_DOWN, 8);               // wrap from Save Changes to the first row
+			for (int i = 0; i < i_disc; i++) press(KEY_DOWN, 6);
+			frame(8);
+			dump("set-10-240p-physical-disc");
+			check(panel_hash() != h_top, "and the disc row is reachable at 240p");
+		}
+
 		press(KEY_ESC, 10);
 		press(KEY_ESC, 10);
 		press(KEY_ESC, 10);
@@ -19314,6 +19478,7 @@ int main()
 		cfg.rumble = was_rumble;
 		cfg.vscale_mode = was_vscale;
 		cfg.video_brightness = was_bright;
+		cfg.classicui_disc = was_disc;
 		theme_invalidate();
 		theme_update(1280, 720, 1);
 
