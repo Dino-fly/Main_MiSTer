@@ -727,6 +727,52 @@ static const char *fake_confstr_long[] =
 	0
 };
 
+
+/*
+  The SMS's own shape, taken off the device: 6 rows on Picture, 16 on System & Sound, 1 on
+  Risky, with a game running.
+
+  fake_confstr_long is 28 rows on one page and scrolls correctly, which is exactly why it
+  did not catch this: a list far longer than the panel takes the window past the cursor on
+  the first press and everything works. The bug lives at a *particular* length - one where
+  list_fit()'s answer and the number of rows the panel can really draw differ by one - and
+  16+1 on a 240p panel is that length. Reported from hardware with a screenshot pair.
+*/
+static const char *fake_confstr_sms[] =
+{
+	"SMS",
+	"FS1,BIN,Load ROM",
+	"P1,Video & Sound;",
+	"P2,System & Sound;",
+	/* --- 6 that land on Picture --- */
+	"P1O[1],Orientation,Normal,Rotate",
+	"P1O[2],Flip Screen,Off,On",
+	"P1O[3],Vertical Crop,Off,On",
+	"P1O[4],Crop Offset,0,1,2",
+	"P1O[5],Border,Off,On",
+	"P1O[6],Masked Left Column,Off,On",
+	/* --- 16 that land on System & Sound --- */
+	"P2O[7],TV System,NTSC,PAL",
+	"P2O[8],Region,US/EU,Japan",
+	"P2O[9],SMS BIOS,Disable,Enable",
+	"P2O[10],GG BIOS,Ext. File,Disable",
+	"P2O[11],Mapper,Auto,Sega",
+	"P2O[12],SMS FM Sound,Enable,Disable",
+	"P2O[13],Swap Joysticks,No,Yes",
+	"P2O[14],Multitap,Disabled,Port1",
+	"P2O[15],Pause Btn Combo,Yes,No",
+	"P2O[16],Gun Control,Disabled,Enabled",
+	"P2O[17],Gun Fire,Joy,Mouse",
+	"P2O[18],Gun Port,Port1,Port2",
+	"P2O[19],Cross,Small,Big",
+	"P2O[20],Paddle Control,Disabled,Enabled",
+	"P2O[21],SK-1100,Off,On",
+	"P2O[22],SC-3000,Off,On",
+	/* --- 1 that lands on Risky --- */
+	"P2O[23],Z80 Speed,Normal,Turbo",
+	0
+};
+
 static int confstr_on = 1;
 
 /*
@@ -759,7 +805,8 @@ char *user_io_get_confstr(int index)
 		: (confstr_on == 6) ? fake_confstr_opts
 		: (confstr_on == 7) ? fake_confstr_opts_v2
 		: (confstr_on == 8) ? fake_confstr_optsex
-		: (confstr_on == 9) ? fake_confstr_long : fake_confstr;
+		: (confstr_on == 9) ? fake_confstr_long
+		: (confstr_on == 10) ? fake_confstr_sms : fake_confstr;
 	int n = 0;
 	while (tbl[n]) n++;
 

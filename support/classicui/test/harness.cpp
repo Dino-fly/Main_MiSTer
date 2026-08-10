@@ -10155,6 +10155,85 @@ static int sysidx_of(const char *id)
 	return -1;
 }
 
+
+/*
+  The exact shape a player reported from a television: SMS, a game running, 16 rows on the
+  System & Sound page, and the cursor walking off the bottom into nothing.
+
+  Worth its own section rather than another size in the loop above, because the failure is
+  length-specific. With 28 rows the window jumps past the cursor on the first press and the
+  scroll looks perfect; the defect only shows where list_fit()'s count and the number of
+  rows the panel can actually draw differ by one, which on a 240p panel is around sixteen.
+  His screenshots: fifteen rows drawn, no scrollbar, and after one DOWN no row highlighted
+  at all - the cursor on row 15 with the window still at 0.
+*/
+static void assert_sms_shaped_page_scrolls()
+{
+	printf("\n== the page length that broke on a television ==\n");
+
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "gb\nTetris (World).gb\n"); fclose(f); }
+	}
+	harness_set_confstr(10);
+	harness_set_menu_core(0);
+	harness_set_fb_supported(1);
+	harness_set_osd_visible(0);
+
+	const int was_prof = cfg.classicui_profile;
+	cfg.classicui_profile = 3;                     // 240p, the profile he is on
+	harness_set_fb(320, 240);
+	gfx_shutdown();
+	theme_update(320, 240, 3);
+
+	chome_leave();
+	chome_handle(0);
+	if (chome_ingame_active()) press(KEY_MENU, 14);
+	frame(6);
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 40 && lib_scanning(); i++) frame(2);
+	frame(16);
+
+	press(KEY_UP, 14);
+	for (int i = 0; i < 6; i++) press(KEY_RIGHT, 8);
+	frame(8);
+	press(KEY_ENTER, 18);
+	frame(10);
+
+	int pic = core_opts_tier_count(CO_TIER_PICTURE);
+	int sys = core_opts_tier_count(CO_TIER_SYSTEM);
+	printf("  picture %d, system %d, risky %d\n", pic, sys, core_opts_tier_count(CO_TIER_RISKY));
+	check(pic == 6 && sys == 16, "the fixture reproduces his page lengths");
+
+	// Off the Picture page onto System & Sound, the way the "More" row does it.
+	for (int i = 0; i < pic; i++) press(KEY_DOWN, 6);
+	press(KEY_ENTER, 14);
+	frame(10);
+
+	/*
+	  Now walk down one row at a time and require the highlight to stay on screen at every
+	  single step. One press at a time on purpose: his report is that the *first* press past
+	  the fold loses the cursor, and a loop that jumps to the end would step over it.
+	*/
+	int lost = -1;
+	for (int r = 1; r <= sys; r++)
+	{
+		press(KEY_DOWN, 6);
+		frame(6);
+		if (sel_bar_y() < 0 && lost < 0) lost = r;
+	}
+	if (lost >= 0) printf("  the highlight disappeared on press %d of %d\n", lost, sys);
+	dump("core-opts-sms-shape-240p-bottom");
+	check(lost < 0, "every row of a 16-row page keeps the cursor on screen at 240p");
+
+	press(KEY_ESC, 12);
+	frame(6);
+	cfg.classicui_profile = (uint8_t)was_prof;
+	harness_set_confstr(1);
+	harness_set_menu_core(1);
+	chome_leave();
+}
+
 /*
   A core-options list longer than the panel, at every profile.
 
@@ -19239,6 +19318,7 @@ int main()
 	assert_core_idle_predicate();
 	assert_core_options_screen();
 	assert_long_core_list_scrolls();
+	assert_sms_shaped_page_scrolls();
 	assert_snac_ownership();
 	assert_core_option_word_forms();
 	assert_per_game_core_options();
