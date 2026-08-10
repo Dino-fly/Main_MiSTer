@@ -9994,7 +9994,13 @@ static void assert_long_core_list_scrolls()
 		int n = core_opts_tier_count(CO_TIER_SYSTEM);
 		printf("  %s: %d rows on the System page\n", canv[c].name, n);
 
-		chome_rowdrop_clear();
+		/*
+		  NOT cleared here, though it was. Clearing per profile threw away every record from
+		  the two profiles before it AND everything earlier in the run, leaving the run-wide
+		  guard at the end of this file judging only the last profile - most of its evidence
+		  wiped by the section that needed it most. The per-profile assertion below reads the
+		  count as a total instead, which is the same statement for a log that only ever grows.
+		*/
 
 		/*
 		  Down past the end. RIGHT is not used here on purpose - it would change values on

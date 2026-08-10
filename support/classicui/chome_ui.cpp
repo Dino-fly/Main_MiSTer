@@ -1355,7 +1355,16 @@ static void draw_fallback_card(const chome_item *it, int x, int y, int w, int h)
 			snprintf(lines[nl], CH_TITLE_LEN, "%s", cand);
 		}
 	}
-	nl++;
+
+	/*
+	  nl is an index on the way in and a count on the way out, and the conversion has to be
+	  clamped: the break above leaves it at 5 when a title needs a sixth line, and an
+	  unconditional ++ then made it 6. The loop below drew lines[5] - one row past the array -
+	  so a long title on a card with no cover art rendered whatever happened to be on the
+	  stack next to it as its last line. Most reachable at 240p, where the card is narrowest
+	  and five lines fill soonest.
+	*/
+	if (nl < 5) nl++;
 
 	int lh = 10 * ts;
 	int ty = y + (h - nl * lh) / 2 - 2 * u;
