@@ -18,6 +18,7 @@
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
+#include <signal.h>                        // SIGKILL/SIGINT, for the child-collection section
 #include <linux/input.h>
 
 #include "../../../cfg.h"
@@ -50,6 +51,7 @@
 #include "../chome_osk.h"
 #include "../chome_net.h"
 #include "../chome_bt.h"
+#include "../chome_proc.h"
 #include "../chome_ini.h"
 #include "../chome_cfgrec.h"
 #include "../chome_opt.h"
@@ -9462,6 +9464,230 @@ static void assert_menu_repeat()
 		snprintf(p2, sizeof(p2), "%s/savestates/Gameboy/Tetris (World)_%d.ss", ROOT, i);
 		unlink(p2);
 	}
+}
+
+/* ------------------------------------------------- collecting the children --- */
+
+/*
+  A modelled process table for the fake waitpid in the section below.
+
+  `survives` is how many more attempts this pid answers "still running" to before it
+  exits. A pid that is not in here at all is not this process's child, which is what a
+  real waitpid() reports as ECHILD.
+*/
+static struct { pid_t pid; int survives; } proc_tbl[8];
+static int proc_n = 0;
+
+static void proc_reset() { proc_n = 0; }
+
+static void proc_add(pid_t pid, int survives)
+{
+	if (proc_n >= (int)(sizeof(proc_tbl) / sizeof(proc_tbl[0]))) return;
+	proc_tbl[proc_n].pid = pid;
+	proc_tbl[proc_n].survives = survives;
+	proc_n++;
+}
+
+static int proc_fake_reap(pid_t pid)
+{
+	for (int i = 0; i < proc_n; i++)
+	{
+		if (proc_tbl[i].pid != pid) continue;
+		if (proc_tbl[i].survives > 0) { proc_tbl[i].survives--; return 0; }
+		return 1;
+	}
+	return -1;
+}
+
+static pid_t sig_pid = 0;
+static int sig_sig = 0, sig_group = 0, sig_calls = 0;
+
+static void proc_fake_sig(pid_t pid, int sig, int group)
+{
+	sig_pid = pid;
+	sig_sig = sig;
+	sig_group = group;
+	sig_calls++;
+}
+
+/*
+  chome_proc.cpp, and the guard inside bt_pair_start().
+
+  What this section can and cannot say, plainly, because the temptation here is to write a
+  test that proves a stub.
+
+  There is no fork() in this harness and no children, so a real waitpid() has nothing to
+  return about any pid this file can invent, and a real kill() would signal whichever host
+  process happens to own that number. Both syscalls therefore go through the seam
+  chome_proc.h documents, and what is asserted below is the *decision*: after a stop, does
+  the firmware still believe it has a child to collect; is it asked again on the next
+  sweep; is it dropped once it comes back; and is the second-start guard closed. That the
+  real waitpid(WNOHANG) then behaves as the module assumes is not verifiable here at all -
+  it wants a device, a drive, and `ps` showing no Z after an evening of disc swaps.
+
+  The first block is the finding itself restated as a test: a child signalled a moment ago
+  is still running, so the WNOHANG that the three sites used to do right there came back
+  empty - and every one of them then dropped the pid, which is what made the zombie
+  permanent.
+*/
+static void assert_children_are_collected()
+{
+	printf("\n== stopped children are collected, not dropped ==\n");
+
+	chome_proc_test_clear();
+	chome_proc_test_hooks(proc_fake_sig, proc_fake_reap);
+
+	{
+		proc_reset();
+		proc_add(4001, 3);                     // takes three sweeps to die, as a real one would
+
+		sig_calls = 0;
+		chome_child_stop(4001, SIGKILL, 0);
+
+		check(sig_calls == 1 && sig_pid == 4001 && sig_sig == SIGKILL && !sig_group,
+			"a stopped child is signalled once, on its own pid rather than its group");
+		check(chome_child_pending() == 1 && chome_child_outstanding(4001),
+			"and is still outstanding the instant after - which is the whole finding: "
+			"nothing has died yet, so the reap that used to be here could not work");
+
+		chome_child_reap();
+		check(chome_child_outstanding(4001) && chome_child_tries(4001) == 1,
+			"one sweep later it is still tracked, and it was asked about exactly once");
+
+		chome_child_reap();
+		chome_child_reap();
+		check(chome_child_outstanding(4001) && chome_child_tries(4001) == 3,
+			"it keeps being asked, once per sweep, for as long as it is still running");
+
+		chome_child_reap();
+		check(!chome_child_outstanding(4001) && chome_child_pending() == 0,
+			"and it is collected on the first sweep after it actually exits");
+	}
+
+	{
+		// The ECHILD case. It should not happen - nothing else in this firmware reaps -
+		// but retrying it for ever would be a syscall a frame until the process is
+		// replaced, so it is dropped instead.
+		proc_reset();
+		chome_child_stop(4002, SIGKILL, 0);
+		check(chome_child_outstanding(4002),
+			"a pid is tracked before anything is known about it");
+		chome_child_reap();
+		check(!chome_child_outstanding(4002) && chome_child_pending() == 0,
+			"a pid the kernel says was never ours is dropped, not retried for ever");
+	}
+
+	{
+		/*
+		  Handing the same child over twice, which is what bt_pair_start() does when the
+		  polite SIGINT has not been acted on: the signal goes again and harder, and there
+		  is still one entry. Two entries would mean two collections of one child, and the
+		  second of them reaping whatever the pid had been recycled onto.
+		*/
+		proc_reset();
+		proc_add(4003, 99);
+
+		chome_child_stop(4003, SIGINT, 1);
+		check(sig_sig == SIGINT && sig_group == 1,
+			"the pairing agent is signalled on its group, because it made one of its own");
+
+		int was = sig_calls;
+		chome_child_stop(4003, SIGKILL, 1);
+		check(sig_calls == was + 1 && sig_sig == SIGKILL && sig_group == 1,
+			"a second stop of the same child signals it again, harder");
+		check(chome_child_pending() == 1,
+			"and does not add a second entry for one child");
+
+		chome_proc_test_clear();
+	}
+
+	{
+		// Signal 0 is "already on its way out, just collect it".
+		proc_reset();
+		proc_add(4004, 1);
+		int was = sig_calls;
+		chome_child_stop(4004, 0, 0);
+		check(sig_calls == was && chome_child_outstanding(4004),
+			"a child handed over with no signal is collected without being signalled");
+		chome_child_reap();
+		chome_child_reap();
+		check(chome_child_pending() == 0, "and collected all the same");
+	}
+
+	{
+		/*
+		  Two children that exit on the same sweep. The set is compacted by moving the last
+		  entry into the vacated slot, so a forwards walk would step straight over whatever
+		  landed there - one leaked pid, on the one frame two modules were collected
+		  together, which is not something anybody would ever have noticed on a device.
+		*/
+		proc_reset();
+		proc_add(4005, 0);
+		proc_add(4006, 0);
+		chome_child_stop(4005, SIGKILL, 0);
+		chome_child_stop(4006, SIGKILL, 0);
+		check(chome_child_pending() == 2, "two children can be outstanding at once");
+
+		chome_child_reap();
+		check(chome_child_pending() == 0,
+			"and both are collected by the one sweep - compacting the set must not make "
+			"the walk skip the entry moved into the hole");
+	}
+
+	{
+		/*
+		  A child that can never be collected - the stuck-in-an-ioctl case the whole
+		  arrangement exists for - must not grow the set without bound, and must not stop
+		  the ones already in it from being retried. No reap hook at all here, which is
+		  exactly "the kernel never gives it back".
+		*/
+		proc_reset();
+		chome_proc_test_clear();
+		chome_proc_test_hooks(proc_fake_sig, 0);
+
+		sig_calls = 0;
+		const int over = CHOME_CHILD_MAX + 4;
+		for (int i = 0; i < over; i++) chome_child_stop(5000 + i, SIGKILL, 0);
+
+		check(chome_child_pending() == CHOME_CHILD_MAX,
+			"children that never die fill the set and cannot push it past its bound");
+		check(sig_calls == over,
+			"every one of them was still signalled, including the ones there was no room "
+			"to remember - being stopped matters more than being counted");
+		check(chome_child_outstanding(5000) && !chome_child_outstanding(5000 + over - 1),
+			"the ones already tracked are kept and the overflow is given up on out loud, "
+			"rather than one of them being silently forgotten to make room");
+
+		for (int i = 0; i < 200; i++) chome_child_reap();
+		check(chome_child_pending() == CHOME_CHILD_MAX,
+			"and two hundred sweeps of stuck children neither collect one nor lose one");
+	}
+
+	/*
+	  And the guard the same finding turned up in chome_bt: bt_pair_start() tested
+	  `pairing`, which pair_child_stop() clears in the same breath as it sends its SIGINT.
+	  btctl takes a moment over that signal, so a Done followed straight away by an Add
+	  forked a second agent onto the adapter the first one was still using - and overwrote
+	  the pid, so the first was unreapable as well.
+
+	  The decision only, because bt_pair_start() itself forks. Whether it is wired to this
+	  answer is a device question; nothing in this harness may call it.
+	*/
+	check(bt_pair_start_due(0, 0) == 1,
+		"Add controller starts an agent when there is nothing in the way");
+	check(bt_pair_start_due(1, 0) == 0,
+		"and does nothing at all while discovery is already up");
+	check(bt_pair_start_due(1, 1) == 0,
+		"nor while discovery is up and the last child is still around");
+	check(bt_pair_start_due(0, 1) == 2,
+		"and when the last agent has not gone yet it is stopped before a new one starts - "
+		"the window that used to put two btctl agents on one adapter");
+
+	// Leave nothing behind: no hooks, so nothing later in this run can signal a host pid,
+	// and no entries, so a later count belongs to whoever made it.
+	chome_proc_test_clear();
+	chome_proc_test_hooks(0, 0);
+	proc_reset();
 }
 
 /*
@@ -21668,6 +21894,10 @@ int main()
 	assert_rip_screen();
 
 	assert_config_check();
+
+	// After the two rip sections, because the copier is one of the three children this is
+	// about; it touches no screen and needs no card, so it can sit anywhere after them.
+	assert_children_are_collected();
 
 	/*
 	  The marquee, before the clipped-copy sweep rather than after it.

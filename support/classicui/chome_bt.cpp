@@ -11,6 +11,7 @@
 #include <sys/wait.h>
 
 #include "chome_bt.h"
+#include "chome_proc.h"
 
 #include "../../hardware.h"
 
@@ -507,9 +508,48 @@ static void list_finish()
 
 /* ---------------------------------------------------------------- pairing --- */
 
+/*
+  Whether "Add controller" may fork an agent right now, and what has to happen first.
+
+    0  no - discovery is already running, so the button has nothing to do
+    1  yes, the way is clear
+    2  yes, but the agent from last time has not gone yet and must be stopped hard first
+
+  A pure function because the real bt_pair_start() below forks, which the harness cannot
+  do, and because the decision is the part that was wrong. It guarded on `pairing` alone,
+  and `pairing` goes to 0 the instant pair_child_stop() sends its SIGINT - a polite signal
+  the agent takes a moment to act on. So a Done immediately followed by an Add forked a
+  second `btctl pair` onto the same adapter while the first was still on it, both of them
+  holding PAIR_OUT open with O_TRUNC, and overwrote pair_child so the first one could
+  never be collected. The comment above pair_child_stop() describes losing a pairing to
+  two agents re-pairing the same pad; this was the firmware doing it to itself.
+
+  `last_outstanding` is chome_child_outstanding(pair_child), which is the only honest way
+  to ask: it is true while that pid is still one this firmware is waiting to collect, and
+  an uncollected pid cannot have been recycled onto somebody else's process.
+*/
+int bt_pair_start_due(int pairing_now, int last_outstanding)
+{
+	if (pairing_now) return 0;
+	return last_outstanding ? 2 : 1;
+}
+
 void bt_pair_start()
 {
-	if (!bt_present() || pairing) return;
+	if (!bt_present()) return;
+
+	int due = bt_pair_start_due(pairing, chome_child_outstanding(pair_child));
+	if (!due) return;
+
+	/*
+	  SIGKILL, and to the group, because SIGINT has already been asked and has not been
+	  acted on. Worse for the adapter than a polite stop - a killed btctl leaves discovery
+	  running until bluetoothd notices its D-Bus connection go - and much better than two
+	  agents, because a killed process never runs again and so cannot truncate the log or
+	  re-pair anything. Sent through chome_proc so the pid stays collectable.
+	*/
+	if (due == 2) chome_child_stop(pair_child, SIGKILL, 1);
+	pair_child = -1;
 
 	// Start from an empty log: the tail reader works from an offset, and last time's
 	// "Done." must not be read as this time's.
@@ -567,8 +607,20 @@ static void pair_child_stop()
 	  way out, and a discovery left running keeps the adapter busy and the radio awake.
 	  This is also the signal MiSTer's own pairing entry sends (menu.cpp passes
 	  "-SIGINT btpair btctl" to its script runner).
+
+	  Sent through chome_proc, which delivers it and then keeps trying to collect the child.
+
+	  Nothing waited here at all before, and it is the one of the three sites where no
+	  amount of waiting in the right place would have helped: `pairing` goes to 0 on the
+	  next line, and bt_poll()'s waitpid() lives inside `if (pairing)`. The only reap site
+	  this pid had was switched off by the act of stopping it. Coming here from bt_watch(0)
+	  is worse again - the screen whose poll would have run is the screen being left.
+
+	  pair_child is deliberately NOT cleared. It stays as the handle bt_pair_start() asks
+	  chome_child_outstanding() about, and the `if (!pairing)` above is what stops this
+	  function from ever signalling that number a second time.
 	*/
-	if (pair_child > 0) kill(-pair_child, SIGINT);
+	chome_child_stop(pair_child, SIGINT, 1);
 
 	pairing = 0;
 	printf("ClassicUI: pairing mode off\n");

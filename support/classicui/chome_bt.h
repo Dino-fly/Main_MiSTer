@@ -82,6 +82,24 @@ void bt_refresh();
 void bt_pair_start();
 void bt_pair_stop();
 int  bt_pairing();                  // pairing mode is on
+
+/*
+  The decision inside bt_pair_start(): may an agent be forked right now, and does the last
+  one have to be stopped hard first.
+
+    0  no - discovery is already running
+    1  yes, the way is clear
+    2  yes, but stop the previous agent first
+
+    pairing_now       bt_pairing(), the flag the old guard used on its own
+    last_outstanding  the previous agent is still a child this firmware has not collected
+
+  Pure, and exported for the reason disc_release_due() is: bt_pair_start() itself forks, so
+  the harness cannot call it, and the decision is the part that was wrong. Guarding on
+  `pairing` alone let a Done-then-Add put two `btctl pair` agents on one adapter - see the
+  definition in chome_bt.cpp.
+*/
+int  bt_pair_start_due(int pairing_now, int last_outstanding);
 int  bt_pair_state();
 int  bt_pair_done();                // how many have paired since it started
 

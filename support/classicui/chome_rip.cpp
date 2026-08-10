@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include "chome_rip.h"
+#include "chome_proc.h"
 
 #ifndef CHOME_HOST_TEST
 #include <signal.h>
@@ -1283,9 +1284,15 @@ void rip_cancel()
 	  responding - which is the whole reason this is a process - and in that case it will
 	  never see the file. So it is killed, and this side removes the staging folder,
 	  because after a SIGKILL there is nobody else left who could.
+
+	  Killed and handed to chome_proc, not killed and reaped on the spot. This was a
+	  kill() with a waitpid(WNOHANG) under it, which is a pair that cannot work: the
+	  non-blocking check is right and necessary, and a child signalled a microsecond ago
+	  has not died yet, so it came back empty every time and the pid was then dropped.
+	  rip_poll() returns immediately on rip_pid <= 0, so there was no later pass that
+	  could have collected it either. See chome_proc.h.
 	*/
-	kill(rip_pid, SIGKILL);
-	waitpid(rip_pid, 0, WNOHANG);            // never blocking: it may be stuck in an ioctl
+	chome_child_stop(rip_pid, SIGKILL, 0);
 	rip_pid = -1;
 
 	if (rst.base[0])

@@ -6,6 +6,7 @@
 
 #include "chome_disc.h"
 #include "chome_titles.h"
+#include "chome_proc.h"
 
 /*
   cfg.h is wanted in both configurations now, not only in the half that owns the drive: the
@@ -1051,8 +1052,22 @@ void disc_watch_stop()
 
 	if (helper_pid > 0)
 	{
-		kill(helper_pid, SIGKILL);
-		waitpid(helper_pid, 0, WNOHANG);   // never blocking: it may be stuck in an ioctl
+		/*
+		  Killed and handed over, rather than killed and reaped here.
+
+		  This used to be kill() followed by waitpid(WNOHANG), which never blocks - the
+		  helper may be stuck in an ioctl, which is the whole reason it is a process - and
+		  for that same reason never actually reaped either: a child that has just been
+		  signalled has not died yet. The pid was then dropped, so nothing could try
+		  again, and this runs before every disc launch and every rip.
+
+		  It cannot be retried from disc_poll() either. The two callers that matter both
+		  stop the poll: disc_launch() hands the drive to a core and chome_handle() then
+		  keeps disc_poll() from running for as long as the core holds it, and the
+		  classicui_disc row turning off is the one case disc_poll() returns early for.
+		  See chome_proc.h.
+		*/
+		chome_child_stop(helper_pid, SIGKILL, 0);
 		helper_pid = -1;
 	}
 
