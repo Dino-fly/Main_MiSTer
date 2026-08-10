@@ -4308,8 +4308,25 @@ static void draw_options_panel(const chome_profile *p)
 	  value names where the row goes, so the label only has to say what kind of thing is
 	  behind it - and this is the row nobody should be looking for by name anyway.
 	*/
+	/*
+	  The tenth row is the classic OSD in *both* lists, and used to be called "Core
+	  Settings" in a game.
+
+	  That was a lie with a witness: this front-end has its own core-options screen, the
+	  running core's entry on the menu bar opens it (MB_CORE -> SCR_CORE), and the panel it
+	  opens is titled with the core's name. So a row promising "Core Options >" and handing
+	  the player to MiSTer's own OSD gave two doors the same name and different destinations,
+	  and the curated one was the one nobody found. Reported from a television.
+
+	  The row stays, and the OSD stays reachable, because it has to be: the pages we hide
+	  are hidden on purpose (debug groups), and a core can mask a row out of our list
+	  entirely - the SMS hides Z80 Speed, Mapper and both BIOS rows behind H8 - so the OSD
+	  is the only way to those, and a controller-first front-end cannot make the answer
+	  "use a keyboard". It is now named for where it goes, which is what the shelf's row has
+	  always done.
+	*/
 	static const char *rows_menu[] = { "Cover Art", "Online Covers", "Rescan Library", "Reinstall Looks", "Menu Layout", "Controllers", "Wi-Fi", "Best Settings", "More Settings", "Advanced", "About" };
-	static const char *rows_game[] = { "Cover Art", "Online Covers", "Rescan Library", "Reinstall Looks", "Menu Layout", "Controllers", "Wi-Fi", "Best Settings", "More Settings", "Core Settings", "About" };
+	static const char *rows_game[] = { "Cover Art", "Online Covers", "Rescan Library", "Reinstall Looks", "Menu Layout", "Controllers", "Wi-Fi", "Best Settings", "More Settings", "Advanced", "About" };
 	const char *const *rows = ig_active ? rows_game : rows_menu;
 	char v1[32];
 	if (lib_scanning()) snprintf(v1, sizeof(v1), "%d...", lib_scan_progress());
@@ -4367,7 +4384,7 @@ static void draw_options_panel(const chome_profile *p)
 		v2,
 		v4,
 		v5,
-		ig_active ? "Core Options >" : "Classic Menu >",
+		"Classic Menu >",                 // both lists: see the note on rows_game above
 		"This Menu >"
 	};
 
