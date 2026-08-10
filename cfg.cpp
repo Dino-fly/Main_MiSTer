@@ -15,6 +15,7 @@
 #include "video.h"
 #include "support/arcade/mra_loader.h"
 #include "support/classicui/chome_cfgrec.h"
+#include "support/classicui/chome_ini.h"
 
 cfg_t cfg;
 static FILE *orig_stdout = NULL;
@@ -399,7 +400,18 @@ static void ini_parse_var(char* buf)
 	{
 		i++;
 		while (buf[i] == '=' || CHAR_IS_SPACE(buf[i])) i++;
-		ini_parser_debugf("Got VAR '%s' with VALUE %s", buf, buf+i);
+		// Same rule as cfg_print() below, and for the same reason it cannot be skipped here:
+		// this line runs on every ini parse, i.e. every core load, and DEBUG is applied to
+		// stdout while its own line is parsed - so a CLASSICUI_SS_PASS line anywhere after
+		// DEBUG=2 in the file was going straight into /tmp/debug.txt in clear, before
+		// cfg_print() ever ran. Fixing only the summary and leaving this trace would be the
+		// same bug with a witness, not a smaller one.
+		//
+		// ini_loggable() only decides which *key* is a credential, not whether an empty
+		// value is worth hiding - so an explicitly blank "classicui_ss_pass=" is kept out of
+		// the call rather than reported as "***", which would assert a password is set when
+		// the file says there is none.
+		ini_parser_debugf("Got VAR '%s' with VALUE %s", buf, buf[i] ? ini_loggable(buf, buf+i) : buf+i);
 
 		const ini_var_t *var = &ini_vars[var_id];
 
@@ -947,7 +959,11 @@ void cfg_print()
 			break;
 
 		case STRING:
-			if (*(uint32_t*)ini_vars[i].var) printf("  %s=%s\n", ini_vars[i].name, (char*)ini_vars[i].var);
+			// ini_loggable() decides which values print in clear - see the comment on its
+			// definition in chome_ini.cpp. The emptiness check stays ahead of it and unchanged:
+			// an unset value must still print nothing at all, not a redacted line that reads as
+			// "set but hidden" for a credential nobody entered.
+			if (*(uint32_t*)ini_vars[i].var) printf("  %s=%s\n", ini_vars[i].name, ini_loggable(ini_vars[i].name, (char*)ini_vars[i].var));
 			break;
 
 		case STRINGARR:

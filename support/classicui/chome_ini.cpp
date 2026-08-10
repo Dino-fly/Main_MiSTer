@@ -548,6 +548,14 @@ static int ini_write_set(const char *path, const ini_set *set, int n, const char
 
   chome_ss.cpp does the same thing for a URL - see ss_redact_url() and the "***" in
   ss_build_url() - and for the same reason, which is why the replacement reads the same.
+
+  cfg.cpp's own debug log had the identical gap, one level up: cfg_print() walked
+  ini_vars[] and printed every STRING value unconditionally, and the parser's own
+  line-by-line trace printed the raw text of every VAR before cfg_print() ever ran -
+  so CLASSICUI_SS_PASS reached /tmp/debug.txt through either of two lines in a file
+  this one had never been asked to protect against. Both now call this instead of
+  reimplementing the rule, for the reason above: a second rule is a rule that can
+  drift from this one and nobody would notice until it did.
 */
 const char *ini_loggable(const char *key, const char *value)
 {
