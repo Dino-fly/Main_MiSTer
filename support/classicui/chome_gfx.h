@@ -334,6 +334,77 @@ void gfx_track(int x, int y, int w, int h, int nseg, int done, int live, unsigne
 #define CH_RIGHT "\x04"
 
 /*
+  And code 5, the ellipsis: the mark gfx_clip() leaves where it cut a string.
+
+  It was a '>' for a long time, which is a character the ROM font happens to have and not
+  a character that means anything - "SUPER MARIO WORLD>" reads as a title with a
+  greater-than sign on it. Three dots is what a reader already knows means "there is more
+  of this".
+
+  In extra_glyphs[] with the arrows rather than in charrom, and that is the whole
+  degradation story: draw_glyph() answers codes 1..5 from our own table before it ever
+  looks at charfont[], so a .pf font loaded off the card cannot take the mark away. A font
+  file *can* write charfont[5] - a non-768-byte .pf starts at code 0 (see LoadFont) - and
+  under any other arrangement the front-end would then be marking its cut text with
+  somebody's spare glyph, or with nothing at all. The cost is that the ellipsis stays in
+  the built-in style while the rest of the screen is in the player's; that is the right way
+  round for a mark whose whole job is to be recognised.
+
+  Drawn as three 2x2 dots on the same two rows as the ROM font's own full stop, so it has
+  the weight of real punctuation at scale 1. That is the size that had to be checked and
+  the reason it is not three single pixels: 240p on a television is where this front-end
+  lives, and a one-pixel dot there is a smudge. Three 2x2 dots with one column of gap is
+  exactly eight columns wide, so the mark inks column 0 and column 7 of its cell - see
+  GLYPH_W below for why nothing else in the font does. At zero tracking that leaves one
+  clear pixel to the letter before it, and at negative tracking the leading dot touches
+  it. Legibility at 240p is worth more than a gap at a setting that already makes `M` and
+  `W` touch.
+*/
+#define CH_ELLIPSIS "\x05"
+
+/*
+  A string too long for its space, shown by scrolling it instead of only cutting it.
+
+  gfx_clip() answers "what fits"; this answers "what fits *now*", and the two agree at the
+  start of the cycle - a marquee parked at offset 0 returns byte-for-byte what gfx_clip()
+  would have returned, ellipsis and all. That is deliberate and it is what makes the
+  feature safe to add to a screen: the resting frame is the frame that shipped.
+
+  The window steps by whole characters, not by pixels. The font is a fixed 8-column cell
+  and a pixel-smooth scroll would need a clip rectangle per string - and gfx_clip_set() is
+  a single global rectangle, not a stack, so setting one inside a compose would silently
+  drop the region clip that render_region() had put there. A partial repaint that lost its
+  clip is a full-screen paint that reports itself as cheap. Whole characters need no clip
+  at all.
+
+  The cycle: hold at the start for GFX_MARQ_HOLD_MS, step one character every
+  GFX_MARQ_STEP_MS until the tail is flush with the right-hand edge, hold there for
+  GFX_MARQ_HOLD_MS, then back to the start. Back rather than reversing: a marquee running
+  backwards reads as a fault, and "it returns to the beginning" is the behaviour a player
+  waits for.
+
+  There is no marker on the left. One would have to eat a cell, which changes how many
+  characters the window holds, which moves the text sideways on the first step and again on
+  the last - a centred title visibly jumping. The movement is what says there is more to
+  the left; the ellipsis on the right says there is more to the right, and disappears when
+  there is not.
+
+  `ms` is a millisecond clock and the phase comes only from it, so this is a pure function
+  of its arguments: composing one instant twice draws the same window twice. Everything in
+  chome_ui.cpp that compares a partial repaint against a full repaint of the same moment
+  depends on that being true of every animation in this file.
+
+  `scrolling`, when given, comes back non-zero if the string did not fit - i.e. if there is
+  a marquee here at all. `next_in`, when given, comes back as the milliseconds until this
+  window changes, which is what lets the caller repaint when the text moves rather than
+  polling at a frame rate. Both are left alone for a string that fits.
+
+  Returns a static buffer, like gfx_clip(): a second call overwrites the first.
+*/
+#define GFX_MARQ_HOLD_MS 1200UL
+#define GFX_MARQ_STEP_MS  180UL
+
+/*
   The width of the glyph *cell*, which is not the same thing as the advance any more.
 
   charrom's cell is 8 columns and draw_glyph() rasterises all 8 of them, so this is the
@@ -388,8 +459,12 @@ void gfx_text(const char *s, int x, int y, int scale, uint32_t col, uint32_t sha
 void gfx_text_c(const char *s, int cx, int y, int scale, uint32_t col, uint32_t shadow);
 int  gfx_text_w(const char *s, int scale);
 
-// Truncate to fit maxpx, appending '>' when clipped. Returns a static buffer.
+// Truncate to fit maxpx, marking the cut with CH_ELLIPSIS. Returns a static buffer.
 const char *gfx_clip(const char *s, int scale, int maxpx);
+
+// The same cut, scrolled. See the note above GFX_MARQ_HOLD_MS.
+const char *gfx_marquee(const char *s, int scale, int maxpx, unsigned long ms,
+	int *scrolling, unsigned long *next_in);
 
 #ifdef CHOME_HOST_TEST
 /*
@@ -433,6 +508,23 @@ void gfx_clip_log_clear();
 // Records the caller for the log. See the note above; the shipped build has neither.
 const char *gfx_clip_at(const char *s, int scale, int maxpx, const char *site);
 #define gfx_clip(s, scale, maxpx) gfx_clip_at((s), (scale), (maxpx), __func__)
+
+/*
+  And the marquee, which records too - the same string, the same width, the same site.
+
+  Worth being explicit about, because the tempting thing was to exempt it: a string that
+  scrolls is not lost any more, so why fail on it? Because assert_no_clipped_copy() is not
+  asserting "the player can eventually read this". It is asserting that no sentence *we*
+  wrote is too long for the space we gave it, and that is still a defect when the sentence
+  scrolls - a footer a player has to wait four seconds to finish is worse than a shorter
+  footer. Scrolling is for names off the card, which are as long as they are. If the
+  marquee stopped logging, the guard would quietly lose its teeth on the day a screen
+  switched a label of ours over to it.
+*/
+const char *gfx_marquee_at(const char *s, int scale, int maxpx, unsigned long ms,
+	int *scrolling, unsigned long *next_in, const char *site);
+#define gfx_marquee(s, scale, maxpx, ms, sc, ni) \
+	gfx_marquee_at((s), (scale), (maxpx), (ms), (sc), (ni), __func__)
 #endif
 
 // Nearest-neighbour blit of an ARGB source. No filtering: at these scales
