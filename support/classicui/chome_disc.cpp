@@ -7,6 +7,14 @@
 #include "chome_disc.h"
 #include "chome_titles.h"
 
+/*
+  cfg.h is wanted in both configurations now, not only in the half that owns the drive: the
+  harness's disc_poll() reads cfg.classicui_disc too, because the setting is a row on a
+  screen and giving the drive back when it goes off is the one part of that function a host
+  test can say something true about.
+*/
+#include "../../cfg.h"
+
 #ifndef CHOME_HOST_TEST
 #include <fcntl.h>
 #include <unistd.h>
@@ -20,7 +28,6 @@
 #include <signal.h>
 #include <sys/stat.h>
 #include <time.h>
-#include "../../cfg.h"
 #endif
 
 /*
@@ -608,6 +615,14 @@ int disc_refork_due(int quick_deaths, int last_fork, int now)
 	return (now - last_fork) >= DISC_HELPER_BACKOFF_S;
 }
 
+// See chome_disc.h. Above the split on purpose: this is the production decision, and both
+// disc_poll()s below - the real one and the harness's - ask it rather than restating it.
+int disc_release_due(int flag_on, int watching_now, int helper_alive)
+{
+	if (flag_on) return 0;
+	return (watching_now || helper_alive) ? 1 : 0;
+}
+
 #ifdef CHOME_HOST_TEST
 
 /*
@@ -618,7 +633,18 @@ int disc_refork_due(int quick_deaths, int last_fork, int now)
 int  disc_watch_start() { watching = 1; return 1; }
 void disc_watch_stop()  { watching = 0; disc_forget(); }
 int  disc_watching()    { return watching; }
-void disc_poll() {}
+
+/*
+  Everything the real disc_poll() does is a device access except one branch, and this is
+  that branch: giving the drive back when classicui_disc goes off. Kept here rather than
+  emptied out because the setting is now a row on a screen, so that transition is something
+  a player can cause - and asking disc_release_due() rather than restating its test is what
+  makes the assertion in the harness an assertion about the shipped decision.
+*/
+void disc_poll()
+{
+	if (disc_release_due(cfg.classicui_disc, watching, 0)) disc_watch_stop();
+}
 void disc_reset_reader() { reader = 0; reader_ctx = 0; }
 
 #else
@@ -1049,10 +1075,31 @@ void disc_reset_reader()
   replaced. Neither is a device access either: waitpid(WNOHANG) asks the kernel about
   a process this one already owns, and fork() below re-runs the probe from the path
   already recorded in dev_path rather than re-opening /dev/sr0 et al.
+
+  And where the flag going *away* is acted on, which is new and is what lets the setting
+  be offered on a screen at all.
+
+  This used to be a bare early return, which was correct while classicui_disc could only
+  change by editing MiSTer.ini and rebooting: the flag was read once, at the value it
+  would keep for the life of the process. Now that Options > More Settings can turn it off
+  under a running front-end, a bare return would leave the helper process alive with
+  /dev/sr0 open and nobody reading what it wrote - the badge frozen on whatever was last
+  identified, the drive unavailable to anything else, and the feature reporting itself as
+  off. That is the "switched off but still running" shape the front-end must not have; it
+  is also what would have made OW_NOW on that row a lie in one direction only, which is
+  the hardest kind to notice.
+
+  Guarded rather than called unconditionally: disc_watch_stop() unlinks the state file and
+  forgets the disc, and doing that every frame forever on a machine that has the feature
+  off would be a syscall per frame for nothing.
 */
 void disc_poll()
 {
-	if (!cfg.classicui_disc) return;
+	if (!cfg.classicui_disc)
+	{
+		if (disc_release_due(cfg.classicui_disc, watching, helper_pid > 0)) disc_watch_stop();
+		return;
+	}
 
 	if (!watching)
 	{

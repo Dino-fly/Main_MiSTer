@@ -949,6 +949,93 @@ static int panel_pixels(uint32_t want)
 }
 
 /*
+  The Controllers panel, mirroring draw_pads()'s own arithmetic - the same bargain
+  covers_rect() makes above, for the same reason and with the same obligation: that screen
+  sizes its panel to its contents rather than taking the profile default, and these
+  constants are draw_pads()'s and have to move with it.
+
+  panel_pixels() above is not enough for what this is wanted for. Its box is the middle
+  third of the screen, and the line being looked for is at the *foot* of the panel - at
+  720p that is thirty pixels below the bottom edge of that box, so a check written against
+  it would have passed whether the sentence was drawn or not.
+
+  Takes no argument, and that is worth stating: the panel is the same size whether the SNAC
+  line is up or not. It buys its row out of the list rather than out of the height, because
+  at 240p ten more pixels of panel land on top of the legend. A version of this that grew
+  with the notice would also have been a box that reached outside the panel in the quiet
+  case, which is where the shelf behind the scrim is - and any amber out there would have
+  been counted as the notice.
+*/
+static void pads_rect(int *x0, int *y0, int *x1, int *y1)
+{
+	const chome_profile *p = theme_get();
+	int s = p->ts_ui;
+
+	int pw = p->w - 2 * p->inset;
+	if (pw > 44 * gfx_adv(s)) pw = 44 * gfx_adv(s);
+
+	int ph = (10 * s + 6) + 18 * s + 5 * (21 * s) + 2 * (10 * s) + 12 * s + 4 * s;
+	if (ph > p->h - 2 * p->safe_y) ph = p->h - 2 * p->safe_y;
+
+	*x0 = (p->w - pw) / 2;
+	*y0 = (p->h - ph) / 2;
+	*x1 = *x0 + pw;
+	*y1 = *y0 + ph;
+}
+
+/*
+  Amber anywhere on the Controllers panel, which on that screen means exactly one thing: the
+  line saying a PlayStation pad on the SNAC port cannot work in the core that is running.
+
+  Nothing else there is drawn in it - a player number is green, the entry that adds a
+  controller is blue, an armed forget is red, and everything else is ink or the panel's own
+  two greys - so a count of this one colour is a yes-or-no about that sentence being on
+  screen. Counted rather than hashed because the claim is "it is there" and "it is not
+  there", and a hash can only say that two frames differ.
+*/
+static int pads_amber()
+{
+	int x0, y0, x1, y1;
+	pads_rect(&x0, &y0, &x1, &y1);
+	return box_pixels(x0, y0, x1, y1, COL_YELLOW);
+}
+
+/*
+  Options > Controllers, from the shelf, at whatever profile is current.
+
+  Written as a walk rather than as a row index for two reasons this file has been bitten by
+  before. Up wraps to the *last* row of the Options list and counting back from there does
+  not care how long that list is - which is the only navigation that survives a row being
+  added to it. And the menu bar drops the Display entry at 240p, so Options is the first
+  slot there and the second everywhere else.
+
+  Re-entered from the shelf each time rather than nudged into repainting: the front-end only
+  composes a frame when something has marked it dirty, and the state this is used to observe
+  - what the SNAC reader found - changes outside the front-end entirely, so nothing marks
+  anything. A screen left up would simply keep showing the frame it already had.
+*/
+static void open_controllers()
+{
+	harness_set_menu_core(1);
+	chome_leave();
+	press(KEY_MENU, 20);
+	frame(8);
+
+	press(KEY_UP, 10);                         // the menu bar
+	if (theme_get()->id != PROF_LO) press(KEY_RIGHT, 10);   // Options; the first slot at 240p
+	press(KEY_ENTER, 14);
+
+	press(KEY_UP, 8);                          // About, the last row
+	press(KEY_UP, 8);                          // Advanced / Core Settings
+	press(KEY_UP, 8);                          // More Settings
+	press(KEY_UP, 8);                          // Best Settings
+	press(KEY_UP, 8);                          // Wi-Fi
+	press(KEY_UP, 8);                          // Controllers
+	press(KEY_ENTER, 14);
+	frame(8);
+}
+
+/*
   The disc dialog's diameter, measured off the screen.
 
   Measured rather than recomputed from the profile, because the layout is the thing being
@@ -2967,6 +3054,67 @@ static void assert_physical_disc()
 		quick_deaths = 0;
 		check(disc_refork_due(quick_deaths, last_fork, refork_at) == 1,
 			"a helper that ran a while before dying is not held to the backoff");
+	}
+
+	/*
+	  And giving the drive back, which only became a question when classicui_disc became a
+	  row on Options > More Settings.
+
+	  While the only way to change that flag was a keyboard and a reboot, disc_poll()
+	  returning on a false flag was complete: the value it read on the first frame was the
+	  value it would read for the life of the process. A player can now turn it off with a
+	  pad, and a bare return would leave the helper process alive with /dev/sr0 open and
+	  nothing reading what it wrote - the badge frozen on the last disc it identified, the
+	  device unavailable to a core or to a rip, and the feature reporting itself as off. A
+	  feature that is switched off and still running is the exact shape this front-end must
+	  not have, and it is what would have made OW_NOW on that row true in one direction only.
+
+	  disc_release_due() is the decision, pure and above the CHOME_HOST_TEST split for the
+	  same reason disc_probe_due() and disc_refork_due() are: no fork() and no device node
+	  in here. Asserted directly *and* through the harness's disc_poll(), which asks it
+	  rather than restating it - so the second block is an assertion about the shipped
+	  decision and not about a copy of it living in the stub.
+	*/
+	{
+		check(disc_release_due(1, 1, 1) == 0 && disc_release_due(1, 0, 0) == 0,
+			"nothing is handed back while the setting is on");
+		check(disc_release_due(0, 0, 0) == 0,
+			"nor when it is off and there was never a drive to hand back");
+		check(disc_release_due(0, 1, 0) == 1,
+			"a latched drive is handed back when the setting goes off");
+		/*
+		  The latch and the process are set and cleared in different places, so either one
+		  outliving the flag is a drive nobody has given back. This is the half that would
+		  have been missed by testing `watching` alone: disc_watch_stop() clears the latch
+		  and then kills the helper, so a stop interrupted between the two leaves exactly
+		  this state.
+		*/
+		check(disc_release_due(0, 0, 1) == 1, "and so is a helper still alive without it");
+	}
+
+	{
+		uint8_t was = cfg.classicui_disc;
+
+		cfg.classicui_disc = 1;
+		check(disc_watch_start() && disc_watching(), "the drive is being watched");
+
+		disc_poll();
+		check(disc_watching(), "and a poll with the setting on leaves it that way");
+
+		// The press on the Settings screen, in the only form a host test can stage it:
+		// cfg is what disc_poll() reads, and the screen's own writer sets exactly this.
+		cfg.classicui_disc = 0;
+		disc_poll();
+		check(!disc_watching(), "turning the setting off hands the drive back on the next poll");
+
+		// Idempotent, because this runs every frame for as long as the machine is on: the
+		// guard in disc_poll() is what keeps a card with the feature off from unlinking a
+		// state file and forgetting a disc sixty times a second, for ever.
+		disc_poll();
+		check(!disc_watching() && !disc_release_due(0, 0, 0),
+			"and asks for nothing more on every frame after that");
+
+		cfg.classicui_disc = was;
 	}
 }
 
@@ -10128,6 +10276,22 @@ static void assert_snac_ownership()
 	harness_set_osd_mask(0x0000);
 	harness_reset_snac();
 	harness_set_confstr(1);
+
+	/*
+	  And left quiet, which matters now in a way it did not before.
+
+	  This section ends with a core that has no reader in it and cfg.snac_pad on - which is
+	  precisely the state the Controllers screen has been taught to put a line on the glass
+	  about. Left standing, every later section that opens that screen would compose it with
+	  an amber warning on it, and the section that would have found that out is the clipped-
+	  copy sweep near the end of the run - twenty sections and several thousand checks away
+	  from the code that caused it.
+
+	  A settled module in this tree is one whose state the next section can ignore. Since
+	  snacpad.cpp acquired readers outside itself, that now includes cfg.snac_pad.
+	*/
+	cfg.snac_pad = 0;
+	snacpad_init();
 }
 
 /*
@@ -18924,6 +19088,325 @@ int main()
 	}
 
 	/*
+	  A PlayStation pad on the SNAC port that this core cannot read.
+
+	  The reader lives in the core's sys framework (psx_snac_pad.sv, over UIO_SNAC_PAD). A
+	  core built from an older sys has none, and the whole of the player's experience of that
+	  was: nothing happens. The one signal was a line in the log - "no SNAC pad reader in this
+	  core (sys update needed)" - which a person sitting in front of a television will never
+	  see, and which is invisible on this front-end even over ssh, because the front-end's own
+	  Controllers screen lists a working SNAC pad and simply omits a broken one. Silence is
+	  indistinguishable from the pad being unplugged.
+
+	  Two halves. First what the module will say when asked, which is where the four quiet
+	  cases live: three of them are cases where "no reader" is *true and still wrong*, and one
+	  is a core nobody has looked at yet. Then the screen, at all three profiles, because the
+	  sentence is long enough that saying it at 240p takes a second wording.
+
+	  The quiet cases are the point of the section, not its edge cases. A warning that appears
+	  on hardware which is working teaches a player to ignore warnings, and every one of these
+	  would have done it: the player who never asked for SNAC pads, the player who told us a
+	  Mega Drive adapter is on the port, and - worst of the three - the player whose old PSX
+	  core reads the port natively and whose pad works perfectly.
+	*/
+	printf("\n== a snac pad this core cannot read ==\n");
+	{
+		uint8_t was_pad = cfg.snac_pad;
+		uint8_t was_dev = cfg.snac_device;
+		uint8_t was_prof = cfg.classicui_profile;
+
+		// The PSX, as it publishes itself, with Pad1 among its thirteen values. The same
+		// fixture assert_snac_ownership() uses, for the one case that needs a real core.
+		static const char *snac_psx[] =
+		{
+			"PSX", "FS1,BIN,Load ROM",
+			"D8O[48:45],Pad1,Dualshock,Off,Digital,Analog,GunCon,NeGcon,Wheel-NegCon,"
+				"Wheel-Analog,Mouse,Justifier,SNAC-port1,Analog Joystick,Popn",
+			"D8h0O[66],SNAC MemCard,Virtual,Real",
+			0
+		};
+
+		/*
+		  And the pads, without the working SNAC pad the section above left in the fixture.
+
+		  Those two states cannot coexist: no reader means snacpad.cpp destroys the uinput
+		  devices, so there is no SNAC row for the list to hold. Left as it was, every frame
+		  dumped below would show the front-end saying a SNAC pad cannot work in this core
+		  directly under a SNAC pad that is working in it - which as a picture is worse than no
+		  picture, and these frames are release-note material. Put back on the way out, because
+		  the sections after this one are entitled to the fixture they were written against.
+		*/
+		harness_clear_pads();
+		harness_add_pad(1, PAD_WIRED, 0x054C, 0x09CC, "Sony Computer Entertainment Wireless Controller", "");
+		harness_add_pad(3, PAD_BT,    0x054C, 0x09CC, "Wireless Controller", "DC:2C:26:1B:9A:71");
+
+		/* ------------------------------------------------- what the module answers --- */
+
+		// The menu core, where core_owns_snac() answers 0 - so what is being varied below is
+		// the player's two settings and the core's sys, one at a time.
+		harness_set_menu_core(1);
+		harness_set_confstr(1);
+
+		cfg.snac_pad = 0;
+		cfg.snac_device = 0;
+		harness_reset_snac();
+		harness_set_snac_reader(0);
+		snacpad_init();
+
+		check(snacpad_reader() == SNAC_UNPROBED,
+			"a core nothing has looked at yet reports neither reader nor no reader");
+		check(!snacpad_wanted(), "and with the feature off, the port is not ours to want");
+
+		snac_tick();
+		check(!snacpad_wanted() && snacpad_reader() == SNAC_UNPROBED,
+			"a poll with the feature off never finds out whether there is a reader");
+
+		/*
+		  Which is the whole argument for UNPROBED being a state and not a synonym for 0. The
+		  poll returns before it touches SPI when it wants nothing, so in every quiet case
+		  below `supported` stays at UNPROBED for the life of the core - and a caller that
+		  read that as "no reader" would announce a fault on all of them, for ever.
+		*/
+
+		// The one case that speaks: asked for, a PlayStation pad on the port, nobody else
+		// driving it, and the core has been looked at and has no reader.
+		cfg.snac_pad = 1;
+		snacpad_init();
+		snac_tick();
+		check(snacpad_wanted(), "with the feature on and nothing else claiming it, the port is ours");
+		check(snacpad_reader() == SNAC_NO_READER, "and this core has no reader in it");
+
+		/*
+		  And now the three quiet cases, every one of them driven *without* snacpad_init() -
+		  which is the whole of what makes them worth asserting, and is what the first version
+		  of this section got wrong.
+
+		  snacpad_init() is a core load. Turning a setting off is not: the core on the FPGA is
+		  the same core, so `supported` keeps the NO_READER the probe above established. Drive
+		  these with an init in between and every one of them lands on UNPROBED instead, where
+		  the reader test alone is already enough to keep the screen quiet - so the checks pass
+		  with or without the snacpad_wanted() gate they are supposed to be about, and the gate
+		  could be deleted with the suite still green. Proved by doing exactly that.
+		*/
+
+		// Turned off mid-session. No relaunch: the next poll answers differently, and the
+		// reader's own answer has not changed at all - which is the trap.
+		cfg.snac_pad = 0;
+		snac_tick();
+		check(!snacpad_wanted(), "turning the feature off stops us wanting the port at once");
+		check(snacpad_reader() == SNAC_NO_READER,
+			"while the core is still the same readerless core, so the reader alone would speak");
+		cfg.snac_pad = 1;
+
+		/*
+		  snac_device: the player has told us what is physically on the port, because nothing
+		  readable changes when a SuperDock's bypass switch moves it (see cfg.h). With a
+		  Mega Drive adapter plugged in, a framework reader for PlayStation pads would change
+		  nothing - so "no reader" is true and is not the interesting fact, and sending that
+		  player off to update a core would be sending them nowhere.
+		*/
+		cfg.snac_device = 1;
+		snac_tick();
+		check(!snacpad_wanted() && snacpad_reader() == SNAC_NO_READER,
+			"a non-PlayStation adapter on the port is not ours either, readerless core and all");
+		cfg.snac_device = 0;
+
+		/*
+		  And the case that made snacpad_wanted() have to exist rather than being recomputed
+		  from the two cfg fields above: a core reading the SNAC port through its own option.
+		  It needs no framework reader and works without one, so on an old PSX core in native
+		  mode the sentence would be true and the player's pad would be fine - the one place
+		  the message would be a flat lie about working hardware.
+
+		  Picked mid-session, on the core already known to have no reader, because that is the
+		  order a player does it in: they plug a pad in, nothing happens, they go and find
+		  Pad1 in the core's own options. Nothing resets `supported` on the way.
+		*/
+		harness_set_menu_core(0);
+		harness_set_confstr_table(snac_psx);
+		harness_set_opt("[48:45]", 10, 0);         // Pad1 = SNAC-port1
+		snac_tick();
+		check(!snacpad_wanted(), "a core that reads the port itself is not missing our reader");
+		check(snacpad_reader() == SNAC_NO_READER,
+			"even though the probe already found none in it - the reader is not the question");
+
+		// The player unpicks it, still mid-session. Now the port is ours, and now the core's
+		// age matters - so this is the transition the notice has to appear across.
+		harness_set_opt("[48:45]", 0, 0);          // Pad1 = Dualshock
+		snac_tick();
+		check(snacpad_wanted() && snacpad_reader() == SNAC_NO_READER,
+			"unpicking it hands the port back to us, and the reader is missing after all");
+
+		// And a core that has genuinely never been looked at, which is every core for its
+		// first couple of milliseconds and every core whose port belongs to somebody else.
+		snacpad_init();
+		check(snacpad_reader() == SNAC_UNPROBED && !snacpad_wanted(),
+			"a core load puts both answers back to knowing nothing");
+
+		harness_set_confstr(1);
+		harness_set_menu_core(1);
+
+		// And a current core, which is the state most cards are in and must stay silent.
+		harness_reset_snac();                      // a reader in the fabric again
+		snacpad_init();
+		snac_tick();
+		check(snacpad_wanted() && snacpad_reader() == SNAC_READER,
+			"a core built from a current sys has the reader and nothing needs saying");
+
+		/* -------------------------------------------------------------- and on screen --- */
+
+		struct { int w, h, force; const char *name; } canv[] = {
+			{ 1280, 720, 1, "hd" },
+			{  640, 480, 2, "sd" },
+			{  320, 240, 3, "lo" },
+		};
+
+		for (int c = 0; c < 3; c++)
+		{
+			cfg.classicui_profile = (uint8_t)canv[c].force;
+			harness_set_fb(canv[c].w, canv[c].h);
+			gfx_shutdown();
+			theme_update(canv[c].w, canv[c].h, canv[c].force);
+
+			char nm[64];
+
+			// The current core first, so what follows is a change and not a starting state.
+			cfg.snac_pad = 1;
+			cfg.snac_device = 0;
+			harness_reset_snac();
+			snacpad_init();
+			snac_tick();
+
+			open_controllers();
+			snprintf(nm, sizeof(nm), "snacgap-%s-1-quiet", canv[c].name);
+			dump(nm);
+			check(pads_amber() == 0,
+				"the Controllers screen says nothing about SNAC when the core can read it");
+
+			// The old core.
+			harness_set_snac_reader(0);
+			snacpad_init();
+			snac_tick();
+
+			open_controllers();
+			snprintf(nm, sizeof(nm), "snacgap-%s-2-said", canv[c].name);
+			dump(nm);
+			int said = pads_amber();
+			check(said > 0, "  and says so when there is no reader in it");
+
+			/*
+			  A core load, straight out of the state that speaks and before any poll has run.
+			  This is the flicker: a fresh core is UNPROBED for its first couple of
+			  milliseconds, and the in-game menu can be open across a core change.
+
+			  Ordered here on purpose. Two things independently keep this quiet - snacpad_init()
+			  clearing `wanted`, and snac_gap_note() testing for NO_READER rather than "not
+			  READER" - and either one alone is enough, so neither can be made to fail by
+			  itself. What can be made to fail is the pair, and only from a preceding state
+			  where the port *was* wanted: run this after one of the quiet cases below and
+			  `wanted` is already 0 for an unrelated reason, and the check passes with both
+			  guards deleted. Measured, in that order, both ways.
+			*/
+			snacpad_init();
+			open_controllers();
+			snprintf(nm, sizeof(nm), "snacgap-%s-3-unprobed", canv[c].name);
+			dump(nm);
+			check(snacpad_reader() == SNAC_UNPROBED && pads_amber() == 0,
+				"  and nothing before the port has been looked at even once");
+
+			// Back to the readerless core the quiet cases below are all changes to.
+			snac_tick();
+			open_controllers();
+			check(snacpad_wanted() && snacpad_reader() == SNAC_NO_READER && pads_amber() == said,
+				"  the first poll of that core finds no reader, and it says so again");
+
+			/*
+			  And the quiet cases on the glass rather than at the accessor, because a screen can
+			  get this wrong in a way the module cannot. Each at every profile, since the wording
+			  is chosen per profile and a condition written into one branch of that choice would
+			  only fail at one canvas.
+
+			  Every one of them a change to the *same* readerless core, with no snacpad_init()
+			  anywhere: see the note in the half above. An init here is a core load, it puts
+			  snacpad_reader() back to UNPROBED, and the reader test alone then keeps the screen
+			  quiet - so these would pass with the snacpad_wanted() gate deleted, which is what
+			  the first version of this section did.
+			*/
+			cfg.snac_pad = 0;
+			snac_tick();
+			open_controllers();
+			snprintf(nm, sizeof(nm), "snacgap-%s-4-feature-off", canv[c].name);
+			dump(nm);
+			check(snacpad_reader() == SNAC_NO_READER && pads_amber() == 0,
+				"  nothing is said when SNAC pads are switched off, readerless core and all");
+			cfg.snac_pad = 1;
+
+			cfg.snac_device = 1;
+			snac_tick();
+			open_controllers();
+			check(snacpad_reader() == SNAC_NO_READER && pads_amber() == 0,
+				"  nor when the player says the port is not a PlayStation pad");
+			cfg.snac_device = 0;
+
+			/*
+			  And the one that matters most: the core claims the port with its own option, which
+			  is what a player does *after* finding their pad dead. It reads the port natively, so
+			  the pad now works - and the probe's NO_READER is still standing behind it.
+			*/
+			harness_set_menu_core(0);
+			harness_set_confstr_table(snac_psx);
+			harness_set_opt("[48:45]", 10, 0);     // Pad1 = SNAC-port1
+			snac_tick();
+			open_controllers();
+			snprintf(nm, sizeof(nm), "snacgap-%s-6-core-owns-it", canv[c].name);
+			dump(nm);
+			check(snacpad_reader() == SNAC_NO_READER && pads_amber() == 0,
+				"  nor about a core that has taken the port over and works without our reader");
+
+			// The player puts it back, still mid-session. The notice returns, which is what
+			// proves it was following the state rather than the order these were driven in.
+			harness_set_opt("[48:45]", 0, 0);
+			snac_tick();
+			harness_set_confstr(1);
+			harness_set_menu_core(1);
+			open_controllers();
+			check(said > 0 && pads_amber() == said, "  and the same notice comes back, unchanged");
+
+			press(KEY_ESC, 10);
+			press(KEY_ESC, 10);
+			press(KEY_ESC, 10);
+			frame(6);
+		}
+
+		/*
+		  Left off, and both halves of it. A section that walked away with cfg.snac_pad on and
+		  a readerless core behind it would put an amber warning on the Controllers screen for
+		  every later section that composes one - including the clipped-copy sweep, thousands
+		  of checks later, which is a long way from the code that caused it.
+		*/
+		cfg.snac_pad = was_pad;
+		cfg.snac_device = was_dev;
+		harness_reset_snac();
+		snacpad_init();
+
+		// And the fixture the section above built, SNAC pad included.
+		harness_clear_pads();
+		harness_add_pad(1, PAD_WIRED, 0x054C, 0x09CC, "Sony Computer Entertainment Wireless Controller", "");
+		harness_add_pad(2, PAD_SNAC,  0x0000, 0x0000, "MiSTer SNAC Pad 1", "");
+		harness_add_pad(3, PAD_BT,    0x054C, 0x09CC, "Wireless Controller", "DC:2C:26:1B:9A:71");
+
+		cfg.classicui_profile = was_prof;
+		harness_set_fb(1280, 720);
+		gfx_shutdown();
+		theme_update(1280, 720, 1);
+		chome_leave();
+		press(KEY_MENU, 20);
+		frame(8);
+		press(KEY_ESC, 10);
+		frame(6);
+	}
+
+	/*
 	  Wi-Fi. There is no radio in the container, so what is checked here is everything
 	  up to the radio: reading what the tools say, building the config file, and the
 	  screen a person drives. Bringing an interface up cannot be tested without an
@@ -19668,6 +20151,13 @@ int main()
 		uint8_t was_rumble = cfg.rumble;
 		uint8_t was_vscale = cfg.vscale_mode;
 		uint8_t was_bright = cfg.video_brightness;
+		/*
+		  And the disc flag, which this block now writes through the table. It has to go back
+		  for a stronger reason than the four above: left on, every later section would have a
+		  front-end that probes for a drive and can put a badge on the shelf, so a section
+		  about something else entirely would be composing a different screen.
+		*/
+		uint8_t was_disc = cfg.classicui_disc;
 
 		/*
 		  A fixture with one of each thing the model has to survive:
@@ -19833,6 +20323,80 @@ int main()
 		check(opt_wrote_live(), "both of those are true for this session already, and the screen says so");
 		check(!opt_dirty() && opt_apply(path, 0, 0) == 0, "and there is nothing left to write");
 
+		/* ------------------------------------------------- physical disc support --- */
+
+		/*
+		  classicui_disc, which had no row anywhere until now.
+
+		  The whole optical-disc feature was gated on it and offered on no screen, so the
+		  only way to turn it on was to edit MiSTer.ini with a keyboard - on a front-end
+		  whose entire purpose is that a television and a controller are enough. A feature
+		  reachable only by its author is not opt-in, and a setting that exists only in a
+		  file fails the objective this front-end is measured against.
+
+		  Written through this table rather than through a screen of its own because it is
+		  exactly what the table is for: a MiSTer.ini key whose value is 0 or 1 inside the
+		  range cfg.cpp declares, with a uint8_t behind it. See chome_opt.h's three rules.
+
+		  The fixture is what makes the last check here worth having. SRC *ends inside
+		  [NES]*, so a writer that appended classicui_disc to the end of the file would put
+		  it in a core section, where cfg.cpp's parser would read it for the NES core and
+		  never for the menu - and the front-end would report the setting as on while the
+		  disc feature stayed off on the shelf, with nothing on screen able to explain it.
+		  That is the single most expensive trap in this project and it has cost it several
+		  bugs; the assertion is that this key lands under a [MiSTer] header of its own.
+		*/
+		{
+			int i_disc = opt_find("classicui_disc");
+			check(i_disc >= 0, "physical disc support has a row on the settings screen");
+
+			const opt_def *od = (i_disc >= 0) ? opt_at(i_disc) : 0;
+			check(od && od->kind == OPT_LIST && od->lo == 0 && od->hi == 1,
+				"offered as a two-value list inside the range cfg.cpp declares");
+			check(od && od->def == 0 && od->rec == 0,
+				"off is both the firmware default and what this menu recommends");
+			/*
+			  Which is what puts a machine with a drive in amber, deliberately: chome_disc.h
+			  states the opinion the colour is reporting - the feature stays opt-in until it
+			  has been proven against a range of drives and discs.
+			*/
+			check(od && od->when == OW_NOW,
+				"and it says it takes effect now, which disc_poll() is what makes true");
+			/*
+			  Not scaler_only, and that is not a detail: the machine most likely to have a
+			  USB optical drive attached is a SuperStation One on an analog set, which is
+			  precisely the machine that drops every scaler_only row from this list.
+			*/
+			check(od && !od->scaler_only, "and it is offered on a machine with no scaler");
+
+			put_file(path, SRC);
+			opt_load(path);
+
+			check(!opt_present(i_disc) && opt_value(i_disc) == 0,
+				"a card that has never heard of the setting reads it as off");
+			check(opt_is_rec(i_disc), "and is not flagged for it");
+
+			check(opt_step_by(i_disc, 1) && opt_value(i_disc) == 1,
+				"one press turns physical disc support on");
+			check(!opt_is_rec(i_disc), "which is away from the default, and says so");
+			check(opt_dirty() == 1 && cfg.classicui_disc == 0,
+				"staged only - nothing has been written and nothing is live yet");
+
+			check(opt_apply(path, 0, 0) == 1, "and saving writes it");
+			check(slurp_file(path, now, sizeof(now)) > 0
+				&& strstr(now, "[MiSTer]\r\nclassicui_disc=1\r\n") != 0,
+				"under a [MiSTer] header of its own, not appended into the [NES] section the file ends in");
+			check(!strstr(now, "[NES]\r\ncontroller_info=0\r\nclassicui_disc"),
+				"which is the one place it would have been silently ignored");
+			check(cfg.classicui_disc == 1 && opt_wrote_live(),
+				"the running front-end is told, so the drive is looked for without a relaunch");
+
+			// Back off again through the same row, which is the direction disc_poll() had
+			// no answer for until disc_release_due() - see assert_physical_disc().
+			check(opt_step_by(i_disc, -1) && opt_apply(path, 0, 0) == 1 && cfg.classicui_disc == 0,
+				"and turning it off again goes through the same row and the same writer");
+		}
+
 		/* ------------------------------------------------------------ the screen --- */
 
 		harness_set_menu_core(1);
@@ -19971,6 +20535,28 @@ int main()
 		dump("set-9-240p-scrolled");
 		check(panel_hash() != h_top, "a list too long for the panel scrolls to the cursor");
 
+		/*
+		  And the Physical Disc row itself, on the canvas his CRT gets, with its sentence
+		  under it - the frame that is the whole answer to "the only way to turn disc support
+		  on is a keyboard".
+
+		  Walked to by index from the top of the list, which is only the table's index while
+		  every row is in the view, so that is asserted rather than hoped for: the scaler-only
+		  rows are dropped on a machine with no scaler and the walk would land elsewhere.
+		*/
+		{
+			int i_disc = opt_find("classicui_disc");
+			int vw[OPT_MAX];
+			check(opt_view(vw, OPT_MAX, 1) == opt_count() && i_disc >= 0
+				&& vw[i_disc] == i_disc, "the row's place in the list is the table's own order");
+
+			press(KEY_DOWN, 8);               // wrap from Save Changes to the first row
+			for (int i = 0; i < i_disc; i++) press(KEY_DOWN, 6);
+			frame(8);
+			dump("set-10-240p-physical-disc");
+			check(panel_hash() != h_top, "and the disc row is reachable at 240p");
+		}
+
 		press(KEY_ESC, 10);
 		press(KEY_ESC, 10);
 		press(KEY_ESC, 10);
@@ -19984,6 +20570,7 @@ int main()
 		cfg.rumble = was_rumble;
 		cfg.vscale_mode = was_vscale;
 		cfg.video_brightness = was_bright;
+		cfg.classicui_disc = was_disc;
 		theme_invalidate();
 		theme_update(1280, 720, 1);
 

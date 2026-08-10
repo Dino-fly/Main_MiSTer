@@ -71,9 +71,10 @@
   "I never set this" from "I set this on purpose": classicui_freeze=0 is precisely the
   deliberate choice of somebody whose SNES core dies when asked for a save state, and
   this screen putting a 1 back over it would be the front-end breaking a game to tidy
-  an ini. Those seven are personal taste or per-television anyway, and three of them
-  (overscan, freeze, halfres) already have a row in Options > More Settings, where a
-  value is *offered* with its recommendation beside it rather than assumed.
+  an ini. Those seven are personal taste or per-television anyway, and five of them
+  (overscan, freeze, halfres, tracking, caps) already have a row in Options > More
+  Settings, where a value is *offered* with its recommendation beside it rather than
+  assumed.
 
   The remaining three are off by default for reasons that are not this screen's to
   overrule:
@@ -84,10 +85,17 @@
   classicui_screenscraper the same, and it needs the player's own account before it
                         can do anything at all - see chome_ss.h. Turning it on for
                         somebody who has no account sets a flag and nothing else.
-  classicui_disc        needs an optical drive most machines do not have, and the
-                        failure mode when it is wrong is the console stopping. See
-                        chome_disc.h for why that default is caution earned rather
-                        than caution for its own sake.
+  classicui_disc        needs an optical drive most machines do not have, so writing a 1
+                        would enable a feature that can do nothing on the great majority
+                        of cards. It is *offered* instead, on Options > More Settings,
+                        which is the distinction this whole list is about - and the
+                        difference between offering it and asserting it is why that row
+                        could be added while this ruling stands.
+                        Not "the console stops if it is wrong" any more: that was true of
+                        the design where the drive was read on the drawing thread, and it
+                        is what a helper *process* was introduced to fix - a wedged drive
+                        now costs a stuck helper. See chome_disc.h. The default is still 0,
+                        for the reason above and because it is somebody else's hardware.
 
   And classicui_ss_user / classicui_ss_pass are somebody's login. There is no value
   to write.

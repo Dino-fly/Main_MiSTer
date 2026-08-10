@@ -173,6 +173,27 @@ int disc_probe_due(int found, int last_probe, int now);
 int disc_refork_due(int quick_deaths, int last_fork, int now);
 
 /*
+  Whether disc_poll() must hand the drive back instead of carrying on.
+
+    flag_on       cfg.classicui_disc, which is now a row on Options > More Settings and
+                  can therefore change under a running front-end.
+    watching_now  a device node has been found and latched.
+    helper_alive  the helper process still exists.
+
+  A pure function for the same reason as the two above - the harness has no fork() and no
+  device node - and because the decision itself is the part worth asserting. The old code
+  had no decision here at all: disc_poll() returned on a false flag, which was correct
+  while the flag could only change by editing MiSTer.ini and rebooting, and became a leak
+  the moment the setting could be turned off from a screen. A helper left holding /dev/sr0
+  with nobody reading what it wrote is a feature that reports itself as off while still
+  running, which is exactly the shape this front-end must not have.
+
+  Both of the last two, not just `watching`: the latch and the process are set and cleared
+  in different places, and either one outliving the flag is a drive nobody has given back.
+*/
+int disc_release_due(int flag_on, int watching_now, int helper_alive);
+
+/*
   Called from the front-end's idle loop, and cheap by construction: it stats one small
   file in /tmp and reads it only when the mtime moved. It does **not** touch the drive -
   see the top of this file for why that is the whole point.

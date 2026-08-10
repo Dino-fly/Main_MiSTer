@@ -63,9 +63,21 @@ static snac_pad_t pads[2] =
 	{ -1, 0, 0xFF, 0, { 0x80, 0x80, 0x80, 0x80 } },
 	{ -1, 0, 0xFF, 0, { 0x80, 0x80, 0x80, 0x80 } },
 };
-static int supported = -1; // -1: not probed yet, 0: no (old sys), 1: yes
+static int supported = SNAC_UNPROBED;
 static int enabled = 0;    // last enable bit sent to the core
 static uint32_t poll_timer = 0;
+
+/*
+  The last answer to "should this reader be driving the port", kept so a screen can ask.
+
+  A published copy of snacpad_poll()'s own `want` rather than a second derivation of it:
+  two of its three terms are cfg fields anybody can read, but the third is
+  core_owns_snac(), which is static here and has to be. A front-end that recomputed the
+  two it can see would announce a missing reader on exactly the core that does not need one
+  - the old PSX core reading the port natively - which is the one place the message would
+  be a flat lie.
+*/
+static int wanted = 0;
 
 static void pad_reset_state(snac_pad_t *pad)
 {
@@ -440,8 +452,15 @@ static int pad_present(int idx, uint16_t w)
 void snacpad_init()
 {
 	// core (re)loaded: the fabric side is back to disabled, ask again
-	supported = -1;
+	supported = SNAC_UNPROBED;
 	enabled = 0;
+	/*
+	  And nothing is known about the new core's port yet. Cleared rather than left standing
+	  because a screen asks these two together: with `wanted` inherited from the previous
+	  core and `supported` reset, the pair reads as "we want the port and have not looked",
+	  which is silent - but the inherited half would be describing a core that is gone.
+	*/
+	wanted = 0;
 	owned_logged = -1;
 	bad_id_said[0] = bad_id_said[1] = 0;
 	poll_timer = 0;
@@ -470,6 +489,12 @@ void snacpad_poll()
 	int claimed = core_owns_snac();
 	int want = (cfg.snac_pad != 0) && (cfg.snac_device == 0) && !claimed;
 
+	// Published here, above every early return below, so a screen asking snacpad_wanted()
+	// gets this poll's answer even on the passes that do nothing else. The cheapest of
+	// those - the feature switched off entirely - returns before touching SPI, and that
+	// is exactly the case a front-end must stay quiet about, so it has to be recorded.
+	wanted = want;
+
 	if (owned_logged != claimed)
 	{
 		owned_logged = claimed;
@@ -497,10 +522,10 @@ void snacpad_poll()
 	if ((status >> 8) != SNAC_MAGIC)
 	{
 		DisableIO();
-		if (supported != 0)
+		if (supported != SNAC_NO_READER)
 		{
 			if (want) printf("snacpad: no SNAC pad reader in this core (sys update needed)\n");
-			supported = 0;
+			supported = SNAC_NO_READER;
 			pad_destroy(0);
 			pad_destroy(1);
 		}
@@ -521,10 +546,10 @@ void snacpad_poll()
 	uint16_t r2 = spi_w(0);
 	DisableIO();
 
-	if (supported != 1)
+	if (supported != SNAC_READER)
 	{
 		printf("snacpad: SNAC pad reader present, %s\n", want ? "enabled" : "disabled");
-		supported = 1;
+		supported = SNAC_READER;
 	}
 	enabled = want;
 
@@ -551,6 +576,10 @@ void snacpad_poll()
 	pad_update(0, p1, w0 & 0xFF, b1, ax1);
 	pad_update(1, p2, w4 & 0xFF, b2, ax2);
 }
+
+// See the note in snacpad.h. Both are what the poll above recorded, nothing more.
+int snacpad_reader() { return supported; }
+int snacpad_wanted() { return wanted; }
 
 #ifdef CHOME_HOST_TEST
 /*

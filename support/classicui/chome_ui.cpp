@@ -40,6 +40,8 @@
 #include "../../user_io.h"
 #include "../../recent.h"
 #include "../../input.h"
+// For the SNAC reader's own answer about the running core - see snac_gap_note().
+#include "../../snacpad.h"
 #include "../../osd.h"
 #include "../../video.h"
 #include "../../hardware.h"
@@ -4738,6 +4740,78 @@ static int pads_count()
 	return pads_build(rows, PADS_MAX);
 }
 
+/*
+  The one thing the Controllers screen could not say: a PlayStation pad on the SNAC port
+  that cannot work in the core that is running, because that core's sys framework has no
+  reader in it.
+
+  ------------------------------------------------------------------------ where ---
+
+  Here, and only here.
+
+  This screen is the answer to "why is my controller not doing anything", which is the
+  question the player actually has - their pad is plugged in, the shelf lists their USB pad
+  and says "1 controller ready", and there is no mention anywhere of the port they used. A
+  working SNAC pad already appears in this list with "SNAC port" under its name (see
+  PAD_SNAC below); when the reader is missing there is no row at all, so the screen's
+  silence is indistinguishable from the pad being unplugged. That is the gap.
+
+  It is also the only screen reachable from *both* sides of a core load - Options >
+  Controllers is row 5 of the Options panel on the shelf and in the in-game menu alike -
+  which matters more than it looks. snacpad_reader() answers about whatever is on the FPGA
+  now, so on the shelf this reports the menu core and in a game it reports that game's
+  core, and those are genuinely different facts: a card can have a current menu core and a
+  five-year-old NES core, and the pad then drives the shelf and dies at the game. One line
+  in one place tells the player the truth about whichever core they are asking from.
+
+  Not on the shelf. A panel of technical text over somebody's cover art before they have
+  pressed anything is the thing this front-end exists to remove - the same ruling as
+  chome_ini.h's refusal of a first-run notice and draw_options_panel()'s reason for keeping
+  the configuration-check line off the shelf.
+
+  ------------------------------------------------------------ and when it is quiet ---
+
+  Four cases say nothing, and three of them are cases where the sentence would be true and
+  still wrong. A message that cries wolf is worse than no message, and this one would cry
+  it on hardware that is working.
+
+    cfg.snac_pad == 0     the player has not asked for SNAC pads. Reporting a missing
+                          reader for a feature they never turned on is a fault report
+                          about nothing. snacpad_wanted() is 0.
+    cfg.snac_device != 0  they have told us the thing on the port is not a PlayStation
+                          adapter (cfg.h: it cannot be derived, so it is asked once and
+                          believed). We would not drive the port even with a reader, so
+                          the reader is not the interesting fact and "update your core"
+                          would be advice that changes nothing. snacpad_wanted() is 0.
+    the core owns it      a core reading the SNAC port through its own option needs no
+                          framework reader and works without one - so on an old PSX core
+                          in native mode, "no reader" is true and the player's pad is
+                          fine. This is the case that made snacpad_wanted() have to exist
+                          rather than being recomputed from the two cfg fields here.
+    SNAC_UNPROBED         the poll has not looked yet. Announcing a missing reader in the
+                          first milliseconds of a core's life is a lie that flickers, and
+                          the states above hold at UNPROBED for ever because the poll
+                          returns before touching SPI when it wants nothing.
+
+  Which leaves exactly one case that speaks, and it is the one where the player's pad is
+  dead and the core is why.
+*/
+static const char *snac_gap_note(int room)
+{
+	if (!snacpad_wanted()) return 0;
+	if (snacpad_reader() != SNAC_NO_READER) return 0;
+
+	/*
+	  Two wordings on measured room, the convention every other footer here follows: at 240p
+	  the panel holds 33 characters and the long one is 41, and a sentence that loses its end
+	  is worse than a short one that does not. Both name the pad and the fix; the long one
+	  says "this core" because on the shelf that is the menu core and in a game it is the
+	  game's, and neither is "your MiSTer".
+	*/
+	return (room >= 36) ? "SNAC pad needs a newer build of this core"
+	                    : "SNAC pad needs a newer core";
+}
+
 static void draw_pads(const chome_profile *p)
 {
 	int s = p->ts_ui;
@@ -4748,21 +4822,65 @@ static void draw_pads(const chome_profile *p)
 	if (w > 44 * gfx_adv(s)) w = 44 * gfx_adv(s);
 
 	int hdr = 10 * s + 6;
-	int foot = 12 * s;
 
 	int pairing = (bt_pairing() || bt_pair_state() != BTP_IDLE);
+
+	/*
+	  Decided before the panel is sized, and it buys the line its own row of footer rather
+	  than letting it share one.
+
+	  The footer already carries two things - the red confirmation while a pairing is armed
+	  to be forgotten, and the "3 of 7" that says the list is scrolled - and both of them
+	  outrank nothing. The armed hint is a press away from destroying a pairing and the count
+	  is how the player knows to keep pressing down. Ranking this above either would trade a
+	  permanent affordance for a notice, and ranking it below would mean the notice is
+	  invisible on precisely the card with enough controllers to scroll. So it gets a line,
+	  and only on the machines that have something to be told.
+
+	  Paid for out of the list's room and not out of the panel's height, which is why `foot`
+	  is separate from the 12 * s in the height below. Growing the panel was the first version
+	  of this and it failed the same test one dimension over: the panel at 240p is already
+	  within a few pixels of the legend, and ten more put it over "B TEST IT / A BACK". The
+	  list is windowed and says "3 of 7" as soon as it is scrolled, so a row of it is the one
+	  thing here that can be spent without anything becoming unreachable - and as it happens
+	  nothing is spent, because `vis` is capped at PADS_VIS - 1 and that cap is what binds at
+	  all three profiles.
+
+	  Never while a pairing is on screen: that state owns the whole panel by design, and its
+	  own footer line is the pairing's result. A pad that cannot work in this core will still
+	  be unable to work in it thirty seconds later, when the player is back on the list.
+	*/
+	const char *snac_note = pairing ? 0 : snac_gap_note(gfx_text_cols(w - 12 * s, s));
+	int foot = 12 * s + (snac_note ? 10 * s : 0);
 
 	/*
 	  Two heights, because the two things this screen does want different shapes: a
 	  list wants rows, a pairing wants room for a mark, a track and three lines of what
 	  to do with your hands. The pairing panel used to be squeezed into the list's
 	  height, which is why it had no footer.
+
+	  One text row of footer here, always, whatever `foot` above says - see its comment.
 	*/
-	int h = pairing ? hdr + PROGRESS_H(s) + foot
-	                : hdr + 18 * s + PADS_VIS * rowh + 2 * LIST_SECH * s + foot + 4 * s;
+	int h = pairing ? hdr + PROGRESS_H(s) + 12 * s
+	                : hdr + 18 * s + PADS_VIS * rowh + 2 * LIST_SECH * s + 12 * s + 4 * s;
 	if (h > p->h - 2 * p->safe_y) h = p->h - 2 * p->safe_y;
 
 	panel_box b = draw_panel_ex(p, w, h, "Controllers");
+
+	/*
+	  Drawn here rather than at the end, because two of the paths below return early and one
+	  of them is where this matters most: the panel that says "this MiSTer has no Bluetooth
+	  adapter" is what a player with nothing but a SNAC pad and no USB pad sees, and that is
+	  the reading of this screen that a missing reader makes completely misleading.
+
+	  Amber, which everywhere in this front-end means "away from what this menu wants" - and
+	  a pad the firmware is willing to read, on a port nothing can read it from, is as away
+	  from it as hardware gets. Not red: nothing is broken and nothing is about to be lost,
+	  which is what red is kept for here.
+	*/
+	if (snac_note)
+		gfx_text(gfx_clip(snac_note, s, b.w - 12 * s), b.x + 6 * s, b.y + b.h - foot,
+			s, COL_YELLOW, 0);
 
 	// Pairing mode owns the screen while it is on: the list underneath is what this is
 	// about to change, and the player is holding a button down waiting to be told.
@@ -4984,9 +5102,16 @@ static void draw_pads(const chome_profile *p)
 		draw_listrow(&b, ybot + 3 * s, &lr, pads_row == addrow, ms);
 	}
 
+	/*
+	  The bottom line of the panel, and it stays the bottom line whatever else is down here.
+	  Measured from the panel's edge rather than from `foot`, which grows by a row when the
+	  SNAC notice above has claimed one: anchoring these two to `foot` would have lifted both
+	  of them onto the notice's line and drawn all three on top of each other.
+	*/
+	int fy = b.y + b.h - 12 * s;
+
 	if (armed)
-		btn_hint_c(b.x + b.w / 2, b.y + b.h - foot, s, COL_RED,
-			"PRESS", LBL_X, "AGAIN TO FORGET IT");
+		btn_hint_c(b.x + b.w / 2, fy, s, COL_RED, "PRESS", LBL_X, "AGAIN TO FORGET IT");
 	else if (nlist > vis)
 	{
 		// Counts controllers, not entries: the pinned one is always on screen, so
@@ -4994,7 +5119,7 @@ static void draw_pads(const chome_profile *p)
 		char more[48];
 		int at = (pads_row < nlist) ? pads_row + 1 : nlist;
 		snprintf(more, sizeof(more), "%d of %d", at, nlist);
-		gfx_text_c(more, b.x + b.w / 2, b.y + b.h - foot, s, COL_PANELLO, 0);
+		gfx_text_c(more, b.x + b.w / 2, fy, s, COL_PANELLO, 0);
 	}
 }
 
