@@ -46,16 +46,42 @@ tests of a different binary. Quote the md5 of the build you actually tested.
 
 ## Branches worth keeping
 
+- **`classic-ui`** - the release line and the fork's default branch on GitHub. Everything
+  ships from here; every release is a tag on it.
 - **`snac-pr`** - PSX controllers over SNAC on stock MiSTer, nothing else. The branch an
   upstream pull request would come from.
-- **`deploy-all`** - everything: the front-end, SNAC, the analog takeover. This is the release
-  line. `disc-shelf` is its working tip; `deploy-all` trails it.
-- The analog/RGB-SCART work (reaching the menu without going through the VGA config, the
-  `fb_terminal_vga` takeover) is **already merged into the `disc-shelf`/`deploy-all` line** and
-  is not a separate branch any more.
 
-Everything else under `disc-*`, `snac-wave*`, `worktree-agent-*` is a merged feature branch or
-an agent's scratch worktree and can go.
+`deploy-all` and `disc-shelf` are **gone** - `classic-ui` replaced both. The analog/RGB-SCART
+work and the `fb_terminal_vga` takeover are merged into it, not separate branches.
+
+## A merge from an old branch would undo the identity scrub
+
+The scoped `git-filter-repo` rewrite that removed the owner's real name gave every touched
+commit a **new SHA and new blobs**. Branches that predate it still point at the *old* commits,
+so they carry the name in author fields, commit messages and file contents - and git cannot
+see their work as merged, because nothing matches by SHA or by patch-id.
+
+Merging one into `classic-ui` would therefore reintroduce the name into published history.
+This came within one command of happening: `options-scroll` looked like an ordinary unmerged
+feature branch, 327 commits "ahead", and the fix was to re-implement its content on top of
+`classic-ui` rather than merge it.
+
+44 such branches were deleted on 2026-08-10 after checking all three vectors and confirming
+each held nothing `classic-ui` lacks. **How to tell whether a branch is safe**, since neither
+`--contains` nor `git cherry` works here:
+
+```
+git log --format='%s' <branch> --not --remotes=fork | sort -u \
+  | comm -23 - <(git log --format='%s' classic-ui | sort -u)
+```
+
+Commit *subjects* survive the rewrite, so an empty result means the work is present. Confirm
+with a file-level check (`git ls-tree -r --name-only`) before deleting; the only files unique
+to any of the 44 were `fbgrab` and `keyinj`, build artifacts committed by accident.
+
+Eleven remain, pinned by agent worktrees under `Main_MiSTer/.claude/worktrees/`. They are
+harmless where they are and dangerous only if merged. Remove the worktree, then the branch.
+Tags and every branch on the fork are clean.
 
 ## `MiSTer.ini` is sectioned, and that is the most expensive trap in this project
 
