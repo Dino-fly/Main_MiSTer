@@ -1956,7 +1956,15 @@ static void draw_title_block(const chome_profile *p)
 			if (e->nvar > 1) snprintf(line, sizeof(line), "%d/%d  %s", e->vsel + 1, e->nvar, file);
 			else snprintf(line, sizeof(line), "%s", file);
 
-			gfx_text_c(gfx_clip(line, p->ts_tiny, avail), p->w / 2, y, p->ts_tiny, COL_PANELLO, 0);
+			/*
+			  Scrolled on the same terms as the title above it, and it is the line that gains
+			  the most by it: this is the only place a player can tell two dumps of one game
+			  apart, and what tells them apart is at the very end of the name - "(Europe)" or
+			  "(USA) (Disc 1)", which is exactly what gets cut. The clip log has it losing up
+			  to thirty-two characters at 240p.
+			*/
+			gfx_text_c(marq_fit(line, p->ts_tiny, avail, !overlay_up(), y),
+				p->w / 2, y, p->ts_tiny, COL_PANELLO, 0);
 		}
 	}
 }
