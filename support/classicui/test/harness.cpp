@@ -20640,6 +20640,30 @@ int main()
 			frame(8);
 			dump("set-10-240p-physical-disc");
 			check(panel_hash() != h_top, "and the disc row is reachable at 240p");
+
+			/*
+			  And Replace Pack Art, for the same reason and with one extra thing to hold: it
+			  must default to OFF and recommend OFF, which is the only row in the table where
+			  those two agree on the *unhelpful* value. It is off because turning it on spends
+			  one ScreenScraper request per pack-supplied cover, against the allowance the miss
+			  store exists to protect - so a future edit that "tidied" rec up to match the
+			  other rows would quietly start spending it.
+			*/
+			int i_pack = opt_find("classicui_ss_replace_pack");
+			check(i_pack >= 0, "Replace Pack Art is offered as a row, not only as an ini key");
+			if (i_pack >= 0)
+			{
+				const opt_def *o = opt_at(i_pack);
+				check(o && o->def == 0 && o->rec == 0,
+					"and it both defaults to and recommends Off, because On costs requests");
+				check(o && o->help && o->help[0],
+					"and it carries a sentence, since which covers it touches is unguessable");
+
+				for (int i = 0; i < i_pack - i_disc; i++) press(KEY_DOWN, 6);
+				frame(8);
+				dump("set-11-240p-replace-pack-art");
+				check(panel_hash() != h_top, "and it is reachable at 240p too");
+			}
 		}
 
 		press(KEY_ESC, 10);

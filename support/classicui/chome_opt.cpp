@@ -130,6 +130,34 @@ static const opt_def opts[] =
 	  "Finds a game disc in a USB drive and offers to play it.",
 	  OG_MENU, OPT_LIST, 0, 0, 1, 1, 0, 0, 0, ch_offon, NCH(ch_offon), &cfg.classicui_disc, 0, OW_NOW },
 
+	/*
+	  Re-asking ScreenScraper for the covers the fallback pack supplied.
+
+	  Off, and off is the recommendation as well as the default, which is unusual here - most
+	  rows recommend what they default to because that is the good value. This one is off
+	  because of what it *spends*: the marks it acts on cost nothing to keep, and turning it
+	  on turns each of them into one request against the account's unmatched allowance, which
+	  is the scarce one and the reason the miss store exists at all.
+
+	  It is a row rather than an ini-only key for the same reason Physical Disc above is: the
+	  player it helps is the one who entered their account *after* their card was already
+	  full, and asking that person to edit a file with a keyboard is asking them to leave the
+	  front-end to fix the front-end.
+
+	  OW_NOW. art_step() reads the flag on the pass that would queue the retry
+	  (chome_art.cpp:3024), so it takes effect on the next frame with no rescan - and the
+	  marks were being written all along whether it was set or not, so there is no history to
+	  rebuild when it is switched on.
+
+	  The help line names the *pack* rather than the account, because which covers this
+	  touches is the part nobody can guess: not a gamelist.xml cover, not a scrape made with
+	  another tool, not a pack copied on by hand - only what this front-end fetched itself.
+	*/
+	{ "classicui_ss_replace_pack", "Replace Pack Art",
+	  "Re-asks ScreenScraper for covers the pack supplied.",
+	  OG_MENU, OPT_LIST, 0, 0, 1, 1, 0, 0, 0, ch_offon, NCH(ch_offon),
+	  &cfg.classicui_ss_replace_pack, 0, OW_NOW },
+
 	{ "classicui_overscan", "TV Edge Margin",
 	  "Keeps this menu clear of the edges of a TV.",
 	  OG_MENU, OPT_NUMBER, 0, 0, 15, 1, "%", 6, 6, 0, 0, &cfg.classicui_overscan, 0, OW_NOW },
