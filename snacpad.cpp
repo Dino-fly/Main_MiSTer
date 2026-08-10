@@ -15,6 +15,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
@@ -277,155 +278,216 @@ static void pad_update(int idx, int connected, uint8_t id, uint16_t buttons, con
 */
 #define PSX_PROBE_MS 400
 
-static int psx_native = 0;      // the core owns the bus on this core
-static int psx_phase = 0;       // 0 probing, 1 settled
-static int psx_probe_ok = 0;    // the reader answered, so presence is knowable
-static int psx_seen[2] = {};    // a pad was seen on that port during the probe
-static unsigned long psx_until = 0;
-static int psx_emulate = 0;     // probe found nothing, so the reader is kept
+static int owned_logged = -1;   // last core_owns_snac() answer we printed
 
-// Everything before the first comma, minus the D<n>/h<n> hide markers and the
-// leading O, which is what user_io_status_bits() wants.
-static int confstr_spec(const char *line, char *out, int len)
+// One comma-separated field of a CONF_STR line. Cores do not quote.
+static void confstr_field(const char *src, int idx, char *out, int len)
 {
-	const char *p = line;
-
-	while (*p)
-	{
-		if ((*p == 'D' || *p == 'd' || *p == 'H' || *p == 'h') && p[1] >= '0' && p[1] <= '9')
-		{
-			p += 2;
-			continue;
-		}
-		break;
-	}
-
-	if (*p != 'O' && *p != 'o') return 0;
-	p++;
-
+	out[0] = 0;
 	int n = 0;
-	while (*p && *p != ',' && n < len - 1) out[n++] = *p++;
-	out[n] = 0;
-	return (*p == ',') && n;
+	const char *p = src;
+	while (n < idx)
+	{
+		const char *c = strchr(p, ',');
+		if (!c) return;
+		p = c + 1;
+		n++;
+	}
+	const char *e = strchr(p, ',');
+	int l = e ? (int)(e - p) : (int)strlen(p);
+	if (l > len - 1) l = len - 1;
+	memcpy(out, p, l);
+	out[l] = 0;
 }
 
 /*
-  Set one of the core's own options by name, to the value with that name.
+  Does the running core drive the SNAC port itself?
 
-  By name in both directions on purpose: Pad1 has thirteen values today and a core is
-  free to add more, so an index would be a guess with a wrong controller as the prize.
+  This is the whole of the arbitration, and it replaces a setting of ours. Exactly one
+  reader may own the bus: the core's, or this one. The core's own options already say
+  which the player wants, so asking them is both the honest answer and one less thing to
+  configure - and it generalises past PSX, which a setting of ours never could. A SNES
+  SNAC adapter with the SNES core's own SNAC switch on now takes the bus from us for the
+  same reason a PSX pad in native mode does.
+
+  Every SNAC-capable core spells it one of two ways, so there are two rules and no table
+  of core names to keep in step:
+
+    - the value the player picked names SNAC. PSX's Pad1 offers "SNAC-port1" among
+      thirteen values, the N64's "Pad 1 Type" offers "SNAC", the SMS calls the option
+      "USERIO" and the value "SNAC".
+    - or the option itself IS the switch, and anything but its first value turns it on.
+      The NES ("SNAC,Off,Controllers,Zapper,3D Glasses"), the Mega Drive ("Off,Port 1,
+      Port 2,Port 3") and the SNES ("No,Yes") are all this shape.
+
+  The name match is exact for the second rule on purpose: "SNAC MemCard" and "SNAC
+  Compare" both begin with SNAC and neither of them hands over the port.
+
+  Erring towards "the core owns it" is the safe direction. Get it wrong that way and
+  nobody drives the port - the player loses a pad until they look at the option. Get it
+  wrong the other way and two readers drive the same pins at once, which is the one
+  outcome that can damage something.
+
+  Every value here is read from cur_status[], the firmware's own shadow of the status
+  word (user_io.cpp:546) - not from the core. So this is a handful of local memory reads
+  and a string compare, cheap enough for the 2 ms poll, and it is already correct on the
+  first poll because <CORE>.CFG is loaded into that shadow during user_io_init().
 */
-static int confstr_set(const char *option, const char *value)
+static int core_owns_snac()
 {
+	if (is_menu()) return 0;
+
 	for (int i = 1; i < 64; i++)
 	{
 		char *line = user_io_get_confstr(i);
-		if (!line || !*line) break;
+		if (!line) break;
+		if (!*line) continue;
 
-		char spec[32];
-		if (!confstr_spec(line, spec, sizeof(spec))) continue;
+		char spec[40];
+		confstr_field(line, 0, spec, sizeof(spec));
+		if (!spec[0]) continue;
 
-		const char *name = strchr(line, ',');
-		if (!name) continue;
-		name++;
+		// A page definition ("P1,Audio & Video"), which is not an option.
+		if (spec[0] == 'P' && spec[1] >= '0' && spec[1] <= '9' && !spec[2]) continue;
 
-		size_t nlen = strlen(option);
-		if (strncasecmp(name, option, nlen) || name[nlen] != ',') continue;
+		/*
+		  Strip the prefixes. They arrive in either order - "D1P1O[104]" and "P1O[3:1]"
+		  are both real - so this loops rather than assuming a sequence, the same way
+		  chome_core.cpp's split_prefix() does and for the same reason.
+		*/
+		const char *body = spec;
+		while ((body[0] == 'H' || body[0] == 'h' || body[0] == 'D' || body[0] == 'd'
+			|| body[0] == 'P') && body[1] && body[2] && body[2] != ',') body += 2;
 
-		const char *v = name + nlen + 1;
-		for (int idx = 0; *v; idx++)
-		{
-			const char *end = strchr(v, ',');
-			size_t n = end ? (size_t)(end - v) : strlen(v);
+		if (body[0] != 'O' && body[0] != 'o') continue;
 
-			if (n == strlen(value) && !strncasecmp(v, value, n))
-			{
-				user_io_status_set(spec, (uint32_t)idx);
-				printf("snacpad: PSX %s = %s\n", option, value);
-				return 1;
-			}
+		// "o" is the second status word. Dropping this reads a different option.
+		int ex = (body[0] == 'o') ? 1 : 0;
 
-			if (!end) break;
-			v = end + 1;
-		}
+		char name[40];
+		confstr_field(line, 1, name, sizeof(name));
+		if (!name[0]) continue;
 
-		printf("snacpad: PSX %s has no \"%s\", left alone\n", option, value);
-		return 0;
+		uint32_t v = user_io_status_get(body + 1, ex);
+
+		char val[40];
+		confstr_field(line, 2 + (int)v, val, sizeof(val));
+
+		if (val[0] && strcasestr(val, "SNAC")) return 1;
+		if (!strcasecmp(name, "SNAC") && v != 0) return 1;
 	}
+
 	return 0;
 }
 
 /*
-  Hand the bus to the core, for the ports that have something on them.
+  Which controller IDs this reader can decode.
 
-  Without pointing the core's pads at SNAC, "native" would leave it on its default
-  Dualshock - a virtual pad nothing is feeding - and the player would get no input at
-  all, which is worse than either mode.
+  The reader in the fabric accepts anything that is not 0xFF and acks like a pad
+  (psx_snac_pad.sv:178), and it never checks the 0x5A a real PSX pad sends as its second
+  byte. That is deliberately loose there and has to be tightened somewhere, because of
+  what the ID byte feeds: the buttons are delivered *inverted*, so a device that answers
+  with zeroes arrives here as id 0x00 with every button and every direction held down
+  for ever. On this front-end that pad drives the menu, so the shelf would scroll on its
+  own and no press could stop it.
 
-  Nothing is written to the core's config. This applies at core load and lasts as long
-  as the core does, so a player who changes Pad1 by hand keeps their choice until the
-  next load, and snac_psx=1 stops it happening at all.
+  A SNAC adapter for another console on the same port is the way that happens - the
+  bypass switch on a SuperDock routes the bus to an extension port where anything can be
+  plugged in. Whether such an adapter idles its lines high (in which case the reader
+  already rejects it: the ID reads 0xFF and it fails cleanly) or low is an electrical
+  question about hardware we do not control, so it is not worth predicting - it is worth
+  refusing.
+
+  0x41 digital, 0x73 analog and 0x53 analog-mode-2 are the three the reader can actually
+  decode; see the note at the top of psx_snac_pad.sv. Anything else is refused and said
+  out loud once, rather than silently, so that a real pad we have not met turns into a
+  bug report with an ID in it instead of a player with a dead port.
 */
-static void psx_hand_over()
+static int psx_id_known(uint8_t id)
 {
-	if (!psx_probe_ok)
+	return (id == 0x41 || id == 0x73 || id == 0x53) ? 1 : 0;
+}
+
+/*
+  A port's presence bit, with the ID sanity check applied and complained about once.
+
+  Once per distinct ID rather than once per port: an adapter that answers differently as
+  it is plugged in should say so each time it changes, and a poll running every 2 ms must
+  not put the same line in the log five hundred times a second.
+*/
+static uint8_t bad_id_said[2] = { 0, 0 };
+#ifdef CHOME_HOST_TEST
+static int test_present[2] = { 0, 0 };
+#endif
+
+static int pad_present(int idx, uint16_t w)
+{
+	if (!(w >> 15)) { bad_id_said[idx] = 0; return 0; }
+
+	uint8_t id = (uint8_t)(w & 0xFF);
+	if (psx_id_known(id)) { bad_id_said[idx] = 0; return 1; }
+
+	if (bad_id_said[idx] != id)
 	{
-		// No reader in this core, so nothing is knowable and nothing is touched. The
-		// core's own SNAC options still work; they are just set by hand, as always.
-		printf("snacpad: PSX core has no reader, leaving its pad options alone\n");
-		return;
+		bad_id_said[idx] = id;
+		printf("snacpad: port %d answered with id %02X, which is not a PSX pad this reader"
+			" can decode - ignoring it. If a real PlayStation controller is plugged in"
+			" here, please report this ID.\n", idx + 1, id);
 	}
-
-	int force = (cfg.snac_psx_fallback == 0);
-
-	if (psx_seen[0] || force) confstr_set("Pad1", "SNAC-port1");
-	else printf("snacpad: nothing on SNAC port 1, leaving Pad1 virtual\n");
-
-	if (psx_seen[1] || force) confstr_set("Pad2", "SNAC-port2");
-	else printf("snacpad: nothing on SNAC port 2, leaving Pad2 virtual\n");
-
-	// One option for both slots, and undetectable - see the note above.
-	if (cfg.snac_psx_memcard) confstr_set("SNAC MemCard", "Real");
+	return 0;
 }
 
 void snacpad_init()
 {
-	// core (re)loaded: the fabric side is back to disabled, probe again
+	// core (re)loaded: the fabric side is back to disabled, ask again
 	supported = -1;
 	enabled = 0;
-	psx_native = 0;
-	psx_phase = 0;
-	psx_probe_ok = 0;
-	psx_seen[0] = psx_seen[1] = 0;
-	psx_until = 0;
-	psx_emulate = 0;
+	owned_logged = -1;
+	bad_id_said[0] = bad_id_said[1] = 0;
 	poll_timer = 0;
 }
 
 void snacpad_poll()
 {
 	/*
-	  On PSX the bus belongs to the core unless the player asked otherwise - but which
-	  ports to hand it for depends on what is plugged in, and the reader is the only
-	  thing that can tell us. So it runs first, for PSX_PROBE_MS, and the hand-over
-	  happens after. All of it here rather than at init: the CONF_STR is not readable
-	  that early, and neither is a pad that has not been polled yet.
+	  Who owns the port, asked fresh every poll rather than settled once.
+
+	  Three terms, and each is a different kind of statement:
+
+	    snac_pad     - the player wants SNAC pads at all.
+	    snac_device  - what is physically on the port. Not inferable: the bypass switch
+	                   on a SuperDock reroutes the bus to an extension port that takes
+	                   any console's adapter, and nothing readable changes when it moves.
+	                   So it is asked once and believed. See cfg.h.
+	    the core     - whether the running core has claimed the bus with its own option.
+
+	  Re-derived every 2 ms on purpose. There is no settled state to unwind, so a player
+	  who changes Pad1 while a game runs hands the port over within one poll and the loser
+	  lets go; the cost is at most one corrupt pad frame during the switch. The old code
+	  needed a probe window and five variables to hold that transition, and all of it
+	  existed to serve a hand-over this no longer does.
 	*/
-	int psx_want_native = (cfg.snac_pad != 0) && is_psx() && (cfg.snac_psx == 0);
-	int probing = psx_want_native && (psx_phase == 0);
+	int claimed = core_owns_snac();
+	int want = (cfg.snac_pad != 0) && (cfg.snac_device == 0) && !claimed;
 
-	psx_native = psx_want_native && !probing && !psx_emulate;
-
-	int want = (cfg.snac_pad != 0) && (!psx_native || probing);
+	if (owned_logged != claimed)
+	{
+		owned_logged = claimed;
+		if (claimed) printf("snacpad: this core reads the SNAC port itself, standing back\n");
+		else if (cfg.snac_pad != 0 && cfg.snac_device != 0)
+			printf("snacpad: snac_device says the port is not a PSX pad, not touching it\n");
+		else if (cfg.snac_pad != 0) printf("snacpad: reading the SNAC port for this core\n");
+	}
 
 	/*
 	  With the feature off there is nothing to say to the core and no reason to touch
-	  SPI at all. PSX native mode is different: the reader has to be *told* to let go,
-	  rather than trusted to have come up idle, or the two readers would both be
-	  driving the port. So it runs the handshake even though it wants nothing back -
-	  once a second, after the first one establishes that the core has a reader.
+	  SPI at all. Handing the port back is different: the reader has to be *told* to let
+	  go, rather than trusted to have come up idle, or two readers would drive the same
+	  pins. So once `supported` is known the poll keeps running even when it wants
+	  nothing - at SNAC_RETRY_MS, set at the bottom - which is also what lets a core
+	  option changed mid-game take effect without a relaunch.
 	*/
-	if (!want && !enabled && !psx_native && supported < 0
+	if (!want && !enabled && supported < 0
 		&& pads[0].fd < 0 && pads[1].fd < 0) return;
 
 	if (poll_timer && !CheckTimer(poll_timer)) return;
@@ -442,12 +504,9 @@ void snacpad_poll()
 			pad_destroy(0);
 			pad_destroy(1);
 		}
-		if (probing)
-		{
-			psx_probe_ok = 0;
-			psx_phase = 1;
-			psx_hand_over();
-		}
+#ifdef CHOME_HOST_TEST
+		test_present[0] = test_present[1] = 0;
+#endif
 		poll_timer = GetTimer(SNAC_RETRY_MS);
 		return;
 	}
@@ -469,44 +528,40 @@ void snacpad_poll()
 	}
 	enabled = want;
 
-	if (probing)
-	{
-		psx_probe_ok = 1;
-		if (w0 >> 15) psx_seen[0] = 1;
-		if (w4 >> 15) psx_seen[1] = 1;
-
-		if (!psx_until) psx_until = GetTimer(PSX_PROBE_MS);
-		else if (CheckTimer(psx_until))
-		{
-			psx_phase = 1;
-
-			if (psx_seen[0] || psx_seen[1] || cfg.snac_psx_fallback == 0)
-			{
-				psx_hand_over();
-			}
-			else
-			{
-				/*
-				  Nothing on either port. Handing the bus over would buy nothing and
-				  cost the menu, so the reader keeps it: a pad plugged in later still
-				  appears, and can still open the front-end.
-				*/
-				psx_emulate = 1;
-				printf("snacpad: no SNAC pad on either port, staying emulated\n");
-			}
-		}
-	}
-
 	if (!want)
 	{
 		pad_destroy(0);
 		pad_destroy(1);
+#ifdef CHOME_HOST_TEST
+		test_present[0] = test_present[1] = 0;
+#endif
 		poll_timer = GetTimer(SNAC_RETRY_MS);
 		return;
 	}
 
 	uint8_t ax1[4] = { (uint8_t)l1, (uint8_t)(l1 >> 8), (uint8_t)r1, (uint8_t)(r1 >> 8) };
 	uint8_t ax2[4] = { (uint8_t)l2, (uint8_t)(l2 >> 8), (uint8_t)r2, (uint8_t)(r2 >> 8) };
-	pad_update(0, w0 >> 15, w0 & 0xFF, b1, ax1);
-	pad_update(1, w4 >> 15, w4 & 0xFF, b2, ax2);
+
+	int p1 = pad_present(0, w0);
+	int p2 = pad_present(1, w4);
+#ifdef CHOME_HOST_TEST
+	test_present[0] = p1;
+	test_present[1] = p2;
+#endif
+	pad_update(0, p1, w0 & 0xFF, b1, ax1);
+	pad_update(1, p2, w4 & 0xFF, b2, ax2);
 }
+
+#ifdef CHOME_HOST_TEST
+/*
+  Two answers the host harness needs and cannot get any other way.
+
+  Not a back door into the logic - both are recorded by the code above as it runs, and
+  neither changes what it does. They exist because the two things worth asserting here are
+  invisible from outside: the enable bit is a value handed to SPI and then gone, and a pad
+  that passes the ID check still creates no device on a host with no /dev/uinput, so
+  "was it accepted" cannot be read off a uinput node that was never made.
+*/
+int snacpad_test_enabled() { return enabled; }
+int snacpad_test_present(int idx) { return (idx >= 0 && idx < 2) ? test_present[idx] : 0; }
+#endif

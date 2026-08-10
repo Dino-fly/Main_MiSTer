@@ -83,6 +83,32 @@ typedef struct {
 	char controller_deadzone[32][256];
 	uint8_t rumble;
 	uint8_t snac_pad;
+	/*
+	  What is physically wired to the SNAC port. 0 = PlayStation pads (or nothing),
+	  1 = some other console's adapter, so do not touch the port at all.
+
+	  A description of hardware, not a preference, and the only one of these that cannot
+	  be worked out instead of asked. Which reader *should* own the bus is answered by the
+	  running core's own SNAC option (see core_owns_snac() in snacpad.cpp) and needs no
+	  setting; what is on the far end of the cable is not readable by anything. A SuperDock
+	  has a bypass switch that disconnects the integrated PlayStation ports and routes the
+	  bus to an extension port taking any console's adapter, and nothing observable changes
+	  when it moves.
+
+	  It matters because our reader *drives* the port - clock, command and attention, at
+	  250 kHz - and on another console's adapter those pins land somewhere else, possibly
+	  on a pin the pad itself drives. Set this to 1 and no core and no menu will drive the
+	  port; the cores' own SNAC options still work, and are then the only thing that does.
+
+	  0 by default, because that is what makes a PlayStation pad work everywhere with no
+	  configuration at all, which is the point of the feature.
+	*/
+	uint8_t snac_device;
+	/*
+	  Superseded, all three, and kept only so an existing card is not silently reinterpreted.
+	  The running core's own options now decide who reads the port - see core_owns_snac().
+	  cfg_parse() says so once at boot when it finds any of them set.
+	*/
 	uint8_t snac_psx;
 	uint8_t snac_psx_fallback;
 	uint8_t snac_psx_memcard;

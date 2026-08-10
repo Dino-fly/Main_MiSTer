@@ -111,6 +111,7 @@ static const ini_var_t ini_vars[] =
 	{ "WAITMOUNT", (void*)(&(cfg.waitmount)), STRING, 0, sizeof(cfg.waitmount) - 1 },
 	{ "RUMBLE", (void *)(&(cfg.rumble)), UINT8, 0, 1 },
 	{ "SNAC_PAD", (void *)(&(cfg.snac_pad)), UINT8, 0, 2 },
+	{ "SNAC_DEVICE", (void *)(&(cfg.snac_device)), UINT8, 0, 1 },
 	{ "SNAC_PSX", (void *)(&(cfg.snac_psx)), UINT8, 0, 1 },
 	{ "SNAC_PSX_FALLBACK", (void *)(&(cfg.snac_psx_fallback)), UINT8, 0, 1 },
 	{ "SNAC_PSX_MEMCARD", (void *)(&(cfg.snac_psx_memcard)), UINT8, 0, 1 },
@@ -758,6 +759,22 @@ void cfg_parse()
 		}
 	}
 
+	/*
+	  Say so when a card still carries the three settings the core's own options replaced.
+
+	  Silently ignoring them would be the wrong kind of quiet: snac_psx=0 used to mean "let
+	  the PSX core read the port", and a player who set it for a light gun would find the gun
+	  had stopped working with nothing anywhere to explain why. The setting is genuinely gone
+	  - what it chose is now chosen by the core's Pad1 - so the honest thing is to name the
+	  replacement rather than to keep half-honouring it.
+	*/
+	if (cfg.snac_psx || cfg.snac_psx_memcard || !cfg.snac_psx_fallback)
+	{
+		printf("cfg: snac_psx / snac_psx_memcard / snac_psx_fallback no longer do anything.\n");
+		printf("cfg: the PSX core's own Pad1 and Pad2 options now decide who reads the SNAC\n");
+		printf("cfg: port - set them to SNAC-port1 / SNAC-port2 for light guns, wheels and\n");
+		printf("cfg: real memory cards, or leave them alone for a pad that opens the menu.\n");
+	}
 }
 
 bool cfg_has_video_sections()

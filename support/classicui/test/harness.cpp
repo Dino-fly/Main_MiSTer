@@ -33,6 +33,7 @@
 // The glyph table itself, for the font section: it checks that a loaded .pf really replaces
 // charfont[] and that restoring the built-in puts back every one of the 2048 bytes.
 #include "../../../charrom.h"
+#include "../../../snacpad.h"
 #include "../chome.h"
 #include "../chome_lib.h"
 #include "../chome_core.h"
@@ -9781,6 +9782,420 @@ static int sysidx_of(const char *id)
 }
 
 /*
+  A core-options list longer than the panel, at every profile.
+
+  The row-drop guard at the end of this file is worth nothing without a list that can
+  actually overflow, and until now no fixture had one - every modelled core is short enough
+  to fit at 240p, so the guard would have reported a clean sweep over a defect that was
+  live on hardware. fake_confstr_long is the real PSX list, 30-odd settings on one page
+  against roughly fifteen that fit at 240p.
+
+  What has to hold: the last row is reachable, the highlight is on screen when the cursor is
+  on it, and nothing is drawn past the panel edge. The first two are what a player does; the
+  third is what the guard sees. All three at 240p especially, which is the television this
+  front-end is for and the profile where the panel is smallest.
+*/
+static void assert_long_core_list_scrolls()
+{
+	printf("\n== a core list longer than its panel ==\n");
+
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "gb\nTetris (World).gb\n"); fclose(f); }
+	}
+	harness_set_confstr(9);
+	harness_set_menu_core(0);
+	harness_set_fb_supported(1);
+	harness_set_osd_visible(0);
+
+	struct { int w, h, force; const char *name; } canv[] = {
+		{ 1280, 720, 1, "hd" },
+		{  640, 480, 2, "sd" },
+		{  320, 240, 3, "lo" },
+	};
+
+	const int was_prof = cfg.classicui_profile;
+
+	for (int c = 0; c < 3; c++)
+	{
+		cfg.classicui_profile = (uint8_t)canv[c].force;
+		harness_set_fb(canv[c].w, canv[c].h);
+		gfx_shutdown();
+		theme_update(canv[c].w, canv[c].h, canv[c].force);
+
+		/*
+		  Close it if the previous profile left it open. Without this the MENU press below
+		  toggles the already-open menu shut and the profile is silently never tested - which
+		  is what happened at 640x480, and it read as a drawing bug rather than a test bug.
+		*/
+		chome_leave();
+		chome_handle(0);
+		if (chome_ingame_active()) press(KEY_MENU, 14);
+		frame(6);
+		press(KEY_MENU, 20);
+		for (int i = 0; i < 40 && lib_scanning(); i++) frame(2);
+		frame(16);
+
+		// To the bar, then along it to the running core's entry, as a player would.
+		press(KEY_UP, 14);
+		for (int i = 0; i < 6; i++) press(KEY_RIGHT, 8);
+		frame(8);
+		press(KEY_ENTER, 18);
+		frame(10);
+
+		int n = core_opts_tier_count(CO_TIER_SYSTEM);
+		printf("  %s: %d rows on the System page\n", canv[c].name, n);
+
+		chome_rowdrop_clear();
+
+		/*
+		  Down past the end. RIGHT is not used here on purpose - it would change values on
+		  the way through, and this is about reaching rows, not setting them.
+		*/
+		for (int i = 0; i < n + 4; i++) press(KEY_DOWN, 6);
+		frame(10);
+
+		int bar = sel_bar_y();
+		printf("  %s: highlight at y=%d after walking to the bottom\n", canv[c].name, bar);
+		check(bar >= 0, "the cursor on the last row is drawn, not left below the panel");
+		check(chome_rowdrop_n() == 0, "and no row of the list is drawn past the panel edge");
+
+		{ char nm[64]; snprintf(nm, sizeof(nm), "core-options-long-%s", canv[c].name); dump(nm); }
+
+		press(KEY_ESC, 14);
+		frame(6);
+	}
+
+	cfg.classicui_profile = (uint8_t)was_prof;
+	harness_set_confstr(1);
+	harness_set_menu_core(1);
+	chome_leave();
+	/*
+	  The log is NOT cleared here. Anything this section recorded belongs to the run-wide
+	  guard at the end - clearing it on the way out would erase exactly the evidence that
+	  guard exists to report, and did: with the windowing reverted this section failed while
+	  the global check still said every list was clean.
+	*/
+}
+
+/*
+  Who owns the SNAC port, which is now derived from the core's own options rather than set.
+
+  The rule: our reader drives the port only when the running core has not claimed it. That
+  is the whole arbitration, and it has to be right for two quite different reasons. Get it
+  wrong towards "we own it" and two readers drive the same pins at once - the one outcome
+  here that can damage hardware, since our reader actively drives clock, command and
+  attention at 250 kHz and another console's adapter maps those pins somewhere else. Get it
+  wrong towards "the core owns it" and a player merely loses a pad until they look at the
+  option, which is why that is the direction to fail in.
+
+  All six SNAC-capable cores are modelled below because they spell it two different ways
+  and a table of core names was the thing worth avoiding. PSX/N64/SMS name SNAC in the
+  *value*; NES/Mega Drive/SNES make the option itself the switch. Note every one of them
+  defaults to its first value, which is never SNAC - so the no-configuration case is
+  "our reader owns the port", which is exactly what makes a PlayStation pad work in every
+  core without the player setting anything.
+
+  The ID check is here too. The reader in the fabric accepts any answer that is not 0xFF
+  and never checks the 0x5A a real pad sends, and the buttons reach us inverted - so a
+  device answering with zeroes would arrive as a pad with every button held down for ever,
+  driving the menu. That is what another console's adapter on the same port can look like.
+
+  What this cannot reach: whether the fabric and a real pad agree. snacpad.cpp is in this
+  build now, but the reader it talks to is modelled here, and on this project a
+  keyboard-driven host test has already proved nothing about a pad once. The arbitration is
+  covered; the electrical half still wants the device.
+*/
+/*
+  One SNAC poll, with the clock moved past both of the poll's own back-offs.
+
+  snacpad_poll() rate-limits itself - SNAC_POLL_MS while it is reading pads, SNAC_RETRY_MS
+  once it wants nothing - so two calls in the same millisecond are one poll and a silent
+  no-op. Advancing past the longer of the two is what makes each call below mean a poll.
+*/
+static void snac_tick()
+{
+	harness_advance(1100);
+	snacpad_poll();
+}
+
+static void assert_snac_ownership()
+{
+	printf("\n== who owns the SNAC port ==\n");
+
+	// Not the menu core: core_owns_snac() answers 0 there, so this must not inherit it.
+	harness_set_menu_core(0);
+
+	// A core publishing each of the two idioms, alongside settings that must not match.
+	static const char *snac_psx[] =
+	{
+		"PSX", "FS1,BIN,Load ROM",
+		"D8O[48:45],Pad1,Dualshock,Off,Digital,Analog,GunCon,NeGcon,Wheel-NegCon,"
+			"Wheel-Analog,Mouse,Justifier,SNAC-port1,Analog Joystick,Popn",
+		"D8h0O[66],SNAC MemCard,Virtual,Real",
+		0
+	};
+	static const char *snac_nes[] =
+	{
+		"NES", "FS1,BIN,Load ROM",
+		"P2oJK,SNAC,Off,Controllers,Zapper,3D Glasses",
+		0
+	};
+	static const char *snac_n64[] =
+	{
+		"N64", "FS1,BIN,Load ROM",
+		"O[51:49],Pad 1 Type,N64Pad,None,ControllerPak,RumblePak,SNAC,TransferPak,Keyboard",
+		"P3O[91],SNAC Compare,Off,On",
+		0
+	};
+	static const char *snac_sms[] =
+	{
+		"SMS", "FS1,BIN,Load ROM",
+		"P2oNO,USERIO,Off,SNAC,Gear2Gear",
+		0
+	};
+	static const char *snac_snes[] = { "SNES", "FS1,BIN,Load ROM", "P2O8,SNAC,No,Yes", 0 };
+	static const char *snac_none[] = { "GAMEBOY", "FS1,BIN,Load ROM", "OEF,System,Auto,GB", 0 };
+
+	struct { const char **tbl; const char *spec; int ex; int snacval; const char *what; } cores[] =
+	{
+		{ snac_psx,  "[48:45]", 0, 10, "the PSX naming SNAC-port1 in Pad1" },
+		{ snac_nes,  "JK",      1, 1,  "the NES making the option itself the switch" },
+		{ snac_n64,  "[51:49]", 0, 4,  "the N64 offering SNAC among its pad types" },
+		{ snac_sms,  "NO",      1, 1,  "the SMS calling the option USERIO" },
+		{ snac_snes, "8",       0, 1,  "the SNES with a plain No/Yes" },
+	};
+
+	cfg.snac_pad = 1;
+	cfg.snac_device = 0;
+
+	for (unsigned c = 0; c < sizeof(cores) / sizeof(cores[0]); c++)
+	{
+		harness_reset_snac();
+		harness_set_confstr_table(cores[c].tbl);
+
+		// The core's own default: its first value, which is never SNAC.
+		harness_set_opt(cores[c].spec, 0, cores[c].ex);
+		snacpad_init();
+		snac_tick();
+		check(harness_snac_last_want() == 1, cores[c].what);
+
+		/*
+		  Now the player picks SNAC in the core's own options, mid-session and without a
+		  relaunch - which is the case that matters and the one the old probe-and-settle
+		  code could not do at all. No snacpad_init() here on purpose: the reader is
+		  already enabled, so this asserts the *release*, that we actively tell the
+		  fabric to let go rather than leaving two readers driving the port.
+		*/
+		harness_set_opt(cores[c].spec, (uint32_t)cores[c].snacval, cores[c].ex);
+		snac_tick();
+		check(harness_snac_last_want() == 0, "  and lets go when it is chosen mid-session");
+
+		// And back again, without a relaunch either way.
+		harness_set_opt(cores[c].spec, 0, cores[c].ex);
+		snac_tick();
+		check(harness_snac_last_want() == 1, "  and takes it back when it is unchosen");
+	}
+
+	/*
+	  The two decoys, which is where an over-eager name match would go wrong: both begin
+	  with "SNAC" and neither hands the port over.
+	*/
+	harness_reset_snac();
+	harness_set_confstr_table(snac_psx);
+	harness_set_opt("[48:45]", 0, 0);
+	harness_set_opt("[66]", 1, 0);            // SNAC MemCard = Real
+	snacpad_init();
+	snac_tick();
+	check(harness_snac_last_want() == 1, "\"SNAC MemCard\" does not hand the port over");
+
+	harness_reset_snac();
+	harness_set_confstr_table(snac_n64);
+	harness_set_opt("[51:49]", 0, 0);
+	harness_set_opt("[91]", 1, 0);            // SNAC Compare = On
+	snacpad_init();
+	snac_tick();
+	check(harness_snac_last_want() == 1, "nor does \"SNAC Compare\"");
+
+	// A core with no SNAC option at all: nothing claims it, so we read it.
+	harness_reset_snac();
+	harness_set_confstr_table(snac_none);
+	snacpad_init();
+	snac_tick();
+	check(harness_snac_last_want() == 1, "a core with no SNAC option leaves the port to us");
+
+	/*
+	  snac_device, the one thing that cannot be derived. A SuperDock's bypass switch routes
+	  the bus to an extension port taking any console's adapter and nothing readable moves,
+	  so this is asked once and believed - and when it says "not a PSX pad" we must not
+	  drive the port in any core, or in the menu.
+	*/
+	harness_reset_snac();
+	harness_set_confstr_table(snac_none);
+	snacpad_init();
+	snac_tick();
+	check(harness_snac_last_want() == 1, "with a PSX pad on the port we read it");
+
+	// Told what is really on the port, we let go of it and stay off - no relaunch needed.
+	cfg.snac_device = 1;
+	snac_tick();
+	check(harness_snac_last_want() == 0, "snac_device=1 keeps us off the port entirely");
+	snac_tick();
+	check(harness_snac_last_want() == 0, "and off it on every poll after that");
+	cfg.snac_device = 0;
+
+	// And snac_pad=0 is still the master switch.
+	cfg.snac_pad = 0;
+	harness_reset_snac();
+	harness_set_confstr_table(snac_none);
+	snacpad_init();
+	snac_tick();
+	check(harness_snac_last_want() == -1, "snac_pad=0 does not touch SPI at all");
+	cfg.snac_pad = 1;
+
+	/* ------------------------------------------------ the ID sanity check --- */
+
+	harness_reset_snac();
+	harness_set_confstr_table(snac_none);
+	snacpad_init();
+
+	harness_set_snac_pad(0, 1, 0x41, 0);      // a digital pad
+	snac_tick();
+	check(snacpad_test_present(0), "a digital pad (id 41) is accepted");
+
+	harness_set_snac_pad(0, 1, 0x73, 0);      // an analog pad
+	snac_tick();
+	check(snacpad_test_present(0), "an analog pad (id 73) is accepted");
+
+	harness_set_snac_pad(0, 1, 0x53, 0);
+	snac_tick();
+	check(snacpad_test_present(0), "and analog mode 2 (id 53)");
+
+	/*
+	  id 00 with every button set is the shape the inversion produces from a device that
+	  answers with zeroes - another console's adapter, on the reading where its lines idle
+	  low. Before the check this was a pad holding all sixteen buttons down for ever.
+	*/
+	harness_set_snac_pad(0, 1, 0x00, 0xFFFF);
+	snac_tick();
+	check(!snacpad_test_present(0), "id 00 is refused, not taken as every button held down");
+
+	harness_set_snac_pad(0, 1, 0x12, 0);      // a PSX mouse: real, but not decodable here
+	snac_tick();
+	check(!snacpad_test_present(0), "and so is an id this reader cannot decode");
+
+	harness_set_snac_pad(0, 1, 0x41, 0);
+	snac_tick();
+	check(snacpad_test_present(0), "a real pad after one is still accepted");
+
+	// A core built from an older sys, which answers without the magic word.
+	harness_reset_snac();
+	harness_set_snac_reader(0);
+	snacpad_init();
+	snac_tick();
+	check(!snacpad_test_present(0) && !snacpad_test_present(1),
+		"a core with no reader in its sys reports no pads");
+
+	/* ------------------------------------------- and they are reachable now --- */
+
+	/*
+	  The rows the arbitration reads have to be rows the player can get at, or "set Pad1 to
+	  SNAC-port1" is advice about a screen we do not offer. They were hidden as ours while
+	  snac_psx existed; with that gone they are the control itself.
+	*/
+	harness_set_confstr_table(snac_psx);
+	harness_set_osd_mask(0x0001);              // so the h0-masked SNAC MemCard row applies
+	core_opts_scan();
+
+	int has_pad1 = 0, has_memcard = 0, has_compare = 0;
+	for (int i = 0; i < core_opts_count(); i++)
+	{
+		const char *nm = core_opt_at(i)->name;
+		if (!strcasecmp(nm, "Pad1")) has_pad1 = 1;
+		if (!strcasecmp(nm, "SNAC MemCard")) has_memcard = 1;
+		if (!strcasecmp(nm, "SNAC Compare")) has_compare = 1;
+	}
+	check(has_pad1, "Pad1 is offered in the core screen, not hidden as ours");
+	check(has_memcard, "and so is SNAC MemCard");
+
+	harness_set_confstr_table(snac_n64);
+	core_opts_scan();
+	has_compare = 0;
+	for (int i = 0; i < core_opts_count(); i++)
+		if (!strcasecmp(core_opt_at(i)->name, "SNAC Compare")) has_compare = 1;
+	check(!has_compare, "while SNAC Compare stays hidden, being a debug aid that hands over nothing");
+
+	harness_set_osd_mask(0x0000);
+	harness_reset_snac();
+	harness_set_confstr(1);
+}
+
+/*
+  "O" and "o" name different status words, and this screen has to keep them apart.
+
+  Found while wiring the SNAC ownership rule, which needs to read the NES's "P2oJK" SNAC
+  row. Every bit-addressing call in chome_core.cpp passed ex=0, so an "o" option was read
+  from and written to the bits 32 *below* the ones it names. The stock OSD derives ex from
+  the letter (menu.cpp:2593); this file did not.
+
+  Why it survived this suite for so long, which is the part worth keeping: the fixture core
+  had no "o" option at all, and the stub's option map was keyed on the spec string alone.
+  With ex dropped the wrong slot was then used *consistently* - every read agreed with every
+  write, so the screen was self-coherent and no assertion could tell. It takes a core that
+  publishes both forms of the same letter to make the collision visible, which real cores do
+  constantly: the SMS lists Z80 Speed as "H8o8" beside its "O" settings.
+
+  What it cost a player: the Genesis "Vertical Crop" row, the SNES "SuperFX FastROM" row,
+  "SMS BIOS", "Mapper", "Orientation" and a dozen more showed a value belonging to some
+  other setting, and changing the row changed that other setting instead. Silent both ways.
+  Bracket specs were never affected - they are absolute and take no ex.
+*/
+static void assert_core_option_word_forms()
+{
+	printf("\n== the two status words ==\n");
+
+	// core_opts_scan() returns nothing on the menu core, so say which core this is.
+	harness_set_menu_core(0);
+	harness_set_confstr(8);
+	harness_set_osd_mask(0x0000);
+	core_opts_scan();
+
+	const core_opt *lock = 0, *z80 = 0, *mapper = 0, *systype = 0;
+	for (int i = 0; i < core_opts_count(); i++)
+	{
+		const core_opt *o = core_opt_at(i);
+		if (!strcasecmp(o->name, "Region Lock")) lock = o;
+		if (!strcasecmp(o->name, "Z80 Speed")) z80 = o;
+		if (!strcasecmp(o->name, "Mapper")) mapper = o;
+		if (!strcasecmp(o->name, "System Type")) systype = o;
+	}
+
+	check(lock && z80 && mapper && systype, "a core publishing both spec forms is read");
+	if (!lock || !z80 || !mapper || !systype) { harness_set_confstr(1); return; }
+
+	check(lock->ex == 0, "an \"O\" option is tagged as the lower word");
+	check(z80->ex == 1, "an \"o\" option is tagged as the upper word");
+	check(mapper->ex == 1, "and so is a multi-bit \"o\" option");
+	check(systype->ex == 0, "a bracket spec stays the lower word, brackets being absolute");
+
+	// The crux. "O8" and "o8" arrive at the bit layer as the same string, "8".
+	harness_set_opt("8", 0, 0);
+	harness_set_opt("8", 0, 1);
+
+	core_opt_set(z80, 1);
+	check(core_opt_value(z80) == 1, "setting an \"o\" option reads back as itself");
+	check(core_opt_value(lock) == 0, "and leaves the \"O\" option sharing its letter alone");
+	check(harness_opt_val("8", 1) == 1, "the upper word is the one that moved");
+	check(harness_opt_val("8", 0) == 0, "and the lower word did not move at all");
+
+	core_opt_set(lock, 1);
+	check(core_opt_value(lock) == 1, "setting the \"O\" option reads back as itself too");
+	check(core_opt_value(z80) == 1, "with the \"o\" option still on the value it was given");
+
+	harness_set_confstr(1);
+}
+
+/*
   Core settings kept for one game instead of for the whole core.
 
   <CORE>.CFG is the core's global config: PSX's Widescreen Hack written there flatters
@@ -11384,7 +11799,8 @@ static void assert_slot_match()
 	press(KEY_RIGHT, 10);                     // slot 2
 	press(KEY_BACKSPACE, 12);                 // Y saves there
 	check(harness_opt_val("GH") == 0, "and still left alone after picking a slot");
-	check(harness_opt_val("01") != 0, "the savestate slot option is the one that moved");
+	// "o01" in this core's CONF_STR, so the upper word - see harness_opt_val().
+	check(harness_opt_val("01", 1) != 0, "the savestate slot option is the one that moved");
 
 	press(KEY_MENU, 16);
 	frame(8);
@@ -16933,6 +17349,41 @@ static void assert_no_clipped_copy()
 	check(n < 4000, "the clip log did not overflow, so nothing went unexamined");
 }
 
+/*
+  Rows a player cannot see, which is the same defect as a cut sentence one dimension over.
+
+  draw_rows_c() stops when a row would cross the bottom of its panel. That is correct
+  drawing and a silent loss: the row is still in the list, still selectable, and never
+  appears. It has bitten twice - Close Game in the Options panel, and every row past the
+  fifteenth on the PSX's 27-row core-options page - both times found by eye on a television
+  rather than here.
+
+  A list that can outgrow its panel must window itself: list_fit(), list_track() and
+  list_scrollbar() in chome_ui.cpp, which is what the Options panel, More Settings, the
+  browser, Wi-Fi, Controllers and the core-options page all now do. This asserts it for all
+  of them at once, at every profile, and names the screen when it fails - so the next list
+  to grow is caught by a test instead of by a player.
+*/
+static void assert_no_row_is_hidden()
+{
+	printf("\n== rows below the fold ==\n");
+
+	int n = chome_rowdrop_n();
+	for (int i = 0; i < n; i++)
+		printf("  LOST  %-24s %d row(s) drawn past the panel edge\n",
+			chome_rowdrop_site(i), chome_rowdrop_lost(i));
+
+	printf("  %d list(s) truncated a row somewhere\n", n);
+	check(n == 0, "no list loses a row off the bottom of its panel, at any profile");
+
+	/*
+	  And the fixture plumbing itself. An exhausted option map answers every later read with
+	  a default and drops every write, which does not fail here - it fails somewhere else,
+	  as an unrelated feature apparently not working. It cost a while to trace once.
+	*/
+	check(!harness_optmap_full(), "the stub option map never ran out, so no write was dropped");
+}
+
 int main()
 {
 	printf("Classic Home host harness\n\n");
@@ -17098,6 +17549,9 @@ int main()
 	assert_freeze_off();
 	assert_core_idle_predicate();
 	assert_core_options_screen();
+	assert_long_core_list_scrolls();
+	assert_snac_ownership();
+	assert_core_option_word_forms();
 	assert_per_game_core_options();
 	assert_core_option_for_all_games();
 	assert_core_options_are_reachable();
@@ -19850,6 +20304,8 @@ int main()
 	  of its own.
 	*/
 	assert_no_clipped_copy();
+	// After the sweep above, which is what visits every screen at every profile.
+	assert_no_row_is_hidden();
 
 	// Last, because it changes text rendering globally. Anything measuring a width after
 	// this runs would be measuring whatever tracking the section left behind.

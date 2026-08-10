@@ -228,8 +228,21 @@ This half matters as much as the other.
 
 **Because we already own it.** Showing a second control for the same thing is worse than
 showing none. `Savestate Slot`, `Savestates to SDCard`, `Autosave`, `Save to SDCard`,
-`Autoincrement Slot` — our suspend points own all of that. `SNAC` / `USERIO` / `Pad1` /
-`Pad2` / `Pad N Type` — the Controllers screen and `snac_psx` own those.
+`Autoincrement Slot` — our suspend points own all of that.
+
+**`SNAC` / `USERIO` / `Pad1` / `Pad2` / `Pad N Type` — hidden today, and they should not
+stay hidden.** These were ours when `snac_psx` decided who read the SNAC port. It no longer
+exists: `core_owns_snac()` in `snacpad.cpp` now *reads* these very rows to decide, so they
+are the control rather than a duplicate of one, and a player who wants a light gun, a wheel
+or real memory cards has to reach them. They are set from the classic OSD in the meantime.
+
+The reason they are still on this list is mechanical, not a judgement: un-hiding them puts
+them in `CO_TIER_SYSTEM`, which on PSX is 27 rows, and `draw_core_opts()` does not scroll —
+so the rows the whole arbitration depends on would exist and never appear at any profile.
+They should be un-hidden as soon as the core-options screen scrolls, and each wants
+per-*value* help text, because the consequence differs per value: `SNAC-port1` gets you
+GunCon, NeGcon, the wheels and real memory cards but **no menu chord**, while any non-SNAC
+value gets you a pad that opens the menu, with virtual memory cards only.
 
 **`Pause when OSD is open` — actively dangerous to expose.** Every core has it, and it is
 the mechanism our freeze depends on. A player turning it off would silently change what

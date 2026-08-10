@@ -636,11 +636,107 @@ static const char *fake_confstr_twoslot[] =
 	0
 };
 
+/*
+  A core that publishes options in BOTH bit-spec letter forms, which is the only shape
+  that can catch a reader that drops the "O"/"o" distinction.
+
+  Real cores do this constantly - the SMS lists Z80 Speed as "H8o8" and SMS BIOS as
+  "H8oBC" while its other settings are "O..." - and the two forms address different
+  status words: "o8" is bit 40, "O8" is bit 8. With only one form present the wrong
+  bits are still self-consistent, so every read matches every write and the screen
+  looks right; it is the collision between the two that shows the defect.
+
+  Note the deliberate letter reuse: "O8" and "o8" share a spec string and differ only
+  in ex, and "[41:40]" names in brackets the same bits "o8" reaches by ex - bracket
+  specs are absolute and take no ex, which is why they were never affected.
+*/
+static const char *fake_confstr_optsex[] =
+{
+	"EXCORE",
+	"FS1,BIN,Load ROM",
+	"-",
+	"O[9:8],System Type,Auto,NTSC,PAL",   // lower word, bracket form
+	"O8,Region Lock,Off,On",              // lower word, letter form, bit 8
+	"o8,Z80 Speed,Normal,Turbo",          // UPPER word, same letter, bit 40
+	"o79,Mapper,Auto,Codemasters,Korea",  // upper word, multi-bit
+	0
+};
+
+/*
+  A core with more options than a 240p panel can hold, taken from the real PSX CONF_STR.
+
+  This is the fixture the row-drop guard needs to mean anything. Every other core modelled
+  here is short enough to fit at every profile, so a list that silently dropped its tail
+  would pass the whole suite - which is exactly what happened: the PSX's System page is 27
+  rows against roughly fifteen that fit, and every row past the fold was selectable and
+  never drawn, on hardware, unnoticed by any test in this file.
+
+  Trimmed to the settings rows: the file selectors, triggers and separators are not offered.
+
+  Deliberately all on ONE page. The first attempt at this fixture used the PSX's real
+  option *names*, and the curation in chome_core.cpp promptly sorted them into three tiers
+  of about ten - so no single page overflowed and the fixture proved nothing. What makes the
+  real PSX System page 27 rows is that most of its settings are named in system_tier[] or in
+  no list at all, and both land in CO_TIER_SYSTEM. These do.
+*/
+static const char *fake_confstr_long[] =
+{
+	"PSXLONG",
+	"FS1,CUECHD,Load CD",
+	"O[40:39],System Type,Auto,NTSC-U,NTSC-J,PAL",
+	"O[1],Video Region,Auto,NTSC,PAL",
+	"O[2],TV System,Auto,NTSC,PAL",
+	"O[3],Auto Region,Off,On",
+	"O[4],Priority,Normal,High",
+	"O[5],TMSS,Off,On",
+	"O[7],Mapper,Auto,Codemasters,Korea",
+	"O[8],SMS BIOS,Off,On",
+	"O[10],GG BIOS,Off,On",
+	"O[11],ROM Header,Auto,Ignore",
+	"O[12],RAM Clear,Off,On",
+	"O[13],PPU Reset Behavior,Off,On",
+	"O[14],Initial WRAM,Zero,Random",
+	"O[15],Initial ARAM,Zero,Random",
+	"O[16],Audio Clock,Auto,NTSC,PAL",
+	"O[17],Audio mode,Stereo,Mono",
+	"O[18],Audio Enable,On,Off",
+	"O[19],Audio Filter,On,Off",
+	"O[20],FM Chip,YM2612,YM3438",
+	"O[21],Stereo Mix,None,25%,50%",
+	"O[22],Save Type,Auto,Off",
+	"O[23],RTC,Off,On",
+	"O[24],Fastboot,Off,On",
+	"O[25],Sync core to video,Off,On",
+	"O[26],Fixed Video Blanks,Off,On",
+	"O[28],Sync 480i for HDMI,Off,On",
+	"O[29],480i to 480p Hack,Off,On",
+	"O[30],Disk Speed,Normal,Fast",
+	0
+};
+
 static int confstr_on = 1;
-void harness_set_confstr(int v) { confstr_on = v; }
+
+/*
+  A table supplied by the test instead of one of the fixtures above.
+
+  The SNAC arbitration has to be right for six real cores that spell the same thing two
+  different ways, and adding six numbered fixtures to the ladder below - each used once -
+  would bury the interesting part. Cleared by harness_set_confstr().
+*/
+static const char **confstr_custom = 0;
+void harness_set_confstr_table(const char **tbl) { confstr_custom = tbl; }
+void harness_set_confstr(int v) { confstr_on = v; confstr_custom = 0; }
 
 char *user_io_get_confstr(int index)
 {
+	if (confstr_custom)
+	{
+		int n = 0;
+		while (confstr_custom[n]) n++;
+		if (index < 0 || index >= n) return 0;
+		return (char *)confstr_custom[index];
+	}
+
 	if (!confstr_on) return 0;
 
 	const char **tbl = (confstr_on == 2) ? fake_confstr_nopause
@@ -648,7 +744,9 @@ char *user_io_get_confstr(int index)
 		: (confstr_on == 4) ? fake_confstr_realpause
 		: (confstr_on == 5) ? fake_confstr_twoslot
 		: (confstr_on == 6) ? fake_confstr_opts
-		: (confstr_on == 7) ? fake_confstr_opts_v2 : fake_confstr;
+		: (confstr_on == 7) ? fake_confstr_opts_v2
+		: (confstr_on == 8) ? fake_confstr_optsex
+		: (confstr_on == 9) ? fake_confstr_long : fake_confstr;
 	int n = 0;
 	while (tbl[n]) n++;
 
@@ -675,24 +773,48 @@ int substrcpy(char *d, const char *s, char idx)
   real core's pause option is "Q" behind a P3 page prefix, and its savestate-to-card
   option is "V", so hardcoding one name hid both.
 */
-#define OPTMAP_MAX 16
-static struct { char opt[32]; uint32_t val; } optmap[OPTMAP_MAX];
-static int noptmap = 0;
+/*
+  Big enough for the longest core modelled here, with room to spare.
 
-static uint32_t *opt_slot(const char *opt)
+  It was 24, and the 28-row fixture core walked straight past it - after which opt_slot()
+  returned 0 for every new option, so writes were dropped and every read answered the
+  default. That surfaced three sections later as the SNAC arbitration "failing" for all six
+  cores, which is a long way from the cause. A silent cap on a fixture is the same class of
+  defect as a silent cap on a list: harness_optmap_full() is asserted at the end of the run
+  so the next one to hit it is told, rather than debugged.
+*/
+#define OPTMAP_MAX 96
+/*
+  Keyed on the spec AND on ex, because those two together are what identify an option.
+
+  "o8" and "O8" are different bits - 40 and 8 - and arrive here as the same string with
+  different ex, since the caller strips the letter that told them apart. A map keyed on
+  the string alone answers both from one slot, which makes a reader that drops ex look
+  perfectly consistent: it writes and reads the same wrong place. That is exactly the
+  bug this fixture exists to catch, so the key has to carry ex.
+*/
+static struct { char opt[32]; int ex; uint32_t val; } optmap[OPTMAP_MAX];
+static int noptmap = 0;
+static int optmap_full = 0;
+
+int harness_optmap_full() { return optmap_full; }
+
+static uint32_t *opt_slot(const char *opt, int ex)
 {
 	if (!opt || !opt[0]) return 0;
-	for (int i = 0; i < noptmap; i++) if (!strcmp(optmap[i].opt, opt)) return &optmap[i].val;
-	if (noptmap >= OPTMAP_MAX) return 0;
+	for (int i = 0; i < noptmap; i++)
+		if (optmap[i].ex == !!ex && !strcmp(optmap[i].opt, opt)) return &optmap[i].val;
+	if (noptmap >= OPTMAP_MAX) { optmap_full = 1; return 0; }
 	snprintf(optmap[noptmap].opt, sizeof(optmap[noptmap].opt), "%s", opt);
+	optmap[noptmap].ex = !!ex;
 	optmap[noptmap].val = 0;
 	return &optmap[noptmap++].val;
 }
 
-// The pause option of the modelled core (P3OQ).
-uint32_t harness_pause_val() { uint32_t *v = opt_slot("Q"); return v ? *v : 0; }
-uint32_t harness_opt_val(const char *opt) { uint32_t *v = opt_slot(opt); return v ? *v : 0; }
-void harness_set_opt(const char *opt, uint32_t v) { uint32_t *p = opt_slot(opt); if (p) *p = v; }
+// The pause option of the modelled core (P3OQ) - "O" form, so ex is 0.
+uint32_t harness_pause_val() { uint32_t *v = opt_slot("Q", 0); return v ? *v : 0; }
+uint32_t harness_opt_val(const char *opt, int ex) { uint32_t *v = opt_slot(opt, ex); return v ? *v : 0; }
+void harness_set_opt(const char *opt, uint32_t v, int ex) { uint32_t *p = opt_slot(opt, ex); if (p) *p = v; }
 
 static char last_pulse_opt[64] = {};
 const char *harness_last_pulse_opt() { return last_pulse_opt; }
@@ -730,11 +852,11 @@ const char *harness_last_status_opt() { return last_status_opt; }
 int harness_status_pulses() { return status_pulses; }
 void harness_reset_status() { last_status_opt[0] = 0; last_pulse_opt[0] = 0; status_pulses = 0; npulses = 0; }
 
-void user_io_status_set(const char *opt, uint32_t value, int)
+void user_io_status_set(const char *opt, uint32_t value, int ex)
 {
 	snprintf(last_status_opt, sizeof(last_status_opt), "%s", opt ? opt : "");
 	last_status_val = value;
-	uint32_t *slot = opt_slot(opt);
+	uint32_t *slot = opt_slot(opt, ex);
 	if (slot) *slot = value;
 	if (value)
 	{
@@ -837,9 +959,9 @@ int fpga_load_rbf(const char *name, const char *, const char *)
 	}
 	return 0;
 }
-uint32_t user_io_status_get(const char *opt, int)
+uint32_t user_io_status_get(const char *opt, int ex)
 {
-	uint32_t *slot = opt_slot(opt);
+	uint32_t *slot = opt_slot(opt, ex);
 	return slot ? *slot : 0;
 }
 /*
@@ -1187,6 +1309,83 @@ uint16_t spi_uio_cmd16(uint8_t cmd, uint16_t)
 	if (cmd == UIO_GET_OSDMASK) return osd_mask;
 	return 0;
 }
+
+/* ------------------------------------------------- the SNAC pad reader ---- */
+
+/*
+  Enough of psx_snac_pad.sv for snacpad.cpp to talk to.
+
+  It answers the eight-word conversation the poll actually has: a magic word, then a
+  presence/id word and three data words per port. Only the shape matters here - what is
+  being tested is the firmware's arbitration and its ID check, not the fabric's protocol -
+  so the pad state is whatever a test set, and the buttons arrive already de-inverted
+  because the RTL does that inversion before the firmware sees them.
+
+  snac_reader_present models a core built from an older sys with no reader at all, which
+  answers without the magic and must not be mistaken for a port with nothing on it.
+*/
+static int snac_reader_present = 1;
+static int snac_port_present[2] = { 0, 0 };
+static uint8_t snac_port_id[2] = { 0x41, 0x41 };
+static uint16_t snac_port_btns[2] = { 0, 0 };
+static int snac_last_want = -1;
+
+void harness_set_snac_reader(int present) { snac_reader_present = present; }
+void harness_set_snac_pad(int port, int present, uint8_t id, uint16_t btns)
+{
+	if (port < 0 || port > 1) return;
+	snac_port_present[port] = present;
+	snac_port_id[port] = id;
+	snac_port_btns[port] = btns;
+}
+int harness_snac_last_want() { return snac_last_want; }
+void harness_reset_snac()
+{
+	snac_reader_present = 1;
+	snac_port_present[0] = snac_port_present[1] = 0;
+	snac_port_id[0] = snac_port_id[1] = 0x41;
+	snac_port_btns[0] = snac_port_btns[1] = 0;
+	snac_last_want = -1;
+}
+
+#define SNAC_MAGIC_STUB 0x4A
+static int snac_word = -1;
+
+uint16_t spi_uio_cmd_cont(uint16_t cmd)
+{
+	if (cmd == UIO_SNAC_PAD)
+	{
+		snac_word = 0;
+		return snac_reader_present ? (uint16_t)(SNAC_MAGIC_STUB << 8) : 0;
+	}
+	snac_word = -1;
+	return 0;
+}
+
+/*
+  fpga_spi() rather than spi_w(), which is inline in spi.h and only forwards to this.
+  Stubbing the lower one keeps the real spi_w in the tested path.
+*/
+uint16_t fpga_spi(uint16_t v)
+{
+	if (snac_word < 0) return 0;
+
+	int w = snac_word++;
+
+	// Word 0 carries the enable bit down and the port-1 presence/id back.
+	if (w == 0) snac_last_want = (v & 1) ? 1 : 0;
+
+	int port = (w < 4) ? 0 : 1;
+	switch (w & 3)
+	{
+	case 0:
+		return (uint16_t)((snac_port_present[port] ? 0x8000 : 0) | snac_port_id[port]);
+	case 1: return snac_port_btns[port];
+	default: return 0x8080;   // sticks centred
+	}
+}
+
+void DisableIO() { snac_word = -1; }
 
 uint32_t user_io_hd_mask(const char *opt)
 {

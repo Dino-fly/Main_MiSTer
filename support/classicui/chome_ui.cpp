@@ -617,6 +617,7 @@ static int opt_row = 0;
 static int opt_top = 0;                      // first Options row drawn; the list scrolls in a game
 static int look_row = 0;
 static int co_row = 0;                       // the core-options list
+static int co_top = 0;                       // first row drawn; this list scrolls too
 static int co_tier = CO_TIER_PICTURE;
 
 /*
@@ -2812,14 +2813,70 @@ static int wrap_text(const char *src, int cols, char out[4][64], int maxlines)
   not the recommended one - and that colour has to survive the row being selected, or
   the one row the player is looking at would be the one that stopped saying so.
 */
-static void draw_rows_c(const panel_box *b, const char *const *rows, const char *const *vals,
-	const uint32_t *vcol, int n, int idx)
+/*
+  Every list goes through here, so this is where "a row the player cannot see" is caught.
+
+  The loop below stops when a row would cross the bottom edge, silently - which is the right
+  thing to draw and the wrong thing to do without telling anyone. Twice now a list has grown
+  past its panel and the rows past the fold simply vanished while staying selectable: Close
+  Game in the Options panel, and every row past the fifteenth on the PSX's 27-row core-options
+  page. Both were found by eye, on hardware, long after the fact.
+
+  So a truncated list is recorded under the host test and asserted against at every profile.
+  A caller whose list can outgrow its panel has to window it - list_fit(), list_track() and
+  list_scrollbar() are right above - and this is what says whether it did. The site is the
+  *calling* function, via the macro in the header, because "some list was cut" is not
+  actionable and "draw_core_opts was cut" is.
+*/
+#ifdef CHOME_HOST_TEST
+struct rowdrop_rec { char site[48]; int n; int drawn; };
+static rowdrop_rec rowdrops[32];
+static int nrowdrops = 0;
+
+static void rowdrop_add(const char *site, int n, int drawn)
+{
+	for (int i = 0; i < nrowdrops; i++)
+	{
+		if (!strcmp(rowdrops[i].site, site ? site : "?"))
+		{
+			// Keep the worst case for this screen: the most rows it ever lost.
+			if (n - drawn > rowdrops[i].n - rowdrops[i].drawn)
+			{
+				rowdrops[i].n = n;
+				rowdrops[i].drawn = drawn;
+			}
+			return;
+		}
+	}
+	if (nrowdrops >= (int)(sizeof(rowdrops) / sizeof(rowdrops[0]))) return;
+	snprintf(rowdrops[nrowdrops].site, sizeof(rowdrops[nrowdrops].site), "%s", site ? site : "?");
+	rowdrops[nrowdrops].n = n;
+	rowdrops[nrowdrops].drawn = drawn;
+	nrowdrops++;
+}
+
+int chome_rowdrop_n() { return nrowdrops; }
+void chome_rowdrop_clear() { nrowdrops = 0; }
+const char *chome_rowdrop_site(int i)
+{
+	return (i >= 0 && i < nrowdrops) ? rowdrops[i].site : "";
+}
+int chome_rowdrop_lost(int i)
+{
+	return (i >= 0 && i < nrowdrops) ? rowdrops[i].n - rowdrops[i].drawn : 0;
+}
+#endif
+
+static void draw_rows_c_at(const panel_box *b, const char *const *rows, const char *const *vals,
+	const uint32_t *vcol, int n, int idx, const char *site)
 {
 	int rowh = 12 * b->s;
+	int drawn = 0;
 	for (int i = 0; i < n; i++)
 	{
 		int y = b->y + 5 * b->s + i * rowh;
 		if (y + rowh > b->y + b->h) break;
+		drawn++;
 
 		int on = (i == idx);
 		if (on) gfx_fill(b->x + 3, y - 2 * b->s, b->w - 6, rowh - 2 * b->s, COL_BLUE);
@@ -2863,12 +2920,23 @@ static void draw_rows_c(const panel_box *b, const char *const *rows, const char 
 			gfx_text(v, b->x + b->w - 6 * b->s - vw, y, b->s, col, 0);
 		}
 	}
+
+#ifdef CHOME_HOST_TEST
+	if (drawn < n) rowdrop_add(site, n, drawn);
+#else
+	(void)site;
+#endif
 }
 
-static void draw_rows(const panel_box *b, const char *const *rows, const char *const *vals, int n, int idx)
+static void draw_rows_at(const panel_box *b, const char *const *rows, const char *const *vals,
+	int n, int idx, const char *site)
 {
-	draw_rows_c(b, rows, vals, 0, n, idx);
+	draw_rows_c_at(b, rows, vals, 0, n, idx, site);
 }
+
+// The site is the caller's name, which is the only form of it worth reporting.
+#define draw_rows_c(b, r, v, c, n, i) draw_rows_c_at((b), (r), (v), (c), (n), (i), __func__)
+#define draw_rows(b, r, v, n, i)      draw_rows_at((b), (r), (v), (n), (i), __func__)
 
 /*
   A list longer than its panel, in the three pieces every screen with one needs: how many
@@ -7747,7 +7815,65 @@ static void draw_core_opts(const chome_profile *p)
 	vcol[i] = COL_PANELHI;
 	i++;
 
-	draw_rows_c(&b, rows, vals, vcol, i, co_row);
+	/*
+	  Windowed, like every other list in here. This one needs it most: the PSX's System page
+	  is 27 rows and about fifteen fit, and draw_rows_c() simply stops when a row would cross
+	  the bottom edge - so the rows past the fold existed, were selectable with the stick, and
+	  were never drawn. That is the same defect that hid Close Game in the Options panel, and
+	  it is why the SNAC rows could not be offered here until now.
+
+	  One row of footer to keep clear of. The promotion line above it is transient and shares
+	  that space rather than claiming its own, which is deliberate: reserving a second row
+	  permanently to caption something that appears for three seconds would cost a row of
+	  every page, on every core, for ever.
+	*/
+	/*
+	  The help line for the row the cursor is on, when that row is one of the SNAC controls.
+
+	  Per *value*, not per row, which is the whole reason it exists: "Pad1" says nothing
+	  useful, while "Pad1 = SNAC-port1" and "Pad1 = Dualshock" have opposite consequences and
+	  neither is guessable. One of them costs the player the ability to open this menu with
+	  the pad in their hands, which is not a thing to discover by trying it.
+
+	  Two wordings, the same as every other line down here: at 240p the panel is not wide
+	  enough for the long one, and a sentence that loses its end is worse than a short one.
+	*/
+	const char *cohelp = 0;
+	if (co_row < n)
+	{
+		const core_opt *sel = core_opt_tier_at(co_tier, co_row);
+		if (sel)
+		{
+			int wide = gfx_text_cols(b.w - 12 * s, p->ts_tiny) >= 36;
+			const char *v = sel->vals[core_opt_value(sel)];
+			int is_snac = (v && strcasestr(v, "SNAC"))
+				|| (!strcasecmp(sel->name, "SNAC") && core_opt_value(sel) != 0)
+				|| (!strcasecmp(sel->name, "USERIO") && v && strcasestr(v, "SNAC"));
+
+			if (!strcasecmp(sel->name, "Pad1") || !strcasecmp(sel->name, "Pad2")
+				|| !strncasecmp(sel->name, "Pad ", 4) || !strcasecmp(sel->name, "SNAC")
+				|| !strcasecmp(sel->name, "USERIO"))
+			{
+				if (is_snac) cohelp = wide ? "The core reads the port: guns and real cards, no menu"
+					: "Guns work - the pad cannot open this";
+				else cohelp = wide ? "We read the port: Select+Start opens this, cards virtual"
+					: "Select+Start opens this menu";
+			}
+			else if (!strcasecmp(sel->name, "SNAC MemCard"))
+			{
+				cohelp = wide ? "Real cards need Pad1 or Pad2 set to SNAC first"
+					: "Needs Pad1 on SNAC";
+			}
+		}
+	}
+
+	int nrows = i;
+	int cofoot = 22 * s;
+	int cofit = list_fit(&b, 12 * b.s, cofoot, nrows);
+	list_track(&co_top, co_row, nrows, cofit);
+
+	draw_rows_c(&b, rows + co_top, vals + co_top, vcol + co_top, cofit, co_row - co_top);
+	list_scrollbar(&b, 12 * b.s, co_top, cofit, nrows);
 
 	int fy = b.y + b.h - 12 * s;
 	/*
@@ -7781,6 +7907,15 @@ static void draw_core_opts(const chome_profile *p)
 		else foot = (room >= 34) ? "(U) marked by the core: can crash" : "(U): can crash";
 	}
 	else if (!n) foot = "Nothing here on this core";
+
+	/*
+	  The SNAC help outranks all of the lines above, because it is about the row the cursor is
+	  on rather than about the page. The star and the (U) warning describe a property of the
+	  list; this describes what the highlighted value will *do*, and one of its values takes
+	  the player's ability to reach this menu away. Ranked under the promotion below, which is
+	  transient and reports something that just happened.
+	*/
+	if (cohelp) foot = cohelp;
 
 	/*
 	  ...and above all of them, for a few seconds, the one thing the screen cannot show any
@@ -9602,6 +9737,7 @@ static void accept()
 			if (!core_opts_tier_count(co_tier)) co_tier = CO_TIER_SYSTEM;
 			if (!core_opts_tier_count(co_tier)) co_tier = CO_TIER_RISKY;
 			co_row = 0;
+			co_top = 0;
 			go_screen(SCR_CORE);
 			break;
 		}
@@ -9616,6 +9752,7 @@ static void accept()
 		co_tier = (co_tier == CO_TIER_PICTURE) ? CO_TIER_SYSTEM
 			: (co_tier == CO_TIER_SYSTEM) ? CO_TIER_RISKY : CO_TIER_PICTURE;
 		co_row = 0;
+		co_top = 0;
 		mark_dirty();
 		break;
 	}
