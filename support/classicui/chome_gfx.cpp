@@ -449,26 +449,6 @@ void gfx_spinner(int cx, int cy, int r, int dot, unsigned long ms, uint32_t hot,
 }
 
 /*
-  A quarter turn of sine, scaled to 256, in 16 steps - so 64 positions round the
-  circle. Written out rather than computed because this file has no math.h and does
-  not want one for a table that never changes.
-*/
-static const int disc_sin[17] =
-{
-	  0,  25,  50,  74,  98, 121, 142, 162,
-	181, 198, 213, 226, 237, 245, 251, 255, 256
-};
-
-static int disc_isin(int step)
-{
-	step &= 63;
-	if (step <= 16) return disc_sin[step];
-	if (step <= 32) return disc_sin[32 - step];
-	if (step <= 48) return -disc_sin[step - 32];
-	return -disc_sin[64 - step];
-}
-
-/*
   Which of 64 positions round the circle a point sits at, without atan2 or floats.
 
   Octant first from the signs and from whether |y| exceeds |x|, then eight steps
@@ -612,8 +592,8 @@ void gfx_disc(int cx, int cy, int r, int step,
 /*
   arctan over one octant, as 2048ths of it: entry i is atan(i/64) scaled so that a full
   eighth turn - which is eight of gfx_disc's 64 positions, each worth 256 here - comes out
-  at 2048. Written out for the same reason disc_sin[] above is: no math.h in this file, and
-  a table that never changes does not need one.
+  at 2048. Written out rather than computed because this file has no math.h and a table
+  that never changes does not need one.
 */
 static const int disc_atan_oct[65] =
 {
