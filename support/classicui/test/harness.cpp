@@ -651,6 +651,12 @@ static void build_sd()
 	touch(ROOT "/games/WonderSwan", "Gunpey (Japan).ws", 2048);
 	touch(ROOT "/games/WonderSwan", "Rockman EXE (Japan).wsc", 2048);
 
+	// A .npc: the one extension left genuinely unresolved in ss_system_id() (see
+	// chome_ss.cpp), used by assert_art_ladder() as its "no systemeid at all" example
+	// now that every other system on the shelf has one.
+	mkpath(ROOT "/games/NGP");
+	touch(ROOT "/games/NGP", "SNK vs Capcom (USA).npc", 2048);
+
 	mkpath(ROOT "/games/GAMEBOY");
 	touch(ROOT "/games/GAMEBOY", "Tetris (World).gb", 2048);
 	touch(ROOT "/games/GAMEBOY", "Zelda - Oracle of Ages (Europe).gbc", 2048);
@@ -7083,9 +7089,24 @@ static void assert_screenscraper()
 	// anything below is reachable at all.
 	check(ss_available() == 1, "the harness build carries a dummy devid, so the module is live here");
 
+	/* ------------------------------------------------- loaded at start-up --- */
+
+	/*
+	  main() wrote classicui/ss-systems.cfg on the fake card before this process drew its
+	  first frame, with a psx override nowhere near the built-in 57 or the "999" this
+	  section loads further down. If chome_ui.cpp's own start-up path ever stops calling
+	  ss_systems_load(), this reads back 57 instead and catches it - which a test that
+	  called ss_systems_load() itself could not, since that would only prove the function
+	  works, not that anything wires it up.
+	*/
+	const char *id = ss_system_id("psx", "x.cue");
+	check(id && !strcmp(id, "8675309"),
+		"the override file main() seeded before frame one is already active here");
+	ss_systems_forget();
+
 	/* -------------------------------------------------------- system ids --- */
 
-	const char *id = ss_system_id("psx", "Destruction Derby (USA).cue");
+	id = ss_system_id("psx", "Destruction Derby (USA).cue");
 	check(id && !strcmp(id, "57"), "psx maps to systemeid 57");
 
 	id = ss_system_id("nes", "Zelda.nes");
@@ -7094,7 +7115,7 @@ static void assert_screenscraper()
 	id = ss_system_id("SNES", "Metroid.sfc");
 	check(id && !strcmp(id, "4"), "the system id is matched case-insensitively");
 
-	// The two that ride in another core's shelf and are a different platform to the API.
+	// The shelves that hold two platforms, told apart only by extension.
 	id = ss_system_id("gb", "Tetris.gb");
 	check(id && !strcmp(id, "9"), "a .gb in the Game Boy shelf is 9");
 
@@ -7102,26 +7123,79 @@ static void assert_screenscraper()
 	check(id && !strcmp(id, "10"), "and a .gbc in the same shelf is 10, not 9");
 
 	/*
-	  Game Gear rides in the Master System shelf and its systemeid is not one of the
-	  values we were able to verify. Returning nothing is the whole point: the
-	  tempting alternative - fall back to the Master System id - would scrape .gg
-	  games as Master System and put the wrong covers on the shelf silently.
+	  Game Gear used to return nothing here: its systemeid was not one of the values a
+	  live client's own source could verify, and the tempting alternative - fall back to
+	  the Master System id - would have scraped .gg games as Master System and put the
+	  wrong covers on the shelf silently. It is verified now (see chome_ss.cpp), so a .gg
+	  gets its own id instead of staying uncovered forever.
 	*/
-	check(ss_system_id("sms", "Sonic.gg") == 0,
-		"a .gg is refused rather than scraped as Master System");
+	id = ss_system_id("sms", "Sonic.gg");
+	check(id && !strcmp(id, "21"), "a .gg in the Master System shelf is 21, not 2");
 	id = ss_system_id("sms", "Sonic.sms");
 	check(id && !strcmp(id, "2"), "while a real .sms is still 2");
 
-	check(ss_system_id("c64", "game.d64") == 0,
-		"a system whose id we never verified returns nothing rather than a guess");
+	id = ss_system_id("ws", "Rockman EXE WS.ws");
+	check(id && !strcmp(id, "45"), "a .ws in the WonderSwan shelf is 45");
+	id = ss_system_id("ws", "Rockman EXE WS.wsc");
+	check(id && !strcmp(id, "46"), "and a .wsc in the same shelf is 46, not 45");
+
+	id = ss_system_id("ngp", "SNK vs Capcom.ngp");
+	check(id && !strcmp(id, "25"), "a plain .ngp is 25");
+	id = ss_system_id("ngp", "SNK vs Capcom.ngc");
+	check(id && !strcmp(id, "82"), "and a .ngc in the same shelf is 82, not 25");
+	/*
+	  .npc is the third extension chome_lib.cpp's Neo Geo Pocket row accepts, and neither
+	  reference client this table was cross-checked against names it with confidence as
+	  either the mono or the Color hardware - so, like .gg before it was verified, this
+	  returns nothing rather than guess between two real platforms.
+	*/
+	check(ss_system_id("ngp", "SNK vs Capcom.npc") == 0,
+		"a .npc is refused: it is genuinely ambiguous between mono and Color");
+	id = ss_system_id("ngp", 0);
+	check(id && !strcmp(id, "25"), "and with no extension to go on at all, ngp defaults to mono");
+
+	// Saturn is why this table's gaps got closed - the system the bug report was about.
+	id = ss_system_id("saturn", "Panzer Dragoon (USA).cue");
+	check(id && !strcmp(id, "22"), "saturn maps to systemeid 22");
+
 	check(ss_system_id("", "x.nes") == 0, "an empty system id is refused");
+
+	/*
+	  Every system chome_lib.cpp's library table carries either has a systemeid or is
+	  named here as a deliberate exception - so a future system added to the library
+	  table without a line in chome_ss.cpp's builtin[] fails loudly instead of just
+	  quietly never showing art. There are no deliberate exceptions at the row level
+	  today: every row resolves with no extension hint (romnom 0, so the ngp/gg/ws-style
+	  extension cases above do not apply) - the only gap left is the .npc extension case
+	  just above, which is not a row of its own.
+	*/
+	{
+		static const char *const deliberately_absent[] = { 0 };  // none, today
+
+		int n = lib_sys_count();
+		check(n > 20, "the library table still has the systems this loop is walking");
+
+		for (int i = 0; i < n; i++)
+		{
+			const chome_sys *s = lib_sys(i);
+			const char *mapped = ss_system_id(s->id, 0);
+
+			int excused = 0;
+			for (int e = 0; deliberately_absent[e]; e++)
+				if (!strcasecmp(deliberately_absent[e], s->id)) excused = 1;
+
+			char what[96];
+			snprintf(what, sizeof(what), "%s has a systemeid or is a named exception", s->id);
+			check(mapped != 0 || excused, what);
+		}
+	}
 
 	/* ---------------------------------------------------- override file --- */
 
 	put_file("/tmp/chome_ss_sys.cfg",
 		"# a comment\n"
 		"\n"
-		"c64 = 66\n"
+		"homebrew = 999999\n"       // no library row named this at all
 		"psx=999\n"                 // deliberately overrides a built-in
 		"bogus=notanumber\n"        // must be ignored: this goes into a URL
 		"noequals\n");
@@ -7129,8 +7203,9 @@ static void assert_screenscraper()
 	check(ss_systems_load("/tmp/chome_ss_sys.cfg") == 2,
 		"the override file takes two good lines and drops the junk");
 
-	id = ss_system_id("c64", "game.d64");
-	check(id && !strcmp(id, "66"), "an override fills a gap in the built-in table");
+	id = ss_system_id("homebrew", "whatever.rom");
+	check(id && !strcmp(id, "999999"),
+		"an override can name a system with no built-in entry at all");
 
 	id = ss_system_id("psx", "x.cue");
 	check(id && !strcmp(id, "999"), "and can correct a built-in that has gone stale");
@@ -7678,8 +7753,8 @@ static void assert_disc_art()
 	check(disc_art_active() == 0, "and still none");
 
 	strcpy(cfg.classicui_ss_user, "dune");
-	check(disc_art_request("SLES-01506", "c64", 0) == 0,
-		"nor for a system whose systemeid we never verified");
+	check(disc_art_request("SLES-01506", "doesnotexist", 0) == 0,
+		"nor for a system with no systemeid at all");
 	check(disc_art_active() == 0, "and still none");
 
 	check(disc_art_request("", "psx", 0) == 0, "an empty identity is refused");
@@ -7896,9 +7971,9 @@ static void assert_art_ladder()
 	int ddragon = item_by_path("Genesis", "Double Dragon (Europe).bin");
 	int bonk    = item_by_path("TGFX16", "Bonk's Adventure (USA).pce");
 	int fusion  = item_by_path("GBA", "Metroid Fusion (Europe).gba");
-	int lynx    = item_by_path("AtariLynx", "Chip's Challenge (USA).lnx");
+	int npc     = item_by_path("NGP", "SNK vs Capcom (USA).npc");
 
-	check(metroid >= 0 && smwjp >= 0 && ddragon >= 0 && bonk >= 0 && fusion >= 0 && lynx >= 0,
+	check(metroid >= 0 && smwjp >= 0 && ddragon >= 0 && bonk >= 0 && fusion >= 0 && npc >= 0,
 		"the six games this section needs are all in the index");
 
 	/*
@@ -7917,7 +7992,7 @@ static void assert_art_ladder()
 	check(art_state(metroid) == ART_READY, "Super Metroid has a cover on the card already");
 	check(art_state(smwjp) != ART_READY && art_state(ddragon) != ART_READY &&
 		art_state(bonk) != ART_READY && art_state(fusion) != ART_READY &&
-		art_state(lynx) != ART_READY, "and the other five have no cover anywhere on it");
+		art_state(npc) != ART_READY, "and the other five have no cover anywhere on it");
 
 	ss_forget_state();
 	check(ss_hold_reason() == SS_OK, "and nothing is holding ScreenScraper off yet");
@@ -7957,11 +8032,13 @@ static void assert_art_ladder()
 		"while a game whose cover is already on the card is not re-fetched over");
 
 	/*
-	  A system whose systemeid we never verified cannot be asked at all, and must fall to
-	  the pack rather than becoming a rung that is offered and then quietly refuses.
-	  Atari Lynx has a libretro name and no ScreenScraper id, so it is exactly that case.
+	  A game with no systemeid cannot be asked at all, and must fall to the pack rather
+	  than becoming a rung that is offered and then quietly refuses. Every system on the
+	  shelf has a systemeid now (see chome_ss.cpp's builtin[]), so the only game left that
+	  can produce this is a .npc in the Neo Geo Pocket shelf - the one extension neither
+	  reference client that table was checked against can name with confidence.
 	*/
-	check(art_next_source(lynx) == ART_SRC_LIBRETRO,
+	check(art_next_source(npc) == ART_SRC_LIBRETRO,
 		"a game on a system with no systemeid skips ScreenScraper and uses the pack");
 
 	/* ------------------------------------------- a reply that names a cover --- */
@@ -14030,9 +14107,15 @@ static void assert_scan_slices()
 	  every slice size. If a fixture is deliberately added to build_fake_sd() this has to
 	  be re-read from a whole-system build, not merely updated to whatever comes out.
 	*/
-	check(fixture_fp == 0xc7a55e8c,
+	/*
+	  Re-read after assert_screenscraper()'s Neo Geo Pocket fixture (a .npc, added so that
+	  section has a real "no systemeid" game once every other system on the shelf got one -
+	  see chome_ss.cpp) changed what build_sd() puts on the fake card, exactly as the note
+	  above says to do rather than leaving the old literal to fail here forever.
+	*/
+	check(fixture_fp == 0x98342fd1,
 		"the sliced walk produces the library the whole-system walk produced, item for item");
-	check(fixture_root == 0x4996a030, "and the shelf it builds, card for card and group for group");
+	check(fixture_root == 0xdbc6df21, "and the shelf it builds, card for card and group for group");
 
 	stress_build();
 
@@ -19076,6 +19159,17 @@ int main()
 
 	build_sd();
 	harness_set_root(ROOT);
+
+	/*
+	  Seeded before the shelf's very first frame, so ss_system_id()'s first call in this
+	  whole process runs under an override this file never asked to be loaded - the only
+	  way to tell "chome_ui.cpp's start-up path calls ss_systems_load()" apart from "the
+	  loader works when a test calls it directly", which assert_screenscraper() already
+	  covers on its own. See its "loaded at start-up" check, near the top of that section,
+	  for where this gets read back and forgotten again.
+	*/
+	mkpath(ROOT "/classicui");
+	put_file(ROOT "/classicui/ss-systems.cfg", "psx=8675309\n");
 
 	cfg.classicui = 1;
 	cfg.classicui_artfetch = 0;                       // no network in tests

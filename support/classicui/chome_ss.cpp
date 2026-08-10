@@ -117,13 +117,34 @@ int ss_enabled()
 /* ------------------------------------------------------------- system ids --- */
 
 /*
-  Taken from a client that works against the live API rather than from memory, and
-  cross-checked against its own source: muldjord/skyscraper, getPlatformId().
+  Every system chome_lib.cpp's library table knows, mapped to ScreenScraper's
+  systemeid - the owner's rule being that a MiSTer core and a ScreenScraper platform
+  both existing is reason enough to be here, so a player is never left guessing why
+  Saturn has no cover and PSX does.
 
-  The gaps are gaps on purpose. A wrong systemeid does not error - it matches a
-  real game on the wrong platform and puts the wrong cover on the shelf, which is
-  worse than no cover and much harder to notice. Anything not listed here waits
-  either for systemesListe.php or for a line in the override file.
+  The original eleven (nes through arcade below) were taken from a client that works
+  against the live API and cross-checked against its own source: muldjord/skyscraper,
+  getPlatformId(). The rest were meant to come from this build's own call to
+  systemesListe.php, which costs nothing per system and returns ScreenScraper's whole
+  list in one request - but the devid/devpassword this was written against was refused
+  by the live API with "Erreur de login : Verifier vos identifiants developpeur !", a
+  real HTTP 200 from screenscraper.fr and not a formatting bug on this end (checked
+  against both a plain query string and curl --data-urlencode, checked for a stray \r
+  or trailing space in the env file, checked that the same request shape works against
+  a plain echo server). So every addition below is cross-checked the same way the
+  original eleven were, against two independently maintained clients rather than one:
+  Skyscraper's getPlatformId() and ES-DE's screenscraper_platformid_map (ES-DE's own
+  comment names systemesListe.php as where its table came from). The two agree on
+  every id shared between them, including all eleven already in use here, which is
+  what makes trusting them for the rest defensible - it is the verification the
+  original table used, done twice, not a guess standing in for the API call this was
+  supposed to be.
+
+  The gaps that remain are gaps on purpose. A wrong systemeid does not error - it
+  matches a real game on the wrong platform and puts the wrong cover on the shelf,
+  which is worse than no cover and much harder to notice. A system missing from the
+  library table entirely needs no entry here; one whose match is genuinely ambiguous
+  is left out and said so below, and waits for a line in the override file.
 */
 struct ss_sysmap
 {
@@ -133,6 +154,7 @@ struct ss_sysmap
 
 static const ss_sysmap builtin[] =
 {
+	// The original eleven, cross-checked against a live client's own source.
 	{ "nes",    "3"   },
 	{ "snes",   "4"   },
 	{ "md",     "1"   },
@@ -144,10 +166,52 @@ static const ss_sysmap builtin[] =
 	{ "tg16",   "31"  },
 	{ "neogeo", "142" },
 	{ "arcade", "75"  },
+
+	/*
+	  Everything else chome_lib.cpp's library table carries, added once systemesListe.php
+	  could not be reached from here (see the comment above) and cross-checked instead
+	  against Skyscraper's getPlatformId() and ES-DE's screenscraper_platformid_map, which
+	  agree with each other and with the eleven above on every id either of them lists.
+
+	  megacd/pcecd/neogeocd are the CD side of md/tg16/neogeo, each its own row in the
+	  library table and each its own platform to the API, exactly as the built-in comment
+	  in chome_lib.cpp's defaults[] explains for why they are not just an extra extension
+	  on the cartridge machine.
+	*/
+	{ "a7800",    "41"  },   // Atari 7800
+	{ "megacd",   "20"  },   // Sega Mega-CD / Sega CD
+	{ "pcecd",    "114" },   // PC Engine CD / TurboGrafx-CD
+	{ "neogeocd", "70"  },   // Neo Geo CD
+	{ "saturn",   "22"  },   // Sega Saturn - the system this table's gaps were named for
+	{ "lynx",     "28"  },   // Atari Lynx
+	{ "ws",       "45"  },   // WonderSwan (mono); see SS_ID_WSC for .wsc
+	{ "ngp",      "25"  },   // Neo Geo Pocket (mono); see SS_ID_NGPC for .ngc
+	{ "amiga",    "64"  },   // Commodore Amiga
+	{ "st",       "42"  },   // Atari ST
+	{ "c64",      "66"  },   // Commodore 64
+	{ "spec",     "76"  },   // Sinclair ZX Spectrum
+	{ "cpc",      "65"  },   // Amstrad CPC
+	{ "msx",      "113" },   // MSX (and MSX2: Skyscraper lists both as 113)
+	{ "apple2",   "86"  },   // Apple II
+
+	/*
+	  ao486 is MiSTer's PC-compatible DOS core - "PC / DOS" in the library table, extensions
+	  img/vhd/ima, which are DOS disk and hard-disk image formats rather than a Windows
+	  install. Both reference clients carry a plain "PC"/"DOS" platform at the same id, which
+	  is the generic era this core actually emulates rather than either scraper's separate,
+	  later Windows ids (ES-DE lists MICROSOFT_WINDOWS at 138, a different number) - so this
+	  is the one the two clients agree describes ao486, not a guess between the two.
+	*/
+	{ "ao486",    "135" },   // PC / DOS
 };
 
 // A .gbc in the Game Boy shelf is a different platform to the API than a .gb.
 #define SS_ID_GBC "10"
+
+// And the other three shelves that hold two platforms told apart only by extension.
+#define SS_ID_GG   "21"   // Game Gear, in the Master System shelf as .gg
+#define SS_ID_WSC  "46"   // WonderSwan Color, in the WonderSwan shelf as .wsc
+#define SS_ID_NGPC "82"   // Neo Geo Pocket Color, in the Neo Geo Pocket shelf as .ngc
 
 #define SS_OVERRIDE_MAX 64
 
@@ -232,12 +296,32 @@ const char *ss_system_id(const char *sysid, const char *romnom)
 	if (!strcasecmp(sysid, "gb") && ext && !strcasecmp(ext, "gbc")) return SS_ID_GBC;
 
 	/*
-	  Game Gear rides in the Master System shelf as .gg, and it is a distinct
-	  platform to the API - but its systemeid is not one of the values verified
-	  above, so this returns nothing rather than scraping .gg games as Master
-	  System and quietly filling the shelf with the wrong covers.
+	  Game Gear rides in the Master System shelf as .gg, and it is a distinct platform
+	  to the API. It used to return nothing here, because its systemeid was not one of
+	  the values verified against a live client - now that it is (see the table above),
+	  a .gg resolves to its own id rather than either scraping it as Master System or
+	  leaving it uncovered forever.
 	*/
-	if (!strcasecmp(sysid, "sms") && ext && !strcasecmp(ext, "gg")) return 0;
+	if (!strcasecmp(sysid, "sms") && ext && !strcasecmp(ext, "gg")) return SS_ID_GG;
+
+	// WonderSwan Color rides in the WonderSwan shelf as .wsc, same shape as gb/gbc.
+	if (!strcasecmp(sysid, "ws") && ext && !strcasecmp(ext, "wsc")) return SS_ID_WSC;
+
+	/*
+	  The Neo Geo Pocket shelf holds three extensions - chome_lib.cpp's defaults[] lists
+	  ngp,ngc,npc - and only two of them are platforms this table can name with
+	  confidence. .ngc is Neo Geo Pocket Color on both reference clients, the same
+	  standing as .gbc and .wsc above. .npc is not a No-Intro extension either client
+	  documents, and nothing here can say whether it names the monochrome or the color
+	  hardware - so, like the old .gg case above before it was verified, it returns
+	  nothing rather than guess. A plain .ngp, or no extension at all, falls through to
+	  the monochrome id in the table below.
+	*/
+	if (!strcasecmp(sysid, "ngp") && ext)
+	{
+		if (!strcasecmp(ext, "ngc")) return SS_ID_NGPC;
+		if (!strcasecmp(ext, "npc")) return 0;
+	}
 
 	for (size_t i = 0; i < sizeof(builtin) / sizeof(builtin[0]); i++)
 	{
