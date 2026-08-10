@@ -323,7 +323,7 @@ follows from the firmware and the FPGA framework but nobody has photographed it.
 | Combination | Result |
 |---|---|
 | SCART RGB, `vga_mode=rgb`, `composite_sync=1`, no HDMI | **Good, confirmed.** This is what the photographs in this guide were taken on. |
-| HDMI only | **Good, confirmed.** |
+| HDMI only | **Should be good, from the source — but no HDMI panel has ever been attached here.** The 720p and 1080p layouts are checked in the test harness at every release and have never been seen on real glass, so this row is the one in the table most worth reporting on. |
 | Component, `vga_mode=ypbpr`, no HDMI, `menu_pal=0`, 50 Hz set | **Bad, reported:** rolling picture. Colour is fine. Try `menu_pal=1`. *(From the source: the front-end's TV mode is chosen on `menu_pal` alone.)* |
 | S-Video or composite, no HDMI | **Colour is gone, from the source.** Sync should be correct; if it also rolls, see the `menu_pal` row above. |
 | S-Video or composite **with** `forced_scandoubler=1` | **Bad:** a 31 kHz signal on a 15 kHz input. Set it to `0`. *(The front-end now ignores `forced_scandoubler` when it takes the analog output itself, so this only still bites under `direct_video=1`.)* |
