@@ -9572,6 +9572,23 @@ static void compose()
 	draw_pips(p);
 	draw_position(p);
 
+	/*
+	  The still-playing band, drawn BEFORE the screens so a panel covers it.
+
+	  It used to be drawn last, over everything, on the grounds that a game still playing is
+	  true whatever is on top of it. True, and it cost a row of whatever list was open: at
+	  240p a tall panel starts immediately under the menu bar, so the band landed across the
+	  panel's second row and hid it. On the N64 that was Pad 1 Type - the row a player goes
+	  there to change - behind a message telling them something they had just been told by
+	  opening the menu at all.
+
+	  So it keeps its place below the bar and yields to panels. Visible on the shelf, on the
+	  menu bar and on any screen that does not fill that strip; hidden while the player is
+	  reading a list, which is the only time it was doing harm. Nothing about the game's state
+	  is lost - closing the panel shows it again, and the game is muted throughout either way.
+	*/
+	draw_running_warning(p);
+
 	int overlay = overlay_up();
 	// Black over a still of the game and COL_BGDARK over the front-end's own background, for
 	// the reason spelled out at ig_build_background(): over a photograph this colour is a
@@ -9603,8 +9620,6 @@ static void compose()
 	default: break;
 	}
 
-	// Over the panels too: a game that is still playing is true whatever is on top of it.
-	draw_running_warning(p);
 
 	// Last, and over everything: while the keyboard is up it is the only thing the
 	// player can act on.
