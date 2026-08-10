@@ -12617,6 +12617,27 @@ static unsigned long legend_shape_box(int x0, int y0, int x1, int y1)
 	return v;
 }
 
+/*
+  How much ink the button bar at the bottom is using. A hash says "different"; this says
+  "smaller", which is the claim when a prompt is meant to have disappeared and every other
+  prompt on the screen is meant to be untouched.
+*/
+static long legend_ink()
+{
+	const uint32_t *fb = harness_fb_shown();
+	int w = gfx_w(), h = gfx_h();
+	if (!fb || w < 1 || h < 1) return -1;
+
+	long n = 0;
+	for (int y = (h * 4) / 5; y < h; y++)
+		for (int x = 0; x < w; x++)
+		{
+			uint32_t px = fb[(size_t)y * w + x];
+			if (px != COL_BG && px != COL_BGDARK && px != COL_BTN_CHIP) n++;
+		}
+	return n;
+}
+
 static unsigned long legend_shape(int y0, int y1)
 {
 	const uint32_t *fb = harness_fb_shown();
@@ -22397,6 +22418,43 @@ int main()
 				"under a [MiSTer] header of its own, not into the [NES] section the file ends in");
 			check(cfg.snac_device == 1 && opt_wrote_live(),
 				"and the running poll is told, so the port is let go without a relaunch");
+
+			/*
+			  And X, which is the trap the amber was only half of. opt_set() clamps, so
+			  resetting to a sentinel of INT_MIN would land on lo - X on "Other Console"
+			  would quietly write PlayStation and the legend across the bottom would have
+			  called that the usual value. The press is refused instead, and because it is
+			  refused the prompt is not drawn at all: the screen does not offer a key that
+			  does nothing but shake the panel.
+			*/
+			check(opt_value(i_snac) == 1 && !opt_reset(i_snac) && opt_value(i_snac) == 1,
+				"X is refused rather than clamping the sentinel onto PlayStation");
+			check(!opt_has_rec(i_snac), "because the row has no usual value to go back to");
+
+			int i_rum2 = opt_find("rumble");
+			check(i_rum2 >= 0 && opt_has_rec(i_rum2), "which is not true of an ordinary row");
+
+			/*
+			  ...and the prompt is gone from the bar, checked in pixels rather than by asking
+			  the code that decides it. Focus is on Replace Pack Art from the block above, so
+			  two presses up reach SNAC Adapter and a third reaches Button Pop-Up - an
+			  ordinary row, on the same screen, at the same size, differing in nothing but
+			  whether X is offered. Less ink is the assertion; a hash would only say the bar
+			  changed, which it would also do if the wording had shifted.
+			*/
+			press(KEY_UP, 6);
+			press(KEY_UP, 6);
+			frame(8);
+			dump("set-12-240p-snac-adapter");
+			long ink_snac = legend_ink();
+
+			press(KEY_UP, 6);
+			frame(8);
+			long ink_ord = legend_ink();
+
+			check(ink_snac > 0, "the bar still offers Change and Back on the SNAC row");
+			check(ink_snac < ink_ord,
+				"and one prompt fewer than an ordinary row, because X is not offered at all");
 
 			cfg.snac_device = 0;
 		}

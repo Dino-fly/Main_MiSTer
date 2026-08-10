@@ -383,12 +383,25 @@ int opt_step_by(int i, int dir)
 	return 1;
 }
 
+/*
+  X, "put this row back to the usual value" - and refused on a row that has no usual
+  value, which is the whole of what the sentinel has to mean here.
+
+  Refused rather than ignored: the caller nudges on a 0, so the press is answered.
+  Getting this wrong is worse than the amber footer the sentinel was added for, because
+  opt_set() clamps - INT_MIN would land on lo, so X on "Other Console" would quietly
+  write PlayStation and the legend would have called that the usual value. A row that
+  reports what is plugged into a port has no business being reset to anything.
+*/
 int opt_reset(int i)
 {
-	if (i < 0 || i >= NOPTS || cur[i] == opts[i].rec) return 0;
+	if (i < 0 || i >= NOPTS || opts[i].rec == OPT_NO_REC) return 0;
+	if (cur[i] == opts[i].rec) return 0;
 	opt_set(i, opts[i].rec);
 	return 1;
 }
+
+int opt_has_rec(int i) { return (i >= 0 && i < NOPTS) ? (opts[i].rec != OPT_NO_REC) : 0; }
 
 static const char *text_for(const opt_def *o, int v, char *buf, int max)
 {

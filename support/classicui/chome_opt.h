@@ -163,6 +163,7 @@ int opt_step_by(int i, int dir);
 
 // Back to the recommended value. 0 when it was already there.
 int opt_reset(int i);
+int opt_has_rec(int i);          // 0 on the row whose rec is OPT_NO_REC, which refuses X
 
 // How the value reads on the row: a choice's label, or the number and its unit. A
 // value no choice claims is shown as itself rather than as the nearest name - the

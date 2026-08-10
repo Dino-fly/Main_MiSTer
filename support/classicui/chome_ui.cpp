@@ -2885,10 +2885,22 @@ static int build_legend(legend_pair *out, int max)
 			break;
 		}
 		if (n < max) { out[n++] = { CH_LEFT CH_RIGHT, "dpad_lr", "Change", "Chg", 0, COL_WHITE }; }
-		// The Font row has no recommended value to go back to - see the row's colour - so X
-		// puts back the one the file names, which is the undo somebody actually wants.
-		if (n < max) { out[n++] = lp(LBL_X, (set_row == SET_ROW_FONT) ? "Saved Font" : "Usual Value",
-			(set_row == SET_ROW_FONT) ? "Saved" : "Usual"); }
+		/*
+		  The Font row has no recommended value to go back to - see the row's colour - so X
+		  puts back the one the file names, which is the undo somebody actually wants.
+
+		  SNAC Adapter has no recommended value either and, unlike Font, has no equivalent to
+		  offer: it reports which console's adapter is plugged into a port, so "usual" is not
+		  a thing that exists for it (chome_opt.h, OPT_NO_REC). opt_reset() refuses the press,
+		  so the prompt goes too - the same rule the Save row above follows, and the one the
+		  Controllers screen follows for a wired pad it can do nothing with. A prompt for a
+		  press that only shakes the panel is worse than no prompt.
+		*/
+		if (n < max && (set_row >= set_nview || opt_has_rec(set_view[set_row])))
+		{
+			out[n++] = lp(LBL_X, (set_row == SET_ROW_FONT) ? "Saved Font" : "Usual Value",
+				(set_row == SET_ROW_FONT) ? "Saved" : "Usual");
+		}
 		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
 		break;
 
