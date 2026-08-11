@@ -13114,6 +13114,44 @@ static void assert_slot_count_follows_core()
 	  because the fake core never writes a state file - only a real one does.
 	*/
 
+	/*
+	  And now the arithmetic the paragraph above says it cannot pin, because
+	  chome_list_cursor() exists since task 54 and answers user_slots() directly on this
+	  screen. Two slots in the core, one of them reserved to hold the game still, so the
+	  player gets exactly one.
+	*/
+	{
+		int n = -1;
+		chome_list_cursor(1, &n);
+		check(n == 1, "a two-slot core offers the player exactly one, not two and not three");
+	}
+
+	/*
+	  ...and the count belongs to the game the STRIP is about, not to whatever is running.
+
+	  The in-game menu can browse the shelf, so the strip can be opened on a card that is
+	  not the running game. The reserved-slot subtraction is a fact about the core that will
+	  be saved into; on another game's card nothing will be, and the strip is a display of
+	  files that already exist. Before the fix this asked ig_active - true here - so a player
+	  running a two-slot PSX game saw ONE slot on a SNES card and states 2 and 3 vanished.
+
+	  Reached by leaving the strip and stepping the shelf one card off the running game.
+	*/
+	press(KEY_ESC, 12);
+	frame(8);
+	press(KEY_RIGHT, 10);
+	frame(8);
+	press(KEY_DOWN, 18);
+	frame(10);
+
+	{
+		int n = -1;
+		chome_list_cursor(1, &n);
+		check(n == CHOME_STRIP_SLOTS,
+			"a card that is not the running game shows all its slots, whatever the core offers");
+	}
+
+	press(KEY_ESC, 12);
 	press(KEY_MENU, 16);
 	frame(8);
 	harness_set_confstr(1);
@@ -13488,6 +13526,135 @@ static int band_red_at(int y)
 	return red > w / 2;
 }
 
+/*
+  The colour of the focus ring above the centre card.
+
+  Sampled one pixel above the card's top edge at the horizontal centre, which is inside the
+  ring on every profile: draw_card() puts a CARD_RING-thick frame that many pixels outside
+  the card, and the centre card is sel_w x sel_h with its bottom on y_shelf. Read as a
+  colour rather than counted as a population because both COL_FOCUS and COL_DIM appear
+  elsewhere on the screen - a count would pass for the wrong reason.
+*/
+static uint32_t ring_colour()
+{
+	const uint32_t *fb = harness_fb_shown();
+	if (!fb) return 0;
+
+	const chome_profile *p = theme_get();
+	int x = p->w / 2;
+	int y = p->y_shelf - p->sel_h - 1;
+	if (x < 0 || y < 0 || x >= gfx_w() || y >= gfx_h()) return 0;
+	return fb[(size_t)y * gfx_w() + x];
+}
+
+/*
+  One cursor, one thing lit.
+
+  The shelf, the menu bar and the disc badge are three places the cursor can be, and the
+  centre card used to keep its bright ring in all three - so moving up to the bar lit two
+  things at once and left the player to remember which one a press would reach. Dinofly's
+  report, and it is a real confusion rather than a nicety: the badge and the bar both look
+  actionable, and so did the card.
+
+  The card must still show WHICH card is current, so the ring is dimmed rather than dropped.
+  This asserts exactly that pair - bright on the shelf, muted off it - and it is checked as
+  the ring's own pixel so that a change of colour cannot be mistaken for a change of layout.
+*/
+static void assert_focus_ring()
+{
+	printf("\n== one cursor, one focus ==\n");
+
+	/*
+	  Establish the precondition rather than assume it. Writing this test the lazy way cost
+	  me twenty minutes: whatever ran before left the suspend strip up, the ring was
+	  correctly muted, and the "bright on the shelf" assertion failed on a screen that was
+	  not the shelf. The fix was right and the test was wrong - so the state is now backed
+	  out to and then asserted. SCR_HOME is 0 (chome_ui.cpp:296); the enum is not exported.
+	*/
+	for (int i = 0; i < 8 && chome_screen_id() != 0; i++) press(KEY_ESC, 12);
+	select_first_game();
+	frame(10);
+	check(chome_screen_id() == 0, "the shelf has the cursor to begin with");
+
+	uint32_t on_shelf = ring_colour();	check(on_shelf == COL_FOCUS, "the centre card's ring is bright while the shelf has the cursor");
+
+	press(KEY_UP, 25);                 // up from the shelf reaches the menu bar
+	frame(10);
+
+	uint32_t on_bar = ring_colour();
+	check(on_bar == COL_DIM,
+		"and is muted once the cursor is on the menu bar, so only one thing looks live");
+	check(on_bar != on_shelf, "which is a visible difference, not the same pixel twice");
+	dump("focus-1-ring-dim-on-menubar");
+
+	press(KEY_ESC, 15);
+	frame(10);
+	check(ring_colour() == COL_FOCUS, "and it comes back bright when the shelf is left in charge");
+	dump("focus-2-ring-bright-on-shelf");
+}
+
+/*
+  Sort by: a sentence per order, and Favourites as an order rather than a filter.
+
+  It was the one list in the front-end with nothing under it, so "Recently Played" against
+  "Times Played" was two labels for orders a player could not tell apart. Dinofly's report.
+
+  Favourites is a SORT and deliberately not a filter: the shelf already opens with a
+  Favourites card, so a filter would be a second control for the same thing, while an order
+  keeps the whole library walkable with the ones you care about at the front.
+
+  The help is asserted by what changes rather than by reading glyphs: stepping between two
+  orders must change the pixels BELOW the rows, which is where the sentence is. Without the
+  sentence that band is identical whichever row is selected, so this fails on a revert.
+*/
+static void assert_sort_help()
+{
+	printf("\n== sort by, with a sentence under it ==\n");
+
+	for (int i = 0; i < 8 && chome_screen_id() != 0; i++) press(KEY_ESC, 12);
+	select_first_game();
+	frame(10);
+
+	check(!strcmp(lib_sort_name(SORT_FAVS), "Favourites First"),
+		"Favourites First is one of the orders offered");
+
+	press(KEY_GRAVE, 20);
+	frame(8);
+	// SCR_SORT is 3 (chome_ui.cpp:299); the enum is not exported.
+	check(chome_screen_id() == 3, "select opens the sort list");
+
+	/*
+	  The band below the rows, located from the plate the panel actually drew rather than
+	  from arithmetic: SORT_COUNT rows start under the title and the sentence sits in the
+	  footer the panel reserves, so the bottom third of the plate holds the help and nothing
+	  else that moves with the cursor.
+	*/
+	const chome_profile *p = theme_get();
+	int px = 0, py = 0, pw = 0, ph = 0;
+	check(panel_plate_seen(&px, &py, &pw, &ph), "and its plate is on screen to measure");
+
+	/*
+	  Read as the sentence rather than as a band of pixels. Isolating the footer by
+	  arithmetic kept catching the selected row's highlight instead, which would have made
+	  this pass for the wrong reason; chome_test_sort_help() asks the same function the
+	  screen draws from.
+	*/
+	const char *first = chome_test_sort_help();
+	check(first && first[0], "the order under the cursor has a sentence");
+	printf("  first: %s\n", first);
+
+	press(KEY_DOWN, 14);
+	frame(8);
+	const char *second = chome_test_sort_help();
+	printf("  next:  %s\n", second);
+	check(second && second[0] && strcmp(first, second) != 0,
+		"and it is a different sentence for a different order");
+	dump("sort-1-help-line");
+
+	press(KEY_ESC, 12);
+	frame(6);
+}
+
 static void assert_no_savestates()
 {
 	printf("\n== systems with no save states ==\n");
@@ -13857,6 +14024,52 @@ static void assert_launch_into_state()
 
 	check(strip_focused_slot(3) == 1,
 		"the strip opens with its cursor on the slot that actually holds a state");
+
+	/*
+	  And what the bar says about that slot, read as text rather than as ink.
+
+	  The pixel comparison below is the right test for "the prompts changed when I stepped
+	  onto EMPTY", but it cannot separate two changes happening in the same bar - which is
+	  exactly the case for a locked slot, where Delete goes away and "Lock" grows into
+	  "Unlock" at the same time. chome_test_legend() calls the same build_legend() the
+	  drawing does, so these are the labels a player reads.
+	*/
+	{
+		char leg[128];
+		chome_test_legend(leg, sizeof(leg));
+		printf("  legend on a kept slot: %s\n", leg);
+		check(strstr(leg, "Delete") != 0, "a kept slot offers Delete");
+		check(strstr(leg, "Lock") != 0 && strstr(leg, "Unlock") == 0,
+			"and Lock, which is the direction the press goes on a slot that is not locked");
+
+		/*
+		  Locked, and the two lies this used to tell. accept()'s Delete branch refuses a
+		  locked slot - that is what locking is for - so offering "Delete" promised a
+		  destructive action the screen had already decided not to perform. And Down on a
+		  locked slot UNLOCKS it, so a prompt reading "Lock" named the opposite of what it
+		  did. Both were left as known-smaller lies when the empty-slot prompts were fixed.
+		*/
+		chome_item *it = 0;
+		for (int i = 0; i < lib_item_count(); i++)
+		{
+			chome_item *c = lib_item(i);
+			if (c && strstr(c->title, "Link to the Past")) { it = c; break; }
+		}
+		if (!it) check(0, "the locked-slot case can reach its item");
+		else
+		{
+			lib_set_lock(it, 1, 1);              // slot 2 (0-based 1), the filled one
+			frame(8);
+			chome_test_legend(leg, sizeof(leg));
+			printf("  legend on a locked slot: %s\n", leg);
+			check(strstr(leg, "Delete") == 0,
+				"a locked slot does not offer Delete, which it would have refused");
+			check(strstr(leg, "Unlock") != 0,
+				"and says Unlock, because that is what the press now does");
+			lib_set_lock(it, 1, 0);
+			frame(8);
+		}
+	}
 
 	/*
 	  The legend follows the cursor's slot, not the strip: on the empty first slot
@@ -24310,6 +24523,16 @@ int main()
 	  Before the marquee and the clipped-copy sweep, like every other section that opens a
 	  panel: the clips its walks make belong in the reading those two do.
 	*/
+	/*
+	  Last of the shelf sections, and placed here after two attempts elsewhere failed for
+	  the same reason: both of these walk the shelf and open panels, and the disc sections
+	  further up expect a particular card under the cursor and a particular screen. Moving
+	  them earlier broke "its dialog opens before anything knows what it is" - the suite
+	  catching its own ordering, which is what that check is for.
+	*/
+	assert_focus_ring();
+	assert_sort_help();
+
 	assert_uniform_wrap();
 
 	assert_marquee();

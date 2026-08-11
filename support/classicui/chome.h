@@ -28,6 +28,14 @@ int chome_active();
 */
 int chome_screen_id();
 
+#ifdef CHOME_HOST_TEST
+// The legend's prompts as text, '|'-separated, long labels, in draw order. Test-only:
+// see the note on the definition for why pixels were not enough.
+void chome_test_legend(char *out, int len);
+// The sentence the sort screen shows for the row its cursor is on.
+const char *chome_test_sort_help();
+#endif
+
 /*
   Which entry the shelf has selected, as an index into the current view.
 

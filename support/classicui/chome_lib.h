@@ -119,7 +119,8 @@ struct chome_entry
 #define SORT_TITLE   2
 #define SORT_SYSTEM  3
 #define SORT_ADDED   4
-#define SORT_COUNT   5
+#define SORT_FAVS    5
+#define SORT_COUNT   6
 
 const char *lib_sort_name(int sort);
 
