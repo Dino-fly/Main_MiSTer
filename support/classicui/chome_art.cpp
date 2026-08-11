@@ -1766,6 +1766,116 @@ static int disc_already_tried(const char *key)
 	return 0;
 }
 
+/*
+  Give a key its attempt back, because the attempt never happened.
+
+  disc_mark_tried() is called at the fork, before anything is known, which is right: it
+  stops a per-frame caller forking a request a frame. But it makes every kind of failure
+  final for the session, and one kind of failure is not a failure of the *request* at all.
+
+  Measured on the device on 2026-08-11, with a Saturn disc left in the drive across a
+  reboot. The disc is identified within a few seconds of boot; Wi-Fi has not associated
+  yet; so:
+
+      ClassicUI: asking for a disc scan for MK-81207 (system 22, as "SEGA RALLY CHAMPIONSHIP")
+      ClassicUI: the disc scan query for MK-81207 failed, curl exit 6 (host would not resolve)
+
+  and that was the end of it - the key was spent, nothing re-triggers a prefetch while the
+  disc just sits there, and the art could never arrive for as long as the machine stayed
+  up. The query was correct, the network simply did not exist yet.
+
+  So a failure with no HTTP status - nothing resolved, nothing connected, nothing timed
+  out at the far end - releases the key. Retrying is then bounded by disc_retry_due()
+  rather than being open, because "no network" must not become a fork per frame.
+*/
+/*
+  When a released key may be spent again, and how many times.
+
+  The case being served is a network that is not up yet, which on this hardware means a
+  Wi-Fi association a few seconds to a minute after boot. So the backoff starts short and
+  grows, and then stops: five tries reaching about eight minutes past boot. A machine with
+  no network at all is a machine that will not get art, and it should stop asking rather
+  than knock on a door that is not there for the rest of the day.
+
+  Deliberately not persisted. A count that survived a reboot would turn "the Wi-Fi was
+  slow twice" into "never try again", and the state costs nothing to rebuild.
+*/
+#define DISC_RETRY_MAX 5
+
+/*
+  How long to wait before the nth retry, in seconds. Seconds and not milliseconds because
+  the shortest wait here is ten of them and time(0) is already the clock this file uses.
+
+  The decision is a pure function of (tries so far, when it was armed, now) so the harness
+  can drive it without a wall clock - the same shape, and for the same reason, as
+  disc_probe_due() and disc_refork_due() in chome_disc.cpp.
+*/
+int disc_retry_wait_s(int tries)
+{
+	static const int wait[DISC_RETRY_MAX] = { 10, 30, 60, 120, 300 };
+	if (tries < 0 || tries >= DISC_RETRY_MAX) return -1;      // -1: no more retries
+	return wait[tries];
+}
+
+int disc_retry_due_at(int tries, int armed_at, int now)
+{
+	if (!armed_at) return 0;                                  // nothing armed
+	int w = disc_retry_wait_s(tries - 1);                     // the wait we are serving
+	if (w < 0) return 0;
+	return (now - armed_at) >= w;
+}
+
+static int disc_retry_n = 0;
+static int disc_retry_armed = 0;
+
+static void disc_retry_arm()
+{
+	if (disc_retry_n >= DISC_RETRY_MAX)
+	{
+		printf("ClassicUI: the disc scan has failed to reach the network %d times,"
+			" not asking again until a disc changes\n", DISC_RETRY_MAX);
+		return;
+	}
+
+	disc_retry_n++;
+	disc_retry_armed = (int)time(0);
+	if (!disc_retry_armed) disc_retry_armed = 1;               // 0 means "nothing armed"
+
+	printf("ClassicUI: no network for the disc scan, trying again in %ds (attempt %d of %d)\n",
+		disc_retry_wait_s(disc_retry_n - 1), disc_retry_n, DISC_RETRY_MAX);
+}
+
+/*
+  Cleared when the drive changes, because a new disc is a new question and a count that
+  outlived its disc would deny the next one its tries. Not persisted either: a count that
+  survived a reboot would turn "the Wi-Fi was slow twice" into "never again", and the state
+  costs nothing to rebuild.
+*/
+void disc_art_retry_forget()
+{
+	disc_retry_n = 0;
+	disc_retry_armed = 0;
+}
+
+int disc_art_retry_due()
+{
+	if (!disc_retry_due_at(disc_retry_n, disc_retry_armed, (int)time(0))) return 0;
+	disc_retry_armed = 0;
+	return 1;
+}
+
+static void disc_untry(const char *key)
+{
+	for (int i = 0; i < disc_ntried; i++)
+	{
+		if (strcmp(disc_tried[i], key)) continue;
+		for (int j = i + 1; j < disc_ntried; j++)
+			memcpy(disc_tried[j - 1], disc_tried[j], sizeof(disc_tried[0]));
+		disc_ntried--;
+		return;
+	}
+}
+
 static void disc_mark_tried(const char *key)
 {
 	if (disc_already_tried(key)) return;
@@ -2528,6 +2638,22 @@ static void ss_fetch_poll()
 			  asking about. What differs between them is only whether the module keeps
 			  asking - see ss_note_result().
 			*/
+			/*
+			  A request that never reached a server is not an answer about this disc, so it
+			  does not get to be the last word on it. http is 0 for exactly that case - see
+			  the note on ssf_http(): no DNS, no route, no connection, no curl. The key goes
+			  back in the pot and disc_retry_arm() sets when it may be spent again.
+
+			  Only for a disc. A cover for a file on the card is asked for again on the next
+			  scan anyway, and the shelf has thousands of them - arming a retry per card is
+			  a queue nobody asked for.
+			*/
+			if (!http && ssf_kind == SS_KIND_DISC && ssf_key[0])
+			{
+				disc_untry(ssf_key);
+				disc_retry_arm();
+			}
+
 			ss_note_result(failed_as, 0);
 			ssf_finish();
 			return;
