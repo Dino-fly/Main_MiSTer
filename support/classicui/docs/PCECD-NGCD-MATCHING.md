@@ -147,19 +147,61 @@ game id 14466, with 40 media entries including box-2D, support-2D and wheel - so
 cover and a disc scan are available. The second hop needs no new code: it is the romnom path
 Saturn and Mega CD already use.
 
-## Status
+## Status: implemented, and working on real discs of both consoles
 
-The match is proven. The implementation is not written. The evidence above is what is settled: no title on the disc, the TOC is
-readable for free and is distinctive, ScreenScraper cannot take it directly, and the table
-that bridges the gap is buildable from data we already know how to fetch.
+Implemented 2026-08-12. `tools/disctocdb.py` builds the table, `read_toc_shape()` and
+`disc_toc_title()` read the disc and the table, and `disc_shape_identity()` decides what the
+disc is then called. Proven on a real PC Engine CD disc end to end:
 
-What remains is small and fully specified now:
+    2|4|22:221262|Akumajou Dracula X - Chi no Rondo
+    asking for a disc scan for 22:221262 (system 114, as "Akumajou Dracula X ...")
+    disc scan stored: classicui/discart/22_221262.png (30550 bytes)
 
-1. extend `tools/disctitles.py` to emit a second table keyed on `ntracks:total` -> title,
-   marking any key that maps to more than one distinct *game* so it can be refused;
-2. compute `ntracks` and the leadout in the helper - it already reads both, see
-   `find_data_track()` and `tools/disctoc.py`;
-3. look the key up in that table and hand the title to the existing name path.
+### Neo Geo CD, added the same day
 
-The measurement that had to come first has been taken, and it changed the design: use the
-leadout, not the track vector.
+The mechanism is per-console-agnostic, so Neo Geo CD needed only its datfile - and two
+measurements to confirm that was really all:
+
+**One flat table serves both, measured not assumed.** PC Engine CD yields 492 keys, Neo Geo
+CD 103, and the merge yields **595** - so not one key is shared between the two systems and
+no name is lost to the merge. The key therefore needs no system field, and the firmware that
+reads it needed no change at all. (Worth re-running if a third system is added: a
+cross-system collision is not an error, it is written `?` and refused, but it would cost two
+real names.)
+
+**Redump's `A ~ B` titles hit ScreenScraper as they stand.** Neo Geo CD releases are named
+`Garou Densetsu 2 ~ Fatal Fury 2` in the dat, which is a Redump convention and not obviously
+a searchable string. Asked on systemeid 70:
+
+    romnom "Garou Densetsu 2 ~ Fatal Fury 2"     ->  HIT  id 38358  Fatal Fury 2
+    romnom "Garou Densetsu 2"                    ->  miss
+    romnom "Fatal Fury 2"                        ->  HIT  id 38358
+    romnom "Samurai Spirits ~ Samurai Shodown"   ->  HIT  id 38392
+    romnom "Metal Slug"                          ->  HIT  id 107062
+    romnom "King of Fighters '94, The"           ->  HIT  id 38366
+
+So the tilde form is kept verbatim. Note the second line: splitting on the `~` and taking
+the *first* half - the obvious tidy-up, and the one half a reader would assume is canonical -
+**misses**, because ScreenScraper indexes the Western name. The fuzzy matcher finds the
+English half inside the whole string, so doing nothing is strictly better than tidying.
+
+### A defect this exposed, in the half PC Engine CD cannot reach
+
+The first implementation set the serial on an unmatched shape and left the label alone.
+Invisible on PC Engine CD, which has no filesystem and so no label to leave - and wrong on
+Neo Geo CD, which has a volume label that is a house code as often as a name. That label
+then satisfied `disc_scrape_name()`'s rule that "a label beside a serial containing `:` came
+out of the table", and a disc called `DD_CD` would have gone to the database as a game name:
+a miss against the scarce unmatched allowance, or a confidently wrong cover.
+
+The decision now lives in `disc_shape_identity()` in the common half of the file rather than
+inline in the helper, precisely so the harness can hold it - the bug survived review because
+it sat in the device-only code the harness cannot compile.
+
+### What still needs a disc
+
+Everything above about Neo Geo CD is offline: the table, the systemeid and the romnom
+shapes are measured, but no Neo Geo CD disc has been in the drive. Two things are therefore
+unproven until one is: that the drive's TOC totals agree with the dat for this console as
+they do for PC Engine CD, and that detection fires (`chome_disc.cpp:212`, the `NGCD` volume
+identifier, or `:222`, an `IPL.TXT` in the root).

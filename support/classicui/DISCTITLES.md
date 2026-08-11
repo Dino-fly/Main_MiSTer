@@ -56,11 +56,17 @@ PC Engine CD and Neo Geo CD contribute 613 rows that **no disc can ever key into
 Redump serials are catalogue codes read off the printed disc: a PCE CD disc has no ISO9660
 filesystem and no product code anywhere in its data, and a Neo Geo CD disc's only in-data
 identifier is a volume label that is a house code (`DD_CD`, `B4CD`, `C205`) or a mastering
-default (`UNTITLED`, `CD_DATA`) more often than a name. The firmware therefore asks nothing
-about those two systems — see `disc_scrape_name()` — and these rows sit here at a cost of
-about 25 KB because generating them is free, because a hand-added line for such a disc
-belongs beside them, and because nothing would have to be regenerated if a route to those
-keys is ever found. They are not evidence that the systems work.
+default (`UNTITLED`, `CD_DATA`) more often than a name. These rows sit here at a cost of about 25 KB because
+generating them is free, because a hand-added line for such a disc belongs beside them, and
+because nothing would have to be regenerated if a route to those keys were ever found.
+
+**A route was found**, on 2026-08-12, and it is not a serial. `disctoc.txt` — built by
+`tools/disctocdb.py` from these same datfiles — keys a disc on the *shape* of its table of
+contents, `<tracks>:<total sectors>`, which every disc does carry. Both consoles now show
+their real titles and get their covers; see
+[docs/PCECD-NGCD-MATCHING.md](docs/PCECD-NGCD-MATCHING.md). The rows below are still
+unreachable by serial, so this file's own account of them stands — what has changed is that
+that no longer means the systems are unnamed.
 
 Note the `/serial` suffix on those URLs. It is mandatory: without it Redump generates the
 DAT with no `<serial>` elements at all and the script finds nothing. Note the domain too
