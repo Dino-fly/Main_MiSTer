@@ -19307,6 +19307,81 @@ static void assert_config_check()
 		snprintf(cfg.classicui_ss_pass, sizeof(cfg.classicui_ss_pass), "%s", was_pass);
 	}
 
+	/*
+	  And the two printers this suite cannot reach, guarded by reading the source.
+
+	  cfg.cpp is not compiled into the harness (nor are menu.cpp, user_io.cpp, input.cpp),
+	  and it holds the other two paths that can publish a password: cfg_print()'s STRING case
+	  walks ini_vars[] and prints every value, and the parser's own line trace prints the raw
+	  text of each VAR as it is read - which for a DEBUG=2 file happens before cfg_print()
+	  runs at all. Both go through ini_loggable() today. Nothing would fail if a future edit
+	  dropped that call: there is no test that can execute either line.
+
+	  So this reads cfg.cpp and asserts the shape instead. A source check is a poor test and
+	  a good guard - it cannot say the output is right, only that the redaction was not
+	  deleted, which is the failure mode that actually threatens a password. It is here
+	  rather than in a script because a check nobody runs is not a check, and this file is
+	  run on every change.
+
+	  Verified against the device on 2026-08-11 as well: 3.7 MB of accumulated log, zero
+	  occurrences of either the player's password or the application's - the password was
+	  handed to grep on stdin, never in argv, for the reason CLAUDE.md gives.
+	*/
+	{
+		char *src = 0;
+		long n = 0;
+		FILE *f = fopen("cfg.cpp", "rb");
+		if (f)
+		{
+			fseek(f, 0, SEEK_END);
+			n = ftell(f);
+			fseek(f, 0, SEEK_SET);
+			src = (char*)malloc((size_t)n + 1);
+			if (src && fread(src, 1, (size_t)n, f) == (size_t)n) src[n] = 0;
+			else { free(src); src = 0; }
+			fclose(f);
+		}
+
+		check(src != 0, "cfg.cpp can be read, so the guard below is actually guarding");
+
+		if (src)
+		{
+			/*
+			  Line by line, because the property is per-printf: any line that prints a STRING
+			  ini value must name ini_loggable() on that same line. Matching on the cast the
+			  STRING case uses is what makes this specific - it appears nowhere else.
+			*/
+			int bad = 0, seen = 0;
+			for (char *p = src; *p; )
+			{
+				char *e = strchr(p, '\n');
+				int len = e ? (int)(e - p) : (int)strlen(p);
+				char line[1024];
+				if (len > (int)sizeof(line) - 1) len = (int)sizeof(line) - 1;
+				memcpy(line, p, (size_t)len);
+				line[len] = 0;
+
+				if (strstr(line, "(char*)ini_vars[i].var") && strstr(line, "printf"))
+				{
+					seen++;
+					if (!strstr(line, "ini_loggable")) bad++;
+				}
+				if (strstr(line, "Got VAR") && strstr(line, "ini_parser_debugf"))
+				{
+					seen++;
+					if (!strstr(line, "ini_loggable")) bad++;
+				}
+
+				if (!e) break;
+				p = e + 1;
+			}
+
+			check(seen >= 2, "both of cfg.cpp's value printers were found to check");
+			check(!bad, "and each one redacts through ini_loggable() rather than printing in clear");
+			free(src);
+		}
+	}
+
 	/* ------------------------------------------------------------------ and debug --- */
 
 	{
