@@ -10758,6 +10758,84 @@ static int fav_count()
   prefix, the two bit-spec forms, options we own and must not offer twice, and the core's
   own (U) marking.
 */
+/*
+  A core that leaves config-string index 1 empty, which is the shape of the real Saturn
+  core and the reason its options were invisible.
+
+  The stock OSD starts reading options at index 2 (menu.cpp:2023) and index 1 is a slot it
+  never touches, so a core may leave it empty. user_io_get_confstr() returns NULL for an
+  empty entry, and our scanner treats NULL as end-of-string - so starting at 1 ended the
+  scan before it began and the core looked like it had no options at all.
+
+  What that cost, measured on the device on 2026-08-11: the Saturn core's Region option
+  (O[35:33], default Japan) was unreachable, so the machine refused every USA and European
+  disc with "Game disc unsuitable for this system" - our own rip and a known-good Redump
+  dump alike - and the menu bar showed no core-options entry to fix it with, because
+  mb_visible(MB_CORE) asks core_opts_tier_count() and every tier was 0.
+
+  The entries below are the real ones, in the real order, read off the device.
+*/
+static const char *confstr_saturn[] =
+{
+	"Saturn",
+	"",                                    /* the empty slot that ended the scan */
+	"S0,CUECHD,Insert Disc",
+	"FS2,BIN,Load bios",
+	"FS3,BIN,Load cartridge",
+	"O[4],Reset on insert,Yes,No",
+	"-",
+	"O[23:21],Cartridge,None,ROM 2M,DRAM 1M,DRAM 4M,DRAM 6M DEV,BACKUP",
+	"O[35:33],Region,Japan,Taiwan,USA,Brazil,Korea,Asia,Europe,Auto",
+	"-",
+	"S1,SAV,Mount Backup RAM",
+	0
+};
+
+static void assert_saturn_options()
+{
+	harness_set_confstr_table(confstr_saturn);
+	harness_set_osd_mask(0);
+
+	int n = core_opts_scan();
+	check(n > 0, "a core that leaves config index 1 empty still has its options read");
+
+	const core_opt *region = 0, *cart = 0;
+	for (int i = 0; i < core_opts_count(); i++)
+	{
+		const core_opt *o = core_opt_at(i);
+		if (!strcasecmp(o->name, "Region")) region = o;
+		if (!strcasecmp(o->name, "Cartridge")) cart = o;
+	}
+
+	check(region != 0, "Region is one of them, which is what makes a Saturn disc bootable");
+	check(cart != 0, "and so is Cartridge, so this is not one option arriving by luck");
+	check(region && region->nvals == 8 && !strcmp(region->vals[0], "Japan")
+		&& !strcmp(region->vals[7], "Auto"),
+		"with all eight regions, Japan first and Auto last, as the core spells them");
+
+	/*
+	  And the count the menu bar actually consults. mb_visible(MB_CORE) shows the entry only
+	  when one of these three tiers is non-empty, so this is the assertion that the screen
+	  can be reached at all - the failure everybody actually saw.
+	*/
+	check(core_opts_tier_count(CO_TIER_PICTURE)
+		|| core_opts_tier_count(CO_TIER_SYSTEM)
+		|| core_opts_tier_count(CO_TIER_RISKY),
+		"and a tier the menu bar counts is non-empty, so the Core entry is offered");
+
+	/*
+	  Put the shared fixture back before returning. The checks after the call site read
+	  whatever the last scan left in core_opts_count(), and this core carries a real
+	  "Reset on insert" *setting* - Yes/No, not a momentary trigger - which the loose
+	  strcasestr(name, "Reset") test below would otherwise report as a trigger being
+	  offered. That test is a proxy for "no T/R spec is ever accepted", which the parser
+	  enforces by only taking O and o; the name match is not the property it means.
+	*/
+	harness_set_confstr_table(0);
+	harness_set_confstr(6);
+	core_opts_scan();
+}
+
 static void assert_core_options(int hd_mask_bit1)
 {
 	harness_set_confstr(6);
@@ -10837,6 +10915,7 @@ static void assert_core_options_screen()
 	assert_core_options(0);
 	assert_core_options(1);
 	assert_core_options(0);
+	assert_saturn_options();
 
 	/*
 	  A trigger is not a setting. Reset sits in the same CONF_STR and a momentary action
