@@ -2952,6 +2952,31 @@ static void assert_physical_disc()
 			"and past the last one nothing is ever due again, however long it has been");
 	}
 
+	/*
+	  Which consoles are expected to carry a product number, which the identify loop needs to
+	  tell "has not answered yet" from "has none to give".
+
+	  The loop used to stop as soon as it had EITHER a serial or a name, and on a disc just
+	  pushed in that is the name: the ISO volume label is one sector at LBA 16 while the
+	  PlayStation serial needs the root directory walked several reads further in. So a
+	  mid-session insert produced a disc with no serial - a different cache key, no title from
+	  the table, and nothing left to ask the database with. Measured on the device on
+	  2026-08-11: at boot "2|3|SLES-00838|ABESODDYSEE", on reinsert "2|3||ABESODDYSEE".
+
+	  The loop itself lives in helper_main(), which is compiled out of this harness with the
+	  rest of the device I/O, so what can be checked here is the predicate it turns on.
+	*/
+	{
+		check(disc_type_has_serial(DISC_T_PSX), "a PlayStation disc has a serial to wait for");
+		check(disc_type_has_serial(DISC_T_SATURN), "so does a Saturn disc");
+		check(disc_type_has_serial(DISC_T_MEGACD), "and a Mega CD disc");
+		check(!disc_type_has_serial(DISC_T_PCECD),
+			"a PC Engine CD disc does not, so waiting for one would wait for ever");
+		check(!disc_type_has_serial(DISC_T_NEOGEO), "nor a Neo Geo CD disc");
+		check(!disc_type_has_serial(DISC_T_AUDIO) && !disc_type_has_serial(DISC_T_UNKNOWN),
+			"nor an audio disc, nor one we could not identify at all");
+	}
+
 	// Mega CD, where the international title wins and a Japanese disc falls back to the
 	// domestic one rather than to a blank.
 	{
@@ -13661,6 +13686,69 @@ static void assert_focus_ring()
   orders must change the pixels BELOW the rows, which is where the sentence is. Without the
   sentence that band is identical whichever row is selected, so this fails on a revert.
 */
+/*
+  Recently Played is not Times Played.
+
+  It was, until Dinofly asked why. cmp_entry()'s SORT_RECENT case fell through to the play
+  count, so the two names produced one order - and the comment above it claimed that telling
+  them apart needed a timestamp the play file does not keep. The first half is true: there is
+  no clock time anywhere in this front-end, and no record of how long a game ran. The second
+  half was wrong. recent_keys[] in chome_lib.cpp is an ordered most-recent-first list of the
+  last twenty launches, saved to the card, which is the same information for those twenty.
+
+  So the fixture is built to make the two orders DISAGREE: one game played many times and
+  then left alone, another played once, most recently. Times Played must put the first in
+  front; Recently Played must put the second. Asserting only that each sort "works" would
+  pass with both cases identical, which is exactly the state this replaces.
+*/
+static void assert_recent_is_not_plays()
+{
+	printf("\n== recently played is its own order ==\n");
+
+	chome_item *often = 0, *lately = 0;
+	for (int i = 0; i < lib_item_count() && (!often || !lately); i++)
+	{
+		chome_item *it = lib_item(i);
+		if (!it || it->kind != ENT_GAME) continue;
+		if (!often) { often = it; continue; }
+		if (it != often) lately = it;
+	}
+
+	if (!often || !lately) { check(0, "two games to order against each other"); return; }
+
+	// Played a lot, a while ago; then a different game played once, most recently.
+	for (int i = 0; i < 5; i++) lib_note_play(often);
+	lib_note_play(lately);
+
+	check(often->plays > lately->plays, "one game has the higher play count");
+
+	lib_view_build(VIEW_ALL, -1, SORT_PLAYS);
+	int p_often = -1, p_lately = -1;
+	for (int i = 0; i < lib_view_count(); i++)
+	{
+		const chome_entry *e = lib_view_entry(i);
+		if (!e || e->kind != ENT_GAME) continue;
+		if (&lib_item(e->game)[0] == often)  p_often  = i;
+		if (&lib_item(e->game)[0] == lately) p_lately = i;
+	}
+	check(p_often >= 0 && p_lately >= 0 && p_often < p_lately,
+		"Times Played puts the one played most often first");
+
+	lib_view_build(VIEW_ALL, -1, SORT_RECENT);
+	int r_often = -1, r_lately = -1;
+	for (int i = 0; i < lib_view_count(); i++)
+	{
+		const chome_entry *e = lib_view_entry(i);
+		if (!e || e->kind != ENT_GAME) continue;
+		if (&lib_item(e->game)[0] == often)  r_often  = i;
+		if (&lib_item(e->game)[0] == lately) r_lately = i;
+	}
+	check(r_often >= 0 && r_lately >= 0 && r_lately < r_often,
+		"and Recently Played puts the one played LAST first - a different answer");
+
+	lib_view_build(VIEW_ROOT, -1, SORT_TITLE);
+}
+
 static void assert_sort_help()
 {
 	printf("\n== sort by, with a sentence under it ==\n");
@@ -24661,6 +24749,7 @@ int main()
 	*/
 	assert_focus_ring();
 	assert_sort_help();
+	assert_recent_is_not_plays();
 
 	assert_uniform_wrap();
 
