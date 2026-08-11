@@ -96,6 +96,9 @@ dd if=/dev/urandom of="$official_menu" bs=1024 count=1500 2>/dev/null
 disctitles=$repo/support/classicui/disctitles.generated.txt
 [ -f "$disctitles" ] || disctitles=''
 
+disctoc=$repo/support/classicui/disctoc.generated.txt
+[ -f "$disctoc" ] || disctoc=''
+
 md5_of() {
 	if command -v md5sum >/dev/null 2>&1; then
 		md5sum "$1" | cut -d' ' -f1
@@ -155,6 +158,8 @@ out=$tmp/pack.txt
 sh "$tools/make_sdcard_root.sh" --name chome-test --firmware "$ours" \
 	--expect-md5 "$(printf '%s' "$ours_md5" | cut -c1-8)" \
 	${disctitles:+--disctitles "$disctitles"} \
+	${disctoc:+--disctoc "$disctoc"} \
+	--no-ss-creds \
 	--out "$tmp/rel" >"$out" 2>&1
 rc=$?
 sed 's/^/    | /' "$out"
@@ -171,6 +176,15 @@ has "^EXPECT_MENU_MD5=\"\"\$" "$archive/Scripts/classic_home_protect.sh" "no men
 has "$ours_md5  " "$archive/MANIFEST_chome-test.txt" "the manifest lists the firmware md5"
 has " MiSTer\$" "$archive/MANIFEST_chome-test.txt" "the manifest lists the firmware path"
 absent "$archive/MiSTer.ini" "no MiSTer.ini in the archive"
+
+# The two name tables. Asserted because neither is visible when it is missing: a disc
+# simply shows its console's name and no cover, which reads as the scraper being down
+# rather than as a file we forgot to ship. disctoc.txt was in fact wired into the
+# packager only after it had already been hand-copied to one card and declared working.
+[ -z "$disctitles" ] || exists "$archive/classicui/disctitles.txt" \
+	"the serial-to-title table ships on the card"
+[ -z "$disctoc" ] || exists "$archive/classicui/disctoc.txt" \
+	"and the TOC table, without which PC Engine CD and Neo Geo CD have no name at all"
 echo "    -- manifest:"
 sed 's/^/    | /' "$archive/MANIFEST_chome-test.txt"
 
@@ -377,7 +391,7 @@ has "was missing from the card root" "$log" "the log says it was missing"
 section "9. a SNAC-carrying release protects menu.rbf too"
 out=$tmp/pack-menu.txt
 sh "$tools/make_sdcard_root.sh" --name chome-snac --firmware "$ours" \
-	--expect-md5 "$ours_md5" --menu "$menu" --out "$tmp/rel-snac" >"$out" 2>&1
+	--expect-md5 "$ours_md5" --menu "$menu" --no-ss-creds --out "$tmp/rel-snac" >"$out" 2>&1
 rc=$?
 sed 's/^/    | /' "$out"
 rc_is "$rc" 0 "packaged with a menu core"
@@ -491,7 +505,7 @@ echo core >"$tmp/flat-computer/Minimig_20260807.rbf"
 echo core >"$tmp/flat-arcade/ActFancer.rbf"
 echo readme >"$tmp/README.md"
 out=$tmp/12.txt
-sh "$tools/make_sdcard_root.sh" --name chome-cores --firmware "$ours" --expect-md5 "$ours_md5" \
+sh "$tools/make_sdcard_root.sh" --name chome-cores --firmware "$ours" --expect-md5 "$ours_md5" --no-ss-creds \
 	--console-cores "$tmp/flat-console" --computer-cores "$tmp/flat-computer" \
 	--arcade-cores "$tmp/flat-arcade" --doc "$tmp/README.md" \
 	--out "$tmp/rel-cores" >"$out" 2>&1
@@ -510,7 +524,7 @@ mkdir -p "$tmp/shaped/_Console" "$tmp/shaped/_Arcade/cores"
 echo core >"$tmp/shaped/_Console/SNES_20260807.rbf"
 echo core >"$tmp/shaped/_Arcade/cores/ActFancer.rbf"
 out=$tmp/12b.txt
-sh "$tools/make_sdcard_root.sh" --name chome-shaped --firmware "$ours" --expect-md5 "$ours_md5" \
+sh "$tools/make_sdcard_root.sh" --name chome-shaped --firmware "$ours" --expect-md5 "$ours_md5" --no-ss-creds \
 	--cores "$tmp/shaped" --out "$tmp/rel-shaped" >"$out" 2>&1
 rc=$?
 sed 's/^/    | /' "$out"
@@ -520,7 +534,7 @@ exists "$tmp/rel-shaped/SD-CARD-ROOT/_Console/SNES_20260807.rbf" "the shaped tre
 mkdir -p "$tmp/unshaped/games"
 echo core >"$tmp/unshaped/games/x.rbf"
 out=$tmp/12c.txt
-sh "$tools/make_sdcard_root.sh" --name chome-unshaped --firmware "$ours" --expect-md5 "$ours_md5" \
+sh "$tools/make_sdcard_root.sh" --name chome-unshaped --firmware "$ours" --expect-md5 "$ours_md5" --no-ss-creds \
 	--cores "$tmp/unshaped" --out "$tmp/rel-unshaped" >"$out" 2>&1
 rc=$?
 sed 's/^/    | /' "$out"
@@ -530,7 +544,7 @@ section "12d. an archive that would carry MiSTer.ini is thrown away"
 mkdir -p "$tmp/withini"
 echo 'CLASSICUI=1' >"$tmp/withini/MiSTer.ini"
 out=$tmp/12d.txt
-sh "$tools/make_sdcard_root.sh" --name chome-ini --firmware "$ours" --expect-md5 "$ours_md5" \
+sh "$tools/make_sdcard_root.sh" --name chome-ini --firmware "$ours" --expect-md5 "$ours_md5" --no-ss-creds \
 	--doc "$tmp/withini/MiSTer.ini" --out "$tmp/rel-ini" >"$out" 2>&1
 rc=$?
 sed 's/^/    | /' "$out"

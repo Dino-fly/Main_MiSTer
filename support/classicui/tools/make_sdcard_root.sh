@@ -11,6 +11,7 @@
 #     MiSTer                            replaces the firmware in the card root
 #     menu.rbf                          replaces the menu core (SNAC-carrying builds)
 #     classicui/disctitles.txt          the disc name table, a new file
+#     classicui/disctoc.txt             names the discs that carry no product code
 #     linux/classic-home/               the boot hook's worker, ready for the installer
 #     Scripts/classic_home_protect.sh   installs the hook
 #     Scripts/classic_home_unprotect.sh removes it again
@@ -36,6 +37,10 @@
 #                          notes can be pasted straight in.
 #     --menu PATH          menu.rbf to ship (SNAC-carrying builds)
 #     --disctitles PATH    the file to ship as classicui/disctitles.txt
+#     --disctoc PATH       the file to ship as classicui/disctoc.txt. Without it a PC
+#                          Engine CD or Neo Geo CD disc has no name and no cover: those
+#                          discs carry no product code, so this table is the only thing
+#                          that can name them.
 #     --cores DIR          a tree already shaped like the card: its top level must be
 #                          _Console, _Computer, _Arcade, _Other, _Utility or
 #                          _ExtraCores. Copied as it stands. _ExtraCores is on the list
@@ -81,6 +86,7 @@ FIRMWARE=''
 EXPECT=''
 MENU=''
 DISCTITLES=''
+DISCTOC=''
 CORES=''
 CONSOLE=''
 COMPUTER=''
@@ -116,6 +122,11 @@ while [ $# -gt 0 ]; do
 	--disctitles)
 		need_arg --disctitles "${2:-}"
 		DISCTITLES=$2
+		shift
+		;;
+	--disctoc)
+		need_arg --disctoc "${2:-}"
+		DISCTOC=$2
 		shift
 		;;
 	--cores)
@@ -241,6 +252,16 @@ fi
 # The devid is looked for on grep's *stdin*, never in its argument vector, so the
 # secret does not reach `ps` or a build log - the same reason it is not a -D.
 #
+# -a is not optional, and its absence was a live bug. A firmware is a binary, and BSD
+# grep - which is the grep on the Mac these archives are actually packaged on - reports
+# nothing and exits 1 for a match in a file it considers binary unless told to treat it
+# as text. GNU grep and busybox both exit 0. So without -a this check inverted on one
+# platform: a perfectly good credentialled firmware was refused, under the message below
+# telling the packager the credentials were missing. That is this guard failing in the
+# same direction as the bug it exists to catch, which is the worst way for a check to be
+# wrong - and the temptation it creates is to pass --no-ss-creds to get past it, which
+# would ship a scraper-less firmware as though that had been the intention.
+#
 # Not fatal when the env file is absent: somebody with no credentials of their own must
 # still be able to package a build. --no-ss-creds is how a firmware that is meant to
 # have no scraper in it - the SNAC-only build - says so out loud.
@@ -258,7 +279,7 @@ else
 	if [ -z "$ss_devid" ]; then
 		echo "make_sdcard_root: $SS_ENV has no SS_DEVID, so the firmware could not be" >&2
 		echo "  checked for it." >&2
-	elif ! printf '%s\n' "$ss_devid" | LC_ALL=C grep -F -f - -q "$FIRMWARE"; then
+	elif ! printf '%s\n' "$ss_devid" | LC_ALL=C grep -a -F -f - -q "$FIRMWARE"; then
 		echo "make_sdcard_root: refusing to package - the firmware has no ScreenScraper" >&2
 		echo "developer credentials in it, so no cover art will ever download." >&2
 		echo "  $FIRMWARE" >&2
@@ -325,6 +346,7 @@ put "$FIRMWARE" MiSTer
 chmod 755 "$root/MiSTer"
 [ -z "$MENU" ] || put "$MENU" menu.rbf
 [ -z "$DISCTITLES" ] || put "$DISCTITLES" classicui/disctitles.txt
+[ -z "$DISCTOC" ] || put "$DISCTOC" classicui/disctoc.txt
 
 put "$worker" linux/classic-home/classic-home-restore.sh
 chmod 755 "$root/linux/classic-home/classic-home-restore.sh"
