@@ -1965,6 +1965,32 @@ static void ssf_make_reply_private(const char *path)
 	if (fd >= 0) close(fd);
 }
 
+/*
+  Why a disc scan was not asked for, said once per reason per key.
+
+  Every refusal in disc_art_request() used to be a silent `return 0`, and on 2026-08-11 that
+  cost an evening: a PlayStation disc produced no cover, the log held nothing at all about
+  it, and the cause could not be told apart from outside the process. Four guards can refuse
+  before the request is even built, and from the outside they look identical - so the
+  diagnosis came down to guessing, and two of the guesses were wrong.
+
+  Once per (reason, key) rather than per call, because the dialog asks on every pass of its
+  draw: an unconditional printf here would be sixty lines a second. disc_already_tried() is
+  deliberately still quiet - it is the *expected* steady state after one attempt, so saying
+  it would drown the ones that matter.
+*/
+static void disc_why(const char *reason, const char *key)
+{
+	static char last_reason[96], last_key[128];
+	if (!reason || !reason[0]) reason = "no reason given";
+
+	if (!strcmp(last_reason, reason) && !strcmp(last_key, key)) return;
+	snprintf(last_reason, sizeof(last_reason), "%s", reason);
+	snprintf(last_key, sizeof(last_key), "%s", key);
+
+	printf("ClassicUI: no disc scan for %s - %s\n", key, reason);
+}
+
 int disc_art_request(const char *key, const char *sysid, const char *romnom, const char *serial)
 {
 	if (!key || !key[0]) return 0;
@@ -1992,9 +2018,13 @@ int disc_art_request(const char *key, const char *sysid, const char *romnom, con
 
 	// One in flight. Answer honestly about whose it is, so a dialog that has switched
 	// discs does not sit waiting for a picture of the one before.
-	if (ssf_pid > 0) return !strcmp(ssf_key, key);
+	if (ssf_pid > 0)
+	{
+		disc_why("a fetch for another key is already in flight", key);
+		return !strcmp(ssf_key, key);
+	}
 
-	if (!cfg.classicui_artfetch) return 0;
+	if (!cfg.classicui_artfetch) { disc_why("classicui_artfetch is off", key); return 0; }
 
 	/*
 	  ss_may_request() rather than ss_enabled(), and above disc_already_tried() rather than
@@ -2025,11 +2055,19 @@ int disc_art_request(const char *key, const char *sysid, const char *romnom, con
 	  and must not spend its one attempt on a request that was never made. The dialog calls
 	  this again on its next frame and the gap will have passed.
 	*/
-	if (!ss_may_ask_now(SS_ASK_DELIBERATE)) return 0;
-	if (fetch_pid > 0) return 0;
+	if (!ss_may_ask_now(SS_ASK_DELIBERATE))
+	{
+		disc_why(ss_why(ss_hold_reason()), key);
+		return 0;
+	}
+	if (fetch_pid > 0) { disc_why("the shelf's cover fetcher is busy", key); return 0; }
 
 	const char *systemeid = ss_system_id(sysid, 0);
-	if (!systemeid) return 0;
+	if (!systemeid)
+	{
+		disc_why("this console has no ScreenScraper platform id", key);
+		return 0;
+	}
 
 	/*
 	  Named before the tried-list is consulted, because the name is half of the miss key and
@@ -2043,8 +2081,12 @@ int disc_art_request(const char *key, const char *sysid, const char *romnom, con
 	char discnom[256];
 	snprintf(discnom, sizeof(discnom), "%s", (romnom && romnom[0]) ? romnom : key);
 
-	if (art_ss_miss_known(systemeid, discnom)) return 0;
-	if (disc_already_tried(key)) return 0;
+	if (art_ss_miss_known(systemeid, discnom))
+	{
+		disc_why("the database has already said it has no cover for this", key);
+		return 0;
+	}
+	if (disc_already_tried(key)) return 0;   // quiet: the dialog asks on every frame
 
 	/*
 	  What to ask the database for. The essay that used to be here said serialnum was
