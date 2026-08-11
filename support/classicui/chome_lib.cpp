@@ -1861,6 +1861,7 @@ const char *lib_sort_name(int sort)
 	case SORT_TITLE:  return "Title A-Z";
 	case SORT_SYSTEM: return "System";
 	case SORT_ADDED:  return "Recently Added";
+	case SORT_FAVS:   return "Favourites First";
 	}
 	return "?";
 }
@@ -1893,6 +1894,22 @@ static int cmp_entry(const void *a, const void *b)
 		break;
 	case SORT_RECENT:
 		if (ia->plays != ib->plays) return (int)ib->plays - (int)ia->plays;
+		break;
+	/*
+	  Favourites first, and a SORT rather than a filter - Dinofly asked which it should be.
+
+	  A filter already exists: Favourites is the first card on the shelf, so a view holding
+	  only them is one press away and duplicating it here would give the same thing two
+	  controls that could disagree. What a sort adds is the thing the filter cannot - the
+	  whole library still browsable, with the ones you care about at the front, so walking
+	  right past the end of your favourites lands you in everything else rather than in a
+	  dead end.
+
+	  Ties fall through to the title compare below, so within each group the order is the
+	  one a player can predict rather than whatever the scan happened to produce.
+	*/
+	case SORT_FAVS:
+		if (!ia->fav != !ib->fav) return ia->fav ? -1 : 1;
 		break;
 	default:
 		break;

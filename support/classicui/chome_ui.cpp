@@ -1689,6 +1689,31 @@ static const char *marq_fit_at(const char *s, int scale, int maxpx, int focused,
 #define CARD_RING 2
 static int card_shadow(int h) { int sd = h / 40; return sd < 2 ? 2 : sd; }
 
+/*
+  Whether the shelf is where the player's presses are going.
+
+  The shelf, the menu bar and the disc badge are three places one cursor can be, and until
+  now only two of them said so: the bar highlights its entry, the badge breathes, and the
+  centre card kept its bright ring the whole time. So moving up to the badge lit TWO things
+  at once and the player had to remember which one a press would reach - Dinofly's report,
+  and it is the sort of thing that is obvious the moment somebody browses between the three.
+
+  The card still needs to show WHICH card is current, because it is where a press will land
+  when focus comes back. So the ring stays and only its colour changes: COL_FOCUS while the
+  shelf has the cursor, COL_DIM while something else does. That is the ordinary distinction
+  between an active and an inactive selection, and it costs no geometry - the ring is the
+  same rectangle either way, so every partial-repaint band and every row the slide records
+  is unchanged.
+
+  An overlay panel counts as focus being elsewhere, and deliberately: draw_menubar() already
+  draws the bar as focused while a panel it opened is up (see its call in draw_frame), so a
+  dim card under an open panel agrees with the bar above it rather than competing with it.
+*/
+static int shelf_has_focus()
+{
+	return screen == SCR_HOME;
+}
+
 static void draw_card(const chome_entry *e, int cx, int bottom, int w, int h, int selected)
 {
 	int x = cx - w / 2, y = bottom - h;
@@ -1833,8 +1858,10 @@ static void draw_card(const chome_entry *e, int cx, int bottom, int w, int h, in
 
 	if (selected)
 	{
+		// Bright while the shelf has the cursor, muted while the bar or the badge does.
+		// See shelf_has_focus() for why the ring is dimmed rather than dropped.
 		gfx_frame_rect(x - CARD_RING, y - CARD_RING, w + 2 * CARD_RING, h + 2 * CARD_RING,
-			COL_FOCUS, CARD_RING);
+			shelf_has_focus() ? COL_FOCUS : COL_DIM, CARD_RING);
 	}
 	else
 	{
@@ -2757,8 +2784,27 @@ static int build_legend(legend_pair *out, int max)
 			out[n].dim = busy;
 			n++;
 		}
-		else if (st && n < max) { out[n++] = { CH_DOWN, "dpad_down", "Lock", "Lock", 0, COL_WHITE }; }
-		if (st && n < max) { out[n++] = lp(LBL_X, "Delete", "Del"); }
+		/*
+		  And it says which way the toggle goes. slot_state() answers 0 empty, 1 kept,
+		  2 locked, and Down on a locked slot unlocks it (lib_set_lock at :10333 passes
+		  `st == 2 ? 0 : 1`) - so a prompt reading "Lock" on a locked slot names the
+		  opposite of what the press does. The same class of lie as the one below, found
+		  while fixing it.
+		*/
+		else if (st && n < max)
+		{
+			out[n++] = { CH_DOWN, "dpad_down", st == 2 ? "Unlock" : "Lock",
+				st == 2 ? "Unlock" : "Lock", 0, COL_WHITE };
+		}
+
+		/*
+		  Delete only on a slot it will actually delete. A locked slot refuses the press
+		  (accept()'s SCR_SUSPEND Delete branch nudges on `st == 2`, chome_ui.cpp:13928),
+		  which is the whole point of locking one - so offering "Delete" there promises a
+		  destructive action the screen has already decided not to perform. Left as a known
+		  smaller lie when the empty-slot prompts were fixed; there is no reason to keep it.
+		*/
+		if (st == 1 && n < max) { out[n++] = lp(LBL_X, "Delete", "Del"); }
 		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
 		break;
 	}
@@ -9147,12 +9193,80 @@ static void draw_about_panel(const chome_profile *p)
 	}
 }
 
+/*
+  One sentence per order, in one function so the screen and the test cannot hold different
+  opinions about what an order does - the same rule disc_dlg_legend() and cov_dirty() follow
+  further up.
+
+  Each is written to the 240p panel width so the wrap never needs a third line.
+  "Recently Added" is the honest one: the scan has no file date to sort on, so it falls
+  through to title order, and saying so beats a player wondering why it looks alphabetical.
+  See cmp_entry() in chome_lib.cpp - SORT_ADDED has no case of its own. "Recently Played"
+  and "Times Played" are also the same order today, which the wording admits rather than
+  hides; making them differ needs a last-played timestamp the play file does not keep.
+*/
+static const char *sort_help_for(int mode)
+{
+	switch (mode)
+	{
+	case SORT_RECENT: return "Most played first.";
+	case SORT_PLAYS:  return "Most played first, by number of plays.";
+	case SORT_TITLE:  return "Alphabetical, ignoring case.";
+	case SORT_SYSTEM: return "Grouped by console, in the shelf's own order.";
+	case SORT_ADDED:  return "Not yet dated, so this is title order for now.";
+	case SORT_FAVS:   return "Favourites first, then everything else.";
+	}
+	return "";
+}
+
+#ifdef CHOME_HOST_TEST
+// The sentence the sort screen would show for the row the cursor is on. Test-only, and it
+// asks sort_help_for() so a test cannot pass against wording the screen does not use.
+const char *chome_test_sort_help() { return sort_help_for(sort_idx); }
+#endif
+
+/*
+  Sort by - and it says what each order actually does now.
+
+  It was the one list in the front-end with no sentence under it. Dinofly's report, and the
+  names are exactly where a sentence earns its place: "Recently Played" and "Times Played"
+  are different words for orders a player cannot tell apart from the labels, "System" does
+  not say which order the systems come in, and "Favourites First" has to say that it keeps
+  the rest of the library rather than hiding it - otherwise it reads as a filter, which is
+  the one thing it deliberately is not.
+
+  Panel geometry is the Online Covers pattern, not a new one: rows, then a footer band
+  reserved out of the panel height, then the help wrapped into it. `foot` is two lines here
+  where that panel takes three, because none of these sentences needs a third.
+*/
 static void draw_sort_panel(const chome_profile *p)
 {
+	int s = p->ts_ui;
+	int foot = 2 * 10 * s + 4 * s;
+	int botpad = 6 * s;
+
+	/*
+	  draw_panel(), not draw_panel_ex() with a computed height. Sizing this panel to its
+	  content moved its plate, and a dimming test three sections away measures the sort
+	  panel's top edge against the profile's own panel_top - it failed the moment I made
+	  this panel a different shape. That test is right to: this is the standard list panel
+	  and half the front-end's geometry is stated relative to it, so the help goes inside
+	  the box the profile already reserves rather than growing the box.
+	*/
 	panel_box b = draw_panel(p, "Sort by");
+
 	const char *rows[SORT_COUNT];
 	for (int i = 0; i < SORT_COUNT; i++) rows[i] = lib_sort_name(i);
 	draw_rows(&b, rows, 0, SORT_COUNT, sort_idx);
+
+	int fy = b.y + b.h - botpad - foot + 2 * s;
+	int helpw = b.w - 12 * s;
+	const char *body = sort_help_for(sort_idx);
+
+	char wrapped[4][64];
+	int nl = wrap_text(body, helpw, s, wrapped, 2);
+	for (int i = 0; i < nl; i++)
+		gfx_text(wrapped[i], b.x + 6 * s, fy + i * 10 * s, s, COL_PANELLO, 0);
 }
 
 /* ------------------------------------------------------------- browser ---- */
@@ -11703,9 +11817,23 @@ static int susp_matches(const chome_item *it)
   shelf the strip is a display of files that already exist, not somewhere to save into, so
   the full three are shown there as before.
 */
+/*
+  ...and the test is whether THIS strip's game is the running one, not whether any game is.
+
+  ig_active only says the in-game menu is open, and the in-game menu can browse the shelf -
+  so a player running Destruction Derby (PSX: two slots, one of them reserved) could open
+  the strip on a SNES card and be shown ONE slot, hiding states 2 and 3 that exist on the
+  card. The reserved-slot arithmetic is a fact about the core that will be saved into, and
+  when the strip is about a game that is not running, nothing is going to be saved into it:
+  it is a display of files, which is exactly the shelf case the fall-through already covers.
+
+  Same shape as the defect this pair of screens has now produced twice - a screen answering
+  about one item while showing another. Found by the agent that fixed the empty-slot cursor,
+  noted rather than fixed there because it was not what had broken.
+*/
 static int user_slots()
 {
-	if (!ig_active || !ss_hk_valid) return CH_SLOTS_USER;
+	if (!ig_is_running(susp_target()) || !ss_hk_valid) return CH_SLOTS_USER;
 
 	const ss_hooks *h = ss_get();
 	if (!h->found_save && !h->found_load) return CH_SLOTS_USER;
@@ -13293,6 +13421,36 @@ void chome_core_boot()
 }
 
 int chome_screen_id() { return screen; }
+
+#ifdef CHOME_HOST_TEST
+/*
+  The legend's prompts as text, for tests.
+
+  Added because every legend claim so far has had to be checked in pixels, and counting ink
+  cannot tell "Delete disappeared" from "Lock got two characters longer" when both happen in
+  the same bar. It is also the assertion that would have caught the empty-slot lie outright:
+  "the strip offers Play on a slot that is empty" is a sentence about labels, and reading it
+  as a population of lit pixels was how it went unnoticed.
+
+  Long labels, joined by '|', in the order the bar draws them. Test-only, and it calls the
+  same build_legend() the drawing does so it cannot hold a second opinion.
+*/
+void chome_test_legend(char *out, int len)
+{
+	if (!out || len < 1) return;
+	out[0] = 0;
+
+	legend_pair pairs[8];
+	int n = build_legend(pairs, 8);
+
+	int at = 0;
+	for (int i = 0; i < n && at < len - 1; i++)
+	{
+		const char *l = pairs[i].label ? pairs[i].label : "";
+		at += snprintf(out + at, (size_t)(len - at), "%s%s", at ? "|" : "", l);
+	}
+}
+#endif
 int chome_sel_index() { return sel; }
 
 // See chome.h, and the comment on cov_state_of() for why the availability is an argument.
