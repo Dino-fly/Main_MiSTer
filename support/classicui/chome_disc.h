@@ -404,4 +404,12 @@ int disc_serial_for(int type, int data_lba0, char *out, int outsz);
 // The volume label out of an ISO primary volume descriptor.
 int disc_label_at(int data_lba0, char *out, int outsz);
 
+/*
+  The title a Sega disc writes into its own header - Saturn and Mega CD only, 0 for
+  everything else. Preferred over the volume label above wherever it answers, which is
+  measured rather than assumed: see the numbers in disc_title_at()'s own comment, and
+  note that seven of the thirty-seven Saturn discs tested have no volume label at all.
+*/
+int disc_title_at(int type, int data_lba0, char *out, int outsz);
+
 #endif
