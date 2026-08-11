@@ -6275,8 +6275,18 @@ static void disc_dlg_get(disc_dlg *d)
 	  Mega Drive game when the disc is a Mega-CD one cannot match anything. Three consoles
 	  were scraping against the platform next door - see disc_scrape_id() in chome_disc.cpp.
 	*/
+	/*
+	  ...and `running` is not the question either, which is the second half of the same
+	  mistake. d->sysidx is the core that was handed the disc - "md" for a Mega CD disc -
+	  so once the game started, the dialog asked ScreenScraper for a Mega Drive title and
+	  got a 404 for a disc whose cover it had already fetched correctly as Mega CD minutes
+	  earlier. The disc did not change when it started playing.
+
+	  So the drive's own answer wins whenever there is one, and d->sysidx is only the
+	  fallback for a disc-shaped item that really did come from a file.
+	*/
 	int art_sx = (disc_chosen_sys >= 0) ? disc_chosen_sys
-		: (d->running ? d->sysidx : disc_sys_by_id(disc_scrape_id(disc_type())));
+		: disc_sys_by_id(disc_scrape_id(disc_type()));
 	if (art_sx < 0) art_sx = d->sysidx;
 
 	/*
@@ -6292,8 +6302,18 @@ static void disc_dlg_get(disc_dlg *d)
 	  answer with the wrong game's cover. A running disc has no serial to send: it came
 	  from a file, and the filename is the better key anyway.
 	*/
-	const char *scrape = d->running ? (d->title[0] ? d->title : d->key) : disc_scrape_name();
-	const char *ser = d->running ? 0 : disc_serial();
+	/*
+	  The pressed disc's own name and serial whenever the drive has given us one - which,
+	  now that disc_state_refresh() is called whoever owns the drive, includes while the game
+	  is running. The mounted name is only right for an item that genuinely came from a file:
+	  for a disc handed to a core it is the firmware's save-name, "GM_MK-4407_-00", which is
+	  neither the cache key the cover was stored under nor anything the database has heard of.
+	*/
+	const char *own = disc_scrape_name();
+	int have_disc = (disc_serial()[0] || (own && own[0]));
+
+	const char *scrape = have_disc ? own : (d->title[0] ? d->title : d->key);
+	const char *ser = have_disc ? disc_serial() : 0;
 
 	if (d->key[0] && ((scrape && scrape[0]) || (ser && ser[0])))
 		disc_art_request(d->key, lib_sys(art_sx) ? lib_sys(art_sx)->id : 0, scrape, ser);
@@ -14465,6 +14485,13 @@ int chome_handle(uint32_t key)
 	}
 
 	int drive_is_ours = !disc_handed_to_core && !core_holds_disc() && !rip_busy();
+
+	/*
+	  The identity first, and unconditionally: it comes out of a file in tmpfs, not off the
+	  drive, so it is as readable while a core is playing the disc as it is on the shelf.
+	  Only the supervision below is the drive's business. See disc_state_refresh().
+	*/
+	disc_state_refresh();
 
 	if (drive_is_ours) disc_poll();
 	if (drive_is_ours && disc_take_dirty())
