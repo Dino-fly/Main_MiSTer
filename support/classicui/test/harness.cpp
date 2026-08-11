@@ -711,6 +711,16 @@ static void build_sd()
 	*/
 	touch(ROOT "/savestates/SNES", "Super Mario World (USA)_1.ss", 256);
 
+	/*
+	  The ActRaiser shape from the device (2026-08-11): the first slot empty, the real
+	  state in slot 2 with its thumbnail, and a second state in slot 4 - which is past
+	  the three slots the strip shows, so it must neither draw nor leak into another
+	  tile. This is the fixture behind "ENT plays the state the strip opened on".
+	*/
+	touch(ROOT "/savestates/SNES", "The Legend of Zelda - A Link to the Past (Europe)_2.ss", 256);
+	touch(ROOT "/savestates/SNES", "The Legend of Zelda - A Link to the Past (Europe)_4.ss", 256);
+	make_cover(ROOT "/savestates/SNES/The Legend of Zelda - A Link to the Past (Europe)_2.png", 320, 240, 0xff35608e);
+
 	// The Game Boy game gets a state too, so the in-game load path has something
 	// to act on.
 	mkpath(ROOT "/savestates/Gameboy");
@@ -13399,6 +13409,41 @@ static void strip_pixels(int *slots, int *message)
 }
 
 /*
+  Which slot the strip's cursor is on, read off the framebuffer the same way
+  strip_pixels() reads the tiles: COL_FOCUS is the cursor ring, and in the strip's own
+  band nothing else is that colour. Returns the tile the ring surrounds, using
+  draw_suspend()'s own geometry (tiles at x0 + i * (tw + gap), the ring 3 px outside
+  its tile), or -1 when no ring is drawn.
+
+  Read back rather than trusted, because this is exactly what the device report got
+  wrong by eye: a filled tile's green frame reads as "selected" in a capture, and the
+  actual ring was two tiles away on an empty slot.
+*/
+static int strip_focused_slot(int nslots)
+{
+	const chome_profile *p = theme_get();
+	uint32_t *fb = harness_fb_shown();
+	int w = gfx_w(), h = gfx_h();
+	if (!fb || w < 1 || h < 1 || nslots < 1) return -1;
+
+	int top = p->h - p->safe_y - p->strip_h;
+	int bot = p->y_legend - 6 * p->ts_ui;
+	if (top < 0) top = 0;
+	if (bot > h) bot = h;
+
+	int minx = -1;
+	for (int y = top; y < bot; y++)
+		for (int x = 0; x < w; x++)
+			if ((fb[(size_t)y * w + x] | 0xff000000u) == COL_FOCUS)
+				if (minx < 0 || x < minx) minx = x;
+
+	if (minx < 0) return -1;
+
+	int x0 = (p->w - (nslots * p->thumb_w + (nslots - 1) * p->thumb_gap)) / 2;
+	return (minx + 3 - x0) / (p->thumb_w + p->thumb_gap);
+}
+
+/*
   The row the strip's panel starts on, read off the framebuffer rather than from the
   metrics: its top edge is a rule in COL_PANELLO across the whole width, and with the menu
   bar closed - which it is, on the way down into the strip - nothing else on the screen
@@ -13783,6 +13828,80 @@ static void assert_launch_into_state()
 
 	check(body[0] != 0, "choosing a slot arms the resume record so the state is loaded");
 	check(strstr(body, "Tetris") != 0, "naming the game that was chosen");
+
+	unlink(rec);
+	press(KEY_ESC, 12);
+	frame(6);
+
+	/*
+	  The same start when the first slot is empty, which is the device report of
+	  2026-08-11 verbatim: states in slots 2 and 4 (files _2 and _4), slot 1 empty. The
+	  strip drew slot 2's thumbnail, the legend offered Play, and ENT did nothing at all -
+	  three times, from a cold boot, with disc support on and then off. The missing piece
+	  was the cursor: the strip opened it on slot 1, EMPTY, whose refusal is a 160ms
+	  flash no capture can hold, while slot 2's green frame read as the selection.
+
+	  So this drives exactly what the player did - Down onto the strip, then ENT with no
+	  slot movement - and expects the state to be armed. The cursor's position is read
+	  back off the framebuffer first, because "which slot is selected" is the fact the
+	  device captures could not settle by eye.
+	*/
+	printf("\n== starting at a suspend point when the first slot is empty ==\n");
+
+	check(select_titled("Link to the Past"),
+		"the shelf can be parked on a game whose first slot is empty");
+
+	press(KEY_DOWN, 18);                  // into its suspend strip
+	frame(8);
+	dump("suspend-first-slot-empty");
+
+	check(strip_focused_slot(3) == 1,
+		"the strip opens with its cursor on the slot that actually holds a state");
+
+	/*
+	  The legend follows the cursor's slot, not the strip: on the empty first slot
+	  neither Play nor Lock nor Delete can do anything, so none of them may be offered.
+	  Compared as the legend band's pixels across the move rather than by naming
+	  glyphs, because "it visibly changed when I stepped onto EMPTY" is the whole of
+	  what a player can see. Left is a legal move (no nudge), so nothing else below
+	  the strip differs between the two frames.
+	*/
+	{
+		const chome_profile *p = theme_get();
+		int ly = p->y_legend - 6 * p->ts_ui;
+		unsigned long on_filled = harness_fb_hash_box(0, ly, gfx_w(), gfx_h());
+		press(KEY_LEFT, 8);
+		frame(6);
+		unsigned long on_empty = harness_fb_hash_box(0, ly, gfx_w(), gfx_h());
+		check(on_filled != on_empty,
+			"the legend stops offering Play/Lock/Delete on an empty slot");
+		check(strip_focused_slot(3) == 0, "with the cursor now on the empty first slot");
+	}
+
+	// ENT there refuses: an empty slot has nothing to start, and this must stay a
+	// refusal rather than become a launch from the beginning.
+	press(KEY_ENTER, 20);
+	frame(10);
+	{
+		FILE *f = fopen(rec, "rb");
+		check(f == 0, "ENT on the empty slot arms nothing");
+		if (f) fclose(f);
+	}
+
+	// Back to the slot the strip opened on, and the press the player made.
+	press(KEY_RIGHT, 8);
+	press(KEY_ENTER, 20);
+	frame(10);
+
+	body[0] = 0;
+	f = fopen(rec, "rb");
+	if (f) { if (fread(body, 1, sizeof(body) - 1, f)) {} fclose(f); }
+	printf("  suspend record: %s", body[0] ? body : "(none)\n");
+
+	check(body[0] != 0, "ENT on the slot the strip opened on starts the game");
+	check(strstr(body, "Link to the Past") != 0, "naming the game whose slot it was");
+	check(strstr(body, "\n1\n") != 0,
+		"and the slot line says index 1 - the file with the _2 suffix, not a renumbering");
 
 	unlink(rec);
 	press(KEY_ESC, 12);

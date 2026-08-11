@@ -1118,6 +1118,29 @@ static int slot_state(const chome_item *it, int n)
 	return (it->slots >> (n * 2)) & 3;
 }
 
+/*
+  Where the strip's cursor starts when it opens.
+
+  Slot 1 unconditionally was how "Play on a suspend point does nothing" happened on the
+  device (2026-08-11): ActRaiser's states were in slots 2 and 4, so the strip opened with
+  EMPTY under the cursor while slot 2 - the only tile with a picture, framed in green -
+  read as the selected one. ENT on the empty slot is a nudge, a 160ms flash no screen
+  capture can hold, so three presses at three hold lengths all looked like the button
+  being ignored outright.
+
+  From the shelf everything the strip offers - Play, Lock, Delete - needs a filled slot,
+  so the cursor starts on the first slot that has one. Inside the running game slot 1
+  stays the start on purpose: an empty slot is what Y saves into there, and defaulting
+  the cursor onto a filled one would point that save at a state the player kept.
+*/
+static int susp_open_slot(const chome_item *it)
+{
+	if (!it || ig_is_running(it)) return 0;
+	for (int i = 0; i < user_slots(); i++)
+		if (slot_state(it, i)) return i;
+	return 0;
+}
+
 static void nudge()
 {
 	nudge_until = GetTimer(160);
@@ -2715,8 +2738,18 @@ static int build_legend(legend_pair *out, int max)
 			if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
 			break;
 		}
-		if (here && ss_can_load() && n < max) { out[n++] = lp(LBL_A, "Load", "Load"); }
-		else if (n < max) { out[n++] = lp(LBL_A, "Resume", "Play"); }
+		/*
+		  Play, Lock and Delete all need something under the cursor - each of them nudges
+		  on an empty slot - so an empty slot does not offer them. This legend used to,
+		  unconditionally, and that is half of how the device report of 2026-08-11 read the
+		  way it did: "ENT Play" under a strip whose cursor was on EMPTY testified that the
+		  press should have worked, when the press was never going to do anything. The same
+		  rule this file already states for Version on a scrolled-away card: a legend must
+		  not lie about what the button would do.
+		*/
+		int st = slot_state(susp_target(), slot_idx);
+		if (st && here && ss_can_load() && n < max) { out[n++] = lp(LBL_A, "Load", "Load"); }
+		else if (st && n < max) { out[n++] = lp(LBL_A, "Resume", "Play"); }
 		if (here && ss_can_save() && n < max)
 		{
 			int busy = (pend_slot >= 0);
@@ -2724,8 +2757,8 @@ static int build_legend(legend_pair *out, int max)
 			out[n].dim = busy;
 			n++;
 		}
-		else if (n < max) { out[n++] = { CH_DOWN, "dpad_down", "Lock", "Lock", 0, COL_WHITE }; }
-		if (n < max) { out[n++] = lp(LBL_X, "Delete", "Del"); }
+		else if (st && n < max) { out[n++] = { CH_DOWN, "dpad_down", "Lock", "Lock", 0, COL_WHITE }; }
+		if (st && n < max) { out[n++] = lp(LBL_X, "Delete", "Del"); }
 		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
 		break;
 	}
@@ -10191,7 +10224,7 @@ static void move_v(int dir)
 			chome_item *it = susp_target();
 			if (!it) { nudge(); return; }     // folders have no suspend points
 			lib_refresh_slots(it);
-			slot_idx = 0;
+			slot_idx = susp_open_slot(it);
 			go_screen(SCR_SUSPEND);
 		}
 		break;
@@ -10315,7 +10348,7 @@ static void move_v(int dir)
 
 			susp_is_disc = 1;
 			lib_refresh_slots(d.susp);
-			slot_idx = 0;
+			slot_idx = susp_open_slot(d.susp);
 			go_screen(SCR_SUSPEND);
 			break;
 		}
@@ -11103,7 +11136,20 @@ static void accept()
 	case SCR_SUSPEND:
 	{
 		chome_item *it = susp_target();
-		if (!it || !slot_state(it, slot_idx)) { nudge(); return; }
+		if (!it || !slot_state(it, slot_idx))
+		{
+			/*
+			  Refusing out loud. The nudge is a 160ms flash, which is invisible in a
+			  screen capture and easy to miss on a couch - so this refusal used to
+			  leave no trace anywhere, and diagnosing it from the device meant proving
+			  a negative. One line names the slot and the game so a log can settle in
+			  one read what took three instrumented key presses on 2026-08-11.
+			*/
+			if (it) printf("ClassicUI: suspend slot %d of \"%s\" is empty - nothing to start\n",
+				slot_idx + 1, it->title);
+			nudge();
+			return;
+		}
 
 		// Inside that very game we restore directly, through the same status bit
 		// the OSD pulses, and drop straight back into play.
