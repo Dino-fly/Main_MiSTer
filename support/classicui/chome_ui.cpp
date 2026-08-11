@@ -7435,9 +7435,15 @@ static const char disc_gen_key[] = "*generated*";
 /*
   arctangent, as a table, because this file has no math.h and does not want one.
 
-  Same reasoning as disc_sin[] and gfx_disc_cover() in chome_gfx.cpp: the values are
-  written out, and interpolating between them is cheaper and more predictable than pulling
-  in libm for a curve that is used in exactly one place.
+  Same reasoning as disc_sin_q8() above and gfx_disc_cover() in chome_gfx.cpp: the values
+  are written out, and interpolating between them is cheaper and more predictable than
+  pulling in libm for a curve that is used in exactly one place.
+
+  It said disc_sin[] until now, which is a table this tree no longer has - smoothing the
+  disc to a distinct angle per frame replaced it with the q8 pair above, and the comment
+  kept pointing at the thing it had been derived from. A reference to a symbol that does not
+  exist is worse than no reference: the next person greps for it, finds nothing, and has to
+  work out whether the code or the comment is the stale one.
 
   tab[i] is atan(i/64) in units where a full turn is 4096, so an eighth of a turn - the
   octant this covers - is 512. Linear interpolation between the entries is accurate to
