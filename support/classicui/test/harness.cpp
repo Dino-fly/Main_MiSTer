@@ -2808,6 +2808,133 @@ static void assert_physical_disc()
 		check(disc_identify_at(L) == DISC_T_3DO, "the 0x5A run is a 3DO disc");
 	}
 
+	/*
+	  What a Sega disc says about itself, and which of the two names we keep.
+
+	  The bytes are the real ones, copied off the Sega Rally Championship disc in the
+	  drive on 2026-08-11 - dd if=/dev/sr0 - rather than composed to fit the parser:
+
+	    0x00 "SEGA SEGASATURN "   0x10 "SEGA ENTERPRISES"
+	    0x20 "MK-81207  "         0x2A "V1.000"   0x30 "19951218"
+	    0x60 "SEGA RALLY CHAMPIONSHIP"
+
+	  Two separate defects were found here and both are asserted, because either one
+	  alone leaves a physical Sega disc unidentified:
+
+	  1. The serial was never read. The helper called disc_serial_at() - the PlayStation
+	     reader, which walks sectors 16..64 for Sony prefixes - instead of the dispatcher
+	     disc_serial_for(). On this disc it found nothing, correctly, and wrote "". So
+	     no physical Saturn or Mega CD disc has ever produced a serial, while the readers
+	     for both sat in the file unused.
+
+	  2. The name came from the ISO volume id, which for Saturn is the worse of the two
+	     strings and sometimes is not there at all. Measured against ScreenScraper over
+	     the 37 Saturn discs on the card: volume id 23/37, header title 30/37, and seven
+	     discs have no volume id whatsoever - Daytona USA among them.
+	*/
+	{
+		fake_disc d; memset(&d, 0, sizeof(d));
+		fake_put(&d, L, 0, "SEGA SEGASATURN SEGA ENTERPRISES", 32, 0);
+		fake_put(&d, L, 0, "MK-81207  V1.000", 16, 0x20);
+		fake_put(&d, L, 0, "19951218", 8, 0x30);
+		fake_put(&d, L, 0, "SEGA RALLY CHAMPIONSHIP", 23, 0x60);
+		disc_set_reader(fake_read, &d);
+
+		char ser[DISC_SERIAL_LEN] = {};
+		check(disc_serial_for(DISC_T_SATURN, L, ser, sizeof(ser)) > 0 && !strcmp(ser, "MK-81207"),
+			"a Saturn disc's product number is read through the dispatcher");
+
+		ser[0] = 0;
+		check(disc_serial_at(L, ser, sizeof(ser)) == 0 && !ser[0],
+			"and the PlayStation reader finds nothing on it, which is what the helper used to call");
+
+		char t[DISC_LABEL_LEN] = {};
+		check(disc_title_at(DISC_T_SATURN, L, t, sizeof(t)) > 0
+			&& !strcmp(t, "SEGA RALLY CHAMPIONSHIP"),
+			"the title comes out of the disc's own header, spaces and all");
+
+		check(disc_title_at(DISC_T_PSX, L, t, sizeof(t)) == 0,
+			"and nothing is claimed for a PlayStation disc, which has no such header");
+	}
+
+	/*
+	  A Saturn disc with no ISO volume id at all - seven of the thirty-seven on the card
+	  are like this, so it is the normal case rather than a corrupt one. Before the title
+	  reader these were nameless on the shelf.
+	*/
+	{
+		fake_disc d; memset(&d, 0, sizeof(d));
+		fake_put(&d, L, 0, "SEGA SEGASATURN SEGA ENTERPRISES", 32, 0);
+		fake_put(&d, L, 0, "MK-81200  ", 10, 0x20);
+		fake_put(&d, L, 0, "DAYTONA USA", 11, 0x60);
+		disc_set_reader(fake_read, &d);
+
+		char lbl[DISC_LABEL_LEN] = {};
+		check(disc_label_at(L, lbl, sizeof(lbl)) == 0,
+			"there is no ISO volume descriptor to read a label from");
+
+		check(disc_title_at(DISC_T_SATURN, L, lbl, sizeof(lbl)) > 0 && !strcmp(lbl, "DAYTONA USA"),
+			"and the header still names the game, which is the whole point of preferring it");
+	}
+
+	/*
+	  And the whole way through disc_ingest_identify(), which is what actually decides the
+	  name and serial a disc is known by - the checks above only prove the readers work.
+
+	  Worth doing separately because the divergence between this path and the helper's is
+	  what let the serial bug ship: this copy always called disc_serial_for() and so was
+	  always right, while the helper called the PlayStation reader. A test of the readers
+	  alone would have passed in both worlds.
+	*/
+	{
+		fake_disc d; memset(&d, 0, sizeof(d));
+		fake_put(&d, 0, 0, "SEGA SEGASATURN SEGA ENTERPRISES", 32, 0);
+		fake_put(&d, 0, 0, "MK-81307  ", 10, 0x20);
+		fake_put(&d, 0, 0, "J:AZEL PANZER DRAGOON RPG", 25, 0x60);
+		// ...and a volume id that is real, so this proves an order and not just a fallback.
+		static const char *const none[] = { "" };
+		fake_iso(&d, 0, "AZEL_1", "AZEL_1", none, 0);
+		fake_put(&d, 0, 0, "SEGA SEGASATURN SEGA ENTERPRISES", 32, 0);
+		fake_put(&d, 0, 0, "MK-81307  ", 10, 0x20);
+		fake_put(&d, 0, 0, "J:AZEL PANZER DRAGOON RPG", 25, 0x60);
+
+		disc_ingest_present(1);
+		disc_set_reader(fake_read, &d);
+		disc_ingest_identify(0);
+
+		check(disc_type() == DISC_T_SATURN, "the ingest path calls it a Saturn disc");
+		check(!strcmp(disc_serial(), "MK-81307"),
+			"and gives it the product number the disc carries, which it never used to");
+		check(!strcmp(disc_label(), "J:AZEL PANZER DRAGOON RPG"),
+			"and the disc's own title rather than the AZEL_1 the volume id would have given");
+
+		disc_ingest_present(0);
+	}
+
+	// Mega CD, where the international title wins and a Japanese disc falls back to the
+	// domestic one rather than to a blank.
+	{
+		fake_disc d; memset(&d, 0, sizeof(d));
+		fake_put(&d, L, 0, "SEGADISCSYSTEM", 14, 0);
+		fake_put(&d, L, 0, "SONIC THE HEDGEHOG CD", 21, 0x120);
+		fake_put(&d, L, 0, "SONIC CD", 8, 0x150);
+		disc_set_reader(fake_read, &d);
+
+		char t[DISC_LABEL_LEN] = {};
+		check(disc_title_at(DISC_T_MEGACD, L, t, sizeof(t)) > 0 && !strcmp(t, "SONIC CD"),
+			"a Mega CD disc gives its international title");
+
+		fake_disc j; memset(&j, 0, sizeof(j));
+		fake_put(&j, L, 0, "SEGADISCSYSTEM", 14, 0);
+		fake_put(&j, L, 0, "LUNAR THE SILVER STAR", 21, 0x120);
+		disc_set_reader(fake_read, &j);
+
+		t[0] = 0;
+		check(disc_title_at(DISC_T_MEGACD, L, t, sizeof(t)) > 0
+			&& !strcmp(t, "LUNAR THE SILVER STAR"),
+			"and one that left the international field blank falls back to the domestic name");
+	}
+
 	{
 		fake_disc d; memset(&d, 0, sizeof(d));
 		static const char *const none[] = { "" };
@@ -3563,10 +3690,22 @@ static void assert_disc_serials()
 
 		{
 			/*
-			  The disc that started this. A Saturn disc whose serial the table does not
-			  know, but which has a volume label - and the label is what used to go out.
-			  It must not: no volume label was ever indexed as a rom name, and the miss
-			  is charged against the unmatched allowance twice over.
+			  The disc that started this, and the assertion is now the opposite of what it
+			  was, on measurement rather than on preference.
+
+			  It used to require that the serial go out and the label never did, reasoning
+			  that "no volume label was ever indexed as a rom name". That is not true. Asked
+			  about all 37 Saturn discs on the card on 2026-08-11:
+
+			      romnom = ISO volume label     23/37 matched
+			      romnom = disc header title    30/37 matched, none wrong
+			      romnom = product number        0/37 - "MK-81207" and its kind miss
+			      serialnum = product number    11/37
+
+			  So the old order sent the one string that cannot work in place of two that
+			  can. It survived because the serial was empty on every physical Saturn disc
+			  (see disc_serial_for() in chome_disc.cpp), so this branch was unreachable on
+			  real hardware and only ever ran here.
 			*/
 			fake_disc d; memset(&d, 0, sizeof(d));
 			fake_put(&d, L, 0, "SEGA SEGASATURN ", 16, 0);
@@ -3581,8 +3720,10 @@ static void assert_disc_serials()
 				"an unknown Saturn disc still shows its volume label on screen");
 			check(!strcmp(disc_display_name(), "SEGARALLY CHAMPIONSHIP"),
 				"which is what the player sees, and is right");
-			check(disc_scrape_name() && !strcmp(disc_scrape_name(), "MK-81088"),
-				"but the database is asked about the serial instead, never the label");
+			check(disc_scrape_name() && !strcmp(disc_scrape_name(), "SEGARALLY CHAMPIONSHIP"),
+				"and the database is asked about that name, because a product number matches nothing");
+			check(strcmp(disc_scrape_name(), "MK-81088") != 0,
+				"never the bare product number, which is the one string measured to always miss");
 
 			disc_ingest_present(0);
 			(void)disc_take_dirty();

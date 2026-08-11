@@ -511,6 +511,59 @@ int disc_megacd_serial_at(int data_lba0, char *out, int outsz)
 
   PC Engine CD and Neo Geo CD return nothing on purpose - see disc_display_name().
 */
+/*
+  The title a Sega disc carries in its own header, which is not the same string as the
+  ISO9660 volume id and is a much better one.
+
+  Measured against 37 Saturn discs on the card, asking ScreenScraper for each:
+
+    ISO volume id     23/37 matched, and SEVEN discs have no volume id at all - Daytona
+                      USA, Virtua Cop, Panzer Dragoon, Myst, Bug!, Magic Knight Rayearth
+                      and Clockwork Knight are simply nameless on the shelf today.
+    header title      30/37 matched, present on 37 of 37, and not one wrong answer in
+                      the whole set.
+
+  The volume id is also the worse string to *show* somebody, because it is a filename:
+  "B_RANGERS" for Burning Rangers, "S_BOMBERMAN", "AZEL_1" for Panzer Dragoon Saga,
+  "SEGARALLY_CHAMPIONSHIP" with the space missing. The header spells the title out.
+
+  Offsets, from the same field tables as the serial readers above:
+
+    Saturn   0x60, 112 bytes. One field, space-padded.
+    Mega CD  0x150, 48 bytes for the international title, with 0x120 (the domestic one)
+             behind it - a Japanese disc leaves the international field blank rather
+             than absent, so an empty result there falls through rather than winning.
+
+  PlayStation is deliberately absent: a PSX disc has no such header, its volume id is
+  the string "PLAYSTATION" on every single disc (disc_label_at() refuses it by name),
+  and its serial is both present and indexed by ScreenScraper - which the same study
+  measured at 9 of 9 correct. Nothing here would improve it.
+*/
+int disc_title_at(int type, int data_lba0, char *out, int outsz)
+{
+	if (!out || outsz < 2) return 0;
+	out[0] = 0;
+	if (data_lba0 < 0) return 0;
+
+	uint8_t raw[DISC_RAW_SIZE];
+	if (read_raw(data_lba0, raw)) return 0;
+
+	if (type == DISC_T_SATURN)
+	{
+		if (memcmp(raw + 16, "SEGA SEGASATURN", 15)) return 0;
+		return sega_field(raw + 16, 0x60, 112, out, outsz);
+	}
+
+	if (type == DISC_T_MEGACD)
+	{
+		if (!find_bytes(raw + 16, 64, "SEGADISCSYSTEM", 14)) return 0;
+		if (sega_field(raw + 16, 0x150, 48, out, outsz)) return (int)strlen(out);
+		return sega_field(raw + 16, 0x120, 48, out, outsz);
+	}
+
+	return 0;
+}
+
 int disc_serial_for(int type, int data_lba0, char *out, int outsz)
 {
 	if (!out || outsz < 2) return 0;
@@ -752,17 +805,59 @@ const char *disc_display_name()
 */
 const char *disc_scrape_name()
 {
+	// 1. The offline table, by serial. Exact, free, and the best answer there is. This is
+	//    the branch every PlayStation disc takes - the table is largely Sony serials.
 	if (dserial[0])
 	{
 		const char *t = disc_title_for(dserial);
-		return (t && t[0]) ? t : dserial;
+		if (t && t[0]) return t;
 	}
 
+	// 2. The table again, by whatever name the disc gave.
 	if (dlabel[0])
 	{
 		const char *t = disc_title_for(dlabel);
 		if (t && t[0]) return t;
 	}
+
+	/*
+	  3. The disc's own name, unresolved - and this branch is why the order changed.
+
+	  Teaching the helper to read Saturn product numbers (see disc_serial_for() above)
+	  moved every Saturn disc into branch 1, where the table misses: it holds 12762
+	  entries and seven of them begin "MK", so Sega product numbers are effectively not
+	  in it. The old code then returned the bare serial as the name to search for, and
+	  that is measurably the worst thing to send. Asking ScreenScraper for Saturn:
+
+	      romnom "MK-81207"                 miss
+	      romnom "SEGA RALLY CHAMPIONSHIP"  hit
+
+	  over 37 discs, 30 of the header titles matched and not one returned the wrong game.
+	  So a fix that only read the serial would have left Saturn art worse than before it,
+	  which is the sort of thing that is obvious in a measurement and invisible in review.
+
+	  Confined to the two Sega CD systems, because that is where the measurement was taken.
+	  Neo Geo CD and PC Engine CD stay silent - see chome_disc.h: they carry no product code
+	  at all, nobody has shown their volume labels are indexed, and a miss costs the scarce
+	  allowance. Widening this to "any disc with any name" would spend that allowance on a
+	  guess, which is the opposite of what the numbers above licence. It also broke the test
+	  that guards their silence, which is the test doing its job.
+	*/
+	if (dlabel[0] && (dtype == DISC_T_SATURN || dtype == DISC_T_MEGACD)) return dlabel;
+
+	/*
+	  4. The bare serial, last, and only to preserve what a PlayStation disc missing from
+	     the table already did.
+
+	     Flagged rather than fixed, because it is a product call: a serial in romnom is
+	     fuzzy-matched, so it does not just miss, it can answer confidently wrong. Asked
+	     for "SLUS-00594" ScreenScraper returned "Beyblade Burst - Battle Zero" - a real
+	     game, a real cover, and nothing to do with Metal Gear Solid. The narrow fix is
+	     serialnum, which the same study measured at 9 of 9 correct on PlayStation; the
+	     cheap fix is to drop this branch and show the generated disc face instead. Either
+	     beats a wrong cover, and both are Dinofly's to choose.
+	*/
+	if (dserial[0]) return dserial;
 
 	return 0;
 }
@@ -824,12 +919,30 @@ void disc_ingest_identify(int lba0)
 	dtype = disc_identify_at(lba0);
 	dstate = (dtype == DISC_T_UNKNOWN) ? DISC_UNKNOWN : DISC_READY;
 
-	disc_label_at(lba0, dlabel, sizeof(dlabel));
+	// The disc's own title where it has one, the ISO volume id otherwise. Same order as
+	// the helper, and that is not a coincidence to be maintained by hand - see below.
+	if (!disc_title_at(dtype, lba0, dlabel, sizeof(dlabel)))
+		disc_label_at(lba0, dlabel, sizeof(dlabel));
 
 	// After the type, and given it: which identifier a disc carries is a fact about
 	// which console pressed it. See disc_serial_for().
 	disc_serial_for(dtype, lba0, dserial, sizeof(dserial));
 	ddirty = 1;
+
+	/*
+	  This function and the identify block inside helper_main() are the same procedure
+	  written twice - this one for the harness, that one for the drive - and the pair is
+	  how a real bug shipped and stayed shipped.
+
+	  This copy called disc_serial_for() from the day it was written. The helper called
+	  disc_serial_at(), the PlayStation-only reader, so every physical Saturn and Mega CD
+	  disc came out with no serial while the tested path was provably correct. The suite
+	  could not fail: it was not exercising the code that runs on the device.
+
+	  So when either half changes, the other one has to change in the same commit, and
+	  neither is authority for the other. If a third caller ever appears, the answer is to
+	  lift these four lines into one function both call rather than to write them again.
+	*/
 }
 
 /* --------------------------------------------------- probing and backoff ---- */
@@ -1185,8 +1298,46 @@ static void helper_main(const char *dev)
 
 					ser[0] = 0;
 					lbl[0] = 0;
-					disc_serial_at(lba0, ser, sizeof(ser));
-					disc_label_at(lba0, lbl, sizeof(lbl));
+
+					/*
+					  disc_serial_for(), not disc_serial_at(). The difference is which
+					  consoles get a serial at all.
+
+					  disc_serial_at() is the PlayStation reader: it walks sectors 16..64
+					  looking for Sony's publisher prefixes in a boot configuration file.
+					  On a Saturn or a Mega CD disc it finds none - correctly, they are not
+					  there - and writes an empty serial. So every physical Saturn and Mega
+					  CD disc came out unidentified, while disc_saturn_serial_at() and
+					  disc_megacd_serial_at() sat right there in this file, implemented and
+					  commented down to the six malformed Mega CD headers they cope with,
+					  and were never once called on the path that reads a real disc.
+
+					  Measured rather than reasoned: a Sega Rally disc in the drive carries
+					  "MK-81207" at the documented offset - dd off /dev/sr0 shows it - and
+					  the state file this helper wrote said the serial was "".
+
+					  Only this call site was wrong. disc_serial_for() is what the other one
+					  (see above, in the rip path) has always used, which is why a rip names
+					  a Saturn disc properly and the shelf did not.
+
+					  Dispatched on `t` from the line above, and DISC_T_UNKNOWN still routes
+					  to the PlayStation reader inside disc_serial_for(), so a disc that
+					  named no console behaves exactly as it did before this change.
+					*/
+					disc_serial_for(t, lba0, ser, sizeof(ser));
+
+					/*
+					  The disc's own title first, the ISO volume id only if it has none.
+					  See disc_title_at() for the measurement behind that order: on Saturn
+					  the volume id is missing outright on seven of thirty-seven discs and
+					  matches ScreenScraper on 23 where the header title matches 30.
+
+					  Not the other way round even though the volume id is what shipped:
+					  a Sega disc that fills in its own title is describing itself, and a
+					  volume id is a filename that happens to be nearby.
+					*/
+					if (!disc_title_at(t, lba0, lbl, sizeof(lbl)))
+						disc_label_at(lba0, lbl, sizeof(lbl));
 
 					// Named, or nothing there to name: either way the answer is in.
 					if (ser[0] || lbl[0] || t == DISC_T_UNKNOWN) break;
