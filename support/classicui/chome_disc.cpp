@@ -1043,6 +1043,13 @@ int disc_release_due(int flag_on, int watching_now, int helper_alive)
   the identification above is under test; the ioctl plumbing below is not something
   a host test can say anything true about.
 */
+/*
+  The harness drives disc state directly through disc_ingest_present()/identify(), so there
+  is no file to re-read. Present as a no-op rather than ifdef'd out at the call site: the
+  frame loop should not have to know which half of this file it is talking to.
+*/
+void disc_state_refresh() {}
+
 int  disc_watch_start() { watching = 1; return 1; }
 void disc_watch_stop()  { watching = 0; disc_forget(); }
 int  disc_watching()    { return watching; }
@@ -1651,10 +1658,31 @@ void disc_poll()
 	  so the read is trivial; the counter is only there because this is called on every
 	  pass of the draw loop and there is no point doing it thousands of times a second.
 	*/
-	static int skip = 0;
-	if (++skip < 32) return;
-	skip = 0;
+	disc_state_refresh();
+}
 
+/*
+  The helper's answer, read out of /tmp - and safe to call when the core owns the drive.
+
+  Split out of disc_poll() because the two things that function did have completely
+  different costs and completely different rules. Supervising the helper touches the drive
+  and must stop the moment a core takes it; reading this file is a twenty-byte read from
+  tmpfs and touches nothing.
+
+  Keeping them together cost Dinofly a disc dialog with no art. Loading a core re-execs the
+  firmware, so the new process starts with no disc identity at all, and disc_poll() - the
+  only thing that read this file - was gated on the drive still being ours. It never was
+  again. So the running process had no serial, no type and no name for the disc it was
+  playing, and the dialog fell back to the mounted save-name: it asked ScreenScraper for
+  "SONIC CD   " on platform 1 (Mega Drive) under the key GM_MK-4407_-00, got a 404, and
+  looked for a cover file that nothing had ever written - while MK-4407.png, correct and
+  already fetched, sat on the card.
+
+  There is no reason for the identity to disappear when the drive changes hands. The disc
+  has not changed; only who reads it has.
+*/
+void disc_state_refresh()
+{
 	FILE *f = fopen(DISC_STATE_FILE, "r");
 	if (!f) return;
 

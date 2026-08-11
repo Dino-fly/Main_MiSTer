@@ -419,4 +419,12 @@ int disc_title_at(int type, int data_lba0, char *out, int outsz);
 */
 int disc_type_has_serial(int type);
 
+/*
+  Re-read the helper's answer out of /tmp. Cheap - a twenty-byte tmpfs read - and it touches
+  no device, so unlike disc_poll() it is safe to call when a core owns the drive. That case
+  is the reason it exists: a core load re-execs the firmware, and without this the new
+  process has no idea which disc it is playing. See the note on the definition.
+*/
+void disc_state_refresh();
+
 #endif
