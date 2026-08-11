@@ -3863,6 +3863,33 @@ static void assert_disc_serials()
 			(void)disc_take_dirty();
 		}
 
+		{
+			/*
+			  ...unless its shape is in disctoc.txt, which is how both of those consoles
+			  get named at all. The lookup itself needs the drive and is not reachable
+			  here; the decision it feeds is, and that decision was wrong once.
+
+			  disc_scrape_name() releases a label standing beside a serial containing ':'
+			  on the grounds that only the table produces such a pair. That holds only if
+			  an unmatched shape leaves no label behind - and the first version of the
+			  helper left the disc's own. Harmless on PC Engine CD, which has no label to
+			  leave; on Neo Geo CD it meant "DD CD" went to the database as a game name.
+			*/
+			char ser[DISC_SERIAL_LEN], lbl[DISC_LABEL_LEN];
+
+			snprintf(lbl, sizeof(lbl), "DD CD");           // what the disc called itself
+			disc_shape_identity("14:198765", 0, ser, sizeof(ser), lbl, sizeof(lbl));
+			check(!strcmp(ser, "14:198765"),
+				"an unmatched shape is still the disc's identity - the cache needs one");
+			check(!lbl[0],
+				"but a Neo Geo CD house code is dropped, not passed off as a table title");
+
+			snprintf(lbl, sizeof(lbl), "DD CD");
+			disc_shape_identity("20:287889", "Metal Slug", ser, sizeof(ser), lbl, sizeof(lbl));
+			check(!strcmp(ser, "20:287889") && !strcmp(lbl, "Metal Slug"),
+				"and a matched shape replaces the house code with the real name");
+		}
+
 		unlink(path);
 		disc_titles_forget();
 	}
@@ -17165,6 +17192,19 @@ static void assert_rip_format()
 		check(!rip_folder_name("///", n, sizeof(n)),
 			"and a title with nothing legal in it is refused rather than made into a dot");
 		check(!rip_folder_name("", n, sizeof(n)), "as is an empty one");
+
+		/*
+		  A disc named by its shape carries "22:221262" in the serial field, and a colon is
+		  not a legal character in a FAT directory entry. Checked here because the shape key
+		  was put in that field precisely so the artwork cache and the state file would need
+		  no new plumbing - which means it reaches every consumer of a serial, including the
+		  one that makes folder names out of them.
+		*/
+		check(rip_game_folder("Akumajou Dracula X", "22:221262", n, sizeof(n))
+			&& !strchr(n, ':'),
+			"a shape key never puts a colon in a rip folder name");
+		check(!strcmp(n, "Akumajou Dracula X"),
+			"it names the folder from the title alone, which is right for a lone pressing");
 	}
 
 	/*

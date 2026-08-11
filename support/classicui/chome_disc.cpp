@@ -578,6 +578,30 @@ int disc_type_has_serial(int type)
 	return type == DISC_T_PSX || type == DISC_T_SATURN || type == DISC_T_MEGACD;
 }
 
+/*
+  What a disc named by its shape ends up called: the key is always its identity, and the
+  name is set only when the table actually knew the shape.
+
+  Two lines of assignment, given a function of their own on purpose. The caller is the
+  helper, which is compiled out of the harness with the rest of the /dev/sr0 code, and this
+  exact decision was wrong there for a day: the unmatched branch set the serial and left the
+  label alone. On PC Engine CD that is invisible, because a PCE disc has no filesystem and
+  the label is empty already. On Neo Geo CD, which does have a volume label and where it is
+  a house code as often as a name, it meant an unmatched disc handed "DD CD" to
+  disc_scrape_name(), whose ':' rule reads a label beside a shape serial as "this came from
+  disctoc.txt". Then we would spend the scarce unmatched allowance asking the database for a
+  house code, or match one confidently wrong.
+
+  So the rule that rule depends on lives here, where a test can hold it: the label is empty
+  unless the table filled it.
+*/
+void disc_shape_identity(const char *key, const char *title,
+	char *ser, int sersz, char *lbl, int lblsz)
+{
+	if (ser && sersz > 0) snprintf(ser, sersz, "%s", key ? key : "");
+	if (lbl && lblsz > 0) snprintf(lbl, lblsz, "%s", (title && title[0]) ? title : "");
+}
+
 int disc_serial_for(int type, int data_lba0, char *out, int outsz)
 {
 	if (!out || outsz < 2) return 0;
@@ -1502,17 +1526,15 @@ static void helper_main(const char *dev)
 						snprintf(key, sizeof(key), "%d:%d", nt, lo);
 
 						char title[DISC_LABEL_LEN];
-						if (disc_toc_title(key, title, sizeof(title)))
-						{
-							snprintf(ser, sizeof(ser), "%s", key);
-							snprintf(lbl, sizeof(lbl), "%s", title);
-							printf("ClassicUI: disc shape %s is \"%s\"\n", key, title);
-						}
-						else
-						{
-							snprintf(ser, sizeof(ser), "%s", key);
-							printf("ClassicUI: disc shape %s is not in disctoc.txt\n", key);
-						}
+						int named = disc_toc_title(key, title, sizeof(title));
+
+						// Including dropping any label the disc gave us when the table
+						// did not know the shape - see disc_shape_identity().
+						disc_shape_identity(key, named ? title : 0,
+							ser, sizeof(ser), lbl, sizeof(lbl));
+
+						if (named) printf("ClassicUI: disc shape %s is \"%s\"\n", key, title);
+						else printf("ClassicUI: disc shape %s is not in disctoc.txt\n", key);
 					}
 				}
 

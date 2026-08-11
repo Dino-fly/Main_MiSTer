@@ -419,6 +419,11 @@ int disc_title_at(int type, int data_lba0, char *out, int outsz);
 */
 int disc_type_has_serial(int type);
 
+// The identity of a disc named by its shape: key always, name only if the table knew it.
+// Its whole job is that second clause - see the comment on the definition.
+void disc_shape_identity(const char *key, const char *title,
+	char *ser, int sersz, char *lbl, int lblsz);
+
 /*
   Re-read the helper's answer out of /tmp. Cheap - a twenty-byte tmpfs read - and it touches
   no device, so unlike disc_poll() it is safe to call when a core owns the drive. That case

@@ -26,8 +26,9 @@ track's index-0 pregap to the track before it and the drive does not, so per-tra
 disagree - on that disc by -225, +75, +150 across the first three. They sum to zero. The
 total is identical to the sector, because a pregap does not vanish, it only lands on the
 other side of a boundary. So the key is "<tracks>:<total sectors>" and there is no pregap
-question left to get wrong. Over the whole PC Engine CD datfile: 542 releases with track
-data, 492 distinct keys, 452 naming exactly one release.
+question left to get wrong. Over both datfiles: 492 PC Engine CD keys and 103 Neo Geo CD
+keys, which merge to 595 - no key is shared between the two systems, so one flat table needs
+no system field and the firmware that reads it needed no change to gain Neo Geo CD.
 
 AMBIGUITY IS RECORDED, NOT RESOLVED
 40 keys name more than one dump, and the two kinds are different:
@@ -47,7 +48,19 @@ it matches with or without them - measured on 2026-08-12, both shapes hit.
 
 import io, re, sys, urllib.request, zipfile
 
-DAT_URL = "http://redump.org/datfile/pce/"
+# PC Engine CD and Neo Geo CD - the two consoles with no product code to read.
+#
+# One table for both, and that is measured rather than assumed: the two datfiles produce 492
+# and 103 keys and the merge produces 595, so on 2026-08-12 not one key was shared between the
+# systems and no name was lost to the merge. The key needs no system field, which is why
+# adding Neo Geo CD needed no change to the key format or to the firmware that reads it.
+#
+# Worth re-checking if a third system is added: a cross-system collision is not an error - it
+# is written with '?' and refused like any other - but it would cost two real names.
+DAT_URLS = (
+	"http://redump.org/datfile/pce/",
+	"http://redump.org/datfile/ngcd/",
+)
 SECTOR = 2352
 
 
@@ -131,11 +144,12 @@ def main():
     texts = []
     if '--fetch' in args:
         args.remove('--fetch')
-        req = urllib.request.Request(DAT_URL, headers={'User-Agent': 'Mozilla/5.0'})
-        with zipfile.ZipFile(io.BytesIO(urllib.request.urlopen(req, timeout=120).read())) as z:
-            for nm in z.namelist():
-                if nm.lower().endswith('.dat'):
-                    texts.append(z.read(nm).decode('utf-8', 'replace'))
+        for url in DAT_URLS:
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with zipfile.ZipFile(io.BytesIO(urllib.request.urlopen(req, timeout=120).read())) as z:
+                for nm in z.namelist():
+                    if nm.lower().endswith('.dat'):
+                        texts.append(z.read(nm).decode('utf-8', 'replace'))
     for p in args:
         texts.append(open(p, encoding='utf-8', errors='replace').read())
     if not texts:

@@ -730,7 +730,10 @@ named after the game:
 
 A disc that carries no serial — PC Engine CD and Neo Geo CD discs do not — keeps the
 simpler shape it always had, `Metal Gear Solid/Metal Gear Solid.cue` beside
-`Track 01.bin`, because there is nothing to tell two copies of it apart with.
+`Track 01.bin`, because there is nothing to tell two copies of it apart with. Those two
+consoles are still *named*, just not by a serial: the front-end recognises them by the
+shape of the disc's table of contents, so a PC Engine CD or Neo Geo CD disc shows its real
+title and gets its cover like any other. Nothing to set up — the table ships on the card.
 
 A Mega CD, PC Engine CD or Neo Geo CD disc goes into that console's **CD** folder rather
 than its cartridge one — `games/MegaCD`, `games/TGFX16-CD` and `games/NeoGeo-CD`, which
