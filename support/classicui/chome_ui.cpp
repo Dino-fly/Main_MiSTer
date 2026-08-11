@@ -9222,15 +9222,21 @@ static void draw_about_panel(const chome_profile *p)
   Each is written to the 240p panel width so the wrap never needs a third line.
   "Recently Added" is the honest one: the scan has no file date to sort on, so it falls
   through to title order, and saying so beats a player wondering why it looks alphabetical.
-  See cmp_entry() in chome_lib.cpp - SORT_ADDED has no case of its own. "Recently Played"
-  and "Times Played" are also the same order today, which the wording admits rather than
-  hides; making them differ needs a last-played timestamp the play file does not keep.
+  See cmp_entry() in chome_lib.cpp - SORT_ADDED has no case of its own.
+
+  "Recently Played" and "Times Played" WERE the same order, and this comment used to say so
+  and then explain that telling them apart needed a timestamp the play file does not keep.
+  Half right: there is no timestamp, and there never has been - but recent_keys[] in
+  chome_lib.cpp is an ordered most-recent-first list of the last twenty launches, saved to
+  the card, which is the same information for the games it covers. Dinofly asked why the two
+  were identical; the answer was that nobody had looked one file further down. They are two
+  different orders now.
 */
 static const char *sort_help_for(int mode)
 {
 	switch (mode)
 	{
-	case SORT_RECENT: return "Most played first.";
+	case SORT_RECENT: return "What you played last, most recent first.";
 	case SORT_PLAYS:  return "Most played first, by number of plays.";
 	case SORT_TITLE:  return "Alphabetical, ignoring case.";
 	case SORT_SYSTEM: return "Grouped by console, in the shelf's own order.";

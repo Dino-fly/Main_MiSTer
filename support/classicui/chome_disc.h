@@ -412,4 +412,11 @@ int disc_label_at(int data_lba0, char *out, int outsz);
 */
 int disc_title_at(int type, int data_lba0, char *out, int outsz);
 
+/*
+  1 when a disc of this type is expected to carry a product number. The identify loop needs
+  it to tell "has not answered yet" from "has none to give" - see the retry condition in
+  helper_main(), and the bug it was written for.
+*/
+int disc_type_has_serial(int type);
+
 #endif

@@ -564,6 +564,19 @@ int disc_title_at(int type, int data_lba0, char *out, int outsz)
 	return 0;
 }
 
+/*
+  Whether a disc of this type is expected to carry a product number at all.
+
+  Needed because the identify loop has to know the difference between "this disc has not
+  told me its serial yet" and "this kind of disc has no serial to tell". PlayStation keeps
+  one in a boot file, Saturn and Mega CD in their headers; Neo Geo CD, PC Engine CD, CD-i,
+  3DO and an audio disc carry none, and waiting for one would be waiting for ever.
+*/
+int disc_type_has_serial(int type)
+{
+	return type == DISC_T_PSX || type == DISC_T_SATURN || type == DISC_T_MEGACD;
+}
+
 int disc_serial_for(int type, int data_lba0, char *out, int outsz)
 {
 	if (!out || outsz < 2) return 0;
@@ -1338,12 +1351,53 @@ static void helper_main(const char *dev)
 					if (!disc_title_at(t, lba0, lbl, sizeof(lbl)))
 						disc_label_at(lba0, lbl, sizeof(lbl));
 
-					// Named, or nothing there to name: either way the answer is in.
-					if (ser[0] || lbl[0] || t == DISC_T_UNKNOWN) break;
+					/*
+					  When to stop reading, and it is NOT "as soon as something has a
+					  name". That is what this said, and it is the bug Dinofly hit by
+					  ejecting a PlayStation disc and putting it back.
 
-					printf("ClassicUI: disc read %d gave a %s with no name, reading again\n",
-						try_n + 1, disc_type_name(t));
+					  The two identifiers do not become readable at the same moment. The
+					  ISO volume label is one sector at LBA 16; the PlayStation serial
+					  needs the root directory walked and SYSTEM.CNF read, further in and
+					  several reads later. On a disc that has been spinning since boot both
+					  succeed on the first pass. On one just pushed in, the label arrives
+					  while the deeper walk is still failing - so the old condition saw
+					  lbl[0], declared victory, and settled for a disc with no serial.
+
+					  What that cost, all of it downstream of one missing field:
+
+					    the cache key became the volume label, so the cover already sitting
+					    on the card as SLES-00838.png was never found and the disc looked
+					    unscraped;
+					    the offline title table is keyed by serial, so the disc lost its
+					    real name and showed "ABESODDYSEE";
+					    and with no serial and no table title there was nothing left to ask
+					    the database with, so the request was never even attempted.
+
+					  So a type that carries a serial has to keep reading until it gets one.
+					  Bounded by DISC_ID_TRIES either way, and homebrew - which genuinely has
+					  no serial - simply uses its tries and then settles for the label, which
+					  costs a second or two on a disc that was never going to match anyway.
+					*/
+					if (t == DISC_T_UNKNOWN) break;            // nothing to name at all
+					if (ser[0]) break;                        // the identifier that matters
+					if (!disc_type_has_serial(t) && lbl[0]) break;   // none to wait for
+
+					printf("ClassicUI: disc read %d gave a %s with%s, reading again\n",
+						try_n + 1, disc_type_name(t),
+						lbl[0] ? " a name but no serial" : " no name");
 				}
+
+				/*
+				  Said out loud when we settle for less, because a disc identified without
+				  its serial behaves like a different disc - different cache key, no title
+				  from the table - and that is worth one line rather than a silent
+				  degradation somebody has to infer from a missing cover.
+				*/
+				if (disc_type_has_serial(t) && !ser[0])
+					printf("ClassicUI: %s disc gave no serial after %d reads,"
+						" using \"%s\" alone\n", disc_type_name(t), DISC_ID_TRIES,
+						lbl[0] ? lbl : "");
 
 				helper_write(t == DISC_T_UNKNOWN ? DISC_UNKNOWN : DISC_READY, t, ser, lbl);
 			}

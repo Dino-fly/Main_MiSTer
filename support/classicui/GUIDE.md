@@ -77,18 +77,22 @@ does — which matters more than it sounds, because two of the names look like t
 
 | Order | What you get |
 |---|---|
-| Recently Played | Most played first |
+| Recently Played | What you played last, most recent first |
 | Times Played | Most played first, by number of plays |
 | Title A-Z | Alphabetical, ignoring case |
 | System | Grouped by console, in the shelf's own order |
 | Recently Added | Title order for now — see below |
 | **Favourites First** | Your favourites, then everything else |
 
-Two of those are honest about their limits rather than quietly wrong. **Recently Played and
-Times Played are the same order today**: the play file counts plays but does not record
-*when* you last played something, so there is nothing to sort the first one by yet.
-**Recently Added** has the same shape of problem — the library scan reads no file dates, so
-it falls back to title order. Both are named for what they will do and say what they do now.
+**Recently Played covers your last twenty games.** Nothing here records a clock time — the
+play file keeps a count, a favourite mark and your suspend locks, and no dates at all — but
+the front-end does keep an ordered list of the last twenty things you launched, and that is
+what this sorts by. Games you played longer ago than that have no recency to compare, so
+they follow, in title order.
+
+**Recently Added is honest about a limit it has not solved yet**: the library scan reads no
+file dates, so it falls back to title order. It is named for what it will do and the sentence
+under it says what it does now.
 
 **Favourites First is a sort, not a filter,** and that is deliberate. The shelf already opens
 with a **Favourites** card, so if you want *only* your favourites they are one press away.

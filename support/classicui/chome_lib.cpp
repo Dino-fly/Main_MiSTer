@@ -1868,6 +1868,31 @@ const char *lib_sort_name(int sort)
 
 static int cur_sort = SORT_TITLE;
 
+/*
+  How recently a game was played, as a rank: 0 is the most recent, RECENT_MAX means "not in
+  the list at all".
+
+  There is no timestamp anywhere in this front-end. state_rec holds a key, a play count, a
+  favourite bit and the suspend locks - it has never recorded WHEN a game was played, nor
+  for how long it ran. What it does have is recent_keys[], which recent_touch() moves the
+  played game to the front of on every launch and which is saved to the card: an ordered
+  most-recent-first list, which is the same information for the twenty games it covers.
+
+  So "Recently Played" can be a real order after all. It used to fall through to the play
+  count, which made it identical to "Times Played" - two names for one order, and the
+  documentation went as far as claiming there was nothing to sort it by. There was; it was
+  in the next file down.
+
+  The twenty is the honest limit: past that a game has no recency to compare, so those sort
+  after every game that does, by title. A player looking at this order is looking for what
+  they played last, and that is exactly what the list holds.
+*/
+static int recent_rank(uint32_t key)
+{
+	for (int i = 0; i < recent_nkeys; i++) if (recent_keys[i] == key) return i;
+	return RECENT_MAX;
+}
+
 static int cmp_entry(const void *a, const void *b)
 {
 	const chome_entry *ea = (const chome_entry*)a;
@@ -1893,8 +1918,11 @@ static int cmp_entry(const void *a, const void *b)
 		if (ia->sysidx != ib->sysidx) return ia->sysidx - ib->sysidx;
 		break;
 	case SORT_RECENT:
-		if (ia->plays != ib->plays) return (int)ib->plays - (int)ia->plays;
-		break;
+	{
+		int ra = recent_rank(ia->key), rb = recent_rank(ib->key);
+		if (ra != rb) return ra - rb;              // lower rank = played more recently
+		break;                                     // both unplayed, or both off the list
+	}
 	/*
 	  Favourites first, and a SORT rather than a filter - Dinofly asked which it should be.
 
