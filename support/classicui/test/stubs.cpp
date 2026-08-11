@@ -786,6 +786,18 @@ static const char **confstr_custom = 0;
 void harness_set_confstr_table(const char **tbl) { confstr_custom = tbl; }
 void harness_set_confstr(int v) { confstr_on = v; confstr_custom = 0; }
 
+/*
+  An EMPTY entry returns 0, not "".
+
+  That is what the firmware does - user_io.cpp:3094, `if (!len) return NULL;` - and the
+  stub used to hand back the empty string instead. The difference is not academic: the
+  scanner in chome_core.cpp treats 0 as "end of the config string" and "" as "nothing on
+  this line, keep going", so a core that leaves an entry empty behaved one way on the
+  device and the opposite way here. The Saturn core leaves index 1 empty, its options were
+  therefore invisible in the front-end, and no test could fail because the stub never
+  produced the condition. A fake that is kinder than the real thing hides exactly the bugs
+  worth finding.
+*/
 char *user_io_get_confstr(int index)
 {
 	if (confstr_custom)
@@ -793,6 +805,7 @@ char *user_io_get_confstr(int index)
 		int n = 0;
 		while (confstr_custom[n]) n++;
 		if (index < 0 || index >= n) return 0;
+		if (!confstr_custom[index][0]) return 0;
 		return (char *)confstr_custom[index];
 	}
 

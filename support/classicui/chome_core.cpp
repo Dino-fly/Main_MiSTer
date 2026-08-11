@@ -205,7 +205,36 @@ int core_opts_scan()
 	uint32_t hdmask = spi_uio_cmd16(UIO_GET_OSDMASK, 0);
 	char pagename[10][24] = {};
 
-	for (int i = 1; i < 64 && nopts < CO_MAX; i++)
+	/*
+	  From index 2, which is where the stock OSD starts (menu.cpp:2023, "add options as
+	  requested by core": `int i = 2; do { p = user_io_get_confstr(i++); ...} while (p);`).
+
+	  Index 1 is a slot the stock menu never reads, and a core is free to leave it empty.
+	  user_io_get_confstr() returns NULL for an empty entry rather than "" (user_io.cpp:3094),
+	  and this loop breaks on NULL - so starting at 1 meant that on any core with an empty
+	  index 1 the scan ended before it began and the core appeared to have no options at all.
+
+	  The Saturn core is exactly that core. Its config string reads
+
+	      0 = Saturn
+	      1 = <empty>                     <-- scan stopped here
+	      2 = S0,CUECHD,Insert Disc
+	      ...
+	      8 = O[35:33],Region,Japan,Taiwan,USA,Brazil,Korea,Asia,Europe,Auto
+
+	  so Region was unreachable from this front-end. That is not a cosmetic gap: a Saturn
+	  with Region on its default of Japan refuses every USA and European disc with "Game
+	  disc unsuitable for this system", and the one screen that could have fixed it was
+	  hidden - mb_visible(MB_CORE) asks core_opts_tier_count(), which was 0 for every tier
+	  because nothing had been parsed. Measured on the device on 2026-08-11: neither a disc
+	  we ripped nor a known-good Redump dump would boot, and no core-options entry appeared
+	  on the bar to say why.
+
+	  Breaking on NULL is kept, because that is also what the stock menu does: the config
+	  string is terminated by its first empty entry, so continuing past one would offer
+	  options the stock OSD does not.
+	*/
+	for (int i = 2; i < 64 && nopts < CO_MAX; i++)
 	{
 		char *line = user_io_get_confstr(i);
 		if (!line) break;
