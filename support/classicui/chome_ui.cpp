@@ -14297,8 +14297,27 @@ int chome_handle(uint32_t key)
 		  helper reports an eject as a state change too, and disc_art_prefetch() has
 		  nothing to do with one.
 		*/
+		// A new disc, or none: either way the retry count belongs to the disc that earned
+		// it, so it goes with the drive state rather than lasting the session.
+		disc_art_retry_forget();
 		disc_art_prefetch();
 	}
+
+	/*
+	  ...and again, later, if the first ask never reached the network.
+
+	  This exists because "fetch as soon as the disc is known" and "ask once per key" meet
+	  badly at boot: the disc is identified within seconds, Wi-Fi has not associated, the
+	  single attempt is spent on a host that would not resolve, and nothing above ever runs
+	  again for a disc that is just sitting there. Measured on the device - a Saturn disc
+	  across a reboot got "curl exit 6" and no art for as long as the machine stayed up.
+
+	  Outside the state-change branch on purpose: there is no state change to hang it on,
+	  which is the whole problem. Bounded by disc_art_retry_due() to five tries on a
+	  growing backoff, so a machine with no network stops asking instead of forking curl
+	  for the rest of the day.
+	*/
+	if (disc_art_retry_due()) disc_art_prefetch();
 
 	/*
 	  And a repaint while it is spinning, for the same reason the Wi-Fi screen repaints

@@ -2911,6 +2911,37 @@ static void assert_physical_disc()
 		disc_ingest_present(0);
 	}
 
+	/*
+	  Asking again when the first ask never reached the network.
+
+	  The bug this guards was measured on the device, not imagined: a Saturn disc left in
+	  the drive across a reboot is identified within seconds, before Wi-Fi has associated,
+	  so the one attempt per key is spent on a host that will not resolve -
+
+	      the disc scan query for MK-81207 failed, curl exit 6 (host would not resolve)
+
+	  - and since nothing re-triggers a prefetch for a disc that is just sitting there, the
+	  art could never arrive for as long as the machine stayed up. The query itself was
+	  correct. Only the clock was wrong.
+
+	  The decision is pure so it can be checked without waiting: same shape as
+	  disc_probe_due() next door.
+	*/
+	{
+		check(disc_retry_wait_s(0) == 10 && disc_retry_wait_s(4) == 300,
+			"the retry backoff starts short and grows, for a Wi-Fi association not a dead network");
+		check(disc_retry_wait_s(5) < 0,
+			"and runs out, so a machine with no network stops knocking");
+
+		check(!disc_retry_due_at(0, 0, 1000), "nothing armed is never due");
+		check(!disc_retry_due_at(1, 1000, 1009), "the first retry is not due after nine seconds");
+		check(disc_retry_due_at(1, 1000, 1010), "and is due at ten");
+		check(!disc_retry_due_at(2, 1000, 1029) && disc_retry_due_at(2, 1000, 1030),
+			"the second waits thirty, not another ten");
+		check(!disc_retry_due_at(6, 1000, 99999),
+			"and past the last one nothing is ever due again, however long it has been");
+	}
+
 	// Mega CD, where the international title wins and a Japanese disc falls back to the
 	// domestic one rather than to a blank.
 	{

@@ -455,6 +455,28 @@ int disc_art_active();
 int disc_art_take_ready();
 
 /*
+  Asking again after a scan query that never reached the network.
+
+  The disc scan is asked for once per key per session, at the fork, which makes every
+  failure final - including "there is no network yet". That is the normal case on this
+  hardware: a disc in the drive is identified within seconds of boot and Wi-Fi has not
+  associated, so the one attempt is spent on a name that could not be resolved and the art
+  can never arrive while the machine stays up. Measured on the device, 2026-08-11.
+
+  So a failure with no HTTP status hands the key back and arms a retry. disc_art_retry_due()
+  says when the caller should ask again; disc_art_retry_forget() is called on every drive
+  change, because a new disc is a new question. Five tries, reaching about eight minutes.
+
+  The decision is pure so it can be tested without a wall clock, the same way
+  disc_probe_due() is: disc_retry_due_at(tries, armed_at, now), with the schedule in
+  disc_retry_wait_s(). Both are exposed for the harness rather than for callers.
+*/
+int disc_art_retry_due();
+void disc_art_retry_forget();
+int disc_retry_wait_s(int tries);
+int disc_retry_due_at(int tries, int armed_at, int now);
+
+/*
   How many times anything has asked for a disc scan this session, refusals included.
 
   For the harness, which cannot see the fetch itself: no request is ever made there -
