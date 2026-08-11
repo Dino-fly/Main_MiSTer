@@ -328,6 +328,25 @@ struct ss_query
 {
 	const char *systemeid;
 	const char *romnom;          // file name only, not a path
+
+	/*
+	  A disc's product number, asked for as the database's own serialnum key.
+
+	  Measured on 2026-08-11 over the 52 discs on the card, because the note that used to be
+	  here said this was untested and should stay that way until somebody spent the requests:
+
+	      PlayStation, serialnum alone   9 of 9 correct
+	      Saturn,      serialnum alone   11 of 37 - Sega product numbers are thinly indexed
+	      either,      serial as romnom  WRONG: "SLUS-00594" answered "Beyblade Burst"
+
+	  That last line is why this field exists. A serial in romnom is fuzzy-matched, so it does
+	  not miss - it answers confidently wrong, with a real cover for a real game that is not
+	  the one in the drive, and nothing downstream can tell. serialnum is an exact key.
+
+	  Sent WITHOUT romnom, which is the shape that was measured: jeuInfos accepts it, and
+	  giving it a romnom as well only invites the fuzzy match back in.
+	*/
+	const char *serialnum;
 	long long   romtaille;       // bytes, 0 to leave it out
 	const char *md5;             // 0 when the file was too big to hash
 	const char *crc;             // 0 when not computed

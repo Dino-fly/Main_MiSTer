@@ -362,7 +362,15 @@ int ss_build_url(const ss_query *q, int redact, char *out, int len)
 
 	if (!SS_HAVE_DEV) return 0;
 	if (!q || !q->systemeid || !q->systemeid[0]) return 0;
-	if (!q->romnom || !q->romnom[0]) return 0;
+
+	/*
+	  A name OR a serial. It used to be a name unconditionally, which is what forced a disc
+	  whose only identifier is a product number to send that number as romnom - the one query
+	  shape measured to return the WRONG game rather than nothing. See ss_query::serialnum.
+	*/
+	int has_rom = (q->romnom && q->romnom[0]);
+	int has_ser = (q->serialnum && q->serialnum[0]);
+	if (!has_rom && !has_ser) return 0;
 
 	const char *devpass = redact ? "***" : CLASSICUI_SS_DEVPASS;
 	const char *userpass = redact ? "***" : cfg.classicui_ss_pass;
@@ -381,12 +389,22 @@ int ss_build_url(const ss_query *q, int redact, char *out, int len)
 	ss_urlenc(cfg.classicui_ss_user, e_user, sizeof(e_user));
 	if (redact) snprintf(e_userpass, sizeof(e_userpass), "***");
 	else ss_urlenc(userpass, e_userpass, sizeof(e_userpass));
-	ss_urlenc(q->romnom, e_rom, sizeof(e_rom));
+	ss_urlenc(has_rom ? q->romnom : "", e_rom, sizeof(e_rom));
 
-	int n = snprintf(out, len,
-		SS_API_BASE "?devid=%s&devpassword=%s&softname=%s&output=xml"
-		"&ssid=%s&sspassword=%s&systemeid=%s&romtype=rom&romnom=%s",
-		e_dev, e_devpass, e_soft, e_user, e_userpass, q->systemeid, e_rom);
+	/*
+	  romnom is still written when there is one, and omitted entirely when there is not -
+	  an empty romnom= is not the same request as no romnom at all, and the serial-only
+	  shape is the one that was measured.
+	*/
+	int n = has_rom
+		? snprintf(out, len,
+			SS_API_BASE "?devid=%s&devpassword=%s&softname=%s&output=xml"
+			"&ssid=%s&sspassword=%s&systemeid=%s&romtype=rom&romnom=%s",
+			e_dev, e_devpass, e_soft, e_user, e_userpass, q->systemeid, e_rom)
+		: snprintf(out, len,
+			SS_API_BASE "?devid=%s&devpassword=%s&softname=%s&output=xml"
+			"&ssid=%s&sspassword=%s&systemeid=%s&romtype=rom",
+			e_dev, e_devpass, e_soft, e_user, e_userpass, q->systemeid);
 
 	if (n < 0 || n >= len) { out[0] = 0; return 0; }
 
@@ -403,6 +421,7 @@ int ss_build_url(const ss_query *q, int redact, char *out, int len)
 
 	struct { const char *key; const char *val; } hashes[] =
 	{
+		{ "serialnum", q->serialnum },
 		{ "md5",  q->md5  },
 		{ "sha1", q->sha1 },
 		{ "crc",  q->crc  },

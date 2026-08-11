@@ -7984,12 +7984,51 @@ static void assert_screenscraper()
 	check(strstr(red, "romnom=Destruction%20Derby%20%28USA%29.cue") != 0,
 		"and everything not secret survives redaction, or the log would be useless");
 
+	/*
+	  A disc's product number, and the whole reason serialnum exists as a field.
+
+	  Measured on 2026-08-11: asked as serialnum it is exact and got 9 of 9 right on
+	  PlayStation; asked as ROMNOM it is fuzzy matched and answered "Beyblade Burst - Battle
+	  Zero" for SLUS-00594. A miss costs a request, a wrong cover costs the player's trust in
+	  every cover on the shelf - so the serial must reach the URL as serialnum and must never
+	  appear as a name. Both halves are asserted, because only checking the first would pass
+	  just as happily with the old behaviour still in place beside it.
+	*/
+	{
+		ss_query sq;
+		memset(&sq, 0, sizeof(sq));
+		sq.systemeid = "57";
+		sq.serialnum = "SLUS-00594";
+
+		char su[1024];
+		check(ss_build_url(&sq, 0, su, sizeof(su)) > 0,
+			"a serial alone builds a URL, which it could not before");
+		check(strstr(su, "serialnum=SLUS-00594") != 0, "the serial goes in serialnum");
+		check(strstr(su, "romnom=") == 0,
+			"and there is no romnom at all - not the serial, and not an empty one either");
+
+		// Belt and braces on the exact string that produced the wrong game.
+		check(strstr(su, "romnom=SLUS-00594") == 0,
+			"the serial is never sent as the name, which is what returned the wrong cover");
+
+		sq.romnom = "Metal Gear Solid.cue";
+		check(ss_build_url(&sq, 0, su, sizeof(su)) > 0 && strstr(su, "romnom=Metal") != 0
+			&& strstr(su, "serialnum=SLUS-00594") != 0,
+			"a query may carry both, though the disc path deliberately sends one or the other");
+
+		memset(&sq, 0, sizeof(sq));
+		sq.systemeid = "57";
+		check(ss_build_url(&sq, 0, su, sizeof(su)) == 0,
+			"and neither a name nor a serial is still no URL");
+	}
+
 	// Refusals.
 	q.systemeid = 0;
 	check(ss_build_url(&q, 0, url, sizeof(url)) == 0, "no systemeid, no URL");
 	q.systemeid = "57";
 	q.romnom = "";
-	check(ss_build_url(&q, 0, url, sizeof(url)) == 0, "no rom name, no URL");
+	check(ss_build_url(&q, 0, url, sizeof(url)) == 0,
+		"no rom name and no serial, no URL");
 	q.romnom = "x.cue";
 
 	char tiny[32];
@@ -8464,27 +8503,42 @@ static void assert_disc_art()
 	cfg.classicui_screenscraper = 1;
 	strcpy(cfg.classicui_ss_user, "dune");
 
-	check(disc_art_request("SLES-01506", "psx", 0) == 0, "with the fetch off, nothing is asked for");
+	/*
+	  A serial is handed to each of these on purpose. The signature grew one when the serial
+	  stopped being sent as a name, and disc_art_request() now refuses outright when it has
+	  neither a name nor a serial - so calling these with both absent would make every
+	  refusal below pass for that reason instead of for the setting each one is about.
+	  "SLES-01506" is a PlayStation disc's own product number, which is what a real caller
+	  has here: for a disc, the cache key and the serial are the same string.
+	*/
+	check(disc_art_request("SLES-01506", "psx", 0, "SLES-01506") == 0,
+		"with the fetch off, nothing is asked for");
 	check(disc_art_active() == 0, "and no download was started");
 
 	cfg.classicui_artfetch = 1;
 	cfg.classicui_screenscraper = 0;
-	check(disc_art_request("SLES-01506", "psx", 0) == 0,
+	check(disc_art_request("SLES-01506", "psx", 0, "SLES-01506") == 0,
 		"with ScreenScraper off, nothing is asked for either");
 	check(disc_art_active() == 0, "and still no download");
 
 	cfg.classicui_screenscraper = 1;
 	cfg.classicui_ss_user[0] = 0;
-	check(disc_art_request("SLES-01506", "psx", 0) == 0, "nor with no account to ask under");
+	check(disc_art_request("SLES-01506", "psx", 0, "SLES-01506") == 0,
+		"nor with no account to ask under");
 	check(disc_art_active() == 0, "and still none");
 
 	strcpy(cfg.classicui_ss_user, "dune");
-	check(disc_art_request("SLES-01506", "doesnotexist", 0) == 0,
+	check(disc_art_request("SLES-01506", "doesnotexist", 0, "SLES-01506") == 0,
 		"nor for a system with no systemeid at all");
 	check(disc_art_active() == 0, "and still none");
 
-	check(disc_art_request("", "psx", 0) == 0, "an empty identity is refused");
-	check(disc_art_request(0, "psx", 0) == 0, "and an absent one");
+	check(disc_art_request("", "psx", 0, "SLES-01506") == 0, "an empty identity is refused");
+	check(disc_art_request(0, "psx", 0, "SLES-01506") == 0, "and an absent one");
+
+	// And nothing to ask with at all, which is the Neo Geo CD and PC Engine CD shape: no
+	// product code in the data and no name worth sending. A refusal, not an error.
+	check(disc_art_request("NGCD-X", "neogeocd", 0, 0) == 0,
+		"a disc with neither a name nor a serial is refused rather than guessed at");
 	check(disc_art_active() == 0, "none of the refusals forked anything");
 
 	// Back to the state the rest of the suite expects. Left set, the next section that
@@ -8604,7 +8658,7 @@ static void assert_disc_art()
 	cfg.classicui_screenscraper = 1;
 	strcpy(cfg.classicui_ss_user, "dune");
 
-	check(disc_art_request("SLES-01506", "psx", 0) == 1,
+	check(disc_art_request("SLES-01506", "psx", 0, "SLES-01506") == 1,
 		"a scan already on the card needs no fetch and says so");
 	check(disc_art_active() == 0, "and nothing was downloaded to find that out");
 

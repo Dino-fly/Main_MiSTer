@@ -420,7 +420,16 @@ int disc_art_path(const char *key, char *out, int len);
   disc the database does not have would otherwise be asked for on every frame the dialog
   is open.
 */
-int disc_art_request(const char *key, const char *sysid, const char *romnom);
+/*
+  Ask for a disc's scan. `romnom` is the name to match on, or 0/"" when the disc has no name
+  worth sending; `serial` is its product number, or 0/"" when it has none.
+
+  Both, because they are asked for as different keys and only one of them is safe as a name.
+  A serial in romnom is fuzzy-matched and answers confidently WRONG - "SLUS-00594" came back
+  as "Beyblade Burst" - while serialnum is exact and measured 9 of 9 on PlayStation. See
+  ss_query::serialnum. At least one of the two must be non-empty or the request is refused.
+*/
+int disc_art_request(const char *key, const char *sysid, const char *romnom, const char *serial);
 
 /*
   1 while a *disc scan* is being fetched, for a spinner and to keep callers from piling up.
