@@ -1965,7 +1965,7 @@ static void ssf_make_reply_private(const char *path)
 	if (fd >= 0) close(fd);
 }
 
-int disc_art_request(const char *key, const char *sysid, const char *romnom)
+int disc_art_request(const char *key, const char *sysid, const char *romnom, const char *serial)
 {
 	if (!key || !key[0]) return 0;
 
@@ -2047,54 +2047,48 @@ int disc_art_request(const char *key, const char *sysid, const char *romnom)
 	if (disc_already_tried(key)) return 0;
 
 	/*
-	  What to ask the database for, and this comment used to be wrong in a way worth
-	  correcting rather than deleting.
+	  What to ask the database for. The essay that used to be here said serialnum was
+	  untested and should stay untested until somebody spent the requests on it. Somebody
+	  did, on 2026-08-11, over the 52 discs on this card - and it overturned two of its
+	  three premises:
 
-	  It said "the serial is not a jeuInfos key". It is one: the documentation lists
+	    - "roughly a fifth of PlayStation entries carry a serial": measured 9 of 9 correct
+	      on PlayStation, asked as serialnum with no romnom at all.
+	    - "a serialnum that matches nothing might break a romnom that would have matched":
+	      not applicable, because the two are no longer sent together. Saturn asks by its
+	      header title (30 of 37) and PlayStation asks by serial; neither needs both.
+	    - "a miss is charged twice, to the day's requests and to the unmatched allowance":
+	      still true, and still the reason nothing here asks speculatively.
 
-	      serialnum : Forcer la recherche du jeu avec le numero de serie de la rom (iso)
-	                  associe
+	  What it did not consider is the failure this replaces. Sending the serial as ROMNOM -
+	  which is what happened whenever the offline table did not know a disc - is fuzzy
+	  matched: asked for "SLUS-00594" the database answered "Beyblade Burst - Battle Zero",
+	  a real game with a real cover and nothing to do with Metal Gear Solid. A miss costs a
+	  request; a wrong cover costs the player's trust in every cover on the shelf, silently,
+	  with nothing downstream able to tell. So the serial goes in serialnum, which is exact,
+	  or it does not go at all.
 
-	  alongside romnom, the three hashes and gameid. So the option exists. It is still not
-	  taken, and the reasons are worth having written down because they are reasons to
-	  wait rather than reasons it cannot work:
-
-	    - It *forces* the search. What a serialnum that matches nothing does to a romnom
-	      that would have matched is not documented, and the wrong guess makes a working
-	      request stop working.
-	    - ScreenScraper's serial field is community-contributed and thin, and thin in a
-	      way that follows the console rather than the disc: roughly a fifth of its
-	      PlayStation and Saturn entries carry one, and none of its Mega-CD entries do.
-	      For the console this change just taught to read a serial, the field is empty.
-	    - A miss is charged twice, once to the day's requests and once to the unmatched
-	      allowance, which is about a tenth the size and is the one that runs out. Sega
-	      serials would need two or three spellings tried - the database stores the
-	      manufacturer's, Redump normalises differently - so the cost is several
-	      double-charged misses per disc.
-	    - None of that can be settled without spending from a capped, shared account.
-
-	  Against which the name below is an exact match against an offline table that
-	  resolves 100% of Mega CD and 96% of Saturn discs. So the name stays the key, the
-	  serial stays a fallback for a disc the table does not know, and serialnum waits for
-	  a deliberate test rather than being switched on speculatively.
-
-	  Hashing is not the alternative either, and that is now settled rather than assumed:
-	  the database stores hashes of whole dump files, so there is nothing small and stable
-	  on a disc that could be hashed to match one. Hashing 700 MB off a spinning drive is
-	  the only hashing route there is, and it is not one.
-
-	  Composed above, as discnom, because the miss store had to be consulted before we got
-	  this far. This is that same name - disc_scrape_name()'s answer, which is the title
-	  when the table knew it and the serial when it did not, and which is never a volume
-	  label. That last part is the fix: a label cannot match a romnom and the attempt was
-	  being paid for out of the unmatched allowance.
+	  Mega CD is the case to watch: the old note says the database holds no serials for it,
+	  and this card has no Mega CD disc to check that with. Nothing breaks if it is true -
+	  a serialnum that matches nothing is a miss, and the disc's header title is tried
+	  first anyway - but it is unmeasured and marked as such.
 	*/
-	const char *name = discnom;
+	/*
+	  A name only when there is a real one. discnom falls back to `key` so the miss store has
+	  something to key on, but `key` is the product number - exactly the string that must not
+	  be sent as a name - so the query takes romnom only when a romnom was actually given.
+	*/
+	const char *name = (romnom && romnom[0]) ? romnom : 0;
 
 	ss_query q;
 	memset(&q, 0, sizeof(q));
 	q.systemeid = systemeid;
 	q.romnom = name;
+	q.serialnum = (serial && serial[0]) ? serial : 0;
+
+	// Nothing to ask with. Not a failure to report: the disc simply has no identifier this
+	// database accepts, which is the Neo Geo CD and PC Engine CD case by design.
+	if (!q.romnom && !q.serialnum) return 0;
 
 	char url[1400];
 	if (!ss_build_url(&q, 0, url, sizeof(url))) return 0;

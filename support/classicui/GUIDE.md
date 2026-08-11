@@ -70,6 +70,43 @@ The **menu bar** across the top is the exception, and on purpose: it is three to
 entries all on screen at once, so it simply stops at each end. There is nothing on it to
 go round to.
 
+### Sorting the shelf
+
+**Select** opens **Sort by**, and the sentence under the list says what each order actually
+does — which matters more than it sounds, because two of the names look like the same idea:
+
+| Order | What you get |
+|---|---|
+| Recently Played | Most played first |
+| Times Played | Most played first, by number of plays |
+| Title A-Z | Alphabetical, ignoring case |
+| System | Grouped by console, in the shelf's own order |
+| Recently Added | Title order for now — see below |
+| **Favourites First** | Your favourites, then everything else |
+
+Two of those are honest about their limits rather than quietly wrong. **Recently Played and
+Times Played are the same order today**: the play file counts plays but does not record
+*when* you last played something, so there is nothing to sort the first one by yet.
+**Recently Added** has the same shape of problem — the library scan reads no file dates, so
+it falls back to title order. Both are named for what they will do and say what they do now.
+
+**Favourites First is a sort, not a filter,** and that is deliberate. The shelf already opens
+with a **Favourites** card, so if you want *only* your favourites they are one press away.
+What this adds is the thing that card cannot: the whole library still walkable, with the ones
+you care about at the front — so walking right past the end of your favourites lands you in
+everything else instead of a dead end.
+
+### Which of the three things has your cursor
+
+The shelf, the **menu bar** across the top and the **disc badge** are three places the cursor
+can be, and only one of them is live at a time. Whichever has it is the bright one:
+
+- on the shelf, the centre card wears a bright frame;
+- move up and that frame **dims** while the bar or the badge lights instead.
+
+The dimmed frame is not a bug — it is still telling you which card you will come back to.
+Only one thing on screen looks live, so a press never goes somewhere you did not expect.
+
 ### System icons
 
 ![System icons](img/system-icons.png)
@@ -607,6 +644,7 @@ All optional; the defaults are what most people want.
 | `classicui_ss_pass` | unset | And its password, in clear text |
 | `classicui_ss_replace_pack` | `0` | Try ScreenScraper once more for covers already downloaded from the libretro pack |
 | `classicui_disc` | `0` | Recognise a physical CD in a USB drive, and play it |
+| `snac_device` | `0` | What is plugged into the SNAC port: `0` a PlayStation pad, `1` another console's adapter |
 
 **`classicui_screenscraper` needs a ScreenScraper account of your own.** Make one — it
 is free, at [screenscraper.fr](https://www.screenscraper.fr) — and put it in
@@ -617,6 +655,29 @@ quota. Two more things worth knowing before you fill it in. The password sits in
 text in `MiSTer.ini`, on a FAT partition anything on the machine can read, so use one
 you do not use anywhere else. And the front-end asks for one thing at a time, so art
 fills in gradually rather than all at once — it never holds the menu up waiting.
+
+### The SNAC port, and telling us what is on it
+
+**Options ▸ Controllers ▸ SNAC Adapter** has two values, **PlayStation** and **Other
+Console**, and it exists because this is the one thing about your controllers the firmware
+cannot work out for itself.
+
+Everything else it reads from the hardware. This it cannot: the bypass switch on a SuperDock
+reroutes the SNAC bus to an extension port that takes any console's adapter, and **nothing on
+any pin changes when you move it**. So you are the only source of the answer.
+
+- **PlayStation** — the normal setting. We read the port as a PlayStation pad.
+- **Other Console** — you have routed SNAC to an adapter for something else. We leave the
+  port completely alone.
+
+Set it to **Other Console** whenever the port is not a PlayStation pad. It does not make
+another console's adapter *work* — reading an N64 or SNES pad off that port needs a core that
+does it in RTL — it stops us clocking PlayStation command frames at somebody else's hardware
+for as long as it is plugged in.
+
+This is the one row in Settings with **no recommended value**, so it never turns amber and
+never offers **X** to "put it back": it reports a fact about your desk, and both answers are
+correct for the person giving them.
 
 **If your card was filled from the libretro pack before you had an account**, set
 `classicui_ss_replace_pack=1`. Covers this front-end downloaded from the pack are noted in
@@ -835,6 +896,23 @@ why. Note the domain too — `redump.info`; the old `redump.org` no longer answe
 ---
 
 ## If it does not work
+
+### "Game disc unsuitable for this system" on a Saturn disc
+
+The Saturn core's **Region** defaults to **Japan**, so it refuses every USA and European
+disc — including a perfectly good dump and a disc you just ripped yourself. That default is
+the core's, not this front-end's: a stock MiSTer does the same thing. It is listed here
+because the message names the *disc*, so it reads as "your rip is broken" when nothing is
+wrong with it.
+
+The fix is two presses now that the core's own options are reachable from here:
+
+1. With the game running, open the menu and go along the top bar to the entry named after
+   the core (**SAT**).
+2. **More ▸ System & Sound ▸ Region**, and set it to **Auto**.
+3. Press **Y** for *For All Games* so it sticks for the whole core rather than that one
+   game, then start the game again — the core reads that setting when it loads, so a change
+   made while it is already running does nothing until the next launch.
 
 **Start here, and start with the card in a PC:**
 

@@ -1450,3 +1450,36 @@ no new table.
 - The index cache's validation cannot see a change deeper than the directories it
   recorded, if that set overflowed its 2048 cap. Options > Rescan Library forces a
   fresh scan, and says so when validation was incomplete.
+
+## Matching a disc to its cover art
+
+Measured against the live ScreenScraper API on 2026-08-11 over the 52 discs on the
+development card - 37 Saturn, 15 PlayStation - at a cost of 218 requests out of 20000/day.
+Full method and results in `docs/DISC-MATCHING-2026-08-11.md`; the tools that produced them
+are `tools/discid.py` and `tools/ssmatch.py`.
+
+A file scrapes by its name and always did. A disc in a tray has no filename, so the question
+is which of the things written *on* it a database will accept:
+
+| asked as | Saturn (37) | PlayStation (9 with a serial) |
+|---|---|---|
+| `serialnum` = product number | 11 correct | **9 of 9** |
+| `romnom` = the disc's header title | **30 correct, 0 wrong** | - |
+| `romnom` = ISO volume id | 23, and 7 discs have none at all | weak |
+| `romnom` = product number | **0** | **returns the wrong game** |
+
+Three rules come out of that, and the code follows them:
+
+- **PlayStation asks by `serialnum`.** It is an exact key.
+- **Saturn asks by the disc's own header title** - `disc_title_at()` in `chome_disc.cpp`,
+  offset 0x60 - and not by the ISO volume id, which is missing outright on seven of the
+  thirty-seven discs tested and is a filename (`B_RANGERS`, `AZEL_1`) where present.
+- **A serial is never sent as a name.** `romnom` is fuzzy matched: asked for `SLUS-00594`
+  the database answered "Beyblade Burst - Battle Zero", a real cover for a real game that is
+  not in the drive. A miss costs one request; a wrong cover costs the player's trust in
+  every cover on the shelf, and nothing downstream can detect it.
+
+Mega CD, PC Engine CD and Neo Geo CD are **unmeasured** - the development card holds no
+discs for them - and are deliberately not inferred from Saturn. Neo Geo CD and PC Engine CD
+carry no product code in their data at all, so they ask for nothing rather than spending an
+unmatched request on a guess.

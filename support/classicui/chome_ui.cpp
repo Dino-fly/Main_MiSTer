@@ -6283,14 +6283,20 @@ static void disc_dlg_get(disc_dlg *d)
 	  The name to match on, which for a disc in the drive is not the one on screen. A
 	  running disc came from a file and keeps the filename it was mounted under, which is
 	  exactly what jeuInfos.php wants; a pressed disc gets disc_scrape_name(), which is the
-	  resolved title or the serial and is *nothing at all* for the consoles that carry
-	  neither. See disc_scrape_name() for why sending the volume label instead was not a
-	  free mistake.
+	  resolved title or the disc's own name and is *nothing at all* for the consoles that
+	  carry neither. See disc_scrape_name() for why sending the volume label instead was not
+	  a free mistake.
+
+	  The serial rides alongside rather than standing in for the name - it is asked for as
+	  serialnum, which is exact, where a serial used as a name is fuzzy matched and can
+	  answer with the wrong game's cover. A running disc has no serial to send: it came
+	  from a file, and the filename is the better key anyway.
 	*/
 	const char *scrape = d->running ? (d->title[0] ? d->title : d->key) : disc_scrape_name();
+	const char *ser = d->running ? 0 : disc_serial();
 
-	if (d->key[0] && scrape && scrape[0])
-		disc_art_request(d->key, lib_sys(art_sx) ? lib_sys(art_sx)->id : 0, scrape);
+	if (d->key[0] && ((scrape && scrape[0]) || (ser && ser[0])))
+		disc_art_request(d->key, lib_sys(art_sx) ? lib_sys(art_sx)->id : 0, scrape, ser);
 }
 
 #ifdef CHOME_HOST_TEST
@@ -6387,10 +6393,19 @@ static void disc_art_prefetch()
 	  disc_art_request() refuses everything else that has to hold: the fetch option, an
 	  account, a systemeid it recognises, one attempt per key per session.
 	*/
+	/*
+	  The name and the serial are handed over separately, because the database takes them as
+	  different keys and only one of them is safe as a name. disc_scrape_name() no longer
+	  falls back to the serial for exactly that reason, so a PlayStation disc the offline
+	  table does not know arrives here with no name and a serial - which is a request, not a
+	  refusal. See ss_query::serialnum for the measurement.
+	*/
 	const char *name = disc_scrape_name();
-	if (!name || !name[0]) return;
+	const char *serial = disc_serial();
 
-	disc_art_request(key, sc ? sc->id : 0, name);
+	if ((!name || !name[0]) && (!serial || !serial[0])) return;
+
+	disc_art_request(key, sc ? sc->id : 0, name, serial);
 }
 
 /*

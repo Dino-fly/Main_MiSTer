@@ -846,19 +846,18 @@ const char *disc_scrape_name()
 	if (dlabel[0] && (dtype == DISC_T_SATURN || dtype == DISC_T_MEGACD)) return dlabel;
 
 	/*
-	  4. The bare serial, last, and only to preserve what a PlayStation disc missing from
-	     the table already did.
+	  And NOT the bare serial, which this used to return as a last resort.
 
-	     Flagged rather than fixed, because it is a product call: a serial in romnom is
-	     fuzzy-matched, so it does not just miss, it can answer confidently wrong. Asked
-	     for "SLUS-00594" ScreenScraper returned "Beyblade Burst - Battle Zero" - a real
-	     game, a real cover, and nothing to do with Metal Gear Solid. The narrow fix is
-	     serialnum, which the same study measured at 9 of 9 correct on PlayStation; the
-	     cheap fix is to drop this branch and show the generated disc face instead. Either
-	     beats a wrong cover, and both are Dinofly's to choose.
+	  It was flagged as a product call and Dinofly took the narrow option: the serial is now
+	  asked for as serialnum, an exact key, by the caller that has it - see disc_art_request()
+	  and ss_query::serialnum. A serial as a *name* is fuzzy matched and does not merely miss,
+	  it answers confidently wrong: "SLUS-00594" came back as "Beyblade Burst - Battle Zero",
+	  a real cover for a real game that is not in the drive. Nothing downstream can detect
+	  that, which is what makes it worse than no cover at all.
+
+	  So this returns nothing, and "nothing" is a complete answer: the dialog draws the
+	  generated disc face, which is honest about not knowing.
 	*/
-	if (dserial[0]) return dserial;
-
 	return 0;
 }
 
