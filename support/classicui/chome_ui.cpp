@@ -6285,8 +6285,24 @@ static void disc_dlg_get(disc_dlg *d)
 	  So the drive's own answer wins whenever there is one, and d->sysidx is only the
 	  fallback for a disc-shaped item that really did come from a file.
 	*/
-	int art_sx = (disc_chosen_sys >= 0) ? disc_chosen_sys
-		: disc_sys_by_id(disc_scrape_id(disc_type()));
+	/*
+	  The disc's own console first, and the player's chosen one only as a fallback - which
+	  is the opposite of the order this used to have.
+
+	  disc_chosen_sys answers "which core should be handed the drive", and for two consoles
+	  that is not the console the disc came from: a Neo Geo CD disc is played by the NeoGeo
+	  core and a PC Engine CD disc by the TurboGrafx16 one, so the chosen row is the
+	  *cartridge* system. Scraping a CD title as its cartridge sibling asks the wrong
+	  platform - measured on a real disc, which went out as systemeid 142 (Neo Geo) when
+	  Sonic Wings 2 lives under 70 (Neo Geo CD), and came back 404.
+
+	  Nothing is lost by the swap. Where the two agree - PlayStation, Saturn, Mega CD - the
+	  answer is identical, and a *running* disc has no drive state to ask, so disc_type()
+	  is DISC_T_NONE, the lookup fails, and the chosen system still decides exactly as
+	  before.
+	*/
+	int art_sx = disc_sys_by_id(disc_scrape_id(disc_type()));
+	if (art_sx < 0) art_sx = disc_chosen_sys;
 	if (art_sx < 0) art_sx = d->sysidx;
 
 	/*

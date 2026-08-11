@@ -19564,6 +19564,49 @@ static void assert_config_check()
 		}
 	}
 
+	/*
+	  The same kind of guard, for the helper loop - which is compiled out of this harness
+	  with the rest of the /dev/sr0 code and so cannot be executed here at all.
+
+	  Both properties below were broken on a real disc while every test in this file passed,
+	  and that is the argument for reading the source: assert_disc_ui() proves the badge
+	  appears the instant disc_state() is SPINNING, and it always did. What the device did
+	  was never reach SPINNING from an insertion, because the helper called anything that
+	  was not CDS_DISC_OK an empty drive - and a drive spinning up a 34-track disc reports
+	  CDS_DRIVE_NOT_READY for seconds. So the player heard the drive working and the shelf
+	  stayed empty, with a green test suite either side of it.
+	*/
+	{
+		char *src = 0;
+		long n = 0;
+		FILE *f = fopen("support/classicui/chome_disc.cpp", "rb");
+		if (f)
+		{
+			fseek(f, 0, SEEK_END);
+			n = ftell(f);
+			fseek(f, 0, SEEK_SET);
+			src = (char*)malloc((size_t)n + 1);
+			if (src && fread(src, 1, (size_t)n, f) == (size_t)n) src[n] = 0;
+			else { free(src); src = 0; }
+			fclose(f);
+		}
+
+		check(src != 0, "chome_disc.cpp can be read, so the guards below are guarding");
+
+		if (src)
+		{
+			check(strstr(src, "st != CDS_DRIVE_NOT_READY") != 0,
+				"a drive that is busy with a disc is not reported as an empty one");
+
+			// The shape is read inside the identify loop, so a drive that was not ready on
+			// the first pass gets another - one look at a spinning disc is a sample.
+			check(strstr(src, "if (shape_identity(t, ser, sizeof(ser), lbl, sizeof(lbl))) break;") != 0,
+				"and the shape is what a no-serial console waits for, retried like a serial");
+
+			free(src);
+		}
+	}
+
 	/* ------------------------------------------------------------------ and debug --- */
 
 	{

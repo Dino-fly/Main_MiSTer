@@ -1324,6 +1324,38 @@ static int disc_toc_title(const char *key, char *out, int outsz)
 	return hit;
 }
 
+/*
+  The identity of a disc whose console prints no product code, taken from the drive.
+
+  Returns 1 when the shape was read - which is the whole answer, whether or not the table
+  knew that shape. A key with no title is a disc nobody has dumped: it still identifies the
+  disc to the artwork cache and the state file, and leaving the name empty is the honest
+  outcome. Returns 0 only when the *drive* would not give up its table of contents, which is
+  a "not yet", not a "no", and is why the caller retries on it.
+*/
+static int shape_identity(int type, char *ser, int sersz, char *lbl, int lblsz)
+{
+	(void)type;
+
+	int nt = 0, lo = 0;
+	if (!read_toc_shape(&nt, &lo)) return 0;
+
+	char key[DISC_SERIAL_LEN];
+	snprintf(key, sizeof(key), "%d:%d", nt, lo);
+
+	char title[DISC_LABEL_LEN];
+	int named = disc_toc_title(key, title, sizeof(title));
+
+	// Which also drops whatever name the disc gave itself when the table did not know the
+	// shape - see disc_shape_identity() for why that matters on Neo Geo CD.
+	disc_shape_identity(key, named ? title : 0, ser, sersz, lbl, lblsz);
+
+	if (named) printf("ClassicUI: disc shape %s is \"%s\"\n", key, title);
+	else printf("ClassicUI: disc shape %s is not in disctoc.txt\n", key);
+
+	return 1;
+}
+
 static int find_data_track()
 {
 	struct cdrom_tochdr hdr;
@@ -1379,9 +1411,33 @@ static void helper_main(const char *dev)
 		{
 			last = st;
 
-			if (st != CDS_DISC_OK)
+			/*
+			  CDS_DRIVE_NOT_READY is a disc, not an empty drive.
+
+			  The drive reports it while it spins a freshly inserted disc up and reads its
+			  table of contents, and on a 34-track Neo Geo CD that is many seconds of
+			  audible work. Treating everything that is not CDS_DISC_OK as ABSENT meant the
+			  one state that exists to say "there is a disc and we are still working out
+			  what it is" could never be reached from an insertion: the player heard the
+			  drive working and the shelf showed nothing, then the badge appeared all at
+			  once when the disc was already identified. The comment below promised the
+			  spinning icon would start while the drive was still seeking, and it could not.
+
+			  Only NOT_READY, and deliberately not CDS_NO_INFO: no-info means the drive
+			  would not say, which is not evidence of a disc, and a badge for a disc that
+			  is not there cannot be dismissed - the only thing that clears it is a status
+			  the drive is declining to give.
+			*/
+			if (st != CDS_DISC_OK && st != CDS_DRIVE_NOT_READY)
 			{
 				helper_write(DISC_ABSENT, DISC_T_NONE, "", "");
+			}
+			else if (st == CDS_DRIVE_NOT_READY)
+			{
+				// Nothing to read yet - the drive says so. Show the badge and come back
+				// on the next tick, which is DISC_POLL_EMPTY_S away, not thirty seconds:
+				// see the wait at the bottom of this loop.
+				helper_write(DISC_SPINNING, DISC_T_NONE, "", "");
 			}
 			else
 			{
@@ -1495,7 +1551,28 @@ static void helper_main(const char *dev)
 					*/
 					if (t == DISC_T_UNKNOWN) break;            // nothing to name at all
 					if (ser[0]) break;                        // the identifier that matters
-					if (!disc_type_has_serial(t) && lbl[0]) break;   // none to wait for
+
+					/*
+					  A console with no product code: its identity is the shape of its
+					  table of contents, so that is the thing to wait for, and it is read
+					  here inside the loop rather than once after it.
+
+					  It used to sit after the loop, and the line above used to be "if the
+					  type has no serial and we have a label, stop" - which gave the shape
+					  read exactly one attempt, on the pass that had just finished waking
+					  the drive. When that attempt failed the disc settled with the volume
+					  label as its whole identity, and on Neo Geo CD the volume label is a
+					  house code: a real disc of Sonic Wings 2 went to the database as
+					  "SW2 CD01" and came back 404, while the shape - 34:309854, which the
+					  table knows - was read correctly a moment later and by then nothing
+					  was asking. One look at a spinning disc is a sample, not an answer,
+					  which is the fourth time that has been the lesson in this file.
+					*/
+					if (!disc_type_has_serial(t))
+					{
+						if (shape_identity(t, ser, sizeof(ser), lbl, sizeof(lbl))) break;
+						continue;                            // no shape yet: look again
+					}
 
 					printf("ClassicUI: disc read %d gave a %s with%s, reading again\n",
 						try_n + 1, disc_type_name(t),
@@ -1517,25 +1594,25 @@ static void helper_main(const char *dev)
 				  Only when there is nothing else. A disc that named itself keeps its own
 				  name; this is for the ones that cannot.
 				*/
+				/*
+				  Out of tries with no shape: the disc keeps no identity at all, not even
+				  the name it gave itself.
+
+				  Deliberate, and it is the same reasoning as disc_shape_identity()'s. The
+				  only name such a disc has is its volume label, the label is a house code
+				  as often as a name on the one console this can happen to, and there is no
+				  way here to tell the two apart. Asking the database for a house code
+				  spends the scarce unmatched allowance to be told nothing, or matches
+				  something confidently wrong. An unnamed disc still shows its console and
+				  still plays; a misnamed one puts the wrong cover on the shelf.
+				*/
 				if (!ser[0] && !disc_type_has_serial(t) && t != DISC_T_UNKNOWN)
 				{
-					int nt = 0, lo = 0;
-					if (read_toc_shape(&nt, &lo))
-					{
-						char key[DISC_SERIAL_LEN];
-						snprintf(key, sizeof(key), "%d:%d", nt, lo);
-
-						char title[DISC_LABEL_LEN];
-						int named = disc_toc_title(key, title, sizeof(title));
-
-						// Including dropping any label the disc gave us when the table
-						// did not know the shape - see disc_shape_identity().
-						disc_shape_identity(key, named ? title : 0,
-							ser, sizeof(ser), lbl, sizeof(lbl));
-
-						if (named) printf("ClassicUI: disc shape %s is \"%s\"\n", key, title);
-						else printf("ClassicUI: disc shape %s is not in disctoc.txt\n", key);
-					}
+					if (lbl[0])
+						printf("ClassicUI: %s disc gave no readable shape after %d reads,"
+							" so it stays unnamed rather than be named by its volume label\n",
+							disc_type_name(t), DISC_ID_TRIES);
+					lbl[0] = 0;
 				}
 
 				if (disc_type_has_serial(t) && !ser[0])
