@@ -100,13 +100,66 @@ properties matter more than the exact choice of hash:
   the art path and produces a confidently wrong cover, which this project has already
   learned costs more than no cover at all.
 
+## PROVEN, end to end, on this disc
+
+Done on 2026-08-12 against the real disc and the real datfile, so none of the above is
+theory any more.
+
+**Redump.** The datfile fetched with the pipeline that already exists
+(`http://redump.org/datfile/pce/`, 551 releases) contains exactly one release whose layout
+is the disc in the drive:
+
+    Akumajou Dracula X - Chi no Rondo (Japan)      [Castlevania: Rondo of Blood]
+
+    22 tracks, as the drive reports
+    17 of 21 track lengths identical to the drive's
+    the three that differ:  -225, +75, +150  -  which SUM TO ZERO
+    total sectors in the dat: 221262   device leadout: 221262   difference: 0
+
+That is the pregap question answered, and answered better than expected. The per-track
+split differs - Redump accounts index-0 pregaps to the adjacent track, the drive does not -
+but **the total does not**. The leadout matches to the sector.
+
+**So the fingerprint should be (track count, total sectors), not the track vector.** It has
+no pregap ambiguity at all, it is two integers, and it was measured across the whole datfile:
+
+    542 releases carrying track data
+    492 distinct (ntracks, total) keys
+    452 of them name exactly ONE release          -  83% of releases, unambiguous
+    40 keys collide
+
+and the collisions are mostly benign for artwork, because they are revisions of one game:
+Doukyuusei Rev 3/Rev 4, Tokimeki Memorial Rev 1/2/3, Ys I & II vs its Alt. Same game, same
+cover. A handful are genuinely different and must be refused: J. B. Harold (Japan) against
+(USA), Fighting Street (Japan) against (USA), and the two PC Engine Hyper Catalog discs.
+The table has to distinguish "several dumps of one game" from "several games" and the
+front-end has to decline to name the latter.
+
+**ScreenScraper.** Asked for the matched title on systemeid 114, every shape hits:
+
+    romnom "Akumajou Dracula X - Chi no Rondo (Japan)"   ->  hit
+    romnom "Akumajou Dracula X - Chi no Rondo"           ->  hit
+    romnom "...(Japan).cue"                              ->  hit
+    romnom "Castlevania - Rondo of Blood"                ->  hit   (its own fuzzy match)
+    the same title on systemeid 31 (TurboGrafx-16)       ->  hit
+
+game id 14466, with 40 media entries including box-2D, support-2D and wheel - so both a
+cover and a disc scan are available. The second hop needs no new code: it is the romnom path
+Saturn and Mega CD already use.
+
 ## Status
 
-Not implemented. The evidence above is what is settled: no title on the disc, the TOC is
+The match is proven. The implementation is not written. The evidence above is what is settled: no title on the disc, the TOC is
 readable for free and is distinctive, ScreenScraper cannot take it directly, and the table
 that bridges the gap is buildable from data we already know how to fetch.
 
-What remains is a data pipeline plus a lookup: extend `disctitles.py` to emit a TOC table,
-compute the same fingerprint in the helper, and route a hit into the existing name path.
-The one measurement to take first is the pregap question above - read one disc whose Redump
-entry is known and check the two fingerprints agree before building a table of thousands.
+What remains is small and fully specified now:
+
+1. extend `tools/disctitles.py` to emit a second table keyed on `ntracks:total` -> title,
+   marking any key that maps to more than one distinct *game* so it can be refused;
+2. compute `ntracks` and the leadout in the helper - it already reads both, see
+   `find_data_track()` and `tools/disctoc.py`;
+3. look the key up in that table and hand the title to the existing name path.
+
+The measurement that had to come first has been taken, and it changed the design: use the
+leadout, not the track vector.
