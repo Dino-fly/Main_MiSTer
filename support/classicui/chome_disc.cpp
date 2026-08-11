@@ -25,6 +25,7 @@
 #include <climits>
 #include <sys/ioctl.h>
 #include <linux/cdrom.h>
+#include "../../file_io.h"          // getRootDir(), for classicui/disctoc.txt
 #include <sys/wait.h>
 #include <signal.h>
 #include <sys/stat.h>
@@ -859,6 +860,16 @@ const char *disc_scrape_name()
 	if (dlabel[0] && (dtype == DISC_T_SATURN || dtype == DISC_T_MEGACD)) return dlabel;
 
 	/*
+	  ...and for a disc named by its shape, whatever console pressed it. The ':' is what says
+	  so: a product code never contains one, and the shape key is exactly "<tracks>:<leadout>"
+	  - so a label standing beside such a serial came out of disctoc.txt, which means it is a
+	  real game name from Redump rather than the house code a Neo Geo CD volume label often is.
+	  An unmatched shape leaves the serial set and the label empty, and falls through to
+	  nothing, which is the right answer for a disc nobody can name.
+	*/
+	if (dlabel[0] && strchr(dserial, ':')) return dlabel;
+
+	/*
 	  And NOT the bare serial, which this used to return as a last resort.
 
 	  It was flagged as a product call and Dinofly took the narrow option: the serial is now
@@ -1217,6 +1228,78 @@ static int helper_reader(int lba, int mode, uint8_t *dst, void *ctx)
   Where the first data track starts, or -1 when the table of contents is all audio -
   which is how an audio CD is recognised before a sector is read.
 */
+/*
+  The disc's shape: how many tracks it has and where the leadout sits.
+
+  For the two consoles that carry no product code this is the only identifier there is - a
+  PC Engine CD disc has no ISO filesystem and its boot area holds a Hudson copyright notice
+  and code-module labels, nothing that names the game. See docs/PCECD-NGCD-MATCHING.md.
+
+  Read from the same TOC find_data_track() already walks, so it costs one more ioctl pair
+  and touches no sector data.
+*/
+static int read_toc_shape(int *ntracks, int *leadout)
+{
+	struct cdrom_tochdr hdr;
+	if (ioctl(helper_fd, CDROMREADTOCHDR, &hdr) < 0) return 0;
+
+	struct cdrom_tocentry e;
+	memset(&e, 0, sizeof(e));
+	e.cdte_track = CDROM_LEADOUT;
+	e.cdte_format = CDROM_LBA;
+	if (ioctl(helper_fd, CDROMREADTOCENTRY, &e) < 0) return 0;
+
+	*ntracks = hdr.cdth_trk1 - hdr.cdth_trk0 + 1;
+	*leadout = e.cdte_addr.lba;
+	return (*ntracks > 0 && *leadout > 0);
+}
+
+/*
+  ...and the name that shape belongs to, out of classicui/disctoc.txt.
+
+  Keyed on "<tracks>:<leadout>" because that is the one quantity the drive and Redump agree
+  on to the sector: they split index-0 pregaps between tracks differently, so per-track
+  lengths disagree - measured at -225, +75, +150 on the disc this was built against - but
+  those differences sum to zero and the total does not move. tools/disctocdb.py builds the
+  table and its header carries the whole measurement.
+
+  A '?' in front of the title means the shape is shared by genuinely different games, and
+  is refused here rather than guessed at: a wrong title feeds the artwork path and produces
+  a confidently wrong cover, which this project has already paid to learn about.
+*/
+static int disc_toc_title(const char *key, char *out, int outsz)
+{
+	out[0] = 0;
+
+	char path[1024];
+	snprintf(path, sizeof(path), "%s/classicui/disctoc.txt", getRootDir());
+
+	FILE *f = fopen(path, "r");
+	if (!f) return 0;
+
+	char line[256];
+	int hit = 0;
+	while (fgets(line, sizeof(line), f))
+	{
+		if (line[0] == '#') continue;
+		char *tab = strchr(line, '\t');
+		if (!tab) continue;
+		*tab = 0;
+		if (strcmp(line, key)) continue;
+
+		char *title = tab + 1;
+		char *nl = strchr(title, '\n');
+		if (nl) *nl = 0;
+
+		if (title[0] == '?') break;              // shared by different games: no answer
+		snprintf(out, (size_t)outsz, "%s", title);
+		hit = out[0] ? 1 : 0;
+		break;
+	}
+	fclose(f);
+	return hit;
+}
+
 static int find_data_track()
 {
 	struct cdrom_tochdr hdr;
@@ -1401,6 +1484,38 @@ static void helper_main(const char *dev)
 				  from the table - and that is worth one line rather than a silent
 				  degradation somebody has to infer from a missing cover.
 				*/
+				/*
+				  A console with no product code gets its shape instead, and the shape
+				  becomes its identity: the key goes in the serial field so the artwork
+				  cache and the state file work unchanged, and the title - if the table
+				  knows this shape - goes in the name. "22:221262" is Rondo of Blood.
+
+				  Only when there is nothing else. A disc that named itself keeps its own
+				  name; this is for the ones that cannot.
+				*/
+				if (!ser[0] && !disc_type_has_serial(t) && t != DISC_T_UNKNOWN)
+				{
+					int nt = 0, lo = 0;
+					if (read_toc_shape(&nt, &lo))
+					{
+						char key[DISC_SERIAL_LEN];
+						snprintf(key, sizeof(key), "%d:%d", nt, lo);
+
+						char title[DISC_LABEL_LEN];
+						if (disc_toc_title(key, title, sizeof(title)))
+						{
+							snprintf(ser, sizeof(ser), "%s", key);
+							snprintf(lbl, sizeof(lbl), "%s", title);
+							printf("ClassicUI: disc shape %s is \"%s\"\n", key, title);
+						}
+						else
+						{
+							snprintf(ser, sizeof(ser), "%s", key);
+							printf("ClassicUI: disc shape %s is not in disctoc.txt\n", key);
+						}
+					}
+				}
+
 				if (disc_type_has_serial(t) && !ser[0])
 					printf("ClassicUI: %s disc gave no serial after %d reads,"
 						" using \"%s\" alone\n", disc_type_name(t), DISC_ID_TRIES,

@@ -1,0 +1,493 @@
+#classicui-disctoc 1
+2:3545	Bomberman '94
+2:4013	Tengai Makyou - Deden no Den
+2:11031	Psychic Detective Series Vol. 3 - Aya
+2:203614	Ginga Ojousama Densetsu Yuna HuVIDEO CD
+2:299254	Sherlock Holmes - Consulting Detective - Vol. II
+2:330167	De-Ja
+4:29482	Henshin Engine
+4:33821	CD Battle - Hikari no Yuushatachi
+4:62088	Himitsu no Hanazono
+4:99162	Shin Onryou Senki
+4:143728	Magical Dinosaur Tour
+4:144804	Magical Saurus Tour
+5:44730	Duo Comic - Bakuretsu Hunter
+5:56204	Jantei Monogatari
+5:61124	Master of Monsters
+5:77695	Virgin Dream
+5:79333	Seiryuu Densetsu - Monbit
+5:98413	Jantei Monogatari 2 - Uchuu Tantei Diban - Kanketsu-hen
+5:100985	Jantei Monogatari 2 - Uchuu Tantei Diban - Shutsudou-hen
+5:138001	Top o Nerae! GunBuster Vol. 1
+5:154740	Baby Jo - The Super Hero
+5:165487	CAL III - Kanketsu-hen
+5:198265	Wrestle Angels - Double Impact
+5:215504	Urusei Yatsura - Stay with You
+5:270634	Dennou Tenshi - Digital Ange
+6:15746	A.III. - A Ressha de Ikou III
+6:38048	Mad Stalker - Full Metal Force
+6:76712	Record of Lodoss War
+6:79660	Develo - Starter Kit - BASIC-hen
+6:157333	Far East of Eden - Tengai Makyou - Ziria
+6:157334	Far East of Eden - Tengai Makyou - Ziria (Hibaihin)
+6:172595	YaWaRa! 2 - A Fashionable Judo Girl!
+6:256831	Hatsukoi Monogatari
+7:37226	Adventure Quiz - Capcom World + Hatena no Daibouken
+7:44606	Sugoroku, The '92 - Nari Tore - Nariagari Trendy
+7:51978	Space Invaders - The Original Game
+7:83214	Quiz Avenue
+7:147284	CAL II
+7:160072	YaWaRa! A Fashionable Judo Girl!
+7:210415	Kagami no Kuni no Legend
+7:226734	3x3 Eyes - Sanjiyan Henjou
+7:226736	3x3 Eyes - Sanjiyan Henjou
+7:232776	Doukyuusei
+8:81433	Develo - Starter Kit - Assembler-hen
+8:85977	BuilderLand - The Story of Melba
+8:105502	Psychic Detective Series Vol. 4 - Orgel
+8:109601	Shougi Database Kiyuu
+8:119758	Quiz Avenue II
+8:140643	Travellers! Densetsu o Buttobase
+8:151793	Quiz Avenue III
+8:161421	Far East of Eden - Tengai Makyou - Fuun Kabuki-den
+8:266086	Tokimeki Memorial
+8:273829	Go! Go! Birdie Chance
+9:42431	Juuouki
+9:51204	Super Daisenryaku
+9:102921	Nobunaga no Yabou - Zenkokuban
+9:104128	Psychic Detective Series Vol. 3 - Aya
+9:131469	Ginga Ojousama Densetsu Yuna
+9:137654	PC Engine Fan - Special CD-ROM^2 Vol. 1
+9:166963	Motteke Tamago
+9:168475	Daisenpuu Custom
+9:177715	Space Adventure Cobra II - Densetsu no Otoko
+9:185506	Inoue Mami - Kono Hoshi ni Tatta Hitori no Kimi
+9:231782	Fushigi no Umi no Nadia - The Secret of Blue Water
+10:44382	Juuouki
+10:63032	Gyuwambler Jiko Chuushinha - Gekitou 36 Janshi
+10:108935	Gain Ground SX
+10:123574	Lord of Wars
+10:127993	Tadaima Yuusha Boshuu-chuu
+10:128009	Implode
+10:129313	Hu PGA Tour - PowerGolf 2 - Golfer
+10:135139	Rally Championship
+10:202838	Shadow of the Beast - Mashou no Okite
+10:206340	Shadow of the Beast
+10:207798	Ginga Ojousama Densetsu Yuna
+10:207808	Ginga Ojousama Densetsu Yuna (FAAT, FABT, FACT)
+10:330128	Kuusou Kagaku Sekai Gulliver Boy
+11:86778	Jack Nicklaus' World Tour Golf - 162 Holes
+11:88425	Jack Nicklaus Turbo Golf
+11:112097	Record of Lodoss War II
+11:121483	Might and Magic
+11:129010	Record of Lodoss War II
+11:156697	ROM^2 Karaoke Volume 1
+11:162541	ROM^2 Karaoke Volume 2
+11:163111	ROM^2 Karaoke Volume 3
+11:172490	ROM^2 Karaoke Volume 4
+11:188751	Metal Angel
+11:199067	?J. B. Harold Murder Club
+12:63323	Shinsetsu Shiawase Usagi f - Yuujou yorimo Aiyoku
+12:82000	High Grenadier
+12:87934	Shinsetsu Shiawase Usagi 2 - Kairaku e no Invitation
+12:90155	Revival Chase
+12:107267	Space Adventure Cobra - Kokuryuuou no Densetsu
+12:108000	Startling Odyssey II - Maryuu Sensou
+12:118058	John Madden Duo CD Football (RE)
+12:137892	ROM^2 Karaoke Volume 5
+12:140910	Battle Shanghai - Dragon's Eye
+12:213022	Dragon Knight &amp; Graffiti
+12:238639	Jim Power in Mutant Planet
+13:65827	Goetzendiener
+13:67818	Shanghai II
+13:94581	Insanity
+13:96688	Daisenryaku II - Campaign Version
+13:100098	Kakutou Haou Densetsu - Algunos
+13:110089	Shinsetsu Shiawase Usagi
+13:169827	Hi-Leg Fantasy
+13:188930	ROM^2 Karaoke Vol. 5 - Karaoke Maku no Uchi
+13:197024	ROM^2 Karaoke Vol. 3 - Yappashi Band
+13:204392	ROM^2 Karaoke Vol. 2 - Nattoku Idol
+13:205597	ROM^2 Karaoke Vol. 1 - Suteki ni Standard
+13:213927	ROM^2 Karaoke Vol. 4 - Choito Otona!
+13:245753	Metal Angel 2
+13:274982	Yami no Ketsuzoku - Harukanaru Kioku
+13:299970	Tenchi Muyou! Ryououki
+14:44242	Kick Boxing, The
+14:114976	Atlas, The - Renaissance Voyager
+14:121128	Bishoujo Senshi Sailor Moon Collection
+14:131982	Laplace no Ma
+14:132046	Laplace no Ma
+14:141347	Populous - The Promised Lands
+14:142552	Splash Lake
+14:142907	Splash Lake - Ostrich Daibouken
+14:171417	SydMead's TerraForming
+14:171773	TerraForming
+14:200404	Star Mobile
+14:224975	Mitsubachi Gakuen
+15:47283	Faceball
+15:109573	Shiawase Usagi II - Toraware Usagi Sailor Z
+15:110728	Shiawase Usagi - Nureta Bishoujo - Hajimete Nanoni...
+15:143425	Eiyuu Sangokushi
+15:147130	Dragon Ball Z - Idainaru Son Gokuu Densetsu
+15:152717	Wizardry I, II
+15:180612	Jessie Jaeger in Cleopatra's Curse
+15:180681	Super Raiden
+15:197253	Alshark
+15:239406	Gulclight TDF 2
+16:64254	Shin Megami Tensei
+16:80093	ROM ROM Stadium
+16:97908	Color Wars
+16:128997	Might and Magic III - Isles of Terra
+16:128999	Might and Magic III - Isles of Terra
+16:132871	Faceball
+16:139720	Down Load 2
+16:158112	Mahjong Clinic Special
+16:160956	Uchuu Senkan Yamato
+16:172919	Rayxanber II
+16:182420	Monster Lair
+16:182422	Wonder Boy III - Monster Lair
+16:182423	Wonder Boy III - Monster Lair
+16:208372	Wizardry III, IV
+16:237878	Horror Story
+16:261158	Aoki Ookami to Shiroki Mejika - Genchou Hishi
+16:291807	Hyper Wars
+17:119072	Summer Carnival '92 - Alzadick
+17:163067	Galaxy Deka Gayvan
+17:172873	Star Breaker
+17:173456	Ginga Fukei Densetsu Sapphire
+17:173606	Ginga Fukei Densetsu Sapphire (Reprint)
+17:235281	Efera &amp; Jiliora - The Emblem from Darkness
+17:260323	Kaze no Densetsu Xanadu
+17:267327	Legend of Xanadu - Kaze no Densetsu Xanadu
+17:268657	Bonk III - Bonk's Big Adventure
+18:103332	GS (Ghost Sweeper) Mikami
+18:116754	Jantei Monogatari 3 - Saver Angels
+18:161240	Motoroader MC
+18:170356	Palladion - Auto Crusher Palladium
+18:200785	Rayxanber III
+18:214526	Gate of Thunder (FACT, FADT)
+18:259033	Sylphia
+19:143511	Mahjong on the Beach
+19:168476	J-Thunder - Tsumetai Hada wa Shoujo o Nurasu
+19:177708	Dungeon Master - Theron's Quest (RE)
+19:177709	Dungeon Master - Theron's Quest
+19:178232	Mamono Hunter Youko - Tooki Yobigoe
+19:178271	Dungeon Master - Theron's Quest
+19:192445	Prince of Persia
+19:192803	Prince of Persia
+19:194642	Super Darius
+19:205489	Last Armageddon
+19:205603	Last Armageddon
+19:224635	Sotsugyou II - Neo Generation
+19:234767	Super Darius II
+19:242302	Super Schwarzschild
+19:257914	Dragon Knight III
+20:83111	Pastel Lime
+20:100673	Tenchi o Kurau
+20:111625	CD Mahjong - Bishoujo Chuushinha
+20:118058	Todd's Adventures in Slime World
+20:149632	Nekketsu Legend - Baseballer
+20:204076	Emerald Dragon
+20:206397	Wrestling Universe - Fire Pro Joshi - Dome Choujo Taisen - Zenjo vs. JWP
+20:218224	Aurora Quest - Otaku no Seiza in Another World
+20:260463	Garou Densetsu 2 - Aratanaru Tatakai (FABT, FACT, FAET, FAFT)
+20:282004	Hataraku Shoujo - Tekipaki Working Love
+21:80432	Pro Yakyuu, The
+21:116922	Davis Cup Tennis, The
+21:135713	Slot Gambler
+21:147264	Legion
+21:147712	Sexy Idol Mahjong
+21:168433	Tecmo World Cup Super Soccer
+21:187964	Startling Odyssey
+21:208742	Road Spirits
+21:223616	Ai Chou Aniki (SADS, SAES)
+21:267328	Garou Densetsu 2 - Aratanaru Tatakai
+21:277934	Solid Force
+21:328062	Meteor Blaster DX
+21:330082	Meteor Blaster DX (Rerelease)
+22:129898	Quiz Marugoto the World
+22:155392	Gyuwambler Jiko Chuushinha - Mahjong Puzzle Collection
+22:170580	Dragon Half
+22:193701	Pachio-kun 3 - Pachi-Slot &amp; Pachinko
+22:195290	Garou Densetsu Special
+22:221262	Akumajou Dracula X - Chi no Rondo
+22:225612	Fiend Hunter
+22:242836	Kisou Louga
+22:242838	Kisou Louga
+22:266502	Super Schwarzschild 2
+22:280519	Dragon Slayer - The Legend of Heroes
+22:280875	Dragon Slayer - The Legend of Heroes
+22:326787	Princess Maker 2
+23:76892	Nishimura Kyoutarou Mystery - Hokutosei no Onna
+23:113183	Bonanza Bros.
+23:120254	Loom
+23:120610	Loom
+23:169187	Downtown Nekketsu Monogatari
+23:190887	Human Sports Festival
+23:209229	NEXZR
+23:209944	Hyper Dyne - SideArms Special
+23:214805	Summer Carnival '93 - NEXZR Special
+23:222277	Sol Moonarge
+23:226558	Gate of Thunder + Bonk's Adventure + Bonk's Revenge
+23:227391	Ruin - Kami no Isan
+23:246869	Lords of Thunder
+23:247030	Winds of Thunder
+23:314457	Ginga Ojousama Densetsu Yuna 2 - Eien no Princess
+23:320048	Garou Densetsu Special
+24:112848	Pomping World
+24:113056	Buster Bros.
+24:159749	Police Connection
+24:176876	Godzilla
+24:178677	Godzilla Bakutou Retsuden
+24:180654	Minesweeper
+24:202915	FX Unit Yuki - The Henshin Engine
+24:209370	Mashou Denki - La Valeur
+24:210974	Genocide
+24:213074	Hellfire S - The Another Story
+24:228372	Black Hole Assault
+24:229471	Riot Zone
+24:229837	Ookami-teki Monshou - Crest of Wolf
+24:233315	Bishoujo Senshi Sailor Moon
+24:238278	Kaze Kiri - Ninja Action
+24:238587	Super Air Zonk - Rockabilly-Paradise
+24:238589	CD Denjin - Rockabilly Tengoku
+24:269122	Snatcher CD-ROMantic
+24:278524	Star Parodier
+24:291022	Hypernova Blast
+24:298353	Dragon Slayer - The Legend of Heroes II
+24:312587	FX Unit Yuki - The Henshin Engine
+25:118897	Super-CD-Demo^2
+25:190678	Asuka 120% Maxima - Burning Fest. Maxima
+25:192809	Super CD-ROM^2 Taiken Soft Shuu
+25:193095	Lemmings
+25:214466	ImageFight II - Operation Deepstriker
+25:226035	Psychic Storm
+25:240748	God Panic - Shijou Saikyou no Gundan
+25:242856	Forgotten Worlds
+25:243938	Forgotten Worlds
+25:281489	Private Eye dol
+25:283935	Far East of Eden - Tengai Makyou II - Manji Maru
+25:303704	Ys III
+25:304392	Ys III - Wanderers from Ys
+26:150804	PC Engine Hyper Catalog CD-ROM
+26:160608	Sexy Idol Mahjong - Yakyuuken no Uta
+26:167597	Mamono Hunter Youko - Makai kara no Tenkousei
+26:179792	Dekoboko Densetsu - Hashiru Wagamanmaa
+26:181839	Fighting Street
+26:221207	Double Dragon II - The Revenge
+26:224258	Vasteel 2
+26:231731	It Came from the Desert
+26:233266	Chiki Chiki Boys
+26:241195	J.League Tremendous Soccer '94
+26:265394	Seisenshi Denshou - Jantaku no Kishi
+27:181178	Browning
+27:181610	Pachio-kun - Warau Uchuu
+27:208916	Princess Minerva
+27:225091	Hihou Densetsu - Chris no Bouken
+27:229777	Yamamura Misa Suspense - Kinsenka Kyouezara Satsujin Jiken
+27:234064	Fantastic Night Dreams - Cotton
+27:234230	Fantastic Night Dreams - Cotton
+27:253511	Seirei Senshi Spriggan
+27:261413	KO Seiki Beast Sanjuushi - Gaia Fukkatsu - Kanketsu-hen
+27:278780	Ultra Box 6-gou
+27:304503	Linda^3
+28:105101	Death Bringer - The Knight of Darkness
+28:121003	Chou Aniki (FAAT, FACT)
+28:166292	Hawk F-123
+28:174874	Bazar de Gozarre no Game de Gozarre
+28:191189	Zero Wing
+28:221248	Gradius II - Gofer no Yabou
+28:227928	Exile - Wicked Phenomenon
+28:232992	Chou Eiyuu Densetsu - Dynastic Hero
+28:233525	Dynastic Hero, The
+28:238565	Exile II - Janen no Jishou
+28:242259	TV Show, The
+28:264172	Quest of Jongmaster - Janshin Densetsu
+28:267630	Sotsugyou - Graduation
+28:270727	1552 Tenka Tairan
+28:312066	Linda^3
+28:317914	Hyaku Monogatari - Honto ni Atta Kowai Hanashi
+29:136483	Ultra Box Soukangou
+29:139722	CD Hanafuda - Bishoujo Fan Club
+29:196273	Pro Yakyuu Super, The
+29:232653	Mugen Senshi Valis - The Legend of a Fantasm Soldier
+29:238332	Akiyama Jin no Suugaku Mystery - Hihou India no Honoo o Shishu Seyo!
+29:240145	Xak
+29:244496	Renny Blaster
+29:246180	Mysterious Song (Rerelease)
+29:246185	Mysterious Song
+29:252992	Yuu Yuu Hakusho - Yami Shoubu!! Ankoku Bujutsu-kai
+29:260493	Kabuki Ittouryoudan
+29:283330	Ane-san
+30:165647	Pro Yakyuu Super '94, The
+30:176091	Sexy Idol Mahjong - Fashion Monogatari
+30:206396	Strider Hiryuu
+30:215045	Kawa no Nushitsuri - Shizen-ha
+30:230668	Farjius no Jakoutei - Neo Metal Fantasy
+30:242887	Bakushou Yoshimoto Shinkigeki
+30:242950	Magicoal
+30:248890	Sangokushi III
+31:131243	F1 Team Simulation - Project F
+31:136313	Eikan wa Kimi ni - Koukou Yakyuu Zenkoku Taikai
+31:178048	Ultra Box 5-gou
+31:178289	Formation Soccer 95 della Serie A
+31:255495	Bomberman - Panic Bomber
+31:258560	Shin Nihon Pro Wrestling - '94 Battlefield in Tokyo Dome
+31:262924	Sword Master
+31:307551	Neo Nectaris
+31:329297	Emerald Dragon
+32:20025	Kid's Station Vol. 2 - Atchi Kotchi Dotchi
+32:184346	Seiya Monogatari - Anearth Fantasy Stories
+32:201739	Brandish
+32:206644	Ryuuko no Ken
+32:216838	Kisou Louga II - The Ends of Shangrila
+32:239726	Rainbow Islands - The Story of Bubble Bobble 2
+32:249289	Vasteel
+32:257301	Madou Monogatari I - Honoo no Sotsuenji
+32:266189	Vasteel
+32:269514	Gensou Tairiku Auleria
+32:299278	Seiya Monogatari - Anearth Fantasy Stories
+32:328497	Ys IV - The Dawn of Ys
+32:329101	Ys IV - The Dawn of Ys
+33:213497	Tenshi no Uta
+33:245153	PopfulMail
+34:81652	Quiz Caravan Cult Q
+34:128532	CD Bishoujo Pachinko - Kyuuma Yon Shimai
+34:178484	Where in the World Is Carmen Sandiego
+34:208344	Snatcher CD-ROMantic - Pilot Disk
+34:208666	Dead of the Brain 1&amp;2
+34:224023	Tenshi no Uta II - Datenshi no Sentaku
+34:244883	Ultra Box 2-gou
+34:261274	Mad Stalker - Full Metal Force
+34:314644	Far East of Eden - Tengai Makyou - Fuun Kabuki-den
+34:314650	Dungeon Explorer II
+34:316011	Dungeon Explorer II
+35:155428	SimEarth - The Living Planet
+35:170554	SimEarth - The Living Planet
+35:187041	PC Engine Hyper Catalog CD-ROM 2 - 1993 Spring
+35:215619	Pop'n Magic
+35:219265	?PC Engine Hyper Catalog CD-ROM - 1994 Summer (Disc A)
+35:241729	Xak III - The Eternal Recurrence
+35:249582	Chou Jikuu Yousai Macross 2036
+35:329670	Monster Maker - Yami no Ryuukishi
+36:174237	Ultra Box 4-gou
+36:188089	Quiz Tonosama no Yabou
+36:198704	Beyond Shadowgate
+36:227745	Manhole, The
+36:260582	Iga Ninden Gaiou
+36:286710	Dragon Knight II
+36:311946	Steam-Heart's
+37:61001	Doraemon - Nobita no Dorabian Night
+37:113336	Ranma 1-2 - Toraware no Hanayome
+37:138892	Metamor Jupiter
+37:155794	PC Engine Hyper Catalog CD-ROM 3 - 1993 Summer
+37:187450	Puyo Puyo CD
+37:209406	Advanced V.G.
+37:210473	Taiheiki
+37:250350	Kiaidan 00
+37:271678	Spriggan Mark 2 - Re Terraform Project
+38:133094	Bakuden - Unbalance Zone
+38:213625	Exile
+38:238067	Langrisser - Hikari no Matsuei
+39:158740	Avenger
+39:162150	Super Real Mahjong PIV Custom
+39:217447	Exile - Toki no Hasama e
+39:261219	Basted
+39:267485	Burai II - Yami Koutei no Gyakushuu
+39:329574	Tanjou - Debut
+41:234029	World Heroes 2
+41:272377	Patlabor - Chapter of Griffon
+42:192120	Quiz Marugoto the World 2 - Time Machine ni Onegai!
+42:202685	Lords of the Rising Sun
+42:217633	Top o Nerae! GunBuster Vol. 2
+42:268412	Alnam no Kiba - Juuzoku Juuni Shinto Densetsu
+42:271727	Cardangels
+43:180041	Develo Magazine Vol. 1
+43:236055	Zero 4 Champ II
+43:280156	Megami Paradise
+43:325979	Ys I &amp; II
+43:326566	Ys Book I &amp; II
+44:96050	CD Pachi-Slot - Bishoujo Gambler
+44:207839	Mystic Formula
+44:229181	Quiz no Hoshi - Star of Quiz
+44:250814	Lady Phantom
+44:264784	Flash Hiders
+45:134245	Blood Gear
+45:205538	PC Engine Hyper Catalog CD-ROM - 1994 Summer (Disc B)
+45:286413	Burai II - Yami Koutei no Gyakushuu
+46:206335	R-Type Complete CD
+46:219551	Sotsugyou Shashin - Miki
+46:227451	Faussete Amour
+46:252927	Chou Jikuu Yousai Macross - Eien no Love Song
+47:213010	Mateki Densetsu Astralius
+47:227161	PC Engine Hyper Catalog CD-ROM 6 - 1994 Summer (Disc B)
+47:243192	Pachio-kun - Maboroshi no Densetsu
+48:178264	Moonlight Lady
+48:240746	L-Dis
+48:268587	Legend of Xanadu - Kaze no Densetsu Xanadu II
+51:230041	Sorcerian
+52:312034	Princess Maker 1
+52:327574	Startling Odyssey II - Maryuu Sensou
+53:165267	PC Engine Hyper Catalog CD-ROM 5 - 1994 Spring
+53:211497	Rising Sun
+53:262876	Kaizou Choujin Shubibinman 3 - Ikai no Princess
+54:195285	Downtown Nekketsu Koushinkyoku - Soreyuke Daiundoukai
+55:205413	Final Zone II
+55:206219	Final Zone II
+55:206855	Valis II
+55:271607	Ranma 1-2
+56:215333	Valis II
+56:236908	In Magical Adventure - Fray CD - Xak Gaiden
+56:240754	Nekketsu Koukou Dodgeball-bu CD - Soccer-hen
+56:289476	Camp California
+57:233429	Mirai Shounen Conan
+58:223138	Red Alert
+59:231080	Super Albatross
+59:272015	Cosmic Fantasy 4 - Ginga Shounen Densetsu - Gekitou-hen
+60:220725	Last Alert
+61:243921	Super Mahjong Taikai
+63:219619	Valis III
+63:253464	?F1 Circus Special - Pole to Win
+64:295442	PC Engine Hyper Catalog CD-ROM 4 - 1993 Winter
+67:214990	Super Real Mahjong P.V Custom
+69:266479	Yokoyama Mitsuteru Shin Sangokushi - Tenka wa Ware ni
+69:267111	Nemurenu Yoru no Chiisana Ohanashi
+70:142291	AV Tanjou
+70:238833	Super Real Mahjong Special - Miki Kasumi Shouko no Omoide yori
+70:272681	Mahjong Sword - Princess Quest Gaiden
+71:217473	Golden Axe
+71:275012	Burai - Yatsudama no Yuushi Densetsu
+72:206904	Nobunaga no Yabou - Bushou Fuuunroku
+72:242878	Valis III
+72:270796	Ranma 1-2 - Datou, Ganso Musabetsu Kakutou-ryuu!
+73:131269	Bikkuriman Daijikai
+73:228046	Travel Eple
+73:273999	Cosmic Fantasy 4 - Ginga Shounen Densetsu - Totsunyuu-hen
+74:185584	Sangokushi - Eiketsu Tenka ni Nozomu
+75:204919	Sengoku Kantou Sangokushi
+75:220668	Super Real Mahjong PII-III Custom
+76:242638	Quiz de Gakuensai
+77:265844	Mahjong Vanilla Syndrome
+79:255836	IQ Panic
+80:249767	Laser Soft Visual Collection Vol. 2 - Valis Visual-shuu
+81:189802	Martial Champion
+81:267605	Puyo Puyo CD Tsuu
+82:222428	Babel
+82:225269	Zan - Kagerou no Toki
+83:208479	Mahjong Lemon Angel
+87:242621	Bishoujo Janshi Idol Pai
+88:249836	Cyber City Oedo 808 - Kemono no Alignment
+92:217086	Ultra Box 3-gou
+93:171776	Wizardry V - Heart of the Maelstrom
+93:265271	Laser Soft Visual Collection Vol. 1 - Cosmic Fantasy Visual-shuu
+94:251876	Valis IV
+96:254005	Faerie Dust Story - Meikyuu no Elfeene
+96:273864	Cosmic Fantasy 3 - Bouken Shounen Rei
+98:113653	No-Ri-Ko
+98:253510	Cosmic Fantasy 2 - Bouken Shounen Ban
+98:253632	Cosmic Fantasy 2
+98:276380	Shape Shifter
+98:276383	Makai Eiyuuden - Shape Shifter
+99:176138	Cosmic Fantasy - Bouken Shounen Yuu
+99:244460	Sol Bianca
