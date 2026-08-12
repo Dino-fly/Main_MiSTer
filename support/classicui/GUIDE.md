@@ -667,8 +667,16 @@ Console**, and it exists because this is the one thing about your controllers th
 cannot work out for itself.
 
 Everything else it reads from the hardware. This it cannot: the bypass switch on a SuperDock
-reroutes the SNAC bus to an extension port that takes any console's adapter, and **nothing on
-any pin changes when you move it**. So you are the only source of the answer.
+reroutes the SNAC bus to an extension port that takes any console's adapter, and the firmware
+has no way to ask which way that switch is thrown. So you are the only source of the answer.
+
+**On a SuperDock you will probably not notice this setting at all, and that is the switch
+doing its job.** Tested on 2026-08-12 with an external N64 adapter: the N64 controller worked
+correctly with the setting left on **PlayStation**, because throwing the bypass switch
+electrically disconnects the PlayStation adapter rather than merely sharing the bus with it.
+Nothing is being clocked at the N64 adapter, so nothing needs stopping. The setting earns its
+keep on hardware without that switch — a plain MiSTer wired to a SNAC adapter directly, where
+the pins stay live — and it costs nothing to leave correct on a SuperDock.
 
 - **PlayStation** — the normal setting. We read the port as a PlayStation pad.
 - **Other Console** — you have routed SNAC to an adapter for something else. We leave the

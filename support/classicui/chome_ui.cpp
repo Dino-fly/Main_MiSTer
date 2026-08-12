@@ -6030,6 +6030,10 @@ static int disc_name_is_sanitised(const char *s)
   actually in there. No slot refresh here: this runs per draw, and the strip's opener
   already asks lib_refresh_slots() once, where four stats of the card are worth paying for.
 */
+// Defined with the launch code far below, and needed here: the dialog asks it whether the
+// game it is describing is the disc in the drive.
+static int core_holds_disc();
+
 static void disc_susp_bind(const disc_dlg *d)
 {
 	disc_susp_item.path[0] = 0;
@@ -6166,6 +6170,33 @@ static void disc_dlg_get(disc_dlg *d)
 
 		const chome_sys *sc = lib_sys(run->sysidx);
 		if (sc) snprintf(d->sub, sizeof(d->sub), "%s", sc->name);
+
+		/*
+		  ...and for a *pressed* disc, the drive's own answer beats all of that.
+
+		  Everything above describes the mount, which is the right source for a game
+		  launched from a file. A physical disc mounts under the sentinel and publishes its
+		  volume label, so a Neo Geo CD paused mid-game showed "SW2 CD01" and "Neo Geo"
+		  while the drive three inches away knew it as Sonic Wings 2 on Neo Geo CD - and
+		  the cover we had already fetched and cached sat unused, because d->key was the
+		  label and the picture is filed under the disc's identity.
+
+		  The identity survives the handover without being remembered anywhere: the helper
+		  is resurrected under the running core (see disc_watch_resurrect) and
+		  core_holds_disc() reads what is actually mounted rather than what a previous
+		  process believed, so both halves are re-derived after the re-exec that a core
+		  load performs.
+
+		  Guarded on READY and on a non-empty serial so a disc still spinning up, or one
+		  that never named itself, leaves the mount's answer alone rather than replacing it
+		  with a blank.
+		*/
+		if (core_holds_disc() && disc_state() == DISC_READY && disc_serial()[0])
+		{
+			snprintf(d->key, sizeof(d->key), "%s", disc_serial());
+			snprintf(d->title, sizeof(d->title), "%s", disc_display_name());
+			snprintf(d->sub, sizeof(d->sub), "%s", disc_type_name(disc_type()));
+		}
 	}
 	else
 	{
