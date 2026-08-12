@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <string.h>
 #include <strings.h>
 #include <math.h>
@@ -8,8 +9,10 @@
 
 #include "chome_video.h"
 #include "chome_lib.h"
+#include "chome_core.h"
 #include "../../cfg.h"
 #include "../../file_io.h"
+#include "../../user_io.h"
 #include "../../video.h"
 
 #define PREFIX "ClassicHome"
@@ -17,6 +20,35 @@
 
 /* ------------------------------------------------------------- the table -- */
 
+/*
+  A look drives two machines at once.
+
+  The scaler half (filters, mask, gamma) goes through a preset file exactly as
+  before. The core half is new: core_opts is a ;-separated list of
+  "Option Name=Value Name" pairs matched against the running core's CONF_STR by
+  NAME - a core that does not publish the option is simply left alone, which is
+  what makes one "None" entry safe on every system. Names, not bit positions,
+  for the same reason snacpad.cpp does it: a core update that inserts an option
+  renumbers every bit after it.
+
+  Nothing the core half does is ever saved into <CORE>.CFG. The look is applied
+  on every launch from the shelf (and live from the Display screen), so a game
+  started from the stock menu still gets the player's own core config untouched.
+
+  Why the core owns the colour now: the Game Boy core colourises DMG games BY
+  DEFAULT (Custom Palette=Auto, falling back to the olive/teal
+  828214/517356/305A5F/1A3B49 baked into its RTL). Our old gamma LUT tinted that
+  already-tinted picture green - the double-processed mess this replaces. The
+  GBA core carries the Pokefan531 colour correction ("Modify Colors") in its own
+  pixel pipeline, per hardware model, before scaling - strictly better than a
+  per-channel LUT, which cannot mix channels at all. So for GB and GBA the
+  colour belongs to the core and the scaler gamma stays off; the scaler keeps
+  only what the core cannot do - the pixel grid.
+
+  palette is a root-relative .gbp path sent to the Game Boy core's palette slot
+  (FC3). It is only sent when the core publishes "Custom Palette", so it cannot
+  land in a random index of some other core.
+*/
 struct preset_def
 {
 	const char *id;
@@ -28,6 +60,8 @@ struct preset_def
 	const char *mask;         // 0 = no mask line, "off" = explicitly off
 	const char *maskmode;
 	const char *gamma;        // 0 = no gamma line, "off" = explicitly off
+	const char *core_opts;    // 0 = nothing, else "Name=Value;Name=Value"
+	const char *palette;      // 0 = none, else root-relative .gbp path
 };
 
 #define F_SHARP   PREFIX " Sharp.txt"
@@ -35,14 +69,9 @@ struct preset_def
 #define F_BLURRY  PREFIX " Blurry.txt"
 #define F_SCAN    PREFIX " Scanlines.txt"
 #define F_SCANLT  PREFIX " Scanlines Light.txt"
+#define F_GRID    PREFIX " LCD Grid.txt"
 #define M_GRILLE  PREFIX " Grille.txt"
 #define M_MATRIX  PREFIX " Dot Matrix.txt"
-#define G_DMG     PREFIX " DMG.txt"
-#define G_POCKET  PREFIX " GB Pocket.txt"
-#define G_GBC     PREFIX " GBC.txt"
-#define G_AGB001  PREFIX " GBA AGB-001.txt"
-#define G_AGS001  PREFIX " GBA AGS-001.txt"
-#define G_AGS101  PREFIX " GBA AGS-101.txt"
 #define G_GG      PREFIX " Game Gear.txt"
 #define G_GGMOD   PREFIX " Game Gear Backlit.txt"
 #define G_LYNX    PREFIX " Lynx.txt"
@@ -50,61 +79,108 @@ struct preset_def
 #define G_WSC     PREFIX " WonderSwan Color.txt"
 #define G_NGPC    PREFIX " Neo Geo Pocket Color.txt"
 
+// Root-relative, where the Game Boy core's own palette browser looks.
+#define PAL_DIR    "games/GAMEBOY/Palettes"
+#define PAL_DMG    PAL_DIR "/" PREFIX " DMG Green.gbp"
+#define PAL_POCKET PAL_DIR "/" PREFIX " Pocket.gbp"
+
+/*
+  The core-side halves, shared between entries.
+
+  Every LCD look pins the framework's Scale to HV-integer: the grid filter puts
+  its gutter at source-pixel boundaries whatever the scale, but at a fractional
+  scale the CELLS come out unequal (4- and 5-wide columns alternating at 4.5x),
+  which no real panel does. Integer scale is what makes the grid honest, and the
+  core's own Scale option is the one place it can be set per game from here.
+  "Narrower" rounds down, so the image always fits.
+
+  CO_LCD_OFF is the reset half of "None" and covers GB and GBA in one string -
+  unmatched names are skipped by name lookup, so the GBA sees only its own.
+*/
+#define CO_INTEGER  "Scale=Narrower HV-Integer"
+#define CO_GB_DMG   "Custom Palette=On;Screen Shadow=Yes;Frame blend=On;" CO_INTEGER
+#define CO_LCD_OFF  "Custom Palette=Auto;Screen Shadow=No;Frame blend=Off;" \
+                    "Modify Colors=Off;Scale=Normal"
+
 static const preset_def presets[] =
 {
 	{ "sharp", "Sharp", "No filtering. Square pixels, nothing added.",
-	  "off", "off", "off", "off", "off", "off" },
+	  "off", "off", "off", "off", "off", "off", 0, 0 },
 
 	{ "pvm-rgb", "PVM RGB", "Sharp RGB monitor with fine scanlines and an aperture grille.",
-	  F_SHARP, F_SHARP, F_SCAN, M_GRILLE, "1x", "off" },
+	  F_SHARP, F_SHARP, F_SCAN, M_GRILLE, "1x", "off", 0, 0 },
 
 	{ "pvm-svideo", "PVM S-Video", "Slight horizontal bleed, scanlines. Consoles on a good TV.",
-	  F_SOFT, F_SHARP, F_SCAN, M_GRILLE, "1x", "off" },
+	  F_SOFT, F_SHARP, F_SCAN, M_GRILLE, "1x", "off", 0, 0 },
 
 	{ "composite", "Composite TV", "Soft and blurry, as an RF or composite hookup looked.",
-	  F_BLURRY, F_SOFT, F_SCAN, M_GRILLE, "2x", "off" },
+	  F_BLURRY, F_SOFT, F_SCAN, M_GRILLE, "2x", "off", 0, 0 },
 
 	{ "pal-tv", "PAL TV", "Softer still with lighter scanlines. Home computers on a telly.",
-	  F_SOFT, F_SOFT, F_SCANLT, M_GRILLE, "2x", "off" },
+	  F_SOFT, F_SOFT, F_SCANLT, M_GRILLE, "2x", "off", 0, 0 },
 
 	{ "vga", "VGA Monitor", "Clean and slightly smoothed. No scanlines: a 31 kHz monitor had none.",
-	  F_SOFT, F_SOFT, "off", "off", "off", "off" },
+	  F_SOFT, F_SOFT, "off", "off", "off", "off", 0, 0 },
 
+	/*
+	  The Game Boy pair. Colour comes from a real .gbp through the core's own
+	  palette slot - the scaler gamma that used to fake it tinted the core's
+	  already-colourised picture. The grid is the polyphase filter (aligned to
+	  core pixels by construction), the shadow is the core's own drop-shadow.
+	*/
 	{ "dmg", "Game Boy DMG", "The original olive-green reflective LCD, with its pixel grid.",
-	  F_SHARP, F_SHARP, "off", M_MATRIX, "2x", G_DMG },
+	  F_GRID, F_GRID, "off", "off", "off", "off", CO_GB_DMG, PAL_DMG },
 
 	{ "pocket", "Game Boy Pocket", "Neutral grey reflective LCD, better contrast, finer grid.",
-	  F_SHARP, F_SHARP, "off", M_MATRIX, "1x", G_POCKET },
+	  F_GRID, F_GRID, "off", "off", "off", "off", CO_GB_DMG, PAL_POCKET },
 
-	{ "gbc", "Game Boy Color", "Reflective colour LCD: darkish and a little muted.",
-	  F_SHARP, F_SHARP, "off", M_MATRIX, "1x", G_GBC },
+	{ "gbc", "Game Boy Color", "Reflective colour LCD with its pixel grid.",
+	  F_GRID, F_GRID, "off", "off", "off", "off",
+	  "GBC Colors=Corrected;Screen Shadow=No;Frame blend=Off;" CO_INTEGER, 0 },
 
+	/*
+	  The three GBA screens map to the core's own "Modify Colors" profiles - the
+	  Pokefan531 correction, authored per model, applied before scaling. AGS-101
+	  is the backlit panel people mod their consoles towards: near-raw colour.
+	*/
 	{ "agb001", "GBA (AGB-001)", "The original unlit screen. Dim and washed out.",
-	  F_SHARP, F_SHARP, "off", M_MATRIX, "1x", G_AGB001 },
+	  F_GRID, F_GRID, "off", "off", "off", "off",
+	  "Modify Colors=GBA 2.2;" CO_INTEGER, 0 },
 
 	{ "ags001", "GBA SP (AGS-001)", "Frontlit SP: brighter than AGB, still washed out.",
-	  F_SHARP, F_SHARP, "off", M_MATRIX, "1x", G_AGS001 },
+	  F_GRID, F_GRID, "off", "off", "off", "off",
+	  "Modify Colors=GBA 1.6;" CO_INTEGER, 0 },
 
 	{ "ags101", "GBA SP (AGS-101)", "Backlit SP: bright with proper contrast and colour.",
-	  F_SHARP, F_SHARP, "off", "off", "off", G_AGS101 },
+	  F_GRID, F_GRID, "off", "off", "off", "off",
+	  "Modify Colors=Off;" CO_INTEGER, 0 },
 
 	{ "gg", "Game Gear", "Backlit but murky, with the Game Gear's poor contrast.",
-	  F_SHARP, F_SHARP, "off", M_MATRIX, "1x", G_GG },
+	  F_SHARP, F_SHARP, "off", M_MATRIX, "1x", G_GG, 0, 0 },
 
 	{ "gg-mod", "Game Gear (Backlit Mod)", "The common LED backlight mod: brighter, cleaner whites.",
-	  F_SHARP, F_SHARP, "off", M_MATRIX, "1x", G_GGMOD },
+	  F_SHARP, F_SHARP, "off", M_MATRIX, "1x", G_GGMOD, 0, 0 },
 
 	{ "lynx", "Atari Lynx", "Backlit colour LCD with a cool cast and washed blacks.",
-	  F_SHARP, F_SHARP, "off", M_MATRIX, "1x", G_LYNX },
+	  F_SHARP, F_SHARP, "off", M_MATRIX, "1x", G_LYNX, 0, 0 },
 
 	{ "ws", "WonderSwan", "Reflective mono FSTN: warm grey, low contrast.",
-	  F_SHARP, F_SHARP, "off", M_MATRIX, "1x", G_WS },
+	  F_SHARP, F_SHARP, "off", M_MATRIX, "1x", G_WS, 0, 0 },
 
 	{ "wsc", "WonderSwan Color", "Reflective colour panel: muted and slightly warm.",
-	  F_SHARP, F_SHARP, "off", M_MATRIX, "1x", G_WSC },
+	  F_SHARP, F_SHARP, "off", M_MATRIX, "1x", G_WSC, 0, 0 },
 
 	{ "ngpc", "Neo Geo Pocket Color", "Reflective pastel colour LCD, gentle contrast.",
-	  F_SHARP, F_SHARP, "off", M_MATRIX, "1x", G_NGPC },
+	  F_SHARP, F_SHARP, "off", M_MATRIX, "1x", G_NGPC, 0, 0 },
+
+	/*
+	  One switch to turn every layer of processing off: scaler filters, mask and
+	  gamma explicitly off, and the core-side effects the LCD looks drive put
+	  back to the core's defaults. Appended at the END of the table - the stored
+	  choice in classicui_video.cfg is a raw preset index, so table order is ABI.
+	*/
+	{ "none", "None", "Every effect off: the core's own picture, nothing added.",
+	  "off", "off", "off", "off", "off", "off", CO_LCD_OFF, 0 },
 };
 
 #define NPRESETS ((int)(sizeof(presets) / sizeof(presets[0])))
@@ -149,7 +225,7 @@ enum
 {
 	P_SHARP = 0, P_PVM_RGB, P_PVM_SVIDEO, P_COMPOSITE, P_PAL_TV, P_VGA,
 	P_DMG, P_POCKET, P_GBC, P_AGB001, P_AGS001, P_AGS101,
-	P_GG, P_GGMOD, P_LYNX, P_WS, P_WSC, P_NGPC
+	P_GG, P_GGMOD, P_LYNX, P_WS, P_WSC, P_NGPC, P_NONE
 };
 
 /*
@@ -167,21 +243,29 @@ enum
     gets the GBC panel plus all three GBA screen revisions.
   - A GBA cartridge runs on the three GBA screens and nothing else.
 
-  Handhelds deliberately get no "Sharp" option: an unfiltered Game Boy is not a
-  look anyone is after, and the LCD is the point.
+  Every class ends with an escape hatch that switches the processing off. For
+  the CRT classes that is Sharp (their filters are the only layer); handhelds
+  get None, which also resets the core-side effects their looks drive. This
+  replaces the old stance that "an unfiltered Game Boy is not a look anyone is
+  after" - Dinofly's rule is now that every single system must offer it.
+
+  The GBC list lost the three GBA screens: those looks now speak the GBA core's
+  "Modify Colors" language, which the Game Boy core does not publish, so on a
+  GBC cartridge they would silently do nothing. If a GBC-cart-on-GBA-screen look
+  comes back it will be through the GB core's own GBC colour LUT slot (FC7).
 */
 static const int opt_console[]  = { P_PVM_RGB, P_PVM_SVIDEO, P_COMPOSITE, P_SHARP };
 static const int opt_arcade[]   = { P_PVM_RGB, P_PVM_SVIDEO, P_SHARP };
 static const int opt_computer[] = { P_PAL_TV, P_COMPOSITE, P_PVM_SVIDEO, P_SHARP };
 static const int opt_vga[]      = { P_VGA, P_SHARP };
-static const int opt_gb[]       = { P_DMG, P_POCKET };
-static const int opt_gbc[]      = { P_GBC, P_AGB001, P_AGS001, P_AGS101 };
-static const int opt_gba[]      = { P_AGB001, P_AGS001, P_AGS101 };
-static const int opt_gg[]       = { P_GG, P_GGMOD };
-static const int opt_lynx[]     = { P_LYNX };
-static const int opt_ws[]       = { P_WS };
-static const int opt_wsc[]      = { P_WSC, P_WS };
-static const int opt_ngpc[]     = { P_NGPC };
+static const int opt_gb[]       = { P_DMG, P_POCKET, P_NONE };
+static const int opt_gbc[]      = { P_GBC, P_NONE };
+static const int opt_gba[]      = { P_AGB001, P_AGS001, P_AGS101, P_NONE };
+static const int opt_gg[]       = { P_GG, P_GGMOD, P_NONE };
+static const int opt_lynx[]     = { P_LYNX, P_NONE };
+static const int opt_ws[]       = { P_WS, P_NONE };
+static const int opt_wsc[]      = { P_WSC, P_WS, P_NONE };
+static const int opt_ngpc[]     = { P_NGPC, P_NONE };
 
 struct opt_set { const int *list; int n; };
 
@@ -244,36 +328,117 @@ static void ensure_dir(const char *rel)
 	mkdir(p, 0777);
 }
 
-// Opens a file for writing only if it does not exist yet: never clobber the
-// user's own filters or presets.
-static FILE *open_new(const char *dir, const char *name)
+/* ---- generated files, and when a new build may rewrite them ----
+
+  The old rule was "never overwrite", which meant a card that had ever booted an
+  earlier build kept its old filters and presets for ever - a shipped fix never
+  reached anyone. The rule now is: a file WE generated may be regenerated when
+  its content changes; a file the user made (or edited enough to remove the
+  marker) is never touched. Ownership is the GEN_MARK line for text files; .gbp
+  is a fixed binary layout with its tail documented as reserved-zero, so ours
+  carry "CH" in bytes 12-13 (the Game Boy core keeps those bits off-screen).
+
+  Everything is composed in memory first so "would it change" is one compare,
+  and an unchanged file is not rewritten at all - vp_install() runs on every
+  boot, and the SD card does not want 30 spurious writes each time.
+*/
+#define GEN_MARK "generated by Classic Home"
+
+struct genbuf
 {
-	char rel[1024];
-	snprintf(rel, sizeof(rel), "%s/%s", dir, name);
-	if (exists_rel(rel)) return 0;
+	char b[24 * 1024];
+	int len;
+	int overflow;
+};
+
+static void gb_reset(genbuf *g) { g->len = 0; g->overflow = 0; }
+
+static void gb_bytes(genbuf *g, const void *p, int n)
+{
+	if (g->len + n > (int)sizeof(g->b)) { g->overflow = 1; return; }
+	memcpy(g->b + g->len, p, n);
+	g->len += n;
+}
+
+static void gb_addf(genbuf *g, const char *fmt, ...)
+{
+	char line[512];
+	va_list ap;
+	va_start(ap, fmt);
+	int n = vsnprintf(line, sizeof(line), fmt, ap);
+	va_end(ap);
+	if (n < 0) return;
+	if (n > (int)sizeof(line) - 1) n = (int)sizeof(line) - 1;
+	gb_bytes(g, line, n);
+}
+
+static int gen_owned(const char *data, int len, int gbp)
+{
+	if (gbp) return (len >= 14 && data[12] == 'C' && data[13] == 'H');
+
+	int scan = (len < 1024) ? len : 1024;
+	int mlen = (int)strlen(GEN_MARK);
+	for (int i = 0; i + mlen <= scan; i++)
+		if (!memcmp(data + i, GEN_MARK, mlen)) return 1;
+	return 0;
+}
+
+// Writes rel (root-relative) from g, honouring the ownership rule above.
+static void gen_commit(const char *rel, genbuf *g, int gbp)
+{
+	if (g->overflow) { printf("ClassicUI: %s overflowed the compose buffer, not written\n", rel); return; }
 
 	char p[1200];
 	snprintf(p, sizeof(p), "%s/%s", getRootDir(), rel);
-	FILE *f = fopen(p, "wt");
-	if (f) printf("ClassicUI: wrote %s\n", rel);
-	else printf("ClassicUI: could not write %s\n", rel);
-	return f;
+
+	FILE *f = fopen(p, "rb");
+	if (f)
+	{
+		static char old[sizeof(g->b)];
+		int olen = (int)fread(old, 1, sizeof(old), f);
+		int more = fgetc(f) != EOF;          // longer than the buffer: not ours
+		fclose(f);
+
+		if (more || !gen_owned(old, olen, gbp)) return;
+		if (olen == g->len && !memcmp(old, g->b, g->len)) return;
+	}
+
+	f = fopen(p, "wb");
+	if (!f) { printf("ClassicUI: could not write %s\n", rel); return; }
+	fwrite(g->b, 1, g->len, f);
+	fclose(f);
+	printf("ClassicUI: wrote %s\n", rel);
 }
 
 #define PHASES 32
 
 /*
-  4-tap polyphase coefficients, range -128..128, each line summing to at most
-  128 (read_video_filter in video.cpp). Lines summing to less than 128 come out
-  darker, which is exactly how a scanline filter works.
+  4-tap polyphase coefficients, 128 = 1.0. A line summing to less than 128 comes
+  out darker - a scanline. A line summing to MORE is a brightness boost, and is
+  legitimate: the shipped LCD_Effect filters run up to ~143, which is how the
+  grid filter below can dim its gutters without dimming the whole picture. (An
+  earlier comment here claimed 128 was a hard ceiling; the shipped filters
+  disprove it.)
 */
+static void filter_line(genbuf *g, const double w[4], double gain)
+{
+	int c[4];
+	for (int t = 0; t < 4; t++)
+	{
+		c[t] = (int)lround(w[t] * gain * 128.0);
+		if (c[t] > 255) c[t] = 255;
+		if (c[t] < -255) c[t] = -255;
+	}
+	gb_addf(g, "%4d,%4d,%4d,%4d\n", c[0], c[1], c[2], c[3]);
+}
+
 static void write_filter(const char *name, int kind, double scan_depth)
 {
-	FILE *f = open_new("filters", name);
-	if (!f) return;
+	genbuf g;
+	gb_reset(&g);
 
-	fprintf(f, "# generated by Classic Home\n");
-	fprintf(f, "# range -128..128, 4 taps, %d phases\n\n", PHASES);
+	gb_addf(&g, "# %s\n", GEN_MARK);
+	gb_addf(&g, "# 4 taps, %d phases\n\n", PHASES);
 
 	for (int p = 0; p < PHASES; p++)
 	{
@@ -314,29 +479,71 @@ static void write_filter(const char *name, int kind, double scan_depth)
 			gain = (1.0 - scan_depth) + scan_depth * pow(s, 1.4);
 		}
 
-		int c[4];
-		int total = 0;
-		for (int t = 0; t < 4; t++)
-		{
-			c[t] = (int)lround(w[t] * gain * 128.0);
-			if (c[t] > 128) c[t] = 128;
-			if (c[t] < -128) c[t] = -128;
-			total += c[t];
-		}
-
-		// Must not exceed the range: trim the biggest tap if rounding pushed over.
-		while (total > 128)
-		{
-			int big = 0;
-			for (int t = 1; t < 4; t++) if (c[t] > c[big]) big = t;
-			c[big]--;
-			total--;
-		}
-
-		fprintf(f, "%4d,%4d,%4d,%4d\n", c[0], c[1], c[2], c[3]);
+		filter_line(&g, w, gain);
 	}
 
-	fclose(f);
+	char rel[1024];
+	snprintf(rel, sizeof(rel), "filters/%s", name);
+	gen_commit(rel, &g, 0);
+}
+
+/*
+  The LCD pixel grid, drawn by the polyphase filter instead of a shadow mask.
+
+  A shadow mask repeats in OUTPUT pixels: it lines up with the core's pixels
+  only at an integer scale AND an image offset the cell divides, and 1080p
+  denies the Game Boy both (7x, x-offset 400). This filter is indexed by the
+  position INSIDE each source pixel, so the gutter lands on every core pixel
+  boundary at any scale and any offset - a grid that cannot disagree with the
+  native pixel count, which is the requirement for having one at all.
+
+  Nearest-neighbour switches source pixels at phase 0.5, so the gutter is
+  centred there and the crossfade hides inside the dark line. The body is
+  boosted to keep the average near 1.0, exactly like the community LCD_Effect
+  filters.
+*/
+#define GRID_GUTTER 0.22   // dark line width, as a fraction of the cell
+#define GRID_DEPTH  0.42   // how dark: 0 = invisible, 1 = black
+
+static void write_filter_grid(const char *name)
+{
+	genbuf g;
+	gb_reset(&g);
+
+	gb_addf(&g, "# %s\n", GEN_MARK);
+	gb_addf(&g, "# LCD grid: gutter %.0f%% of the cell at %.0f%% depth\n\n",
+		GRID_GUTTER * 100, GRID_DEPTH * 100);
+
+	double half = GRID_GUTTER / 2;
+	double soft = 1.0 / PHASES;                     // one-phase shoulders
+	double boost = 1.0 / (1.0 - GRID_DEPTH * GRID_GUTTER);
+	if (boost > 1.12) boost = 1.12;
+
+	for (int p = 0; p < PHASES; p++)
+	{
+		double x = (double)p / PHASES;
+		double d = fabs(x - 0.5);
+
+		double e = 0;                               // gutter envelope
+		if (d < half) e = 1.0;
+		else if (d < half + soft) e = 1.0 - (d - half) / soft;
+
+		double w[4] = { 0, 0, 0, 0 };
+		if (x < 0.5 - half) w[1] = 1.0;
+		else if (x > 0.5 + half) w[2] = 1.0;
+		else
+		{
+			double t = (x - (0.5 - half)) / GRID_GUTTER;
+			w[1] = 1.0 - t;
+			w[2] = t;
+		}
+
+		filter_line(&g, w, boost * (1.0 - GRID_DEPTH * e));
+	}
+
+	char rel[1024];
+	snprintf(rel, sizeof(rel), "filters/%s", name);
+	gen_commit(rel, &g, 0);
 }
 
 /*
@@ -346,28 +553,30 @@ static void write_filter(const char *name, int kind, double scan_depth)
 */
 static void write_mask(const char *name, int kind)
 {
-	FILE *f = open_new("shadow_masks", name);
-	if (!f) return;
+	genbuf g;
+	gb_reset(&g);
 
-	fprintf(f, "# generated by Classic Home\n");
+	gb_addf(&g, "# %s\n", GEN_MARK);
 
 	if (kind == 0)
 	{
 		// Aperture grille: R, G, B stripes.
-		fprintf(f, "3,1\n");
-		fprintf(f, "1,2,4\n");
+		gb_addf(&g, "3,1\n");
+		gb_addf(&g, "1,2,4\n");
 	}
 	else
 	{
 		// LCD pixel grid: a black gutter on two sides of each cell.
-		fprintf(f, "4,4\n");
-		fprintf(f, "7,7,7,0\n");
-		fprintf(f, "7,7,7,0\n");
-		fprintf(f, "7,7,7,0\n");
-		fprintf(f, "0,0,0,0\n");
+		gb_addf(&g, "4,4\n");
+		gb_addf(&g, "7,7,7,0\n");
+		gb_addf(&g, "7,7,7,0\n");
+		gb_addf(&g, "7,7,7,0\n");
+		gb_addf(&g, "0,0,0,0\n");
 	}
 
-	fclose(f);
+	char rel[1024];
+	snprintf(rel, sizeof(rel), "shadow_masks/%s", name);
+	gen_commit(rel, &g, 0);
 }
 
 // Gamma curves are 256 lines of "r,g,b" (setGamma in video.cpp), i.e. a full
@@ -380,10 +589,10 @@ struct lut_spec
 
 static void write_gamma(const char *name, const lut_spec *s)
 {
-	FILE *f = open_new("gamma", name);
-	if (!f) return;
+	genbuf g;
+	gb_reset(&g);
 
-	fprintf(f, "# generated by Classic Home\n");
+	gb_addf(&g, "# %s\n", GEN_MARK);
 	for (int i = 0; i < 256; i++)
 	{
 		double t = pow(i / 255.0, s->gamma);
@@ -395,29 +604,21 @@ static void write_gamma(const char *name, const lut_spec *s)
 			if (o > 255) o = 255;
 			v[c] = (int)lround(o);
 		}
-		fprintf(f, "%d,%d,%d\n", v[0], v[1], v[2]);
+		gb_addf(&g, "%d,%d,%d\n", v[0], v[1], v[2]);
 	}
-	fclose(f);
+
+	char rel[1024];
+	snprintf(rel, sizeof(rel), "gamma/%s", name);
+	gen_commit(rel, &g, 0);
 }
 
 /*
-  Handheld panels. These are per-channel curves: MiSTer's gamma format is three
-  independent LUTs, so brightness, contrast and tint are all reachable, but a true
-  colour-space correction matrix (the usual "GBA colour correction" approach, which
-  mixes channels) is not expressible here.
+  Handheld panels still done as per-channel curves - the ones whose cores offer
+  no colour work of their own. The GB and GBA entries that used to sit here are
+  gone: their colour is now the core's (palette slot / Modify Colors), because a
+  LUT cannot mix channels and, worse, it stacked on top of the core's own
+  colourisation.
 */
-// DMG: deep olive shadow to pale yellow-green highlight, poor contrast.
-static const lut_spec lut_dmg    = { { 15, 56, 15 },  { 155, 188, 15 },  1.00 };
-// Game Boy Pocket: neutral grey with a faint cool cast, much better contrast.
-static const lut_spec lut_pocket = { { 20, 22, 24 },  { 214, 219, 214 }, 1.00 };
-// GBC: reflective colour panel, lifted blacks, slightly muted and warm.
-static const lut_spec lut_gbc    = { { 34, 32, 28 },  { 226, 220, 205 }, 0.94 };
-// AGB-001: no light at all. Very low contrast, dim, faintly green.
-static const lut_spec lut_agb001 = { { 62, 66, 58 },  { 188, 190, 176 }, 0.86 };
-// AGS-001: frontlight lifts it and warms it, still washed out.
-static const lut_spec lut_ags001 = { { 48, 47, 42 },  { 214, 209, 196 }, 0.90 };
-// AGS-101: backlit. Bright, near-neutral, proper black level - the good one.
-static const lut_spec lut_ags101 = { { 14, 14, 17 },  { 247, 247, 250 }, 1.00 };
 // Game Gear: backlit, but a murky panel with badly lifted blacks.
 static const lut_spec lut_gg     = { { 46, 48, 52 },  { 206, 204, 196 }, 0.90 };
 // Game Gear with the usual LED backlight mod: brighter, cleaner whites.
@@ -431,23 +632,52 @@ static const lut_spec lut_wsc    = { { 34, 32, 28 },  { 222, 214, 198 }, 0.94 };
 // Neo Geo Pocket Color: reflective pastel, gentle contrast.
 static const lut_spec lut_ngpc   = { { 38, 38, 36 },  { 226, 224, 214 }, 0.96 };
 
+/*
+  Game Boy palettes, written as ordinary .gbp files the core (and the classic
+  OSD) can load: 4 colours, lightest to darkest, 3 bytes each; the reserved tail
+  carries the ownership mark (see gen_owned).
+
+  DMG is the bgb green - the palette the emulation world settled on as "the"
+  Game Boy look. The Pocket is GrafxGray's neutral warm grey, the closest
+  shipped match for that screen. Both also drive the preview rendering, so the
+  numbers live here rather than only in the files.
+*/
+struct gbp_spec { const char *rel; uint8_t c[4][3]; };
+
+static const gbp_spec pal_dmg =
+{ PAL_DMG,    { { 0xE0, 0xF8, 0xD0 }, { 0x88, 0xC0, 0x70 }, { 0x34, 0x68, 0x56 }, { 0x08, 0x18, 0x20 } } };
+
+static const gbp_spec pal_pocket =
+{ PAL_POCKET, { { 0xE0, 0xDB, 0xCD }, { 0xA8, 0x9F, 0x94 }, { 0x70, 0x6B, 0x66 }, { 0x2B, 0x2B, 0x26 } } };
+
+static void write_gbp(const gbp_spec *s)
+{
+	genbuf g;
+	gb_reset(&g);
+
+	for (int i = 0; i < 4; i++) gb_bytes(&g, s->c[i], 3);
+	gb_bytes(&g, "CH\0", 4);              // 16 bytes total, tail marks ownership
+
+	gen_commit(s->rel, &g, 1);
+}
+
 static void write_preset(const preset_def *d)
 {
-	char name[256];
-	snprintf(name, sizeof(name), "%s %s.ini", PREFIX, d->name);
+	genbuf g;
+	gb_reset(&g);
 
-	FILE *f = open_new("presets", name);
-	if (!f) return;
+	gb_addf(&g, "# %s - %s\n", d->name, d->blurb);
+	gb_addf(&g, "# %s\n", GEN_MARK);
+	if (d->hfilter)  gb_addf(&g, "hfilter=%s\n", d->hfilter);
+	if (d->vfilter)  gb_addf(&g, "vfilter=%s\n", d->vfilter);
+	if (d->sfilter)  gb_addf(&g, "sfilter=%s\n", d->sfilter);
+	if (d->mask)     gb_addf(&g, "mask=%s\n", d->mask);
+	if (d->maskmode) gb_addf(&g, "maskmode=%s\n", d->maskmode);
+	if (d->gamma)    gb_addf(&g, "gamma=%s\n", d->gamma);
 
-	fprintf(f, "# %s - %s\n", d->name, d->blurb);
-	fprintf(f, "# generated by Classic Home\n");
-	if (d->hfilter)  fprintf(f, "hfilter=%s\n", d->hfilter);
-	if (d->vfilter)  fprintf(f, "vfilter=%s\n", d->vfilter);
-	if (d->sfilter)  fprintf(f, "sfilter=%s\n", d->sfilter);
-	if (d->mask)     fprintf(f, "mask=%s\n", d->mask);
-	if (d->maskmode) fprintf(f, "maskmode=%s\n", d->maskmode);
-	if (d->gamma)    fprintf(f, "gamma=%s\n", d->gamma);
-	fclose(f);
+	char rel[1024];
+	snprintf(rel, sizeof(rel), "presets/%s %s.ini", PREFIX, d->name);
+	gen_commit(rel, &g, 0);
 }
 
 void vp_install()
@@ -456,31 +686,34 @@ void vp_install()
 	ensure_dir("shadow_masks");
 	ensure_dir("gamma");
 	ensure_dir("presets");
+	// The palette lives where the core's own browser looks. games/ exists on
+	// any card that can play anything; the two below might not.
+	ensure_dir("games");
+	ensure_dir("games/GAMEBOY");
+	ensure_dir(PAL_DIR);
 
 	write_filter(F_SHARP, 0, 0.0);
 	write_filter(F_SOFT, 1, 0.0);
 	write_filter(F_BLURRY, 2, 0.0);
 	// Scanline depth is the single most subjective number here, and combined with
 	// a full aperture grille it is easy to end up too dark. These are deliberately
-	// moderate; tune them on real hardware and delete the files to regenerate.
+	// moderate; tune them on real hardware.
 	write_filter(F_SCAN, 1, 0.28);
 	write_filter(F_SCANLT, 1, 0.15);
+	write_filter_grid(F_GRID);
 
 	write_mask(M_GRILLE, 0);
 	write_mask(M_MATRIX, 1);
 
-	write_gamma(G_DMG, &lut_dmg);
-	write_gamma(G_POCKET, &lut_pocket);
-	write_gamma(G_GBC, &lut_gbc);
-	write_gamma(G_AGB001, &lut_agb001);
-	write_gamma(G_AGS001, &lut_ags001);
-	write_gamma(G_AGS101, &lut_ags101);
 	write_gamma(G_GG, &lut_gg);
 	write_gamma(G_GGMOD, &lut_ggmod);
 	write_gamma(G_LYNX, &lut_lynx);
 	write_gamma(G_WS, &lut_ws);
 	write_gamma(G_WSC, &lut_wsc);
 	write_gamma(G_NGPC, &lut_ngpc);
+
+	write_gbp(&pal_dmg);
+	write_gbp(&pal_pocket);
 
 	for (int i = 0; i < NPRESETS; i++) write_preset(&presets[i]);
 }
@@ -513,6 +746,8 @@ int vp_available(int i)
 		snprintf(rel, sizeof(rel), "gamma/%s", d->gamma);
 		if (!exists_rel(rel)) return 0;
 	}
+
+	if (d->palette && !exists_rel(d->palette)) return 0;
 
 	return 1;
 }
@@ -612,6 +847,68 @@ int vp_preset_path(int i, char *out, int len)
 	return 1;
 }
 
+/*
+  The core-side half of a look: named options, then the palette file.
+
+  Everything here is by name against whatever core is running, so a look is a
+  request, not a command - "Modify Colors" on a SNES matches nothing and nothing
+  happens, which is what lets one None entry cover every system. Values go
+  through core_opt_set(), which changes the live status word and deliberately
+  never touches <CORE>.CFG: a game launched from the stock menu keeps the
+  player's own core setup.
+
+  The palette is gated on the core publishing "Custom Palette": index 3 is only
+  known to mean "palette" on the Game Boy core, and a file pushed at some other
+  core's index 3 would be loaded as who-knows-what.
+*/
+/*
+  The look applied to the running core this session, for the delayed re-apply:
+  chome_core_boot() runs on the first UI frame, but an MGL delivers the ROM a
+  couple of seconds later and the core resets around it - late enough to undo
+  status bits set at boot. chome_core_poll() calls vp_reapply_core_side() once,
+  after its reference-shot delay, so the look wins whichever order the boot
+  dance ran in. Idempotent and cheap: it is the same status writes again.
+*/
+static int vp_running_look = -1;
+
+static void vp_apply_core_side(int i)
+{
+	if (i < 0 || i >= NPRESETS) return;
+	vp_running_look = i;
+	const preset_def *d = &presets[i];
+	if (!d->core_opts && !d->palette) return;
+
+	if (core_opts_scan() <= 0) return;
+
+	if (d->core_opts)
+	{
+		char list[512];
+		snprintf(list, sizeof(list), "%s", d->core_opts);
+
+		char *save = 0;
+		for (char *pair = strtok_r(list, ";", &save); pair; pair = strtok_r(0, ";", &save))
+		{
+			char *eq = strchr(pair, '=');
+			if (!eq) continue;
+			*eq = 0;
+			if (!core_opt_set_named(pair, eq + 1))
+				printf("ClassicUI: look \"%s\": core has no %s=%s, skipped\n",
+					d->name, pair, eq + 1);
+		}
+	}
+
+	if (d->palette && core_opt_set_named("Custom Palette", "On"))
+	{
+		if (exists_rel(d->palette))
+		{
+			char full[1200];
+			snprintf(full, sizeof(full), "%s/%s", getRootDir(), d->palette);
+			printf("ClassicUI: look \"%s\": palette %s\n", d->name, d->palette);
+			user_io_file_tx(full, 3 /* the GB core's FC3 slot */);
+		}
+	}
+}
+
 void vp_arm_for_launch(int sysidx, int vclass_hint)
 {
 	int p = vp_effective(sysidx, vclass_hint);
@@ -620,8 +917,11 @@ void vp_arm_for_launch(int sysidx, int vclass_hint)
 	FILE *f = fopen(PENDING, "wt");
 	if (!f) return;
 
-	// video_loadPreset() takes a path it can open directly.
+	// video_loadPreset() takes a path it can open directly. The second line
+	// names the look so the core-side half can be applied once the core is up -
+	// an older line-1-only file still works, it just carries no core half.
 	fprintf(f, "%s/presets/%s %s.ini\n", getRootDir(), PREFIX, presets[p].name);
+	fprintf(f, "look=%s\n", presets[p].id);
 	fclose(f);
 
 	printf("ClassicUI: armed video look \"%s\" for the next core\n", presets[p].name);
@@ -637,6 +937,8 @@ void vp_arm_for_launch(int sysidx, int vclass_hint)
   Safe to do while the menu is up. A preset carries only the scaler's filters, mask and
   gamma - no mode, no timing - so nothing here disturbs the framebuffer this is drawn
   into, which is the thing that has broken before when video state moved underneath it.
+  The core half is status bits and a palette upload, none of which move video modes
+  either.
 */
 int vp_apply_now(int sysidx, int vclass_hint)
 {
@@ -648,6 +950,7 @@ int vp_apply_now(int sysidx, int vclass_hint)
 
 	printf("ClassicUI: applying video look \"%s\" to the running core\n", presets[i].name);
 	video_loadPreset(path, true);
+	vp_apply_core_side(i);
 	return 1;
 }
 
@@ -657,10 +960,19 @@ void vp_apply_pending()
 	if (!f) return;
 
 	char path[1024] = {};
+	char look[128] = {};
 	if (fgets(path, sizeof(path), f))
 	{
 		char *nl = strchr(path, '\n');
 		if (nl) *nl = 0;
+
+		char line[160] = {};
+		if (fgets(line, sizeof(line), f) && !strncmp(line, "look=", 5))
+		{
+			snprintf(look, sizeof(look), "%s", line + 5);
+			char *lnl = strchr(look, '\n');
+			if (lnl) *lnl = 0;
+		}
 	}
 	fclose(f);
 	unlink(PENDING);
@@ -669,6 +981,25 @@ void vp_apply_pending()
 
 	printf("ClassicUI: applying video look %s\n", path);
 	video_loadPreset(path, true);
+
+	/*
+	  The scaler half only. This runs from chome_core_boot(), which HandleUI()
+	  reaches WHILE user_io is still feeding the core its boot files - applying
+	  the core half here interleaved the palette upload with boot1.rom (one
+	  transfer came back CRC 00000000) and the MGL's ROM was never sent at all:
+	  a blank core wearing the right palette. The look is parked instead, and
+	  chome_core_poll() plays it once menu_mgl_busy() says the launch is over.
+	*/
+	if (look[0])
+	{
+		for (int i = 0; i < NPRESETS; i++)
+			if (!strcmp(presets[i].id, look)) { vp_running_look = i; break; }
+	}
+}
+
+void vp_reapply_core_side()
+{
+	if (vp_running_look >= 0) vp_apply_core_side(vp_running_look);
 }
 
 /* -------------------------------------------------- the analog output ----- */
@@ -779,13 +1110,7 @@ static void lut_of(int i, uint8_t lut[3][256])
 	const lut_spec *s = 0;
 	if (presets[i].gamma)
 	{
-		if (!strcmp(presets[i].gamma, G_DMG)) s = &lut_dmg;
-		else if (!strcmp(presets[i].gamma, G_POCKET)) s = &lut_pocket;
-		else if (!strcmp(presets[i].gamma, G_GBC)) s = &lut_gbc;
-		else if (!strcmp(presets[i].gamma, G_AGB001)) s = &lut_agb001;
-		else if (!strcmp(presets[i].gamma, G_AGS001)) s = &lut_ags001;
-		else if (!strcmp(presets[i].gamma, G_AGS101)) s = &lut_ags101;
-		else if (!strcmp(presets[i].gamma, G_GG)) s = &lut_gg;
+		if (!strcmp(presets[i].gamma, G_GG)) s = &lut_gg;
 		else if (!strcmp(presets[i].gamma, G_GGMOD)) s = &lut_ggmod;
 		else if (!strcmp(presets[i].gamma, G_LYNX)) s = &lut_lynx;
 		else if (!strcmp(presets[i].gamma, G_WS)) s = &lut_ws;
@@ -805,6 +1130,71 @@ static void lut_of(int i, uint8_t lut[3][256])
 			lut[c][v] = (uint8_t)lround(o);
 		}
 	}
+}
+
+/*
+  The core-side halves, simulated for the preview only.
+
+  The Game Boy looks replace four shades with a palette, so the preview maps
+  luminance into the same four colours the .gbp carries - over a real capture
+  that recovers almost exactly what the core will show, because a DMG frame
+  only ever holds four levels.
+
+  The GBA looks run the core's "Modify Colors" - a 3x3 matrix over
+  gamma-decoded channels (gba_gpu_colorshade.vhd, coefficients /1024). The
+  matrix here is the core's own gba-color set; the gamma pair approximates its
+  LUT sections: 2.2 encodes darker than it decodes (the unlit panel), 1.6
+  meets it in the middle.
+*/
+static const gbp_spec *pv_palette(int i)
+{
+	if (!presets[i].palette) return 0;
+	if (!strcmp(presets[i].palette, PAL_DMG)) return &pal_dmg;
+	if (!strcmp(presets[i].palette, PAL_POCKET)) return &pal_pocket;
+	return 0;
+}
+
+// 0 = none, else the decode gamma the profile is labeled with.
+static double pv_gba_gamma(int i)
+{
+	if (!presets[i].core_opts) return 0;
+	if (strstr(presets[i].core_opts, "Modify Colors=GBA 2.2")) return 2.2;
+	if (strstr(presets[i].core_opts, "Modify Colors=GBA 1.6")) return 1.6;
+	return 0;
+}
+
+static void pv_apply_palette(const gbp_spec *pal, uint8_t c[3])
+{
+	// Perceptual-ish luma, quantised to the four DMG levels, brightest first.
+	int y = (c[0] * 299 + c[1] * 587 + c[2] * 114) / 1000;
+	int lv = 3 - ((y * 4) / 256 > 3 ? 3 : (y * 4) / 256);
+	c[0] = pal->c[lv][0];
+	c[1] = pal->c[lv][1];
+	c[2] = pal->c[lv][2];
+}
+
+static void pv_apply_gba(double g, uint8_t c[3])
+{
+	// gba-color: R'G'B' = M * RGB in light-linear-ish space, then re-encode.
+	static const int m[3][3] =
+	{
+		{ 865, 174, -15 },
+		{  92, 696, 236 },
+		{ 164,  87, 773 },
+	};
+
+	double in[3], out[3];
+	for (int k = 0; k < 3; k++) in[k] = pow(c[k] / 255.0, g);
+
+	for (int r = 0; r < 3; r++)
+	{
+		double v = (m[r][0] * in[0] + m[r][1] * in[1] + m[r][2] * in[2]) / 1024.0;
+		if (v < 0) v = 0;
+		if (v > 1) v = 1;
+		out[r] = pow(v, 1.0 / 2.2);      // back to the panel the player is on
+	}
+
+	for (int k = 0; k < 3; k++) c[k] = (uint8_t)lround(out[k] * 255.0);
 }
 
 /*
@@ -906,7 +1296,13 @@ const uint32_t *vp_preview(int i, int w, int h, const uint32_t *ref)
 	if (d->sfilter && !strcasecmp(d->sfilter, F_SCANLT)) scan = 0.15;
 
 	int grille = (d->mask && !strcasecmp(d->mask, M_GRILLE)) ? 1 : 0;
+	// One symbolic cell grid for both mechanisms: the mask the colour handhelds
+	// still use, and the polyphase grid filter of the GB/GBA looks.
 	int matrix = (d->mask && !strcasecmp(d->mask, M_MATRIX)) ? 1 : 0;
+	if (d->hfilter && !strcasecmp(d->hfilter, F_GRID)) matrix = 1;
+
+	const gbp_spec *pal = pv_palette(i);
+	double gba_g = pv_gba_gamma(i);
 
 	/*
 	  With a reference frame the source is that frame at 1:1 (it was decoded at
@@ -944,6 +1340,9 @@ const uint32_t *vp_preview(int i, int w, int h, const uint32_t *ref)
 			}
 
 			for (int k = 0; k < 3; k++) c[k] = lut[k][c[k]];
+
+			if (pal) pv_apply_palette(pal, c);
+			else if (gba_g > 0) pv_apply_gba(gba_g, c);
 
 			if (scan > 0)
 			{

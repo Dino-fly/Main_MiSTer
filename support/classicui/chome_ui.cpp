@@ -12661,6 +12661,14 @@ static int ss_do_load(int slot)
 	return 1;
 }
 
+// See chome.h: the /dev/MiSTer_cmd door into the restore above, for tests.
+int chome_test_ss_load(int slot)
+{
+	int r = ss_do_load(slot);
+	printf("ClassicUI: ss_load %d via MiSTer_cmd -> %s\n", slot, r ? "pulsed" : "no hooks");
+	return r;
+}
+
 /* ------------------------------------------------------- in-game screens --- */
 
 // Identity of the running game, written by do_launch() before the core switch.
@@ -13377,6 +13385,28 @@ void chome_core_poll()
 	chome_pend_poll();
 
 	resume_poll();
+
+	/*
+	  The core half of the launch's Display look, once. Gated on the MGL being
+	  finished - menu_mgl_busy() is 0 both after a real launch completes and on a
+	  restart into an already-loaded core - plus one settle second for the core
+	  to come back from its ROM reset. Applying any earlier corrupts the launch:
+	  see the note in vp_apply_pending().
+	*/
+	{
+		static int look_done = 0;
+		static unsigned long look_due = 0;
+
+		if (!look_done && !menu_mgl_busy())
+		{
+			if (!look_due) look_due = GetTimer(1000);
+			else if (CheckTimer(look_due))
+			{
+				look_done = 1;
+				vp_reapply_core_side();
+			}
+		}
+	}
 
 	if (done) return;
 
