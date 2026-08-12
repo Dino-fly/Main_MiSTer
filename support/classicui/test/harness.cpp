@@ -10015,12 +10015,12 @@ static void assert_video()
 
 	int bad = 0, peak = 0;
 	int n = count_lines("filters/ClassicHome Sharp.txt", &bad, &peak);
-	check(n == 32, "sharp filter has 32 phases");
+	check(n == 64, "sharp filter has 64 phases - 32 hits the legacy half-read in read_video_filter()");
 	check(bad == 0, "no filter line exceeds the 128 range");
 	check(peak == 128, "sharp filter is unity gain");
 
 	n = count_lines("filters/ClassicHome Scanlines.txt", &bad, &peak);
-	check(n == 32, "scanline filter has 32 phases");
+	check(n == 64, "scanline filter has 64 phases");
 	check(bad == 0, "scanline filter stays inside the range");
 	check(peak <= 128 && peak >= 100, "scanline filter peaks near unity");
 
@@ -10062,7 +10062,7 @@ static void assert_video()
 	// The grid filter dims its gutter and boosts the body back to unity average.
 	{
 		n = count_lines("filters/ClassicHome LCD Grid.txt", 0, &peak);
-		check(n == 32, "grid filter has 32 phases");
+		check(n == 64, "grid filter has 64 phases");
 		check(peak > 128 && peak <= 146, "grid filter body boost stays near the shipped filters' ceiling");
 
 		char p[1024];
@@ -10164,26 +10164,83 @@ static void assert_video()
 	}
 
 	/*
-	  Regeneration: a file we generated is brought up to date when the table
-	  changes; a file the user wrote (no marker) is never touched. The old rule
-	  was never-overwrite, which meant a shipped fix never reached a card that
-	  had already booted once.
+	  Regeneration, with the content stamp deciding pristine from edited:
+
+	  - a HAND-EDITED marked file (junk appended after the stamp) is kept -
+	    reverting a user's tuning on every boot was the first cut's bug;
+	  - our pristine output from an OLDER build (self-consistent stamp, content
+	    different from today's) is brought up to date;
+	  - a file without the marker at all is never touched;
+	  - a deleted file comes back.
 	*/
 	{
 		char p[1024];
 		snprintf(p, sizeof(p), "%s/filters/ClassicHome LCD Grid.txt", ROOT);
 
+		// Hand-edit: append a line after the stamp. Must survive vp_install().
 		FILE *f = fopen(p, "at");
-		if (f) { fprintf(f, "# stale tail from an older build\n"); fclose(f); }
-		long grown = 0;
-		f = fopen(p, "rb");
-		if (f) { fseek(f, 0, SEEK_END); grown = ftell(f); fclose(f); }
-
+		if (f) { fprintf(f, "# my tweak\n"); fclose(f); }
 		vp_install();
-		long fixed = 0;
-		f = fopen(p, "rb");
-		if (f) { fseek(f, 0, SEEK_END); fixed = ftell(f); fclose(f); }
-		check(fixed < grown, "a generated file that drifted is regenerated");
+		{
+			static char buf[64 * 1024];
+			f = fopen(p, "rb");
+			int n = f ? (int)fread(buf, 1, sizeof(buf) - 1, f) : 0;
+			if (f) fclose(f);
+			buf[n] = 0;
+			check(strstr(buf, "my tweak") != 0, "a hand-edited generated file is kept");
+		}
+
+		/*
+		  An older build's pristine output: strip the tweak, bend one
+		  coefficient, restamp so the file is self-consistent again - exactly
+		  what a previous firmware would have written. Must be regenerated.
+		*/
+		{
+			static char buf[64 * 1024];
+			f = fopen(p, "rb");
+			int n = f ? (int)fread(buf, 1, sizeof(buf) - 1, f) : 0;
+			if (f) fclose(f);
+			buf[n] = 0;
+
+			char *tw = strstr(buf, "# my tweak\n");
+			if (tw) *tw = 0;
+
+			char *st = 0;
+			for (char *q = buf; (q = strstr(q, "# build ")); q++)
+				if (q == buf || q[-1] == '\n') st = q;
+			if (st) *st = 0;
+
+			char *digit = strchr(buf, ',');
+			if (digit && digit[1]) digit[1] = (digit[1] == '9') ? '8' : '9';
+
+			uint32_t h = 2166136261u;
+			for (char *q = buf; *q; q++) { h ^= (unsigned char)*q; h *= 16777619u; }
+
+			f = fopen(p, "wb");
+			if (f)
+			{
+				fwrite(buf, 1, strlen(buf), f);
+				fprintf(f, "# build %08x\n", h);
+				fclose(f);
+			}
+		}
+		vp_install();
+		{
+			// Regenerated means today's coefficients again, stamped by today.
+			static char buf[64 * 1024];
+			f = fopen(p, "rb");
+			int n = f ? (int)fread(buf, 1, sizeof(buf) - 1, f) : 0;
+			if (f) fclose(f);
+			buf[n] = 0;
+			char *st = 0;
+			for (char *q = buf; (q = strstr(q, "# build ")); q++)
+				if (q == buf || q[-1] == '\n') st = q;
+			uint32_t stamp = st ? (uint32_t)strtoul(st + 8, 0, 16) : 0;
+			uint32_t h = 2166136261u;
+			for (char *q = buf; st && q < st; q++) { h ^= (unsigned char)*q; h *= 16777619u; }
+			check(st && stamp == h && count_lines("filters/ClassicHome LCD Grid.txt", 0, 0) == 64,
+				"an older build's pristine file is regenerated");
+		}
 
 		f = fopen(p, "wb");
 		if (f) { fprintf(f, "the user's own filter\n"); fclose(f); }
@@ -10195,7 +10252,7 @@ static void assert_video()
 
 		unlink(p);
 		vp_install();
-		check(count_lines("filters/ClassicHome LCD Grid.txt", 0, 0) == 32, "a deleted file comes back");
+		check(count_lines("filters/ClassicHome LCD Grid.txt", 0, 0) == 64, "a deleted file comes back");
 	}
 
 	// Defaults per class, which is the whole point of "on by default".
@@ -10339,6 +10396,7 @@ static void assert_video()
 		harness_set_confstr_table(gb_core);
 		harness_set_menu_core(0);          // a scan in the menu core rightly finds nothing
 		harness_reset_file_tx();
+		vp_forget_originals();             // this block is its own core session
 
 		int gbsys = -1;
 		for (int i = 0; i < lib_sys_count(); i++) if (!strcmp(lib_sys(i)->id, "gb")) gbsys = i;
@@ -10346,6 +10404,17 @@ static void assert_video()
 		int o2[VP_MAX_OPTIONS];
 		vp_options_for(VC_GB, o2);
 		int prior = vp_effective(gbsys, VC_GB);
+
+		/*
+		  The player's own values, before any look. None must return exactly
+		  these - not some table of defaults - because "nothing added" means the
+		  player's configuration, and a deliberate non-default (Frame blend on)
+		  is part of it.
+		*/
+		harness_set_opt("12", 1);          // Custom Palette = Auto
+		harness_set_opt("4", 0, 1);        // Screen Shadow = No
+		harness_set_opt("G", 1);           // Frame blend = On, deliberately
+		harness_set_opt("LM", 0);          // Scale = Normal
 
 		vp_set(gbsys, VC_GB, o2[0]);                     // DMG
 		vp_apply_now(gbsys, VC_GB);
@@ -10363,9 +10432,9 @@ static void assert_video()
 		vp_apply_now(gbsys, VC_GB);
 
 		check(!harness_last_file_tx()[0], "None pushes no palette");
-		check(harness_opt_val("12") == 1, "None puts the custom palette back to Auto");
-		check(harness_opt_val("4", 1) == 0, "None turns the screen shadow off");
-		check(harness_opt_val("G") == 0, "None turns frame blend off");
+		check(harness_opt_val("12") == 1, "None puts the palette flag back as the player had it");
+		check(harness_opt_val("4", 1) == 0, "None puts the screen shadow back");
+		check(harness_opt_val("G") == 1, "None keeps the player's own frame blend, not a default");
 		check(harness_opt_val("LM") == 0, "None hands the scale back");
 
 		// A core publishing none of it is left entirely alone.

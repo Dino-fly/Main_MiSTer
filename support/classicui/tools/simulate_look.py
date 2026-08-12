@@ -9,7 +9,7 @@ Usage: simulate_look.py in.png out.png scale [dmg|pocket|none] [grid|sharp]
 """
 import sys, struct, zlib, math
 
-PHASES = 32
+PHASES = 64
 GRID_GUTTER = 0.22
 GRID_DEPTH = 0.42
 

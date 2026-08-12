@@ -470,6 +470,31 @@ void core_opt_set(const core_opt *o, int value)
 }
 
 /*
+  The options a look may reach even though the screens hide them. Everything
+  else on the `ours` list is hidden because this front-end's own machinery
+  depends on it (the pause option, the savestate plumbing, the SNAC rows) - a
+  look that drove one of those would be sawing at the branch it sits on, so
+  the name lookup refuses them rather than trusting every future look string.
+*/
+static const char *look_reachable[] = { "Scale", 0 };
+
+static core_opt *find_named(const char *name)
+{
+	if (!name) return 0;
+
+	if (in_list(ours, name) && !in_list(look_reachable, name)) return 0;
+
+	// The offered table first, then the curated-away one: a look may pin an
+	// option the screens deliberately do not show, like Scale.
+	struct { core_opt *t; int n; } tabs[2] = { { opts, nopts }, { hopts, nhopts } };
+
+	for (int k = 0; k < 2; k++)
+		for (int i = 0; i < tabs[k].n; i++)
+			if (!strcasecmp(tabs[k].t[i].name, name)) return &tabs[k].t[i];
+	return 0;
+}
+
+/*
   Both halves by name, for the Display looks: the look says "Screen Shadow=Yes"
   and this finds the option and the value on whatever core is running. A core
   that publishes neither is left untouched - the graceful degradation the looks
@@ -477,28 +502,30 @@ void core_opt_set(const core_opt *o, int value)
 */
 int core_opt_set_named(const char *name, const char *valname)
 {
-	if (!name || !valname) return 0;
+	if (!valname) return 0;
 
-	// The offered table first, then the curated-away one: a look may pin an
-	// option the screens deliberately do not show, like Scale.
-	struct { core_opt *t; int n; } tabs[2] = { { opts, nopts }, { hopts, nhopts } };
+	core_opt *o = find_named(name);
+	if (!o) return 0;
 
-	for (int k = 0; k < 2; k++)
+	for (int v = 0; v < o->nvals; v++)
 	{
-		for (int i = 0; i < tabs[k].n; i++)
-		{
-			if (strcasecmp(tabs[k].t[i].name, name)) continue;
-
-			for (int v = 0; v < tabs[k].t[i].nvals; v++)
-			{
-				if (strcasecmp(tabs[k].t[i].vals[v], valname)) continue;
-				core_opt_set(&tabs[k].t[i], v);
-				return 1;
-			}
-			return 0;    // the option, but not this value: a core too old or too new
-		}
+		if (strcasecmp(o->vals[v], valname)) continue;
+		core_opt_set(o, v);
+		return 1;
 	}
-	return 0;
+	return 0;    // the option, but not this value: a core too old or too new
+}
+
+// The current state of a named option, for the looks' undo records.
+int core_opt_read_named(const char *name, char *spec, int spec_len, int *ex, uint32_t *val)
+{
+	core_opt *o = find_named(name);
+	if (!o) return 0;
+
+	snprintf(spec, spec_len, "%s", o->spec);
+	if (ex) *ex = o->ex;
+	if (val) *val = user_io_status_get(o->spec, o->ex);
+	return 1;
 }
 
 void core_opts_save()

@@ -568,7 +568,7 @@ a stock install with no community filter packs:
 
 | Generated | What it is |
 |---|---|
-| `filters/ClassicHome Sharp/Soft/Blurry.txt` | 4-tap 32-phase polyphase coefficients: nearest, linear, wide tent |
+| `filters/ClassicHome Sharp/Soft/Blurry.txt` | 4-tap **64-phase** polyphase coefficients: nearest, linear, wide tent. 64 and not fewer: read_video_filter() takes a 32-line file for the legacy 16-phase format and half-reads it |
 | `filters/ClassicHome Scanlines*.txt` | Same, with a per-phase gain envelope. Lines summing under 128 come out darker, which is how MiSTer scanline filters work |
 | `filters/ClassicHome LCD Grid.txt` | The handheld pixel grid: a dark gutter at every source-pixel boundary, body boosted back toward unity |
 | `shadow_masks/ClassicHome Grille.txt` | 3x1 R/G/B aperture grille |

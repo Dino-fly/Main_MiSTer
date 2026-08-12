@@ -1061,7 +1061,13 @@ static int decode_into(const char *path, art_slot *s, uint32_t plate)
 
 /* ------------------------------------------------------------ thumbnails -- */
 
-#define THUMB_CACHE 4
+/*
+  8, because the Display screen shows up to five lookshot tiles plus the game's
+  own reference frame in one pass, and the savestate strip shares this cache: a
+  4-slot LRU walked by 6 keys misses on every access and turns each repaint
+  into a full round of PNG decodes off the card.
+*/
+#define THUMB_CACHE 8
 
 struct thumb_slot
 {

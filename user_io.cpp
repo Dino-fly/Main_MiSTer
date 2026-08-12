@@ -23,6 +23,7 @@
 #include "snacpad.h"
 #include "support/classicui/chome.h"
 #include "support/classicui/chome_cfgrec.h"
+#include "support/classicui/chome_video.h"
 #include "DiskImage.h"
 #include "brightness.h"
 #include "sxmlc.h"
@@ -594,7 +595,17 @@ void user_io_status_set(const char *opt, uint32_t value, int ex)
 
 int user_io_status_save(const char *filename)
 {
-	return FileSaveConfig(filename, cur_status, sizeof(cur_status));
+	/*
+	  A ClassicUI Display look holds session-only values on the live status word
+	  (a palette flag, a screen shadow, an integer scale). They are the look's,
+	  not the player's, and must not be captured by a save from any OSD - so the
+	  player's own values are swapped in around the write. Both hooks are no-ops
+	  when no look has touched anything, which is every non-ClassicUI setup.
+	*/
+	vp_core_side_suspend();
+	int r = FileSaveConfig(filename, cur_status, sizeof(cur_status));
+	vp_core_side_resume();
+	return r;
 }
 
 void user_io_status_reset()
