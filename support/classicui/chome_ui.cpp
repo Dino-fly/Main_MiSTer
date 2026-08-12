@@ -13413,6 +13413,17 @@ void chome_core_poll()
 			{
 				look_done = 1;
 				vp_reapply_core_side();
+
+				/*
+				  The player's per-game choices outrank the look. They were
+				  applied at boot (chome_core_boot), which is BEFORE this - so
+				  any option both sides drive would end up the look's, and a
+				  "kept for this game only" value would silently never stick.
+				  Re-asserting them here keeps the promise: look first, then
+				  the player's own word on top.
+				*/
+				if (ig_load_item())
+					core_opts_apply_for_game(ig_item.sysidx, ig_item.path);
 			}
 		}
 	}

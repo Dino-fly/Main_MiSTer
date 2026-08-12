@@ -100,8 +100,6 @@ struct preset_def
 */
 #define CO_INTEGER  "Scale=Narrower HV-Integer"
 #define CO_GB_DMG   "Custom Palette=On;Screen Shadow=Yes;Frame blend=On;" CO_INTEGER
-#define CO_LCD_OFF  "Custom Palette=Auto;Screen Shadow=No;Frame blend=Off;" \
-                    "Modify Colors=Off;Flickerblend=Off;Scale=Normal"
 
 static const preset_def presets[] =
 {
@@ -194,12 +192,14 @@ static const preset_def presets[] =
 
 	/*
 	  One switch to turn every layer of processing off: scaler filters, mask and
-	  gamma explicitly off, and the core-side effects the LCD looks drive put
-	  back to the core's defaults. Appended at the END of the table - the stored
-	  choice in classicui_video.cfg is a raw preset index, so table order is ABI.
+	  gamma explicitly off, and no core half at all - which means "restore what
+	  the look before me changed" when picked live, and "touch nothing" at
+	  launch, where the core has just booted from the player's own config (see
+	  vp_apply_core_side). Appended at the END of the table - the stored choice
+	  in classicui_video.cfg is a raw preset index, so table order is ABI.
 	*/
 	{ "none", "None", "Every effect off: the core's own picture, nothing added.",
-	  "off", "off", "off", "off", "off", "off", CO_LCD_OFF, 0 },
+	  "off", "off", "off", "off", "off", "off", 0, 0 },
 
 	// Appended after None for the same ABI reason None sits where it does.
 	{ "bvm-rgb", "BVM RGB", "Reference broadcast monitor: razor sharp, deep scanlines.",
@@ -406,10 +406,90 @@ static int gen_owned(const char *data, int len, int gbp)
 	return 0;
 }
 
+/*
+  Pristine-or-edited, decided by a content stamp rather than by the marker
+  alone. The marker says a file was BORN ours; it cannot say nobody touched it
+  since, and the whole point of leaving user files alone dies if hand-tuning a
+  coefficient is reverted on the next boot (the first cut of this did exactly
+  that). So every generated text file ends in "# build <hash>" over the bytes
+  above it, and a .gbp carries the same idea in its reserved tail: 'C','H',
+  then a 16-bit hash of the 14 bytes before it.
+
+  Three states on read: no marker - the user's file, never touched; marker and
+  a stamp that matches the content - our pristine output, regenerate freely;
+  marker but the stamp is missing (files from the first stampless build) or
+  does not match - somebody edited it, leave it and say so once.
+*/
+static uint32_t gen_hash(const char *p, int n)
+{
+	uint32_t h = 2166136261u;
+	for (int i = 0; i < n; i++) { h ^= (unsigned char)p[i]; h *= 16777619u; }
+	return h;
+}
+
+#define GEN_STAMP "# build "
+
+// 1 = safe to rewrite (missing, or provably our pristine output).
+static int gen_may_write(int gbp, const char *old, int olen, int more)
+{
+	if (more) return 0;                       // longer than the buffer: not ours
+	if (!gen_owned(old, olen, gbp)) return 0;
+
+	if (gbp)
+	{
+		if (olen != 16) return 0;
+		uint16_t st = (uint16_t)(((unsigned char)old[14] << 8) | (unsigned char)old[15]);
+		// 0 is the first build's stampless tail: pristine by construction.
+		if (st && st != (uint16_t)gen_hash(old, 14)) return 0;
+		return 1;
+	}
+
+	/*
+	  Text: find the stamp line wherever it is - anchoring on "the last line"
+	  would misread a file with lines APPENDED after the stamp as stampless and
+	  overwrite exactly the hand-edit this exists to protect.
+	*/
+	int slen = (int)strlen(GEN_STAMP);
+	int at = -1;
+	for (int i = 0; i + slen <= olen; i++)
+	{
+		if ((i == 0 || old[i - 1] == '\n') && !strncmp(old + i, GEN_STAMP, slen)) at = i;
+	}
+
+	// A marked file without a stamp: the first build wrote these, and only on
+	// the cards we ourselves deployed that day. Treated as pristine.
+	if (at < 0) return 1;
+
+	// Anything after the stamp's own line is a user addition.
+	int eol = at;
+	while (eol < olen && old[eol] != '\n') eol++;
+	if (eol < olen && eol + 1 < olen) return 0;
+
+	uint32_t st = (uint32_t)strtoul(old + at + slen, 0, 16);
+	if (st != gen_hash(old, at)) return 0;
+	return 1;
+}
+
 // Writes rel (root-relative) from g, honouring the ownership rule above.
 static void gen_commit(const char *rel, genbuf *g, int gbp)
 {
 	if (g->overflow) { printf("ClassicUI: %s overflowed the compose buffer, not written\n", rel); return; }
+
+	// Seal the buffer with its stamp before any comparison.
+	if (gbp)
+	{
+		if (g->len == 16)
+		{
+			uint16_t h = (uint16_t)gen_hash(g->b, 14);
+			g->b[14] = (char)(h >> 8);
+			g->b[15] = (char)(h & 0xff);
+		}
+	}
+	else
+	{
+		gb_addf(g, GEN_STAMP "%08x\n", gen_hash(g->b, g->len));
+		if (g->overflow) { printf("ClassicUI: %s overflowed the compose buffer, not written\n", rel); return; }
+	}
 
 	char p[1200];
 	snprintf(p, sizeof(p), "%s/%s", getRootDir(), rel);
@@ -419,11 +499,18 @@ static void gen_commit(const char *rel, genbuf *g, int gbp)
 	{
 		static char old[sizeof(g->b)];
 		int olen = (int)fread(old, 1, sizeof(old), f);
-		int more = fgetc(f) != EOF;          // longer than the buffer: not ours
+		int more = fgetc(f) != EOF;
 		fclose(f);
 
-		if (more || !gen_owned(old, olen, gbp)) return;
 		if (olen == g->len && !memcmp(old, g->b, g->len)) return;
+		if (!gen_may_write(gbp, old, olen, more))
+		{
+			// Only marked-but-edited files are worth a line: a user's own file
+			// being left alone is not news.
+			if (gen_owned(old, olen, gbp))
+				printf("ClassicUI: %s was hand-edited, keeping it\n", rel);
+			return;
+		}
 	}
 
 	f = fopen(p, "wb");
@@ -433,7 +520,18 @@ static void gen_commit(const char *rel, genbuf *g, int gbp)
 	printf("ClassicUI: wrote %s\n", rel);
 }
 
-#define PHASES 32
+/*
+  64, and not fewer, because of a trap in read_video_filter() (video.cpp): a
+  32-line file is taken for the LEGACY 16-phase format and only its first half
+  is ever loaded - the half of the pixel BEFORE the grid filter's centered
+  gutter, so the shipped grid degenerated into an asymmetric smear. Every
+  ClassicHome filter had been 32 lines since the beginning, so all of them were
+  being half-read; it went unseen because the harness stubs video.cpp and a
+  device screenshot taps core video before the scaler. 64 lines take the
+  ordinary path (and it is what the community filter packs use). The on-device
+  check is the firmware's own log line: "Filter '...', phases: 64".
+*/
+#define PHASES 64
 
 /*
   4-tap polyphase coefficients, 128 = 1.0. A line summing to less than 128 comes
@@ -918,14 +1016,74 @@ int vp_lookshot_path(int i, char *out, int len)
 */
 static int vp_running_look = -1;
 
-static void vp_apply_core_side(int i)
+/*
+  What the look changed and what stood there before, so it can all be undone.
+
+  Two consumers. Picking a look with no core half (None, or any CRT look after
+  an LCD one) restores these - which is the only correct meaning of "nothing
+  added": putting back the PLAYER's values, not some table of core defaults
+  that would trample a deliberate choice like GBC Colors=Raw. And
+  user_io_status_save() swaps them in around its write, so a "Save settings"
+  from any OSD captures the player's configuration, never the look's session
+  values - the guarantee that nothing a look does outlives the session.
+
+  Recorded once per option per session, before the first look touches it.
+*/
+struct vp_orig { char spec[12]; uint8_t ex; uint32_t val; };
+#define VP_ORIG_MAX 24
+static vp_orig vp_origs[VP_ORIG_MAX];
+static int nvp_origs = 0;
+
+static void vp_record_original(const char *name)
+{
+	char spec[12];
+	int ex = 0;
+	uint32_t val = 0;
+	if (!core_opt_read_named(name, spec, sizeof(spec), &ex, &val)) return;
+
+	for (int i = 0; i < nvp_origs; i++)
+		if (vp_origs[i].ex == ex && !strcmp(vp_origs[i].spec, spec)) return;
+
+	if (nvp_origs >= VP_ORIG_MAX) return;
+	snprintf(vp_origs[nvp_origs].spec, sizeof(vp_origs[0].spec), "%s", spec);
+	vp_origs[nvp_origs].ex = (uint8_t)ex;
+	vp_origs[nvp_origs].val = val;
+	nvp_origs++;
+}
+
+static void vp_restore_originals()
+{
+	for (int i = 0; i < nvp_origs; i++)
+		user_io_status_set(vp_origs[i].spec, vp_origs[i].val, vp_origs[i].ex);
+	if (nvp_origs) printf("ClassicUI: put back %d core option(s) a look had set\n", nvp_origs);
+}
+
+/*
+  Forget the records. On hardware every core load re-execs the firmware, so a
+  session and a process are the same thing and nobody needs this; the harness
+  runs many sessions in one process and does.
+*/
+void vp_forget_originals()
+{
+	nvp_origs = 0;
+	vp_running_look = -1;
+}
+
+static void vp_apply_core_side(int i, int with_palette)
 {
 	if (i < 0 || i >= NPRESETS) return;
-	vp_running_look = i;
 	const preset_def *d = &presets[i];
-	if (!d->core_opts && !d->palette) return;
+
+	if (!d->core_opts && !d->palette)
+	{
+		// A look with no core half still undoes the one it replaces.
+		vp_restore_originals();
+		vp_running_look = -1;
+		return;
+	}
 
 	if (core_opts_scan() <= 0) return;
+	vp_running_look = i;
 
 	if (d->core_opts)
 	{
@@ -938,22 +1096,46 @@ static void vp_apply_core_side(int i)
 			char *eq = strchr(pair, '=');
 			if (!eq) continue;
 			*eq = 0;
+			vp_record_original(pair);
 			if (!core_opt_set_named(pair, eq + 1))
 				printf("ClassicUI: look \"%s\": core has no %s=%s, skipped\n",
 					d->name, pair, eq + 1);
 		}
 	}
 
-	if (d->palette && core_opt_set_named("Custom Palette", "On"))
+	if (d->palette)
 	{
-		if (exists_rel(d->palette))
+		vp_record_original("Custom Palette");
+		if (with_palette && core_opt_set_named("Custom Palette", "On") && exists_rel(d->palette))
 		{
 			char full[1200];
 			snprintf(full, sizeof(full), "%s/%s", getRootDir(), d->palette);
 			printf("ClassicUI: look \"%s\": palette %s\n", d->name, d->palette);
 			user_io_file_tx(full, 3 /* the GB core's FC3 slot */);
 		}
+		else if (!with_palette)
+		{
+			core_opt_set_named("Custom Palette", "On");
+		}
 	}
+}
+
+/*
+  The save shield. user_io_status_save() calls these around its write so that
+  <CORE>.CFG only ever receives the player's own values - see vp_origs above.
+  The core sees the originals for the few milliseconds of the save; a save is a
+  deliberate, rare act, and a one-frame revert of a scale or a palette flag is
+  invisible next to persisting the wrong configuration forever. Resume skips
+  the palette upload: the file is already in the core and no status was lost.
+*/
+void vp_core_side_suspend()
+{
+	vp_restore_originals();
+}
+
+void vp_core_side_resume()
+{
+	if (vp_running_look >= 0) vp_apply_core_side(vp_running_look, 0);
 }
 
 void vp_arm_for_launch(int sysidx, int vclass_hint)
@@ -997,7 +1179,7 @@ int vp_apply_now(int sysidx, int vclass_hint)
 
 	printf("ClassicUI: applying video look \"%s\" to the running core\n", presets[i].name);
 	video_loadPreset(path, true);
-	vp_apply_core_side(i);
+	vp_apply_core_side(i, 1);
 	return 1;
 }
 
@@ -1036,17 +1218,25 @@ void vp_apply_pending()
 	  transfer came back CRC 00000000) and the MGL's ROM was never sent at all:
 	  a blank core wearing the right palette. The look is parked instead, and
 	  chome_core_poll() plays it once menu_mgl_busy() says the launch is over.
+
+	  A look with no core half is not parked at all: at launch the core has just
+	  booted from its own config, which already IS "nothing added", and there is
+	  nothing from any earlier session to undo - each launch is a new process.
 	*/
 	if (look[0])
 	{
 		for (int i = 0; i < NPRESETS; i++)
-			if (!strcmp(presets[i].id, look)) { vp_running_look = i; break; }
+			if (!strcmp(presets[i].id, look) && (presets[i].core_opts || presets[i].palette))
+			{
+				vp_running_look = i;
+				break;
+			}
 	}
 }
 
 void vp_reapply_core_side()
 {
-	if (vp_running_look >= 0) vp_apply_core_side(vp_running_look);
+	if (vp_running_look >= 0) vp_apply_core_side(vp_running_look, 1);
 }
 
 /* -------------------------------------------------- the analog output ----- */

@@ -6544,7 +6544,9 @@ int input_test(int getchar)
 			{
 				static char cmd[1024];
 				int len = read(pool[NUMDEV + 1].fd, cmd, sizeof(cmd) - 1);
-				if (len)
+				// > 0, not truthy: read() returns -1 on error and cmd[len - 1]
+				// would then write before the buffer.
+				if (len > 0)
 				{
 					if (cmd[len - 1] == '\n') cmd[len - 1] = 0;
 					cmd[len] = 0;

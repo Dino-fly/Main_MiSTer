@@ -97,6 +97,21 @@ void vp_apply_pending();
 */
 void vp_reapply_core_side();
 
+/*
+  The save shield, for user_io_status_save(): suspend puts the player's own
+  pre-look values back on the live status word, resume re-asserts the look.
+  Wrapped around the write, a "Save settings" from any OSD persists the
+  player's configuration and never the look's session values. Both no-ops when
+  no look has touched anything.
+*/
+void vp_core_side_suspend();
+void vp_core_side_resume();
+
+// Drop the undo records and the running look. A new process does this by
+// existing; only the harness, which packs many sessions into one process,
+// ever needs to call it.
+void vp_forget_originals();
+
 // Applies the look the running core should have, right now rather than at next launch.
 int vp_apply_now(int sysidx, int vclass_hint);
 

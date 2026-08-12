@@ -68,8 +68,16 @@ int  core_opt_value(const core_opt *o);
   speak about cores in general rather than about a row on screen - the Display
   looks. 1 when both the option and the value existed and it was set; 0
   otherwise, with nothing changed. core_opts_scan() must have run first.
+
+  Options this front-end owns (pause, savestate plumbing, SNAC) are refused by
+  name even though they exist - a look must not drive the machinery under
+  itself. "Scale" is the deliberate exception.
 */
 int  core_opt_set_named(const char *name, const char *valname);
+
+// The named option's spec, ex and current live value, for the looks' undo
+// records. Same reach and refusals as core_opt_set_named().
+int  core_opt_read_named(const char *name, char *spec, int spec_len, int *ex, uint32_t *val);
 
 /*
   The SNAC-ownership rows are staged rather than written, because applying one takes away the
