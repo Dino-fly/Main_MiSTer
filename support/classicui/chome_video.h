@@ -104,6 +104,15 @@ int vp_apply_now(int sysidx, int vclass_hint);
 int  vp_preset_path(int i, char *out, int len);
 
 /*
+  Absolute path of a look's static preview image (classicui/lookshots/<id>.png),
+  1 only when the file exists. A distribution-provided zoomed shot of the real
+  effect - phosphors, grid - which the Display screen prefers over the computed
+  illustration, because the real filters live in the scaler and cannot be read
+  back.
+*/
+int  vp_lookshot_path(int i, char *out, int len);
+
+/*
   Preview of a look, cached. When ref is non-null it is used as the source frame -
   a real capture of the user's own game - and the look is applied over it; with no
   reference a synthetic test pattern stands in.

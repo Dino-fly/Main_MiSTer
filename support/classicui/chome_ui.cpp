@@ -4396,7 +4396,16 @@ static void draw_display_screen(const chome_profile *p)
 				tile_h + 2 * s + h_label + h_radio, COL_BLUE);
 		}
 
-		const uint32_t *img = vp_preview(opts[i], tile_w, tile_h, ref);
+		/*
+		  A shipped lookshot outranks the computed illustration - see
+		  vp_lookshot_path(). art_thumb() caches by path, so this costs one
+		  decode per look, not one per frame.
+		*/
+		const uint32_t *img = 0;
+		char lsp[1024];
+		if (vp_lookshot_path(opts[i], lsp, sizeof(lsp)))
+			img = art_thumb(lsp, tile_w, tile_h);
+		if (!img) img = vp_preview(opts[i], tile_w, tile_h, ref);
 		if (img) gfx_blit(img, tile_w, tile_h, x, top, tile_w, tile_h);
 		else gfx_fill(x, top, tile_w, tile_h, COL_BGDARK);
 		gfx_frame_rect(x - 1, top - 1, tile_w + 2, tile_h + 2, on ? COL_WHITE : COL_INK, 1);
