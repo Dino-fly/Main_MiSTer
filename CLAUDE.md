@@ -30,6 +30,14 @@ Do not put the credentials on a compiler command line. A `-D` puts the password 
 log and in `ps` while the compiler runs. For the same reason, code that checks a binary for the
 devid must hand it to `grep` on **stdin** (`grep -F -f -`), never in argv.
 
+And that grep needs **`-a`**. A firmware is a binary, and BSD grep - the grep on the Mac these
+archives are packaged on - exits 1 for a match in a file it deems binary unless told to treat
+it as text, where GNU grep and busybox exit 0. `make_sdcard_root.sh` was missing it, so on this
+machine the guard refused good credentialled builds while reporting that their credentials were
+missing: failing in the same direction as the bug it exists to catch, and inviting
+`--no-ss-creds` as the way past it. Both directions are now proven on the Mac - a real build
+packages, a devid-blanked copy is refused.
+
 Several comments in `chome_ss.cpp` still say the credentials are "undefined in every build we
 ship". That was the old policy. Shipped builds carry them; the player's own account is separate
 and comes from `MiSTer.ini` at runtime.
