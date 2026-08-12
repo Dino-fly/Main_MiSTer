@@ -6580,6 +6580,12 @@ int input_test(int getchar)
 						else if (!strcmp(cmd + 7, "unmute")) set_volume(0x80);
 						else if (cmd[7] >= '0' && cmd[7] <= '7') set_volume(0x40 - 0x30 + cmd[7]);
 					}
+					// Test access, 0-based slot - see chome_test_ss_load() for why
+					// a keyboard cannot do this.
+					else if (!strncmp(cmd, "ss_load ", 8))
+					{
+						chome_test_ss_load(atoi(cmd + 8));
+					}
 				}
 			}
 

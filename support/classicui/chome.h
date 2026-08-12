@@ -80,6 +80,16 @@ void chome_leave();
 void chome_core_boot();
 
 /*
+  Test access: restore a savestate slot (0-based) through the same hooks the
+  in-game menu uses. Reached by `echo "ss_load N" > /dev/MiSTer_cmd`, because
+  nothing else on a headless device can press the core's restore trigger - the
+  keyboard F1 path belongs to the core and demonstrably does not fire from an
+  injected keyboard. Harmless on a core without savestates: the hook scan finds
+  nothing and it returns 0.
+*/
+int chome_test_ss_load(int slot);
+
+/*
   Called from HandleUI() in every core, every frame. In a game core it grabs one
   reference frame a little after launch, so the Display screen can preview the
   looks over the user's own game instead of a test pattern. Cheap: it does nothing

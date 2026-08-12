@@ -45,6 +45,14 @@ uint32_t harness_opt_val(const char *opt, int ex = 0);
 void harness_set_opt(const char *opt, uint32_t v, int ex = 0);
 void harness_reset_status();
 
+// The last file pushed at the core (a Display look's .gbp palette), and its index.
+const char *harness_last_file_tx();
+int  harness_last_file_tx_idx();
+void harness_reset_file_tx();
+
+// 1 = a launch's file feed is still running; the look's core half must wait.
+void harness_set_mgl_busy(int v);
+
 uint32_t *harness_fb_shown();
 unsigned long harness_fb_hash(int y0, int y1);
 unsigned long harness_fb_hash_box(int x0, int y0, int x1, int y1);
@@ -97,6 +105,7 @@ void harness_reset_ss_copy();
 
 const char *harness_last_launch();
 const char *harness_last_preset();
+void harness_reset_preset();
 void harness_clear_launch();
 
 #endif

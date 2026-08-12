@@ -20,6 +20,15 @@
 static core_opt opts[CO_MAX];
 static int nopts = 0;
 
+/*
+  Options curated OFF the screens but still real on the core - "Scale", "Pause
+  when OSD is open" - kept aside so core_opt_set_named() can drive them for the
+  Display looks. Never offered: nothing outside that setter reads this table,
+  which is what keeps "we set it, we do not offer it" true.
+*/
+static core_opt hopts[CO_MAX];
+static int nhopts = 0;
+
 /* ------------------------------------------------------------- curation ---- */
 
 /*
@@ -199,6 +208,7 @@ static void field(const char *src, int idx, char *out, int len)
 int core_opts_scan()
 {
 	nopts = 0;
+	nhopts = 0;
 
 	if (is_menu()) return 0;
 
@@ -290,7 +300,11 @@ int core_opts_scan()
 		if (o->nvals < 2) continue;
 
 		o->tier = (uint8_t)tier_for(o);
-		if (o->tier == CO_TIER_HIDDEN) continue;
+		if (o->tier == CO_TIER_HIDDEN)
+		{
+			if (nhopts < CO_MAX) hopts[nhopts++] = *o;
+			continue;
+		}
 
 		nopts++;
 	}
@@ -453,6 +467,38 @@ void core_opt_set(const core_opt *o, int value)
 
 	user_io_status_set(o->spec, (uint32_t)value, o->ex);
 	printf("ClassicUI: core option %s = %s\n", o->name, o->vals[value]);
+}
+
+/*
+  Both halves by name, for the Display looks: the look says "Screen Shadow=Yes"
+  and this finds the option and the value on whatever core is running. A core
+  that publishes neither is left untouched - the graceful degradation the looks
+  rely on - and the return says which happened. Caller must have scanned.
+*/
+int core_opt_set_named(const char *name, const char *valname)
+{
+	if (!name || !valname) return 0;
+
+	// The offered table first, then the curated-away one: a look may pin an
+	// option the screens deliberately do not show, like Scale.
+	struct { core_opt *t; int n; } tabs[2] = { { opts, nopts }, { hopts, nhopts } };
+
+	for (int k = 0; k < 2; k++)
+	{
+		for (int i = 0; i < tabs[k].n; i++)
+		{
+			if (strcasecmp(tabs[k].t[i].name, name)) continue;
+
+			for (int v = 0; v < tabs[k].t[i].nvals; v++)
+			{
+				if (strcasecmp(tabs[k].t[i].vals[v], valname)) continue;
+				core_opt_set(&tabs[k].t[i], v);
+				return 1;
+			}
+			return 0;    // the option, but not this value: a core too old or too new
+		}
+	}
+	return 0;
 }
 
 void core_opts_save()

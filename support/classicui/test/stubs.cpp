@@ -457,6 +457,7 @@ void video_menu_fb_analog(int on)
 
 static char last_preset[1024] = {};
 const char *harness_last_preset() { return last_preset; }
+void harness_reset_preset() { last_preset[0] = 0; }
 
 void video_loadPreset(char *name, bool save)
 {
@@ -465,6 +466,15 @@ void video_loadPreset(char *name, bool save)
 }
 
 /* -------------------------------------------------------------- fake io --- */
+
+/*
+  The launch's file feed. 0 (idle) is also what the ARM answers after a restart
+  into an already-loaded core, so idle is the right default here; a test that
+  wants to model a launch in flight raises it and the look apply must then wait.
+*/
+static int mgl_busy = 0;
+void harness_set_mgl_busy(int v) { mgl_busy = v; }
+int menu_mgl_busy(void) { return mgl_busy; }
 
 static char core_name[64] = "GAMEBOY";
 void harness_set_core_name(const char *n) { snprintf(core_name, sizeof(core_name), "%s", n ? n : ""); }
@@ -924,6 +934,25 @@ static int status_pulses = 0;
 const char *harness_last_status_opt() { return last_status_opt; }
 int harness_status_pulses() { return status_pulses; }
 void harness_reset_status() { last_status_opt[0] = 0; last_pulse_opt[0] = 0; status_pulses = 0; npulses = 0; }
+
+/*
+  The Display looks push a .gbp palette at the core's file slot. The harness
+  only needs to know it happened - and that it never happens on a core without
+  a palette slot, which a test asserts through harness_last_file_tx().
+*/
+static char last_file_tx[512] = {};
+static int last_file_tx_idx = -1;
+const char *harness_last_file_tx() { return last_file_tx; }
+int harness_last_file_tx_idx() { return last_file_tx_idx; }
+void harness_reset_file_tx() { last_file_tx[0] = 0; last_file_tx_idx = -1; }
+
+int user_io_file_tx(const char *name, unsigned char index, char, char, char, uint32_t)
+{
+	snprintf(last_file_tx, sizeof(last_file_tx), "%s", name ? name : "");
+	last_file_tx_idx = index;
+	printf("  [stub] user_io_file_tx(\"%s\", %u)\n", last_file_tx, index);
+	return 1;
+}
 
 void user_io_status_set(const char *opt, uint32_t value, int ex)
 {

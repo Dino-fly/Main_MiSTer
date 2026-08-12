@@ -10051,72 +10051,151 @@ static void assert_video()
 		check(lowest > 60, "scanline filter is not excessively dark");
 	}
 
-	n = count_lines("gamma/ClassicHome DMG.txt", 0, 0);
-	check(n == 256, "DMG gamma LUT has 256 entries");
-	n = count_lines("gamma/ClassicHome GB Pocket.txt", 0, 0);
-	check(n == 256, "Pocket gamma LUT has 256 entries");
-	n = count_lines("gamma/ClassicHome GBA AGB-001.txt", 0, 0);
-	check(n == 256, "AGB-001 gamma LUT has 256 entries");
-	n = count_lines("gamma/ClassicHome GBA AGS-101.txt", 0, 0);
-	check(n == 256, "AGS-101 gamma LUT has 256 entries");
+	/*
+	  The GB/GBA gamma LUTs are gone on purpose: their colour moved into the core
+	  (palette slot / Modify Colors), where it belongs - a LUT cannot mix channels
+	  and it stacked on the core's own colourisation. What replaces them here:
+	  the grid filter, the .gbp palettes, and the core-side application test at
+	  the bottom of this function.
+	*/
 
-	// The three GBA revisions must actually be different curves, brightest last.
+	// The grid filter dims its gutter and boosts the body back to unity average.
 	{
-		int lo[3], hi[3];
-		const char *files[3] = {
-			"gamma/ClassicHome GBA AGB-001.txt",
-			"gamma/ClassicHome GBA AGS-001.txt",
-			"gamma/ClassicHome GBA AGS-101.txt"
-		};
-		for (int k = 0; k < 3; k++)
-		{
-			char pp[1024];
-			snprintf(pp, sizeof(pp), "%s/%s", ROOT, files[k]);
-			FILE *ff = fopen(pp, "rt");
-			lo[k] = hi[k] = -1;
-			if (ff)
-			{
-				char line[256];
-				int idx = 0, r, g, b;
-				while (fgets(line, sizeof(line), ff))
-				{
-					if (sscanf(line, "%d,%d,%d", &r, &g, &b) != 3) continue;
-					if (idx == 0) lo[k] = (r + g + b) / 3;
-					hi[k] = (r + g + b) / 3;
-					idx++;
-				}
-				fclose(ff);
-			}
-		}
-		printf("  GBA revisions (black -> white): AGB-001 %d->%d, AGS-001 %d->%d, AGS-101 %d->%d\n",
-			lo[0], hi[0], lo[1], hi[1], lo[2], hi[2]);
-		check(lo[0] > lo[1] && lo[1] > lo[2], "black level improves AGB-001 -> AGS-001 -> AGS-101");
-		check(hi[2] > hi[1] && hi[1] > hi[0], "white level improves AGB-001 -> AGS-001 -> AGS-101");
-		check((hi[2] - lo[2]) > (hi[0] - lo[0]), "AGS-101 has the most contrast");
-	}
+		n = count_lines("filters/ClassicHome LCD Grid.txt", 0, &peak);
+		check(n == 32, "grid filter has 32 phases");
+		check(peak > 128 && peak <= 146, "grid filter body boost stays near the shipped filters' ceiling");
 
-	// The DMG curve has to actually be yellow-green, not grey.
-	{
 		char p[1024];
-		snprintf(p, sizeof(p), "%s/gamma/ClassicHome DMG.txt", ROOT);
+		snprintf(p, sizeof(p), "%s/filters/ClassicHome LCD Grid.txt", ROOT);
 		FILE *f = fopen(p, "rt");
-		int r0 = -1, g0 = -1, b0 = -1, r255 = -1, g255 = -1, b255 = -1, idx = 0;
+		int lowest = 1000;
 		if (f)
 		{
-			char line[256];
+			char line[512];
 			while (fgets(line, sizeof(line), f))
 			{
-				int r, g, b;
-				if (sscanf(line, "%d,%d,%d", &r, &g, &b) != 3) continue;
-				if (idx == 0) { r0 = r; g0 = g; b0 = b; }
-				r255 = r; g255 = g; b255 = b;
-				idx++;
+				int a, b, c, d;
+				if (sscanf(line, "%d,%d,%d,%d", &a, &b, &c, &d) == 4)
+				{
+					int sum = a + b + c + d;
+					if (sum < lowest) lowest = sum;
+				}
 			}
 			fclose(f);
 		}
-		printf("  DMG LUT: %d,%d,%d -> %d,%d,%d\n", r0, g0, b0, r255, g255, b255);
-		check(g0 > r0 && g0 > b0, "DMG shadow is green-dominant");
-		check(g255 > b255 && r255 > b255, "DMG highlight is yellow-green");
+		printf("  grid gain range: %d..%d of 128\n", lowest, peak);
+		check(lowest < 100, "grid filter draws a visible gutter");
+		check(lowest > 40, "grid gutter is a line, not a blackout");
+	}
+
+	// The .gbp palettes: real files in the core's own format, ours by their tail.
+	{
+		struct { const char *rel; const char *what; int neutral; } pals[] =
+		{
+			{ "games/GAMEBOY/Palettes/ClassicHome DMG Green.gbp", "DMG", 0 },
+			{ "games/GAMEBOY/Palettes/ClassicHome Pocket.gbp", "Pocket", 1 },
+		};
+		for (int k = 0; k < 2; k++)
+		{
+			char p[1024];
+			snprintf(p, sizeof(p), "%s/%s", ROOT, pals[k].rel);
+			FILE *f = fopen(p, "rb");
+			unsigned char b[16] = {};
+			int len = f ? (int)fread(b, 1, sizeof(b), f) : 0;
+			if (f) fclose(f);
+
+			char what[128];
+			snprintf(what, sizeof(what), "%s palette is 16 bytes with the ownership tail", pals[k].what);
+			check(len == 16 && b[12] == 'C' && b[13] == 'H', what);
+
+			int y[4], ordered = 1;
+			for (int i = 0; i < 4; i++) y[i] = (b[i * 3] * 299 + b[i * 3 + 1] * 587 + b[i * 3 + 2] * 114) / 1000;
+			for (int i = 1; i < 4; i++) if (y[i] >= y[i - 1]) ordered = 0;
+			snprintf(what, sizeof(what), "%s palette runs light to dark", pals[k].what);
+			check(ordered, what);
+
+			if (pals[k].neutral)
+			{
+				int spread = 0;
+				for (int i = 0; i < 4; i++)
+				{
+					int mx = b[i * 3], mn = b[i * 3];
+					for (int c = 1; c < 3; c++)
+					{
+						if (b[i * 3 + c] > mx) mx = b[i * 3 + c];
+						if (b[i * 3 + c] < mn) mn = b[i * 3 + c];
+					}
+					if (mx - mn > spread) spread = mx - mn;
+				}
+				printf("  Pocket channel spread: %d\n", spread);
+				check(spread < 32, "Pocket palette is near-neutral grey");
+			}
+			else
+			{
+				check(b[1] > b[0] && b[1] > b[2], "DMG highlight is green-dominant");
+				check(y[3] < 40, "DMG shadow is properly dark");
+			}
+		}
+	}
+
+	// The looks whose colour the core owns must not fight it with scaler gamma.
+	{
+		const char *inis[] = { "Game Boy DMG", "Game Boy Pocket", "GBA (AGB-001)", "GBA SP (AGS-101)" };
+		for (int k = 0; k < 4; k++)
+		{
+			char p[1024];
+			snprintf(p, sizeof(p), "%s/presets/ClassicHome %s.ini", ROOT, inis[k]);
+			FILE *f = fopen(p, "rt");
+			int gamma_off = 0, grid = 0;
+			if (f)
+			{
+				char line[512];
+				while (fgets(line, sizeof(line), f))
+				{
+					if (!strncmp(line, "gamma=off", 9)) gamma_off = 1;
+					if (strstr(line, "LCD Grid")) grid = 1;
+				}
+				fclose(f);
+			}
+			char what[128];
+			snprintf(what, sizeof(what), "%s: scaler gamma off, grid filter on", inis[k]);
+			check(gamma_off && grid, what);
+		}
+	}
+
+	/*
+	  Regeneration: a file we generated is brought up to date when the table
+	  changes; a file the user wrote (no marker) is never touched. The old rule
+	  was never-overwrite, which meant a shipped fix never reached a card that
+	  had already booted once.
+	*/
+	{
+		char p[1024];
+		snprintf(p, sizeof(p), "%s/filters/ClassicHome LCD Grid.txt", ROOT);
+
+		FILE *f = fopen(p, "at");
+		if (f) { fprintf(f, "# stale tail from an older build\n"); fclose(f); }
+		long grown = 0;
+		f = fopen(p, "rb");
+		if (f) { fseek(f, 0, SEEK_END); grown = ftell(f); fclose(f); }
+
+		vp_install();
+		long fixed = 0;
+		f = fopen(p, "rb");
+		if (f) { fseek(f, 0, SEEK_END); fixed = ftell(f); fclose(f); }
+		check(fixed < grown, "a generated file that drifted is regenerated");
+
+		f = fopen(p, "wb");
+		if (f) { fprintf(f, "the user's own filter\n"); fclose(f); }
+		vp_install();
+		char first[64] = {};
+		f = fopen(p, "rb");
+		if (f) { if (!fgets(first, sizeof(first), f)) first[0] = 0; fclose(f); }
+		check(strstr(first, "user's own") != 0, "a file without our marker is never overwritten");
+
+		unlink(p);
+		vp_install();
+		check(count_lines("filters/ClassicHome LCD Grid.txt", 0, 0) == 32, "a deleted file comes back");
 	}
 
 	// Defaults per class, which is the whole point of "on by default".
@@ -10138,7 +10217,11 @@ static void assert_video()
 		printf("\n");
 	}
 
-	// No handheld look may leak into a CRT class, and vice versa.
+	/*
+	  No LCD look may leak into a CRT class and no CRT look into a handheld one.
+	  "None" and "Sharp" are neither: they are the mandatory off switch, which
+	  the next block asserts every class carries.
+	*/
 	int leak = 0;
 	for (int c = 0; c < VC_COUNT; c++)
 	{
@@ -10146,23 +10229,42 @@ static void assert_video()
 		int n = vp_options_for(c, opts);
 		for (int i = 0; i < n; i++)
 		{
-			int is_lcd = (strstr(vp_name(opts[i]), "Game Boy") != 0 || strstr(vp_name(opts[i]), "GBA") != 0);
+			const char *nm = vp_name(opts[i]);
+			if (!strcmp(nm, "None") || !strcmp(nm, "Sharp")) continue;
+			int is_lcd = (strstr(nm, "Game Boy") != 0 || strstr(nm, "GBA") != 0);
 			if (is_lcd != handheld) leak = 1;
 		}
 	}
 	check(!leak, "LCD looks only on handhelds, CRT looks only on everything else");
 
+	// Dinofly's rule: every single system offers one entry with no processing.
+	{
+		int missing = 0;
+		for (int c = 0; c < VC_COUNT; c++)
+		{
+			int n = vp_options_for(c, opts);
+			int off = 0;
+			for (int i = 0; i < n; i++)
+			{
+				const char *nm = vp_name(opts[i]);
+				if (!strcmp(nm, "None") || !strcmp(nm, "Sharp")) off = 1;
+			}
+			if (!off) { printf("  no off switch for %s\n", vp_class_label(c)); missing = 1; }
+		}
+		check(!missing, "every class offers a look that turns processing off");
+	}
+
 	int n_gb = vp_options_for(VC_GB, opts);
-	check(n_gb == 2, "Game Boy offers exactly two screens");
+	check(n_gb == 3, "Game Boy offers two screens and the off switch");
 	check(strstr(vp_name(opts[0]), "DMG") && strstr(vp_name(opts[1]), "Pocket"),
 		"Game Boy offers DMG and Pocket");
 
 	int n_gbc = vp_options_for(VC_GBC, opts);
-	check(n_gbc == 4, "GBC offers its own screen plus the three GBA ones");
+	check(n_gbc == 2, "GBC offers its screen and the off switch");
 	check(strstr(vp_name(opts[0]), "Color") != 0, "GBC defaults to the GBC screen");
 
 	int n_gba = vp_options_for(VC_GBA, opts);
-	check(n_gba == 3, "GBA offers three screen revisions");
+	check(n_gba == 4, "GBA offers three screen revisions and the off switch");
 	{
 		int have001 = 0, haveS001 = 0, haveS101 = 0;
 		for (int i = 0; i < n_gba; i++)
@@ -10199,9 +10301,9 @@ static void assert_video()
 
 			// Choices for the two must not overwrite each other.
 			vp_options_for(VC_GBC, opts);
-			vp_set(gbsys, VC_GBC, opts[3]);              // an AGS screen for the GBC cart
+			vp_set(gbsys, VC_GBC, opts[1]);              // None, for the GBC cart only
 			check(vp_effective(gbsys, VC_GB) == pd, "choosing a GBC screen left the DMG cart alone");
-			check(vp_effective(gbsys, VC_GBC) == opts[3], "the GBC choice stuck");
+			check(vp_effective(gbsys, VC_GBC) == opts[1], "the GBC choice stuck");
 			vp_set(gbsys, VC_GBC, pc);
 		}
 	}
@@ -10213,6 +10315,74 @@ static void assert_video()
 		int before = vp_effective(gbsys, VC_GB);
 		vp_set(gbsys, VC_GB, 1);                          // PVM RGB: not a Game Boy screen
 		check(vp_effective(gbsys, VC_GB) == before, "a CRT look cannot be set on a Game Boy");
+	}
+
+	/*
+	  The core-side half, end to end: a look drives the running core's own
+	  options by name, sends its palette at the palette slot, and None puts all
+	  of it back. The fixture is the real Game Boy CONF_STR shapes, including
+	  Scale - which the core-options screens deliberately hide, so this also
+	  proves the looks can reach past that curation.
+	*/
+	{
+		static const char *gb_core[] =
+		{
+			"GAMEBOY",
+			"FS1,GBCGB BIN,Load ROM",
+			"P1O12,Custom Palette,Off,Auto,On",
+			"h1P1FC3,GBP,Load Palette",
+			"P1o4,Screen Shadow,No,Yes",
+			"P1OG,Frame blend,Off,On",
+			"P1OLM,Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer",
+			0
+		};
+		harness_set_confstr_table(gb_core);
+		harness_set_menu_core(0);          // a scan in the menu core rightly finds nothing
+		harness_reset_file_tx();
+
+		int gbsys = -1;
+		for (int i = 0; i < lib_sys_count(); i++) if (!strcmp(lib_sys(i)->id, "gb")) gbsys = i;
+
+		int o2[VP_MAX_OPTIONS];
+		vp_options_for(VC_GB, o2);
+		int prior = vp_effective(gbsys, VC_GB);
+
+		vp_set(gbsys, VC_GB, o2[0]);                     // DMG
+		vp_apply_now(gbsys, VC_GB);
+
+		check(strstr(harness_last_file_tx(), "ClassicHome DMG Green.gbp") != 0,
+			"the DMG look sends its palette at the core");
+		check(harness_last_file_tx_idx() == 3, "the palette lands in the GB palette slot");
+		check(harness_opt_val("12") == 2, "DMG forces the custom palette on");
+		check(harness_opt_val("4", 1) == 1, "DMG turns the core's screen shadow on");
+		check(harness_opt_val("G") == 1, "DMG turns the core's frame blend on");
+		check(harness_opt_val("LM") == 2, "DMG pins HV-integer scale, past the curation");
+
+		harness_reset_file_tx();
+		vp_set(gbsys, VC_GB, o2[2]);                     // None
+		vp_apply_now(gbsys, VC_GB);
+
+		check(!harness_last_file_tx()[0], "None pushes no palette");
+		check(harness_opt_val("12") == 1, "None puts the custom palette back to Auto");
+		check(harness_opt_val("4", 1) == 0, "None turns the screen shadow off");
+		check(harness_opt_val("G") == 0, "None turns frame blend off");
+		check(harness_opt_val("LM") == 0, "None hands the scale back");
+
+		// A core publishing none of it is left entirely alone.
+		static const char *bare_core[] = { "SNES", "FS1,BIN,Load ROM", "P1O8,Blend,Off,On", 0 };
+		harness_set_confstr_table(bare_core);
+		harness_reset_file_tx();
+		harness_reset_status();
+		vp_set(gbsys, VC_GB, o2[0]);
+		vp_apply_now(gbsys, VC_GB);
+		check(!harness_last_file_tx()[0], "no palette is pushed at a core without a palette slot");
+
+		// Leave the world as found: state here is shared with the UI flows below.
+		vp_set(gbsys, VC_GB, prior);
+		harness_set_confstr_table(0);
+		harness_set_menu_core(1);
+		harness_reset_file_tx();
+		harness_reset_status();
 	}
 
 	// Every handheld class must have at least one look, and no CRT leakage.
@@ -13114,8 +13284,13 @@ static void assert_look_applies_to_the_running_core()
 	frame(16);
 	check(chome_ingame_active(), "the menu is up over the running game");
 
-	char before[1024];
-	snprintf(before, sizeof(before), "%s", harness_last_preset());
+	/*
+	  Cleared rather than snapshotted: comparing against "whatever some earlier
+	  test applied last" made this fail the day another test legitimately applied
+	  the same look this screen lands on. What matters is that choosing a row
+	  hands the core a preset NOW - so start from silence and ask for any sound.
+	*/
+	harness_reset_preset();
 
 	press(KEY_UP, 14);                    // the menu bar, Display first
 	press(KEY_ENTER, 18);
@@ -13124,7 +13299,7 @@ static void assert_look_applies_to_the_running_core()
 	frame(10);
 
 	const char *now = harness_last_preset();
-	check(now && now[0] && strcmp(now, before) != 0,
+	check(now && now[0],
 		"choosing a look hands the running core a preset straight away");
 	dump("look-applied-live");
 

@@ -64,6 +64,14 @@ const core_opt *core_opt_tier_at(int tier, int i);
 int  core_opt_value(const core_opt *o);
 
 /*
+  Set one option by its CONF_STR names ("Screen Shadow", "Yes"), for callers that
+  speak about cores in general rather than about a row on screen - the Display
+  looks. 1 when both the option and the value existed and it was set; 0
+  otherwise, with nothing changed. core_opts_scan() must have run first.
+*/
+int  core_opt_set_named(const char *name, const char *valname);
+
+/*
   The SNAC-ownership rows are staged rather than written, because applying one takes away the
   pad the player is navigating with - see co_is_snac_owner_row() in chome_core.cpp. These are
   the flush and the discard; the menu calls one of them on every way out.
