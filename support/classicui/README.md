@@ -587,18 +587,18 @@ Most authentic first, and the first entry is also the default.
 
 | Class | Offered | Reasoning |
 |---|---|---|
-| Consoles | PVM RGB, PVM S-Video, Composite TV, Sharp | A console reached a TV by RGB, S-Video or composite depending on your luck |
-| Arcade | PVM RGB, PVM S-Video, Sharp | Arcade monitors were direct RGB; composite never entered the picture |
-| Home computers (15 kHz: C64, Spectrum, Amiga, CPC, MSX) | PAL TV, Composite TV, PVM S-Video, Sharp | These lived on televisions, not monitors |
+| Consoles | PVM RGB, BVM RGB, S-Video, Composite, Sharp | A console reached a TV by RGB, S-Video or composite depending on your luck |
+| Arcade | PVM RGB, BVM RGB, S-Video, Sharp | Arcade monitors were direct RGB; composite never entered the picture |
+| Home computers (15 kHz: C64, Spectrum, Amiga, CPC, MSX) | PAL TV, Composite, S-Video, Sharp | These lived on televisions, not monitors |
 | VGA (31 kHz: ao486, x86, Archie) | VGA Monitor, Sharp | A VGA CRT at 480p had **no** visible scanline gaps, so no CRT looks belong here at all |
-| Game Boy | Game Boy DMG, Game Boy Pocket | Both grey reflective panels: the original olive-green, then the Pocket's neutral grey with better contrast and a finer grid |
-| Game Boy Color | Game Boy Color, GBA (AGB-001), GBA SP (AGS-001), GBA SP (AGS-101) | A GBC cartridge also runs on either Game Boy Advance, so all four screens apply |
-| Game Boy Advance | GBA (AGB-001), GBA SP (AGS-001), GBA SP (AGS-101) | The three screen revisions and nothing else |
-| Game Gear | Game Gear, Game Gear (Backlit Mod) | Backlit but murky; the LED backlight mod is common enough to deserve its own entry |
-| Atari Lynx | Atari Lynx | Backlit colour with a cool cast and washed blacks |
-| WonderSwan | WonderSwan | Reflective mono FSTN, warm grey, narrow range |
-| WonderSwan Color | WonderSwan Color, WonderSwan | A colour Swan also plays mono titles |
-| Neo Geo Pocket Color | Neo Geo Pocket Color | Reflective pastel, gentle contrast |
+| Game Boy | Game Boy DMG, Game Boy Pocket, None | Real .gbp palettes through the core (bgb green / neutral grey), the core's own Screen Shadow and Frame blend, the grid filter |
+| Game Boy Color | Game Boy Color, None | The GBA-screen entries left with the gamma LUTs: they now speak the GBA core's Modify Colors, which the GB core does not publish. A GBC-on-GBA look would come back through the GB core's GBC colour LUT slot (FC7) |
+| Game Boy Advance | GBA (AGB-001), GBA SP (AGS-001), GBA SP (AGS-101), None | The three screen revisions map to the core's own Modify Colors (GBA 2.2 / GBA 1.6 / Off) |
+| Game Gear | Game Gear, Game Gear (Backlit Mod), None | Backlit but murky; the SMS core offers no colour work, so these keep their gamma LUTs |
+| Atari Lynx | Atari Lynx, None | Backlit colour with a cool cast; the core's Flickerblend supplies the panel's real ghosting |
+| WonderSwan | WonderSwan, None | Reflective mono FSTN, warm grey; core Flickerblend for the ghosting |
+| WonderSwan Color | WonderSwan Color, WonderSwan, None | A colour Swan also plays mono titles |
+| Neo Geo Pocket Color | Neo Geo Pocket Color, None | Reflective pastel, gentle contrast |
 
 Shared cores are split by extension in `class_of()`: `.gbc` in the Game Boy core is
 a GBC game, `.gg` in the SMS core is a Game Gear game, `.wsc` in the WonderSwan
@@ -609,16 +609,14 @@ the code that consumes them rather than guessed, but nothing has loaded any of t
 cores from the shelf yet. All four take the console look, since all four are consoles.
 
 The three GBA revisions differ in black level and contrast, which is exactly what
-distinguished them in the hand (measured from the generated LUTs, black -> white):
+distinguished them in the hand. That correction now runs in the core's own pixel
+pipeline ("Modify Colors" - the Pokefan531 profiles): AGB-001 gets the dark 2.2
+rendition, AGS-001 the brighter 1.6, and AGS-101 none at all - the backlit panel
+is the one that showed the game's raw colours.
 
-| Revision | Range | Character |
-|---|---|---|
-| AGB-001 | 62 -> 184 | Unlit. Lifted blacks, crushed whites, washed out |
-| AGS-001 | 45 -> 206 | Frontlit. Brighter, warmer, still washed |
-| AGS-101 | 15 -> 248 | Backlit. Proper black level and full contrast |
-
-Handhelds deliberately get no "Sharp" option: an unfiltered Game Boy is not a look
-anyone is after, and the LCD is the point.
+Handhelds' off switch is called **None** rather than Sharp because it turns off
+more than the scaler: it also puts back every core-side option the LCD looks
+drive (palette to Auto, shadow and blends off, Scale to Normal).
 
 A `.gbc` cartridge in the Game Boy core resolves to the **Game Boy Color** class,
 decided from the extension by `class_of()` in `chome_ui.cpp` - the panel and the

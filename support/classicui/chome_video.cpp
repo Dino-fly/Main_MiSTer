@@ -69,6 +69,7 @@ struct preset_def
 #define F_BLURRY  PREFIX " Blurry.txt"
 #define F_SCAN    PREFIX " Scanlines.txt"
 #define F_SCANLT  PREFIX " Scanlines Light.txt"
+#define F_SCANDP  PREFIX " Scanlines Deep.txt"
 #define F_GRID    PREFIX " LCD Grid.txt"
 #define M_GRILLE  PREFIX " Grille.txt"
 #define M_MATRIX  PREFIX " Dot Matrix.txt"
@@ -100,7 +101,7 @@ struct preset_def
 #define CO_INTEGER  "Scale=Narrower HV-Integer"
 #define CO_GB_DMG   "Custom Palette=On;Screen Shadow=Yes;Frame blend=On;" CO_INTEGER
 #define CO_LCD_OFF  "Custom Palette=Auto;Screen Shadow=No;Frame blend=Off;" \
-                    "Modify Colors=Off;Scale=Normal"
+                    "Modify Colors=Off;Flickerblend=Off;Scale=Normal"
 
 static const preset_def presets[] =
 {
@@ -110,10 +111,15 @@ static const preset_def presets[] =
 	{ "pvm-rgb", "PVM RGB", "Sharp RGB monitor with fine scanlines and an aperture grille.",
 	  F_SHARP, F_SHARP, F_SCAN, M_GRILLE, "1x", "off", 0, 0 },
 
-	{ "pvm-svideo", "PVM S-Video", "Slight horizontal bleed, scanlines. Consoles on a good TV.",
+	/*
+	  Short names on purpose: five tiles share a row on the console class since
+	  BVM joined, and at 960x540 a longer label is cut off - the no-clipped-copy
+	  gate is the arbiter. The blurb carries the longer story.
+	*/
+	{ "pvm-svideo", "S-Video", "Slight horizontal bleed, scanlines: a console on a good PVM over S-Video.",
 	  F_SOFT, F_SHARP, F_SCAN, M_GRILLE, "1x", "off", 0, 0 },
 
-	{ "composite", "Composite TV", "Soft and blurry, as an RF or composite hookup looked.",
+	{ "composite", "Composite", "Soft and blurry, as an RF or composite hookup looked.",
 	  F_BLURRY, F_SOFT, F_SCAN, M_GRILLE, "2x", "off", 0, 0 },
 
 	{ "pal-tv", "PAL TV", "Softer still with lighter scanlines. Home computers on a telly.",
@@ -155,23 +161,36 @@ static const preset_def presets[] =
 	  F_GRID, F_GRID, "off", "off", "off", "off",
 	  "Modify Colors=Off;" CO_INTEGER, 0 },
 
+	/*
+	  The rest of the handhelds, same split, measured against each core's own
+	  CONF_STR on the device (2026-08-12): the SMS/Game Gear and NGP cores offer
+	  no colour work at all, so their panels stay as scaler gamma LUTs - the one
+	  case where the LUT is not fighting anybody. Lynx and WonderSwan publish
+	  Flickerblend (Off / 2 Frames / 3 Frames): real temporal ghosting from the
+	  core, which those smeary panels had in spades, so their looks turn it on.
+	  All of them swap the misaligned Dot Matrix mask for the grid filter and
+	  pin integer scale like the GB/GBA looks do.
+	*/
 	{ "gg", "Game Gear", "Backlit but murky, with the Game Gear's poor contrast.",
-	  F_SHARP, F_SHARP, "off", M_MATRIX, "1x", G_GG, 0, 0 },
+	  F_GRID, F_GRID, "off", "off", "off", G_GG, CO_INTEGER, 0 },
 
 	{ "gg-mod", "Game Gear (Backlit Mod)", "The common LED backlight mod: brighter, cleaner whites.",
-	  F_SHARP, F_SHARP, "off", M_MATRIX, "1x", G_GGMOD, 0, 0 },
+	  F_GRID, F_GRID, "off", "off", "off", G_GGMOD, CO_INTEGER, 0 },
 
 	{ "lynx", "Atari Lynx", "Backlit colour LCD with a cool cast and washed blacks.",
-	  F_SHARP, F_SHARP, "off", M_MATRIX, "1x", G_LYNX, 0, 0 },
+	  F_GRID, F_GRID, "off", "off", "off", G_LYNX,
+	  "Flickerblend=2 Frames;" CO_INTEGER, 0 },
 
 	{ "ws", "WonderSwan", "Reflective mono FSTN: warm grey, low contrast.",
-	  F_SHARP, F_SHARP, "off", M_MATRIX, "1x", G_WS, 0, 0 },
+	  F_GRID, F_GRID, "off", "off", "off", G_WS,
+	  "Flickerblend=2 Frames;" CO_INTEGER, 0 },
 
 	{ "wsc", "WonderSwan Color", "Reflective colour panel: muted and slightly warm.",
-	  F_SHARP, F_SHARP, "off", M_MATRIX, "1x", G_WSC, 0, 0 },
+	  F_GRID, F_GRID, "off", "off", "off", G_WSC,
+	  "Flickerblend=2 Frames;" CO_INTEGER, 0 },
 
 	{ "ngpc", "Neo Geo Pocket Color", "Reflective pastel colour LCD, gentle contrast.",
-	  F_SHARP, F_SHARP, "off", M_MATRIX, "1x", G_NGPC, 0, 0 },
+	  F_GRID, F_GRID, "off", "off", "off", G_NGPC, CO_INTEGER, 0 },
 
 	/*
 	  One switch to turn every layer of processing off: scaler filters, mask and
@@ -181,6 +200,10 @@ static const preset_def presets[] =
 	*/
 	{ "none", "None", "Every effect off: the core's own picture, nothing added.",
 	  "off", "off", "off", "off", "off", "off", CO_LCD_OFF, 0 },
+
+	// Appended after None for the same ABI reason None sits where it does.
+	{ "bvm-rgb", "BVM RGB", "Reference broadcast monitor: razor sharp, deep scanlines.",
+	  F_SHARP, F_SHARP, F_SCANDP, M_GRILLE, "1x", "off", 0, 0 },
 };
 
 #define NPRESETS ((int)(sizeof(presets) / sizeof(presets[0])))
@@ -225,7 +248,7 @@ enum
 {
 	P_SHARP = 0, P_PVM_RGB, P_PVM_SVIDEO, P_COMPOSITE, P_PAL_TV, P_VGA,
 	P_DMG, P_POCKET, P_GBC, P_AGB001, P_AGS001, P_AGS101,
-	P_GG, P_GGMOD, P_LYNX, P_WS, P_WSC, P_NGPC, P_NONE
+	P_GG, P_GGMOD, P_LYNX, P_WS, P_WSC, P_NGPC, P_NONE, P_BVM
 };
 
 /*
@@ -254,8 +277,8 @@ enum
   GBC cartridge they would silently do nothing. If a GBC-cart-on-GBA-screen look
   comes back it will be through the GB core's own GBC colour LUT slot (FC7).
 */
-static const int opt_console[]  = { P_PVM_RGB, P_PVM_SVIDEO, P_COMPOSITE, P_SHARP };
-static const int opt_arcade[]   = { P_PVM_RGB, P_PVM_SVIDEO, P_SHARP };
+static const int opt_console[]  = { P_PVM_RGB, P_BVM, P_PVM_SVIDEO, P_COMPOSITE, P_SHARP };
+static const int opt_arcade[]   = { P_PVM_RGB, P_BVM, P_PVM_SVIDEO, P_SHARP };
 static const int opt_computer[] = { P_PAL_TV, P_COMPOSITE, P_PVM_SVIDEO, P_SHARP };
 static const int opt_vga[]      = { P_VGA, P_SHARP };
 static const int opt_gb[]       = { P_DMG, P_POCKET, P_NONE };
@@ -700,6 +723,9 @@ void vp_install()
 	// moderate; tune them on real hardware.
 	write_filter(F_SCAN, 1, 0.28);
 	write_filter(F_SCANLT, 1, 0.15);
+	// The BVM's line structure: a reference monitor resolves the gaps a
+	// consumer set smears over, which on real hardware reads as deep scanlines.
+	write_filter(F_SCANDP, 0, 0.45);
 	write_filter_grid(F_GRID);
 
 	write_mask(M_GRILLE, 0);
@@ -844,6 +870,27 @@ int vp_preset_path(int i, char *out, int len)
 {
 	if (i < 0 || i >= NPRESETS) return 0;
 	snprintf(out, len, "%s/presets/%s %s.ini", getRootDir(), PREFIX, presets[i].name);
+	return 1;
+}
+
+/*
+  A static, distribution-provided preview beats a computed one: the real filters
+  live in the FPGA scaler where nothing can read them back, so anything rendered
+  at runtime is an approximation of an approximation. When the card carries
+  classicui/lookshots/<id>.png - a good zoomed-in photo or render showing the
+  phosphors or the grid - the Display screen shows that instead. Keyed by the
+  preset id, which is stable; the computed illustration stays as the fallback so
+  a card without the pack loses nothing.
+*/
+int vp_lookshot_path(int i, char *out, int len)
+{
+	if (i < 0 || i >= NPRESETS) return 0;
+
+	char rel[256];
+	snprintf(rel, sizeof(rel), "classicui/lookshots/%s.png", presets[i].id);
+	if (!exists_rel(rel)) return 0;
+
+	snprintf(out, len, "%s/%s", getRootDir(), rel);
 	return 1;
 }
 

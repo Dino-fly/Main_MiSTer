@@ -351,6 +351,14 @@ chmod 755 "$root/MiSTer"
 put "$worker" linux/classic-home/classic-home-restore.sh
 chmod 755 "$root/linux/classic-home/classic-home-restore.sh"
 
+# The static Display previews - see vp_lookshot_path(). Optional by design: a
+# card without them falls back to the computed illustrations, so a missing
+# directory is not an error.
+for shot in "$tools_dir/../lookshots/"*.png; do
+	[ -f "$shot" ] || continue
+	put "$shot" "classicui/lookshots/$(basename "$shot")"
+done
+
 # The two Scripts entries are stamped with the md5s of what this archive actually
 # carries, so the installer on the card can refuse to protect a firmware that is not
 # ours - the case that matters is a user running it after an updater has already put the
