@@ -1783,7 +1783,7 @@ static void deck_strip_rect(int x, int y, int w, int h, int lvl,
   cover. Its art is normally still cached (it was the face a frame ago); if it has been
   evicted the outgoing card rides as a plain card back, which reads fine at speed.
 */
-#define VER_RIFFLE_MS 320UL
+#define VER_RIFFLE_MS 400UL
 static unsigned long ver_riffle_at = 0;
 static int ver_riffle_prev = -1;
 
@@ -2093,39 +2093,48 @@ static void draw_riffle(const chome_entry *e, const chome_profile *p)
 		ih = sh + (int)((h - sh) * q);
 	}
 
-	// The outgoing card: right until 0.45, then back left into the deepest strip,
-	// smoothstepped so the turn does not read as a bounce off a wall.
+	/*
+	  The outgoing card. Out to the RIGHT by its own width and a few pixels - a physical
+	  card cannot pass through the pile, so it fully clears the deck's silhouette before
+	  it turns - then back left BEHIND the incoming card, at FULL height: a card filing
+	  into a pile does not shrink, it is occluded by what is in front of it. Only its
+	  width eases in to the deepest strip's inset and its top edge to the strip's top,
+	  so once the face hides everything below, the card's visible remnant above the face
+	  IS the resting strip, to the pixel. (An earlier cut shrank the whole card to strip
+	  height while it flew up to the deck; Dinofly's critique - too much up, too much
+	  scale-down, not enough right - is what shaped the motion above.)
+	*/
 	int ox, oy, ow, oh;
+	int tx, ty, tw2, th2;
+	deck_strip_rect(x, y, w, h, ns, &tx, &ty, &tw2, &th2);
 	{
-		int rx = x + w * 3 / 5;
-		if (t < 0.45)
+		int rx = x + w + 6;
+		if (t < 0.5)
 		{
-			double q = t / 0.45;
+			double q = t / 0.5;
 			q = 1.0 - (1.0 - q) * (1.0 - q);
 			ox = x + (int)((rx - x) * q);
 			oy = y; ow = w; oh = h;
 		}
 		else
 		{
-			double q = (t - 0.45) / 0.55;
+			double q = (t - 0.5) / 0.5;
 			q = q * q * (3.0 - 2.0 * q);
-			int tx, ty, tw2, th2;
-			deck_strip_rect(x, y, w, h, ns, &tx, &ty, &tw2, &th2);
 			ox = rx + (int)((tx - rx) * q);
 			oy = y + (int)((ty - y) * q);
 			ow = w + (int)((tw2 - w) * q);
-			oh = h + (int)((th2 - h) * q);
+			oh = h;
 		}
 	}
 
-	// The outgoing card's look: its own cover while it is card-sized, the deck's plate
-	// once it is nearly filed - so the instant it becomes a resting strip changes no
-	// pixel. The swap happens in motion, where it cannot be seen; at rest it could be.
+	// The outgoing card's look: its own cover while it is out in the open, the deck's
+	// plate from the moment it slips fully behind the face - after which only its top
+	// band shows, and that band must land as the resting strip's pixels.
 	int aw = 0, ah = 0;
 	const uint32_t *oart = (ver_riffle_prev >= 0) ? art_get(ver_riffle_prev, &aw, &ah) : 0;
-	int oplate = (!oart || oh < h / 4);
+	int oplate = (!oart || ox + ow <= x + w);
 
-	if (t >= 0.45)          // filing away: bottom of the pile, drawn first
+	if (t >= 0.5)           // filing away: bottom of the pile, drawn first
 	{
 		if (oplate)
 		{
@@ -2153,7 +2162,7 @@ static void draw_riffle(const chome_entry *e, const chome_profile *p)
 	// The incoming card, dressed once the band fits inside it.
 	draw_card_face(in_it, e, ix, iy, iw, ih, 1, ih >= 48);
 
-	if (t < 0.45)           // sliding out: top of the pile, drawn last
+	if (t < 0.5)            // sliding out: top of the pile, drawn last
 	{
 		if (oplate)
 		{
