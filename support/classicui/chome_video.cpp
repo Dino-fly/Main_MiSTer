@@ -138,8 +138,16 @@ static const preset_def presets[] =
 	{ "pvm-svideo", "S-Video", "Slight horizontal bleed, scanlines: a console on a good PVM over S-Video.",
 	  F_SOFT, F_SHARP, F_SCAN, M_GRILLE, "1x", "off", 0, 0 },
 
+	/*
+	  The distribution's own Sony PVM mask at 1x, on Dinofly's call, in place of our
+	  generated grille at 2x: a doubled cell is two output pixels per phosphor, which
+	  at 1080p is a coarser stripe than any tube ever had, and the 1x PVM mask is the
+	  structure he wants under the blur. Same file the PVM look uses for its grille
+	  family, so the two reads as one set.
+	*/
 	{ "composite", "Composite", "Soft and blurry, as an RF or composite hookup looked.",
-	  F_BLURRY, F_SOFT, F_SCAN, M_GRILLE, "2x", "off", 0, 0 },
+	  F_BLURRY, F_SOFT, F_SCAN,
+	  "Simple (Monochrome)/Sony PVM (Generic) (~1980).txt", "1x", "off", 0, 0 },
 
 	{ "pal-tv", "PAL TV", "Softer still with lighter scanlines. Home computers on a telly.",
 	  F_SOFT, F_SOFT, F_SCANLT, M_GRILLE, "2x", "off", 0, 0 },
@@ -1009,6 +1017,30 @@ void vp_set(int sysidx, int vclass, int preset)
 
 	uint32_t k = sys_key(sysidx, vclass);
 	if (!k) return;
+
+	/*
+	  Choosing the default REMOVES the record rather than storing it, so a stored
+	  choice always means "this system is deliberately not on its default".
+
+	  That invariant is worth more than the byte it saves. Dinofly asked why Game
+	  Boy was not on DMG by default when DMG is exactly what vp_default_for()
+	  answers: his card carried a per-system record from an earlier session of
+	  ours, the front-end honoured it, and nothing on screen could tell the two
+	  apart. With this, a record is evidence of a decision, and the footer below
+	  can name the default only when one was really overridden.
+	*/
+	if (preset == vp_default_for(vclass))
+	{
+		for (int i = 0; i < nvprecs; i++)
+		{
+			if (vprecs[i].key != k) continue;
+			for (int j = i; j + 1 < nvprecs; j++) vprecs[j] = vprecs[j + 1];
+			nvprecs--;
+			FileSaveConfig("classicui_video.cfg", vprecs, nvprecs * (int)sizeof(vp_rec));
+			return;
+		}
+		return;                                  // already on the default: nothing stored
+	}
 
 	for (int i = 0; i < nvprecs; i++)
 	{

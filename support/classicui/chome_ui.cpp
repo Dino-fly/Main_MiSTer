@@ -4847,6 +4847,21 @@ static void draw_display_screen(const chome_profile *p)
 		gfx_text("FILES MISSING - OPTIONS > REINSTALL LOOKS", b.x + pad,
 			b.y + b.h - 10 * tiny, tiny, COL_RED, 0);
 	}
+	else if (in_use != vp_default_for(vclass))
+	{
+		/*
+		  Only when this system is deliberately off its default - vp_set() removes the
+		  record when the default is chosen, so this line cannot appear for a system
+		  nobody has touched. It exists because "why is this not on the default?" was a
+		  real question with no answer on screen: the bright outline says what is in
+		  use and nothing said what would be in use otherwise.
+		*/
+		char msg[96];
+		snprintf(msg, sizeof(msg), "DEFAULT: %s", vp_name(vp_default_for(vclass)));
+		gfx_shout(msg);
+		gfx_text(gfx_clip(msg, tiny, b.w - pad * 2), b.x + pad,
+			b.y + b.h - 10 * tiny, tiny, COL_DIM, 0);
+	}
 }
 
 /*
@@ -8920,11 +8935,33 @@ static void set_font_step(int dir)
 
 /* ------------------------------------------------------- core options ----- */
 
+/*
+  The next page with anything on it. Game Boy's Risky tier is empty - nothing it
+  offers is marked unsafe - and the cycle offered the page anyway: a screen
+  holding nothing but the "More" link back out, which Dinofly hit there and had
+  seen on other cores. One function answers for the draw, the row count and the
+  press, so the label, the cursor math and the landing cannot disagree (that
+  three-way agreement failing is this file's oldest class of bug). Returns cur
+  when no OTHER tier has rows, which is the callers' cue to drop the row.
+*/
+static int co_tier_next(int cur)
+{
+	static const int cycle[3] = { CO_TIER_PICTURE, CO_TIER_SYSTEM, CO_TIER_RISKY };
+	int at = 0;
+	for (int i = 0; i < 3; i++) if (cycle[i] == cur) at = i;
+	for (int st = 1; st <= 2; st++)
+	{
+		int t = cycle[(at + st) % 3];
+		if (core_opts_tier_count(t)) return t;
+	}
+	return cur;
+}
+
 static int co_rows()
 {
 	int n = core_opts_tier_count(co_tier);
-	// The last row switches page, so there is always one more than there are options.
-	return n + 1;
+	// The last row switches page - when there is another page to switch to.
+	return n + (co_tier_next(co_tier) != co_tier ? 1 : 0);
 }
 
 /*
@@ -9014,14 +9051,16 @@ static void draw_core_opts(const chome_profile *p)
 		else vcol[i] = COL_PANELLO;
 	}
 
-	// The page switch, always last.
-	int nt = (co_tier == CO_TIER_PICTURE) ? CO_TIER_SYSTEM
-		: (co_tier == CO_TIER_SYSTEM) ? CO_TIER_RISKY : CO_TIER_PICTURE;
-	rows[i] = "More";
-	snprintf(vbuf[i], sizeof(vbuf[i]), "%s >", co_tier_name(nt));
-	vals[i] = vbuf[i];
-	vcol[i] = COL_PANELHI;
-	i++;
+	// The page switch, always last - and only while another page has rows.
+	int nt = co_tier_next(co_tier);
+	if (nt != co_tier)
+	{
+		rows[i] = "More";
+		snprintf(vbuf[i], sizeof(vbuf[i]), "%s >", co_tier_name(nt));
+		vals[i] = vbuf[i];
+		vcol[i] = COL_PANELHI;
+		i++;
+	}
 
 	/*
 	  Windowed, like every other list in here. This one needs it most: the PSX's System page
@@ -11301,8 +11340,10 @@ static void accept()
 		int n = core_opts_tier_count(co_tier);
 		if (co_row < n) { nudge(); break; }
 
-		co_tier = (co_tier == CO_TIER_PICTURE) ? CO_TIER_SYSTEM
-			: (co_tier == CO_TIER_SYSTEM) ? CO_TIER_RISKY : CO_TIER_PICTURE;
+		int nt = co_tier_next(co_tier);
+		if (nt == co_tier) { nudge(); break; }    // co_rows() hides the row; belt anyway
+
+		co_tier = nt;
 		co_row = 0;
 		co_top = 0;
 		mark_dirty();

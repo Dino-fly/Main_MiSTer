@@ -493,6 +493,7 @@ static void build_sd()
 	touch(ROOT "/gamma/Pure_Gamma", "gamma_110.txt", 64);
 	mkpath(ROOT "/shadow_masks/Simple (Monochrome)");
 	touch(ROOT "/shadow_masks/Simple (Monochrome)", "Aperture Grille (No Scanlines) (1968).txt", 64);
+	touch(ROOT "/shadow_masks/Simple (Monochrome)", "Sony PVM (Generic) (~1980).txt", 64);
 
 	mkpath(ROOT "/games/SNES");
 	touch(ROOT "/games/SNES", "Super Metroid (Europe).sfc", 4096);
@@ -11301,6 +11302,36 @@ static const char *confstr_saturn[] =
 	0
 };
 
+/*
+  Two cores for the page-switch rules, because the rule is about how many pages have
+  anything on them and no single core can show both halves of it.
+
+  The first has a picture option and a system option, so the switch exists and walking
+  the list is a meaningful thing to test. The second has only a system option: Game Boy
+  is shaped like this - nothing it offers is marked unsafe, so its Risky page is empty -
+  and the front-end used to offer that page anyway, leaving Dinofly on a screen holding
+  nothing but the "More" link back out. He met it on Game Boy and had seen it elsewhere.
+*/
+static const char *confstr_two_tiers[] =
+{
+	"TWOTIER",
+	"FS1,BIN,Load ROM",
+	"P1,Audio & Video;",
+	"P1OFH,Palette,Kitrinx,Smooth,Wavebeam",     // picture
+	"O[40:39],System Type,Auto,NTSC,PAL",        // system
+	"V,v1",
+	0
+};
+
+static const char *confstr_one_tier[] =
+{
+	"ONETIER",
+	"FS1,BIN,Load ROM",
+	"O[40:39],System Type,Auto,NTSC,PAL",        // system, and nothing else anywhere
+	"V,v1",
+	0
+};
+
 static void assert_saturn_options()
 {
 	harness_set_confstr_table(confstr_saturn);
@@ -21448,6 +21479,7 @@ static void assert_uniform_wrap()
 	  Navigation only. Nothing here presses Left or Right on this screen, which is where a
 	  value would be written to the core.
 	*/
+	harness_set_confstr_table(confstr_two_tiers);
 	core_opts_scan();
 	frame(6);
 	check(bar_open(W_CORE), "the running core's options open from the in-game bar");
@@ -21455,9 +21487,9 @@ static void assert_uniform_wrap()
 	{
 		/*
 		  Which page it opened on, worked out the way the MB_CORE case of accept() works it
-		  out: Picture, or the first page after it that has anything. The fixture's Picture
-		  tier is empty, so hardcoding it would be asserting against a page the screen never
-		  shows.
+		  out: Picture, or the first page after it that has anything. Worked out rather than
+		  hardcoded because a fixture whose Picture tier is empty would otherwise be
+		  asserting against a page the screen never shows.
 		*/
 		int tier = core_opts_tier_count(CO_TIER_PICTURE);
 		if (!tier) tier = core_opts_tier_count(CO_TIER_SYSTEM);
@@ -21476,6 +21508,28 @@ static void assert_uniform_wrap()
 			"and the page never turned under it: same page, same length after the whole walk");
 	}
 	bar_walk_home();
+
+	/*
+	  And the core with one populated page has no switch row at all - the bug Dinofly
+	  reported. Asserted as a count because that is what the defect was: a row that
+	  existed, was selectable, and led back to the page it was on.
+	*/
+	{
+		harness_set_confstr_table(confstr_one_tier);
+		core_opts_scan();
+		frame(6);
+		check(bar_open(W_CORE), "a core with one populated page still opens its options");
+
+		int only = core_opts_tier_count(CO_TIER_SYSTEM);
+		int n = 0;
+		chome_list_cursor(0, &n);
+		printf("  core options: %d row(s) for %d option(s), one page populated\n", n, only);
+		check(only > 0 && n == only,
+			"one populated page means no page switch row, not a page holding only its own exit");
+		bar_walk_home();
+	}
+	harness_set_confstr_table(0);
+	core_opts_scan();
 
 	if (chome_ingame_active()) press(KEY_MENU, 16);
 	frame(8);
