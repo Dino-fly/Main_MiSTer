@@ -2773,7 +2773,40 @@ static void show_core_info(int info_n)
 		{
 			static char str[256];
 			substrcpy(str, p, info_n);
-			if (strlen(str)) Info(str);
+			if (!strlen(str)) break;
+
+			if (cfg.classicui)
+			{
+				/*
+				  Not over the front-end's own screens: the OSD composites above the
+				  scaler, so a core announcement would sit on top of the menu - the
+				  same reason process_ss() holds its "Saving the state" panel back.
+				  The menu's flows say everything the player needs while it is up.
+				*/
+				if (chome_active() || chome_ingame_active()) break;
+
+				/*
+				  The front-end's voice for the announcements a player actually
+				  meets in play. "Saving Memcard" popped a classic-OSD panel over
+				  every PlayStation disc session and read like a different product;
+				  it is rephrased and shortened, and every message gets breathing
+				  room so the box reads as a quiet pill rather than a dialog.
+				  Messages we have no better words for pass through as the core
+				  wrote them.
+				*/
+				const char *msg = str;
+				int timeout = 2000;
+				if (!strcasecmp(str, "Saving Memcard"))
+				{
+					msg = "saving the memory card";
+					timeout = 1200;
+				}
+
+				char pill[280];
+				snprintf(pill, sizeof(pill), "  %s  ", msg);
+				Info(pill, timeout);
+			}
+			else Info(str);
 			break;
 		}
 	}

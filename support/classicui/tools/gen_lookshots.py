@@ -7,7 +7,7 @@ gaps, LCD grid, palette) is actually visible, the way a macro photo of the real
 screen would show it.
 """
 import sys, math
-from simulate_look import read_png, write_png, BGB, POCKET
+from simulate_look import read_png, write_png, DMG, POCKET
 
 OUT_W, OUT_H = 320, 240
 
@@ -105,9 +105,10 @@ def main(outdir):
     emit(f'{outdir}/pal-tv.png',     crt(csrc, 7, 0.18, bleed=0.14))
     emit(f'{outdir}/vga.png',        crt(csrc, 7, 0.04, grille=True, pitch=3))
     emit(f'{outdir}/sharp.png',      lcd(csrc, 7, 0.0, 0.0))
-    emit(f'{outdir}/none.png',       lcd(csrc, 7, 0.0, 0.0))
+    # none.png is deliberately not authored: the None tile shows the player's
+    # own frame, and a shipped file made every system's None the same picture.
 
-    emit(f'{outdir}/dmg.png',    lcd(graw, 7, 0.2, 0.45, pal=BGB, shadow=True))
+    emit(f'{outdir}/dmg.png',    lcd(graw, 7, 0.2, 0.45, pal=DMG, shadow=True))
     emit(f'{outdir}/pocket.png', lcd(graw, 7, 0.2, 0.45, pal=POCKET, shadow=True))
     emit(f'{outdir}/gbc.png',    lcd(gsrc, 7, 0.2, 0.40))
     emit(f'{outdir}/agb001.png', lcd(asrc, 7, 0.2, 0.35))
