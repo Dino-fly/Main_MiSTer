@@ -1762,6 +1762,25 @@ static void deck_strip_rect(int x, int y, int w, int h, int lvl,
 }
 
 /*
+  And the WHOLE standing card whose visible top edge that strip is - Dinofly's model of
+  the deck, which the riffle animates: the three rectangles ARE the versions. The front
+  one is the face; behind it stands the second version at a slightly smaller size, and
+  behind that the rest. A card at `lvl` is the face scaled to the strip's width, its top
+  at the strip's top - so the strip drawn at rest and this card's visible band are the
+  same pixels, and the riffle can move the card without anything being born or dying.
+  His rule, kept literally: nothing scales to zero, ever.
+*/
+static void deck_card_rect(int x, int y, int w, int h, int lvl,
+	int *rx, int *ry, int *rw, int *rh)
+{
+	int pk = deck_peek(h), ins = deck_inset(w);
+	*rx = x + lvl * ins;
+	*ry = y - lvl * pk;
+	*rw = w - 2 * lvl * ins;
+	*rh = h * (*rw) / (w > 0 ? w : 1);
+}
+
+/*
   When X last turned a multi-file card to its next file, for the riffle that shows it -
   Dinofly's choreography, replacing an earlier card-back deal: the front card slides out
   to the RIGHT, the card behind it comes forward - a zoom, growing from the front strip
@@ -2079,14 +2098,19 @@ static void draw_riffle(const chome_entry *e, const chome_profile *p)
 	chome_item *in_it = lib_item(e->game);
 	if (!in_it) return;
 
-	// The incoming card: from the front strip to the face, eased out, finished at 0.8
-	// of the cycle so the slot is whole while the outgoing card is still filing itself.
+	/*
+	  The riffle is a PERMUTATION of the deck's standing cards - see deck_card_rect().
+	  The incoming card is already on screen when X lands, at its middle-of-deck size
+	  with only its top edge showing; its whole motion is coming forward from that
+	  standing rectangle to the face. Eased out, finished at 0.8 of the cycle so the
+	  slot is whole while the outgoing card is still filing itself.
+	*/
 	int ix, iy, iw, ih;
 	{
 		double q = t / 0.8; if (q > 1) q = 1;
 		q = 1.0 - (1.0 - q) * (1.0 - q);
 		int sx, sy, sw, sh;
-		deck_strip_rect(x, y, w, h, 1, &sx, &sy, &sw, &sh);
+		deck_card_rect(x, y, w, h, 1, &sx, &sy, &sw, &sh);
 		ix = sx + (int)((x - sx) * q);
 		iy = sy + (int)((y - sy) * q);
 		iw = sw + (int)((w - sw) * q);
@@ -2096,17 +2120,19 @@ static void draw_riffle(const chome_entry *e, const chome_profile *p)
 	/*
 	  The outgoing card. Out to the RIGHT by its own width and a few pixels - a physical
 	  card cannot pass through the pile, so it fully clears the deck's silhouette before
-	  it turns - then back left BEHIND the incoming card, at FULL height: a card filing
-	  into a pile does not shrink, it is occluded by what is in front of it. Only its
-	  width eases in to the deepest strip's inset and its top edge to the strip's top,
-	  so once the face hides everything below, the card's visible remnant above the face
-	  IS the resting strip, to the pixel. (An earlier cut shrank the whole card to strip
-	  height while it flew up to the deck; Dinofly's critique - too much up, too much
-	  scale-down, not enough right - is what shaped the motion above.)
+	  it turns - then back left BEHIND the incoming card, easing to the BACK standing
+	  card's rectangle: a whole card at the deck's deepest level, of which the cards in
+	  front will only let the top edge show. It shrinks a few percent on the way (the
+	  back of the deck stands slightly smaller) and rises only the deck's peek, so once
+	  the face hides everything below, its visible remnant IS the resting strip to the
+	  pixel. (Two earlier cuts shaped this: one shrank the card to strip height while it
+	  flew up to the deck - too much up, too much scale-down, not enough right - and one
+	  kept it full height, which broke the standing-card model the deck now animates:
+	  the rectangles are the versions, and a card files in at the size it will stand.)
 	*/
 	int ox, oy, ow, oh;
 	int tx, ty, tw2, th2;
-	deck_strip_rect(x, y, w, h, ns, &tx, &ty, &tw2, &th2);
+	deck_card_rect(x, y, w, h, ns, &tx, &ty, &tw2, &th2);
 	{
 		int rx = x + w + 6;
 		if (t < 0.5)
@@ -2123,7 +2149,7 @@ static void draw_riffle(const chome_entry *e, const chome_profile *p)
 			ox = rx + (int)((tx - rx) * q);
 			oy = y + (int)((ty - y) * q);
 			ow = w + (int)((tw2 - w) * q);
-			oh = h;
+			oh = h + (int)((th2 - h) * q);
 		}
 	}
 
@@ -2144,13 +2170,15 @@ static void draw_riffle(const chome_entry *e, const chome_profile *p)
 		else gfx_blit(oart, aw, ah, ox, oy, ow, oh);
 	}
 
-	// The rest of the pile walks one level forward: the strip at level 2 becomes the
-	// strip at level 1 while the front card it sat behind is away.
+	// The rest of the pile walks one level forward: the standing card at level 2 takes
+	// level 1's rectangle while the front card it sat behind is away. A whole card, not
+	// a strip - the cards in front only ever let its top edge show, so the walk reads
+	// as the deck closing up rather than a band teleporting.
 	if (ns >= 2)
 	{
 		int ax, ay, aw2, ah2, bx, by, bw2, bh2;
-		deck_strip_rect(x, y, w, h, 2, &ax, &ay, &aw2, &ah2);
-		deck_strip_rect(x, y, w, h, 1, &bx, &by, &bw2, &bh2);
+		deck_card_rect(x, y, w, h, 2, &ax, &ay, &aw2, &ah2);
+		deck_card_rect(x, y, w, h, 1, &bx, &by, &bw2, &bh2);
 		int px = ax + (int)((bx - ax) * t);
 		int py = ay + (int)((by - ay) * t);
 		int pw = aw2 + (int)((bw2 - aw2) * t);
