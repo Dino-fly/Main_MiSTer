@@ -554,15 +554,29 @@ static void clean_title(const char *file, char *out, int len)
 	else snprintf(out, len, "%s", s);
 }
 
+/*
+  The ceiling in force. A variable only so the harness can drive a card that is bigger than
+  the index without building one - the same arrangement, and the same reason, as
+  lib_scan_test_budget(): what is worth asserting is that a truncated library still behaves
+  (it says so, and it still caches), and that is only checkable if a test can reach the
+  ceiling. It never exceeds CH_MAX_ITEMS, which is what the arrays are sized for.
+*/
+static int item_cap = CH_MAX_ITEMS;
+
+void lib_test_item_cap(int n)
+{
+	item_cap = (n > 0 && n < CH_MAX_ITEMS) ? n : CH_MAX_ITEMS;
+}
+
 static void add_item(int sysidx, const char *relpath, const char *filename)
 {
-	if (nitems >= CH_MAX_ITEMS)
+	if (nitems >= item_cap)
 	{
 		static int warned = 0;
 		if (!warned)
 		{
 			warned = 1;
-			printf("ClassicUI: index full at %d items, the rest of the library is not listed\n", CH_MAX_ITEMS);
+			printf("ClassicUI: index full at %d items, the rest of the library is not listed\n", item_cap);
 		}
 		return;
 	}
@@ -1273,7 +1287,7 @@ static long scan_cost_max = 0;
 static int scan_push(const char *rel, int depth)
 {
 	if (depth > SCAN_DEPTH_MAX || scan_sp >= SCAN_STACK_MAX) return 0;
-	if (nitems >= CH_MAX_ITEMS) return 0;
+	if (nitems >= item_cap) return 0;
 
 	scan_frame *f = &scan_stack[scan_sp];
 
@@ -1329,8 +1343,23 @@ static void scan_walk()
 		  A full index stopped the old walk by breaking out of every loop on the way
 		  home, so nothing further was read at any depth. Unwinding says the same
 		  thing, and the whole scan then finishes on the next pass.
+
+		  And it says so out loud, here rather than in add_item(): the guard there is
+		  reached only when an archive's members fill the last places, so on a card that
+		  is simply too big it never fires and the library was cut short in silence.
+		  lib_index_full() carries the same fact to the UI.
 		*/
-		if (nitems >= CH_MAX_ITEMS) { scan_unwind(); return; }
+		if (nitems >= item_cap)
+		{
+			// Once per scan: only the system the walk was inside when the ceiling was
+			// reached has an open stack to unwind, and every system after it is refused
+			// before it opens one.
+			printf("ClassicUI: the index is full at %d files - the rest of %s, and every system "
+				"after it, are not listed. Nothing is wrong with the card; the ceiling is ours.\n",
+				item_cap, systems[scan_sys].name);
+			scan_unwind();
+			return;
+		}
 
 		scan_cost += SCAN_COST_ENTRY;
 
@@ -1483,6 +1512,20 @@ int lib_scan_step()
 
 			if (scan_push("", 0)) continue;
 
+			/*
+			  The folder is here and was not walked - the index filled up, or it could not
+			  be opened. Record it anyway, or idx_load()'s "a system appeared since the
+			  cache" rule sees a games folder with no record and rejects the cache for as
+			  long as the card stays that way. That is what made a card too big for the
+			  index pay a full scan on every single boot: the truncation was permanent, so
+			  the rejection was too, and Rescan Library could not clear it either.
+
+			  Recording the root says "this folder existed and this is what it looked like",
+			  which is exactly what the mtime check wants; that its contents are missing
+			  from the index is what lib_index_full() is for.
+			*/
+			idx_note_dir(scan_root);
+
 			// An unreadable games folder: the old code reported it as an empty one.
 			printf("ClassicUI: %s -> %d items\n", systems[scan_sys].name, nitems - scan_before);
 		}
@@ -1495,6 +1538,13 @@ int lib_scan_step()
 
 int lib_scanning() { return scanning; }
 int lib_scan_progress() { return nitems; }
+
+/*
+  Whether the library on the card is bigger than the index can hold. Asked of the index
+  rather than of a flag left by the walk, so it answers the same after a cache load as
+  after a scan - the cache carries the item count and nothing else would remember.
+*/
+int lib_index_full() { return nitems >= item_cap; }
 
 /*
   Which system the walk is inside, for the shelf to name while it waits, and -1 when
@@ -1783,7 +1833,7 @@ void lib_rescan()
   the FAT filesystem the paths came off.
 */
 #define GRP_KEY_LEN 320
-#define GRP_SLOTS   8192     // power of two, comfortably over CH_MAX_ITEMS
+#define GRP_SLOTS   32768    // power of two, comfortably over CH_MAX_ITEMS
 
 /*
   How much of a path is the directory a group would share.
@@ -1854,7 +1904,14 @@ static grp_cell *group_cell(const char *key, grp_same same)
 
 /* --------------------------------------------------------------- views ---- */
 
-#define VIEW_MAX 6100
+/*
+  Every item can be a card of its own - nothing forces the grouping to collapse anything -
+  plus the handful of folder cards a view leads with. Written against CH_MAX_ITEMS rather
+  than as a number of its own so the two cannot drift apart: a view cap below the item cap
+  would drop cards off the end of the shelf without saying anything, which is the fault
+  push_folder() and push_game() below would commit silently.
+*/
+#define VIEW_MAX (CH_MAX_ITEMS + 100)
 static chome_entry view[VIEW_MAX];
 static int nview = 0;
 

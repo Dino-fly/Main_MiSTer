@@ -16461,6 +16461,75 @@ static void assert_scan_slices()
 	}
 }
 
+/* ---------------------------------------------- the index ceiling -------- */
+
+/*
+  A card with more games on it than the index can hold.
+
+  Reported by a beta tester with about 15,000 games: the shelf settled at a fraction of
+  them, Options > Rescan Library stopped climbing at the ceiling and looked frozen, and
+  every boot afterwards spent about a minute scanning. Two of those three are the ceiling
+  doing its job; the third was a bug behind it, and neither was ever said out loud.
+
+  Driven through lib_test_item_cap() rather than by building a card of 20,001 files: the
+  ceiling is the same code whatever number it holds, and a fixture that big would cost
+  more than the rest of this file put together to build and to walk.
+
+  What is asserted here is not the ceiling itself - a ceiling is a policy - but the three
+  things that have to be true when a library reaches it:
+
+    the walk stops there and the library is short, which is the honest half;
+    the index *says* it is full, so the UI can tell the player rather than showing a
+    shelf that simply ends; and
+    the truncated index is still a usable cache. That is the bug: the systems past the
+    ceiling were never walked, so no directory record existed for them, so idx_load()'s
+    "a system appeared since the cache" rule threw the cache away on every boot - for
+    ever, since the next scan truncated in exactly the same place. The card that cannot
+    be fully indexed is precisely the card that can least afford to rescan every time.
+*/
+static void assert_index_ceiling()
+{
+	printf("\n== the index ceiling ==\n");
+
+	lib_test_item_cap(0);
+	lib_rescan();
+	for (int i = 0; i < 40000 && lib_scanning(); i++) lib_scan_step();
+
+	int whole = lib_item_count();
+	uint32_t whole_fp = lib_fingerprint();
+	uint32_t whole_root = view_fingerprint(VIEW_ROOT, -1, SORT_TITLE);
+
+	check(whole > 12, "the fixture card has more games on it than the ceiling below");
+	check(!lib_index_full(), "an index with room to spare does not call itself full");
+
+	lib_test_item_cap(12);
+	lib_rescan();
+	for (int i = 0; i < 40000 && lib_scanning(); i++) lib_scan_step();
+
+	check(lib_item_count() == 12, "a library past the ceiling stops at it");
+	check(lib_index_full(), "and the index says so, rather than reading like a small card");
+
+	/*
+	  The one that matters on the device. A truncated scan writes its cache like any other,
+	  and the next boot has to take it: this check went red before idx_note_dir() was called
+	  for a games folder the walk refused to open, which is the one-line fix behind it.
+	*/
+	lib_init();
+	check(lib_index_cached(), "the truncated index is still a valid cache on the next boot");
+	check(!lib_scanning(), "so a card too big for the index does not rescan every time it starts");
+	check(lib_index_full(), "and it still knows it is short when it came from the cache");
+	check(lib_item_count() == 12, "with the same games in it");
+
+	lib_test_item_cap(0);
+	lib_rescan();
+	for (int i = 0; i < 40000 && lib_scanning(); i++) lib_scan_step();
+
+	check(lib_item_count() == whole, "the ceiling lifted, the whole library comes back");
+	check(!lib_index_full(), "and it is no longer full");
+	check(lib_fingerprint() == whole_fp, "byte for byte the library this section started with");
+	check(view_fingerprint(VIEW_ROOT, -1, SORT_TITLE) == whole_root, "and the same shelf built from it");
+}
+
 // Bright pixels in the top or bottom overscan margin. The wallpaper is dark and
 // every panel is the light ink-on-panel pair, so brightness means furniture.
 static int margin_bright(const chome_profile *p, int top)
@@ -22008,6 +22077,9 @@ int main()
 	// Directly after it: it borrows and hands back the fake card exactly the way that
 	// one does, and it needs the library that one leaves to prove it did.
 	assert_scan_slices();
+	// Directly after it for the same reason: it borrows the fake card, drives the walk
+	// against a ceiling it can reach, and hands the library back byte-identical.
+	assert_index_ceiling();
 
 	walk_profile("hd", 1, 1280, 720);
 	walk_profile("sd", 2, 640, 480);

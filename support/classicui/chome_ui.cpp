@@ -4927,7 +4927,14 @@ static void draw_options_panel(const chome_profile *p)
 	static const char *rows_game[] = { "Cover Art", "Online Covers", "Rescan Library", "Reinstall Looks", "Menu Layout", "Controllers", "Wi-Fi", "Best Settings", "More Settings", "Advanced", "About" };
 	const char *const *rows = ig_active ? rows_game : rows_menu;
 	char v1[32];
+	/*
+	  "FULL" and not the count on its own, because the count is the one thing that does not
+	  say it: a shelf that stops at the ceiling looks exactly like a card with that many
+	  games on it. This row is where a player who cannot find a game comes to look, and
+	  Rescan is the thing they press - so it has to say that rescanning will not help.
+	*/
 	if (lib_scanning()) snprintf(v1, sizeof(v1), "%d...", lib_scan_progress());
+	else if (lib_index_full()) snprintf(v1, sizeof(v1), "%d games - FULL", lib_item_count());
 	else snprintf(v1, sizeof(v1), "%d games", lib_item_count());
 
 	// What the Wi-Fi row says without being opened: the network name is the one
