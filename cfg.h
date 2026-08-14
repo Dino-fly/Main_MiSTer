@@ -147,6 +147,17 @@ typedef struct {
 	uint32_t keyboard_as_joystick[256];
 	uint8_t classicui;
 	uint8_t classicui_artfetch;
+	/*
+	  1 (default) - go on fetching the covers the player has not browsed to, from an idle
+	  shelf, so a library fills in over time instead of only where somebody looked.
+
+	  Does nothing at all without classicui_artfetch, which is the switch that says the
+	  network may be used for art in the first place. It never competes with the card under
+	  the cursor - see fill_step() in support/classicui/chome_art.cpp for the whole of the
+	  scheduling, which is "when there is nothing else at all to do", and for the ceilings
+	  that keep an idle shelf from spending somebody's ScreenScraper allowance in one sitting.
+	*/
+	uint8_t classicui_artfill;
 	uint8_t classicui_gamelist;
 	uint8_t classicui_freeze;
 	uint8_t classicui_profile;
