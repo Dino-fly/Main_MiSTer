@@ -1380,21 +1380,16 @@ static void picto(const char *name, int x, int y, int box, uint32_t col)
   right picture for a Mega CD shelf, and it is the picture a player recognises. Without
   this they would all draw the folder, which says nothing about which console they are.
 
-  Saturn is a machine of its own and has nothing to borrow, so it keeps the folder until
-  the generator is run against a Saturn icon.
+  Game Gear used to borrow the Master System here, and Saturn - a machine of its own,
+  with nothing to borrow - fell through to the folder. Both machines have their own
+  glyph in the licensed set, so the right fix was a run of the generator, and they now
+  have rows in chome_icons32.h like any other system.
 */
 static const struct { const char *id; const char *icon; } sysicon_alias[] =
 {
 	{ "megacd",   "md"     },
 	{ "pcecd",    "tg16"   },
 	{ "neogeocd", "neogeo" },
-	/*
-	  The console the cartridge shares a core with, not a handheld lookalike -
-	  the same borrowing the CD systems above do. RetroArch's licensed set has a
-	  real Game Gear glyph, so the better fix is a run of tools/icons32.py; until
-	  someone does that run, only that tool may put artwork in chome_icons32.h.
-	*/
-	{ "gg",       "sms"    },
 };
 
 /*

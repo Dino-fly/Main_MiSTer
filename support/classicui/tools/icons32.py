@@ -75,9 +75,16 @@ MAP = [
     ("n64", "retroarch", "Nintendo - Nintendo 64"),
     ("md", "retroarch", "Sega - Mega Drive - Genesis"),
     ("sms", "retroarch", "Sega - Master System - Mark III"),
+    # Game Gear rides in the SMS core but is its own shelf row, and it borrowed the
+    # Master System's drawing until this entry existed. The set has the real machine.
+    ("gg", "retroarch", "Sega - Game Gear"),
     ("tg16", "retroarch", "NEC - PC Engine - TurboGrafx 16"),
     ("a7800", "retroarch", "Atari - 7800"),
     ("psx", "retroarch", "Sony - PlayStation"),
+    # The one CD console with nothing to borrow: Mega CD, PC Engine CD and Neo Geo CD
+    # deliberately wear the machine they bolt onto, but a Saturn is a machine of its
+    # own, and without this row it drew the folder.
+    ("saturn", "retroarch", "Sega - Saturn"),
     ("neogeo", "retroarch", "SNK - Neo Geo"),
     # Arcade needed a second source. There is no cabinet anywhere in the RetroArch
     # set; FBNeo's own icon is a light gun, which reads as "shooter", and the input
