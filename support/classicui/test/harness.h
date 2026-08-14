@@ -90,6 +90,11 @@ void harness_set_grab(int ok);
 */
 void harness_set_grab_flat(uint32_t argb);
 
+// screenshot_grab() attempts since the last reset - the blank-frame retry is
+// the same call made again, and nothing else can see it.
+int  harness_grab_calls();
+void harness_reset_grab_calls();
+
 int harness_muted();
 int harness_mute_changes();
 void harness_set_muted(int v);
