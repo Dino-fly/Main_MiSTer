@@ -892,8 +892,11 @@ a fraction of the cost of re-reading them - one stat per directory, versus a
 readdir of every entry. The cache is rejected when:
 
 - a recorded directory is gone or its mtime moved (a game was added or removed)
-- a system's folder exists now but was not walked then (a whole system appeared,
-  which mtimes cannot catch on their own since the new folder has no record)
+- a system's folder exists now but has no record from then (a whole system appeared,
+  which mtimes cannot catch on their own since the new folder has no record). A folder
+  that was *found* and not walked - the index filled up, or it would not open - is
+  recorded anyway, or that rejection would repeat on every boot for as long as the card
+  stayed too big
 - the systems table signature changed (`classicui_systems.txt` was edited)
 - the build changed: version, or `sizeof(chome_item)`, no longer match
 
@@ -1464,8 +1467,16 @@ no new table.
   `vga_scaler=1` or `direct_video`; the takeover hands over a square-pixel canvas.
 - During the first scan the shelf re-sorts each time a system finishes, so the
   selection can jump for a second or two.
-- The index caps at 6000 games and the browser at 512 entries per directory; both
-  log when they truncate rather than silently hiding games.
+- The index caps at 20000 files and the browser at 512 entries per directory; both
+  log when they truncate rather than silently hiding games, and a full index also says
+  so on the Options screen - the count alone cannot, since a shelf that stops at the
+  ceiling looks exactly like a card with that many games on it.
+
+  It said 6000 until a tester's 15,000-game card met it, and the promise above was not
+  kept: the only message sat in `add_item()`, which the walk stops short of, so the
+  library was cut in silence. Worse, the systems past the ceiling were never walked and
+  so had no directory record, which made `idx_load()` reject the cache on every boot -
+  a card too big to index paid a full scan every time it was switched on.
 - The index cache's validation cannot see a change deeper than the directories it
   recorded, if that set overflowed its 2048 cap. Options > Rescan Library forces a
   fresh scan, and says so when validation was incomplete.

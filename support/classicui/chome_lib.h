@@ -18,7 +18,21 @@
 
 #include <inttypes.h>
 
-#define CH_MAX_ITEMS   6000
+/*
+  The index ceiling, in files - not in titles, since the shelf groups several files
+  behind one card. It is a real ceiling and it is reached: a card with 15,000 games
+  indexed 6,000 of them and dropped the rest, and because the systems past the cap
+  were never walked the cache was rejected on every boot afterwards (see
+  idx_note_dir()'s caller in chome_lib.cpp), so that card paid a full scan every time
+  it was switched on.
+
+  What it costs to raise, measured rather than guessed: sizeof(chome_item) is 268
+  bytes, so the item array is 268 * CH_MAX_ITEMS on the heap and index.bin is that
+  again on the card. VIEW_MAX rides on this number, at 104 bytes an entry, and
+  var_next[] at 4. Per indexed file that is 376 bytes of RAM and 268 on the card:
+  20,000 files cost 7.5 MB of a 1 GB board, against 2.3 MB at 6,000.
+*/
+#define CH_MAX_ITEMS   20000
 #define CH_MAX_SYS     64
 #define CH_TITLE_LEN   64
 #define CH_PATH_LEN    192
@@ -152,6 +166,14 @@ void lib_rescan();
 int  lib_index_cached();
 
 /*
+  1 when the card holds more files than CH_MAX_ITEMS and the rest of the library is not
+  in the index. The player has to be told: everything past the ceiling is missing from
+  the shelf, and nothing about a card that is simply too big looks like a fault
+  otherwise - the games are there, the folders are there, and the shelf just ends.
+*/
+int  lib_index_full();
+
+/*
   Advances the background scan by one slice. Returns 1 while still scanning.
 
   A slice is bounded work, not a whole system: see the comment above scan_walk() in
@@ -182,6 +204,13 @@ void lib_scan_stats(int *slices, long *cost_max, long *budget);
   checkable if a test can drive the walk at both.
 */
 void lib_scan_test_budget(long budget);
+
+/*
+  Test hook: the index ceiling, so a card bigger than the index can be reached without
+  building one. 0 puts CH_MAX_ITEMS back, and nothing above it is accepted - the arrays
+  are sized for that. Same arrangement as lib_scan_test_budget() above.
+*/
+void lib_test_item_cap(int n);
 
 int  lib_sys_count();
 const chome_sys *lib_sys(int i);
