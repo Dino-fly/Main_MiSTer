@@ -11,6 +11,10 @@ unsigned long harness_now();
 void harness_set_root(const char *r);
 void harness_set_fb(int w, int h);
 void harness_set_scaler_visible(int v);
+// -2 (the default) follows harness_set_scaler_visible(); 1/0/-1 pins the HPD answer,
+// which is the only way to model vga_scaler=1 with no HDMI sink - a scaler that is
+// visible AND analog. See the note in stubs.cpp.
+void harness_set_hdmi_connected(int v);
 void harness_set_menu_core(int v);
 void harness_set_core_name(const char *n);
 void harness_set_input_pad(int v);

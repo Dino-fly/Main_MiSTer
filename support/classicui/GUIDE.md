@@ -34,6 +34,14 @@ small and why the Display screen is missing from them. See
 The Display screen is deliberately absent at 240p: the preview tiles would come out
 about 66px wide, which is too small to judge a filter by. It is there on HDMI.
 
+Handhelds are the exception, and it is there for them on a CRT at any size. Their
+screens are not only scaler work - the Game Boy palettes and the GBA screen models
+are the core's own colour, so they apply on the analog output exactly as they do on
+HDMI, and this is the only way to reach them. What a CRT never gets is the LCD pixel
+grid or the pixel shadow: those imitate a handheld's panel, and on a tube they are
+just damage. The list on that screen is shortened to the looks that can still show
+you a difference.
+
 ---
 
 ## The shelf
@@ -371,7 +379,7 @@ None of these are written by this front-end. Set them yourself, in `[MiSTer]`.
 | `composite_sync` | `1` for anything that is not a VGA monitor. |
 | `forced_scandoubler` | **`0`.** `1` asks for a 31 kHz signal, which a television cannot lock to at all — a scrambled, rolling picture. |
 | `vga_scaler` | `0` normally. `1` puts the scaler on the analog socket permanently; it makes this menu visible even with HDMI attached, at the cost of the colour and of needing a `video_mode` a CRT can accept. |
-| `direct_video` | `1` only for a VGA-to-HDMI converter or a DAC. It sends raw core timing out and turns the scaler off, so filters, shadow masks and the Display screen all stop applying. |
+| `direct_video` | `1` only for a VGA-to-HDMI converter or a DAC. It sends raw core timing out and turns the scaler off, so filters and shadow masks stop applying and the Display screen goes with them — except on a handheld, whose palette is set in the core and still works. |
 | `menu_pal` | `1` if your set is 50 Hz only. This chooses between the 240p60 and 288p50 modes the front-end takes the analog output in, and it defaults to `0`, so a PAL-only television gets 60 Hz and rolls. |
 | `vsync_adjust` | `0` or `1` is safe. It has nothing to do with this menu — the mode is pinned while the front-end holds the screen — but `2` retimes the output on every mode change, which some sets dislike. |
 | `video_mode`, `video_mode_pal`, `video_mode_ntsc` | Only read when `direct_video=0`. They set the **scaler's** output mode, which is what `vga_scaler=1` puts on the analog socket, so with `vga_scaler=1` this has to be a mode a CRT accepts. With `vga_scaler=0` they do not affect this menu, because the front-end sets its own TV mode while it is open. |
