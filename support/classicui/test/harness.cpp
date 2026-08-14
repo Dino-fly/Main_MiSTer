@@ -5062,11 +5062,17 @@ static void assert_partial_repaint()
 #define CARD_RING 2
 static int card_shadow_off(int h) { int sd = h / 40; return sd < 2 ? 2 : sd; }
 
+// The deck's rise above a multi-file card, kept in step with deck_peek()/deck_rise()
+// in chome_ui.cpp by hand - a copy, deliberately, like card_shadow_off() above it.
+static int deck_peek_off(int h) { int p = h / 28; if (p < 3) p = 3; if (p > 8) p = 8; return p; }
+static int deck_rise_off(int h) { return 2 * deck_peek_off(h); }
+
 static void slide_band_expect(const chome_profile *p, int *y0, int *y1)
 {
-	// The tallest card the shelf can draw, its focus ring above it and its drop shadow
-	// below - the crest of the growth, not whatever size a card happens to be right now.
-	*y0 = p->y_shelf - p->sel_h - CARD_RING;
+	// The tallest card the shelf can draw, the deck a multi-file card wears above it,
+	// its focus ring and its drop shadow below - the crest of the growth, not whatever
+	// size a card happens to be right now.
+	*y0 = p->y_shelf - p->sel_h - CARD_RING - deck_rise_off(p->sel_h);
 	*y1 = p->y_shelf + card_shadow_off(p->sel_h);
 
 	// The pips, which stay live during a scroll and are therefore in the band.
@@ -5138,24 +5144,22 @@ static int force_full_repaint()
   the band. That check is what found the snap in animate(): see the comment there.
 */
 /*
-  Where the stack badge lands on the selected card. Computed rather than hunted for: the
-  selected card is sel_w x sel_h and centred, and draw_card() insets the badge by 4, so
-  there is nothing to search and no chance of matching something else that happens to be
-  the same colour elsewhere on the shelf.
+  Where the deck lands over the selected card: the rows between the card's top and
+  deck_rise above it, across the selected card's width. Computed rather than hunted for:
+  the selected card is sel_w x sel_h and centred, so there is nothing to search and no
+  chance of matching something else that happens to be the same colour elsewhere.
 
   Kept in step with draw_card() by hand. That is a copy, deliberately - a check that asked
   the drawing code where it drew would agree with it for ever while both drifted away from
   the picture.
 */
-static void sel_badge_box(int *bx, int *by, int *bw)
+static void sel_deck_box(int *bx, int *by, int *bw, int *bh)
 {
 	const chome_profile *p = theme_get();
-	int box = p->sel_h / 5;
-	if (box > 16) box = 16;
-	if (box < 6) box = 6;
-	*bx = (p->w - p->sel_w) / 2 + 4;
-	*by = p->y_shelf - p->sel_h + 4;
-	*bw = box + 4;
+	*bx = (p->w - p->sel_w) / 2;
+	*by = p->y_shelf - p->sel_h - deck_rise_off(p->sel_h);
+	*bw = p->sel_w;
+	*bh = deck_rise_off(p->sel_h);
 }
 
 // The entry index of a game whose title contains `want`, found the same way
@@ -5172,14 +5176,16 @@ static int entry_titled(const char *want)
 	return -1;
 }
 
-static int badge_outline_px()
+// COL_PANELHI in the deck zone - the strips' outlines. The focus ring crosses the
+// zone's bottom rows but is COL_FOCUS, so it cannot count.
+static int deck_outline_px()
 {
-	int bx, by, bw;
-	sel_badge_box(&bx, &by, &bw);
+	int bx, by, bw, bh;
+	sel_deck_box(&bx, &by, &bw, &bh);
 	const uint32_t *fb = harness_fb_shown();
 	int w = gfx_w(), h = gfx_h(), n = 0;
 	if (!fb) return -1;
-	for (int y = by; y < by + bw && y < h; y++)
+	for (int y = by; y < by + bh && y < h; y++)
 	{
 		for (int x = bx; x < bx + bw && x < w; x++)
 		{
@@ -5356,9 +5362,9 @@ static void assert_letter_jump()
 	dump("letterjump-1-shelf");
 }
 
-static void assert_stack_badge()
+static void assert_version_deck()
 {
-	printf("\n== a card with several files behind it wears a stack ==\n");
+	printf("\n== a card with several files behind it sits on a deck ==\n");
 
 	disc_reset_reader();
 	disc_ingest_present(0);
@@ -5368,7 +5374,7 @@ static void assert_stack_badge()
 	  Re-entered from scratch rather than trusting whichever view the section before this
 	  one left up. select_titled() searches the *current* view and only presses LEFT, which
 	  cannot climb out of a system folder - so inheriting a sub-view makes every check here
-	  fail for a reason that has nothing to do with the badge. The carousel section below
+	  fail for a reason that has nothing to do with the deck. The carousel section below
 	  learned this the same way.
 	*/
 	chome_leave();
@@ -5382,41 +5388,93 @@ static void assert_stack_badge()
 	check(select_titled("Final Fantasy VII") == 1, "selected a game with several files");
 	int multi = entry_titled("Final Fantasy VII");
 	check(entry_nvar(multi) == 3, "and it really does have three");
-	int with = badge_outline_px();
-	printf("  badge outline pixels, three files: %d\n", with);
-	check(with > 0, "the badge is drawn on it");
-	dump("stack-1-three-files");
+	int with = deck_outline_px();
+	printf("  deck outline pixels, three files: %d\n", with);
+	check(with > 0, "the deck peeks above it");
+	dump("deck-1-three-files");
 
 	// Bonk's Adventure is one file, and the shelf puts it in the same place.
 	check(select_titled("Bonk") == 1, "selected a game with one file");
 	int single = entry_titled("Bonk");
 	check(entry_nvar(single) == 1, "and it really does have one");
-	int without = badge_outline_px();
-	printf("  badge outline pixels, one file:    %d\n", without);
-	check(without == 0, "and no badge is drawn on that one");
-	dump("stack-2-one-file");
+	int without = deck_outline_px();
+	printf("  deck outline pixels, one file:    %d\n", without);
+	check(without == 0, "and no deck is drawn over that one");
+	dump("deck-2-one-file");
 
 	/*
-	  The badge must sit inside the card, because draw_card() records the damage band from
-	  the card's own geometry. A badge hanging outside it would be drawn into rows nothing
-	  repaints, which shows up as dirt that survives a slide - so assert the band is what
-	  it was rather than trusting the arithmetic.
+	  The deck hangs ABOVE the card's rectangle, which is exactly what the old corner
+	  badge was forbidden to do - so the slide band had to grow for it, and this is the
+	  check that the growth and the drawing agree. slide_band_expect() adds the same rise;
+	  a deck above the band would be dirt that survives a scroll.
 	*/
 	const chome_profile *p = theme_get();
-	int bx, by, bw;
-	sel_badge_box(&bx, &by, &bw);
-	check(by >= p->y_shelf - p->sel_h && by + bw <= p->y_shelf,
-		"and it is inside the card's own rows, so the slide band still covers it");
+	int bx, by, bw, bh;
+	sel_deck_box(&bx, &by, &bw, &bh);
+	int e0, e1;
+	slide_band_expect(p, &e0, &e1);
+	check(by >= e0 && by + bh <= e1, "the deck sits inside the band the slide repaints");
 
-	// It must also not collide with the favourite star, which is the top right corner.
-	check(bx + bw < (p->w + p->sel_w) / 2 - 16 - 6,
-		"and clear of the favourite star opposite it");
+	/*
+	  X deals the next file. Around the whole cycle first, so all three covers are decoded
+	  and none can land between a partial frame and the full repaint it is compared with -
+	  the same precaution the carousel section takes, learned the same way.
+	*/
+	check(select_titled("Final Fantasy VII") == 1, "back on the multi-file card");
+	for (int i = 0; i < 3; i++) { press(KEY_TAB, 4); frame(30); }
+	{
+		const chome_entry *e = lib_view_entry(entry_titled("Final Fantasy VII"));
+		check(e && e->vsel == 0, "three presses of X go all the way round");
+	}
+
+	// The counter on the face: top-left corner of the selected card.
+	int fx = (p->w - p->sel_w) / 2, fy = p->y_shelf - p->sel_h;
+	unsigned long corner = harness_fb_hash_box(fx, fy, fx + 60, fy + 24);
+
+	/*
+	  The deal itself: the press repaints the world once (the title block's counter
+	  moved), and every frame after it is the plate flying up onto the deck - card rows
+	  only, each byte-identical to a full repaint of its own instant. That identity is
+	  the check that would catch a plate outside the band, a stale clip, or a deal that
+	  was a function of how often it was composed rather than of the clock.
+	*/
+	chome_handle(KEY_TAB);
+	harness_advance(16);
+	chome_handle(0);                               // the press's own full repaint
+	chome_handle(KEY_TAB | UPSTROKE);
+
+	int frames = 0, forced = 0, differed = 0, worst = 0;
+	int art_was = art_cache_count();
+	int band_rows = e1 - e0 + 1;
+	for (int i = 0; i < 40; i++)
+	{
+		int flips = harness_present_count();
+		harness_advance(16);
+		chome_handle(0);
+		if (harness_present_count() == flips) break;
+		frames++;
+		if (gfx_damage_rows() > worst) worst = gfx_damage_rows();
+		unsigned long partial = harness_fb_hash_box(0, 0, gfx_w(), gfx_h());
+		if (force_full_repaint()) forced++;
+		if (harness_fb_hash_box(0, 0, gfx_w(), gfx_h()) != partial) differed++;
+	}
+	check(art_cache_count() == art_was, "no cover landed during the comparison to spoil it");
+
+	printf("  the deal: %d frames, worst damage %d rows (band %d)\n",
+		frames, worst, band_rows);
+	check(frames >= 6, "the deal plays over several frames");
+	check(worst <= band_rows, "every one of them stays inside the card band");
+	check(forced == frames && !differed,
+		"and each is byte-identical to a full repaint of the same instant");
+	check(harness_fb_hash_box(fx, fy, fx + 60, fy + 24) != corner,
+		"the counter on the face moved to the next file");
+	dump("deck-3-dealt");
 
 	/*
 	  And again at 240p, which is the canvas that actually matters: the owner's MiSTer is
-	  analog only, so this is the size he will judge it at. A card there is 61 rows tall, so
-	  the badge is 12 px with 1 px gaps - the size where a picto would have turned to
-	  porridge and the reason this is drawn as rectangles.
+	  analog only, so this is the size he will judge it at. A card there is 76 rows tall
+	  selected, so the peek clamps at its 3px floor - the size below which the strip reads
+	  as a drawing fault rather than as a card.
 	*/
 	harness_set_fb(320, 240);
 	chome_leave();
@@ -5425,14 +5483,14 @@ static void assert_stack_badge()
 	frame(40);
 
 	check(select_titled("Final Fantasy VII") == 1, "240p: on the multi-file card");
-	int lo_px = badge_outline_px();
+	int lo_px = deck_outline_px();
 	const chome_profile *lp = theme_get();
-	int lb = lp->sel_h / 5; if (lb > 16) lb = 16; if (lb < 6) lb = 6;
-	printf("  240p card %dx%d, badge %d px, outline pixels %d\n",
-		lp->sel_w, lp->sel_h, lb, lo_px);
-	check(lo_px > 0, "240p: the badge is drawn");
-	check(lb >= 6 && lb <= lp->sel_h / 3, "240p: and it is a badge, not a third of the card");
-	dump("stack-3-240p");
+	printf("  240p card %dx%d, deck rise %d, outline pixels %d\n",
+		lp->sel_w, lp->sel_h, deck_rise_off(lp->sel_h), lo_px);
+	check(lo_px > 0, "240p: the deck is drawn");
+	check(deck_rise_off(lp->sel_h) <= lp->sel_h / 4,
+		"240p: and it is a hint above the card, not a second card");
+	dump("deck-4-240p");
 
 	harness_set_fb(1280, 720);
 	chome_leave();
@@ -21737,7 +21795,7 @@ int main()
 	// Directly after it, because it is the same mechanism on the other region of the screen
 	// and it starts from the state that one leaves: the shelf at 720p with an empty drive.
 	assert_letter_jump();
-	assert_stack_badge();
+	assert_version_deck();
 	assert_carousel_slide();
 	assert_disc_launch();
 	// After it, because it leaves the same state that one does and starts from it: a disc

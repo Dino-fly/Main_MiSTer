@@ -1698,6 +1698,46 @@ static const char *marq_fit_at(const char *s, int scale, int maxpx, int focused,
 static int card_shadow(int h) { int sd = h / 40; return sd < 2 ? 2 : sd; }
 
 /*
+  The deck a multi-file card sits on: up to DECK_STRIPS card edges peeking above the
+  card's top, each one deck_peek() rows tall and deck_inset() further in per level, the
+  way a real pile of game boxes shows the ones beneath. It replaced a stack pictogram in
+  the card's corner after a reader sketched this instead, and the sketch was right: the
+  deck says "there are more behind this one" with the cards themselves, where the badge
+  said it with an icon that had to be decoded.
+
+  Functions rather than literals for the reason card_shadow() is one: the slide band is
+  derived from them. The deck is OUTSIDE the card's rectangle - the first decoration that
+  is - so draw_card() and draw_shelf() both add deck_rise() to the rows they record, and
+  a second copy of the arithmetic would drift the first time somebody retuned the peek.
+
+  The peek clamps at 3 because below that the edge is a hairline that reads as a drawing
+  fault at 240p, and at 8 because the deck must stay a hint - a card is 61 rows tall on
+  the canvas that matters most.
+*/
+#define DECK_STRIPS 2
+static int deck_peek(int h)  { int p = h / 28; if (p < 3) p = 3; if (p > 8) p = 8; return p; }
+static int deck_inset(int w) { int i = w / 24; if (i < 3) i = 3; return i; }
+static int deck_rise(int h)  { return DECK_STRIPS * deck_peek(h); }
+
+/*
+  When X last turned a multi-file card to its next file, for the deal that shows it: a
+  card back that starts exactly over the face and flattens up onto the deck, uncovering
+  the new cover beneath. 0 when no deal is in flight.
+
+  The deal is a moving plate rather than a sliding cover, and that is forced, not chosen:
+  sliding the artwork inside the card needs a clip rectangle, and gfx_clip_set() is one
+  global rectangle, not a stack - setting it inside a compose would silently drop the
+  region clip render_region() put there (see the marquee's note in chome_gfx.h, which hit
+  the same wall). An opaque rectangle needs no clip, and it happens to be the truer
+  picture: the file on show goes back on the pile, the next one is under it.
+
+  The plate's geometry is a pure function of this timestamp and the clock, like every
+  animation here, so a partial frame and a full repaint of the same instant agree.
+*/
+#define VER_DEAL_MS 180UL
+static unsigned long ver_deal_at = 0;
+
+/*
   Whether the shelf is where the player's presses are going.
 
   The shelf, the menu bar and the disc badge are three places one cursor can be, and until
@@ -1728,10 +1768,37 @@ static void draw_card(const chome_entry *e, int cx, int bottom, int w, int h, in
 	int sd = card_shadow(h);
 
 	// Recorded as it is drawn, and for every card: the row is as tall as its tallest card
-	// and the ring and the shadow are part of it.
-	slide_note_rows(y - CARD_RING, bottom + sd);
+	// and the ring, the shadow and - on a multi-file card - the deck above it are part
+	// of it.
+	int on_deck = (e->kind == ENT_GAME && e->nvar > 1);
+	slide_note_rows(y - CARD_RING - (on_deck ? deck_rise(h) : 0), bottom + sd);
 
 	gfx_fill(x + sd, y + sd, w, h, COL_SHADOW);
+
+	/*
+	  The deck, before the face so the face sits on it. Back to front, each level one
+	  inset further in and one peek further up, filled before it frames so only its top
+	  band survives the level in front of it - the same occlusion argument the old corner
+	  badge made, played out at card size. Two levels at most: the deck means "there are
+	  more", the counter on the face says how many.
+
+	  Dimmer off the selected card, in the palette rather than under the scrim: the scrim
+	  at the bottom of this function covers the card's own rectangle and the deck is above
+	  it, and a second scrim call there would checkerboard the background beside the
+	  strips, which are narrower than the card.
+	*/
+	if (on_deck)
+	{
+		int pk = deck_peek(h), ins = deck_inset(w);
+		int ns = (e->nvar - 1 < DECK_STRIPS) ? e->nvar - 1 : DECK_STRIPS;
+		for (int i = ns; i >= 1; i--)
+		{
+			int rx = x + i * ins, ry = y - i * pk;
+			int rw = w - 2 * i * ins, rh = i * pk + 2;
+			gfx_fill(rx, ry, rw, rh, selected ? COL_PANEL : COL_PANELLO);
+			gfx_frame_rect(rx, ry, rw, rh, selected ? COL_PANELHI : COL_PANEL, 1);
+		}
+	}
 
 	if (e->kind != ENT_GAME)
 	{
@@ -1823,43 +1890,54 @@ static void draw_card(const chome_entry *e, int cx, int bottom, int w, int h, in
 		}
 
 		/*
-		  Several files behind one card, said as a stack of cards rather than as a number.
-		  A count would need a digit legible at 240p, where a card is 84 wide and the band
-		  along its bottom already has the title in it; the stack reads at a glance and at
-		  any size, which is the whole reason the shape is conventional.
+		  Which of the files is on show, as a count on the face: the deck above the card
+		  already says "there are more", so the number no longer has to be read at a
+		  glance from an unselected card - it appears on the selected one, where X acts
+		  and where the card is at its largest. That is what let a count replace the old
+		  corner pictogram: 1/3 at the selected card's size is legible even at 240p, and
+		  it says which file and how many, which the pictogram never could.
 
-		  Top left, because the favourite star is top right and a game can be both.
-
-		  Three rectangles rather than a picto, deliberately. A picto is a 1-bit mask
-		  sampled to its box, and three one-pixel outlines with one-pixel gaps do not
-		  survive being sampled to 12 pixels - they turn into a grey smudge. Drawn as
-		  geometry it stays crisp at every size, and gfx_frame_rect is exactly the
-		  primitive for it.
-
-		  Back to front, each one filling before it frames, so the front card occludes the
-		  two behind it and only their bottom-right edges show. Drawn the other way round
-		  the outlines cross each other and it reads as a grid.
-
-		  Not animated, and inside the card's own rectangle. Both matter: draw_card()
-		  records the damage band from this card's geometry a few lines above, so anything
-		  drawn within it is already covered, while a badge that breathed would want the
-		  band grown to its maximum for a frame it has not drawn yet - the trap the disc
-		  badge needed DISC_BADGE_CELLS for.
+		  Top left, because the favourite star is top right and a game can be both. Over
+		  a scrim for the reason the title band is: it sits on artwork of every colour.
 		*/
-		if (e->nvar > 1)
+		if (e->nvar > 1 && selected)
 		{
-			int box = h / 5;
-			if (box > 16) box = 16;              // never larger than the star opposite it
-			if (box < 6) box = 6;                // below this the gaps close up anyway
-			int step = (box >= 12) ? 2 : 1;
-			int side = box - 2 * step;
+			char vc[16];
+			snprintf(vc, sizeof(vc), "%d/%d", e->vsel + 1, e->nvar);
+			int ts = (w > 180) ? 2 : 1;
+			int tw = gfx_text_w(vc, ts);
+			gfx_blend(x, y, tw + 8, 8 * ts + 6, COL_SHADOW, 190);
+			gfx_text(vc, x + 4, y + 3, ts, COL_PANELHI, 0);
+		}
 
-			gfx_fill(x + 4, y + 4, box + 4, box + 4, COL_SHADOW);
-			for (int i = 2; i >= 0; i--)
+		/*
+		  The deal: for VER_DEAL_MS after X, a card back flying from the face up onto the
+		  deck, uncovering the file now on show. Drawn over everything on the face and
+		  under the focus ring, and its rectangle interpolates from the face's exactly to
+		  the front strip's - so its last instant is the strip that is already there, and
+		  the landing needs no seam. Eased out, so it leaves the face quickly and settles.
+
+		  Skipped while the shelf is easing (selF != sel): a deal belongs to the card X
+		  was pressed on, and mid-slide the selected card is changing hands. Every term
+		  here is state or the clock, which keeps compose() a pure function of both.
+
+		  No band worry, deliberately: the plate never leaves the union of the face and
+		  the deck, and both are already in this card's recorded rows.
+		*/
+		if (e->nvar > 1 && selected && ver_deal_at && selF == sel)
+		{
+			unsigned long el = GetTimer(0) - ver_deal_at;
+			if (el < VER_DEAL_MS)
 			{
-				int rx = x + 6 + i * step, ry = y + 6 + i * step;
-				gfx_fill(rx, ry, side, side, COL_SHADOW);
-				gfx_frame_rect(rx, ry, side, side, COL_PANELHI, 1);
+				double pe = 1.0 - (1.0 - (double)el / VER_DEAL_MS) *
+					(1.0 - (double)el / VER_DEAL_MS);
+				int pk = deck_peek(h), ins = deck_inset(w);
+				int rx = x + (int)(ins * pe);
+				int ry = y - (int)(pk * pe);
+				int rw = w - (int)(2 * ins * pe);
+				int rh = h + (int)((pk + 2 - h) * pe);
+				gfx_fill(rx, ry, rw, rh, COL_PANEL);
+				gfx_frame_rect(rx, ry, rw, rh, COL_PANELHI, 1);
 			}
 		}
 	}
@@ -1916,8 +1994,13 @@ static void draw_shelf(const chome_profile *p)
 	  can ever be, so the band is recorded at that height on every frame - the badge's
 	  rectangle is recorded at the crest of its breath for exactly this reason. See
 	  disc_note_rect() and DISC_BADGE_CELLS.
+
+	  Plus the deck: a multi-file card wears deck_rise() rows above its own top, so the
+	  crest is that much higher again - whether or not the card arriving at the centre
+	  this frame is one that wears it.
 	*/
-	slide_note_rows(p->y_shelf - p->sel_h - CARD_RING, p->y_shelf + card_shadow(p->sel_h));
+	slide_note_rows(p->y_shelf - p->sel_h - CARD_RING - deck_rise(p->sel_h),
+		p->y_shelf + card_shadow(p->sel_h));
 
 	int n = lib_view_count();
 	int first = (int)selF - p->visible;
@@ -14180,6 +14263,18 @@ static void animate()
 	if (!CheckTimer(ig_close_until)) mark_anim();
 
 	/*
+	  The deal after X, kept moving: frames while the plate is in flight, and one more
+	  once it has landed - the frame without the plate, which is the trap the promoted
+	  message above spells out. mark_slide() rather than mark_anim(), because the plate
+	  never leaves the card band; the press itself already repainted the world.
+	*/
+	if (ver_deal_at)
+	{
+		if (now - ver_deal_at < VER_DEAL_MS) mark_slide();
+		else { ver_deal_at = 0; mark_slide(); }
+	}
+
+	/*
 	  A confirmation with a timer on it needs a repaint while it is up and one *more* when it
 	  runs out. The second is the one that is easy to miss: painting only while the timer runs
 	  leaves the last painted frame the one that still says it, so the message stays on screen
@@ -14643,6 +14738,10 @@ int chome_handle(uint32_t key)
 			if (screen == SCR_HOME)
 			{
 				if (!lib_view_cycle(sel, 1)) { nudge(); break; }
+				// And the deal that shows it: see ver_deal_at. The press itself
+				// repaints the world (the title block's counter moved); the frames
+				// after it are cards only, and animate() carries those on the band.
+				ver_deal_at = GetTimer(0);
 				mark_dirty();
 				break;
 			}
