@@ -111,7 +111,11 @@
   direct_video    front-end takes the analog output by itself anyway.
   gamepad_defaults name-versus-positional button mapping. Changing it silently moves
                   every button in every core.
-  vscale_mode     how games are scaled. The most visible setting on the machine.
+  vscale_mode     stays out of this list, but for a new reason: integer scaling
+                  became the firmware DEFAULT on Dinofly's call (cfg.cpp), so
+                  there is nothing left for a Best Settings row to do except
+                  fight a player who explicitly wrote vscale_mode=0 - and an
+                  explicit choice is exactly what this screen does not override.
 
   Every key here is one ini_parse() knows: an unknown key raises a cfg_error(), and
   those are shown as an OSD panel on the next boot. Adding one would be self-defeating.
