@@ -29,7 +29,9 @@ grabber arrives; the knobs exist so calibration is a flag, not a rewrite):
   * The source-position accumulator's initial phase (--phase-bias, in 1/256
     of a source pixel). The grid is symmetric, so being off by a phase moves
     the gutter a fraction of an output pixel - visible only side by side.
-  * Axis order is H then V here; confirm against ascal's line pipeline.
+  * Axis order: CONFIRMED H then V - ascal's horizontal stage consumes the
+    input line (o_hpix0 <= hpix_v) and the vertical stage reads the H-scaled
+    line buffers (o_vpixq), so this script's order is the RTL's.
   * sfilter (the scanline vfilter) and adaptive filters are not modelled.
 
 Usage (old form still works):
