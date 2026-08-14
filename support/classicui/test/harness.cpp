@@ -5416,7 +5416,7 @@ static void assert_version_deck()
 	check(by >= e0 && by + bh <= e1, "the deck sits inside the band the slide repaints");
 
 	/*
-	  X deals the next file. Around the whole cycle first, so all three covers are decoded
+	  X riffles to the next file. Around the whole cycle first, so all three covers are decoded
 	  and none can land between a partial frame and the full repaint it is compared with -
 	  the same precaution the carousel section takes, learned the same way.
 	*/
@@ -5432,11 +5432,13 @@ static void assert_version_deck()
 	unsigned long corner = harness_fb_hash_box(fx, fy, fx + 60, fy + 24);
 
 	/*
-	  The deal itself: the press repaints the world once (the title block's counter
-	  moved), and every frame after it is the plate flying up onto the deck - card rows
-	  only, each byte-identical to a full repaint of its own instant. That identity is
-	  the check that would catch a plate outside the band, a stale clip, or a deal that
-	  was a function of how often it was composed rather than of the clock.
+	  The riffle itself: the press repaints the world once (the title block's counter
+	  moved), and every frame after it is the three pieces in flight - the front card
+	  out to the right, the next one zooming up to the face, the old one filing in at
+	  the back - card rows only, each byte-identical to a full repaint of its own
+	  instant. That identity is the check that would catch a piece outside the band, a
+	  stale clip, or a riffle that was a function of how often it was composed rather
+	  than of the clock.
 	*/
 	chome_handle(KEY_TAB);
 	harness_advance(16);
@@ -5460,15 +5462,15 @@ static void assert_version_deck()
 	}
 	check(art_cache_count() == art_was, "no cover landed during the comparison to spoil it");
 
-	printf("  the deal: %d frames, worst damage %d rows (band %d)\n",
+	printf("  the riffle: %d frames, worst damage %d rows (band %d)\n",
 		frames, worst, band_rows);
-	check(frames >= 6, "the deal plays over several frames");
+	check(frames >= 6, "the riffle plays over several frames");
 	check(worst <= band_rows, "every one of them stays inside the card band");
 	check(forced == frames && !differed,
 		"and each is byte-identical to a full repaint of the same instant");
 	check(harness_fb_hash_box(fx, fy, fx + 60, fy + 24) != corner,
 		"the counter on the face moved to the next file");
-	dump("deck-3-dealt");
+	dump("deck-3-riffled");
 
 	/*
 	  And again at 240p, which is the canvas that actually matters: the owner's MiSTer is
@@ -20972,6 +20974,12 @@ static const clip_allowed_t clip_allowed[] = {
 	{ "draw_card",          "RECENTLY ADDED",   "the same" },
 	{ "draw_card",          "FAVOURITES",       "the same" },
 	{ "draw_card",          0,                  "every other card label is a system's name or a game's" },
+	// The cover title band moved into draw_card_face() when the riffle needed to draw a
+	// face mid-zoom; the words it cuts are the same words draw_card() cut before it.
+	{ "draw_card_face",     "RECENTLY PLAYED",  "a shelf's name on a card, which is sized by its artwork" },
+	{ "draw_card_face",     "RECENTLY ADDED",   "the same" },
+	{ "draw_card_face",     "FAVOURITES",       "the same" },
+	{ "draw_card_face",     0,                  "every other card label is a system's name or a game's" },
 	{ "draw_fallback_card", 0,                  "a game's name on a card with no artwork" },
 	{ "draw_title_block",   0,                  "the hero's title and the file it came from" },
 	{ 0, 0, 0 }
