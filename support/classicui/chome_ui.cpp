@@ -13627,15 +13627,55 @@ static void ig_build_background(const chome_profile *p)
 
 	for (int i = 0; i < p->w * p->h; i++) ig_bg[i] = COL_BLACK;
 
+	/*
+	  The look, run over the still the way the scaler runs it over the game.
+
+	  The capture is pre-scaler - it is the core's own frame - so this background
+	  used to show a Game Boy without its grid and a console without its
+	  scanlines, which is to say a picture of something the television was not
+	  showing. vp_render_exact() is the fabric's own arithmetic (see the note on
+	  its definition), so the menu now sits over what is actually on screen.
+
+	  Deliberately not done for savestate thumbnails: those are pictures of the
+	  GAME, kept to be recognised in a strip months later, and a grid baked into
+	  a 256-pixel-wide thumbnail is dirt rather than fidelity.
+
+	  A look with nothing in the scaler (None, or one whose whole effect is core
+	  side) returns 0 and the plain path below draws the frame as captured.
+	*/
+	uint32_t *shot = ig_shot;
+	int shot_w = ig_shot_w, shot_h = ig_shot_h;
+	uint32_t *filtered = 0;
+	{
+		chome_item *it = disp_target();
+		if (it)
+		{
+			int look = vp_effective(it->sysidx, disp_class());
+			filtered = (uint32_t*)malloc((size_t)fw * fh * 4);
+			if (filtered && vp_render_exact(look, ig_shot, ig_shot_w, ig_shot_h,
+				filtered, fw, fh))
+			{
+				shot = filtered;
+				shot_w = fw;
+				shot_h = fh;
+			}
+			else
+			{
+				free(filtered);
+				filtered = 0;
+			}
+		}
+	}
+
 	for (int y = 0; y < fh; y++)
 	{
-		int sy = (y * ig_shot_h) / fh;
-		const uint32_t *srow = ig_shot + (size_t)sy * ig_shot_w;
+		int sy = (y * shot_h) / fh;
+		const uint32_t *srow = shot + (size_t)sy * shot_w;
 		uint32_t *drow = ig_bg + (size_t)(oy + y) * p->w + ox;
 
 		for (int x = 0; x < fw; x++)
 		{
-			uint32_t c = srow[(x * ig_shot_w) / fw];
+			uint32_t c = srow[(x * shot_w) / fw];
 			// Dim to three eighths: the game stays recognisable, the menu readable. Kept in
 			// sixteenths because the scrim halves this again on a panel screen, and the pair
 			// of numbers in the table above is what was actually chosen.
@@ -13645,6 +13685,8 @@ static void ig_build_background(const chome_profile *p)
 			drow[x] = 0xff000000u | (r << 16) | (g << 8) | b;
 		}
 	}
+
+	free(filtered);
 }
 
 static void ig_close(int restore_video)

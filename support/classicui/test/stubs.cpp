@@ -954,6 +954,17 @@ int user_io_file_tx(const char *name, unsigned char index, char, char, char, uin
 	return 1;
 }
 
+/*
+  The liveness poll the firmware sends the running core mid-computation. On the
+  device it is one SPI word that keeps the PSX's savestate machine from deciding
+  the HPS has wandered off; here there is no core, so it counts calls - a long
+  computation that forgets to pump it is a bug this can see.
+*/
+static int alive_polls = 0;
+void user_io_core_alive_poll() { alive_polls++; }
+int harness_alive_polls() { return alive_polls; }
+void harness_reset_alive_polls() { alive_polls = 0; }
+
 void user_io_status_set(const char *opt, uint32_t value, int ex)
 {
 	snprintf(last_status_opt, sizeof(last_status_opt), "%s", opt ? opt : "");

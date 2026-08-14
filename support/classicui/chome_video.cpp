@@ -237,6 +237,334 @@ static const preset_def presets[] =
 
 #define NPRESETS ((int)(sizeof(presets) / sizeof(presets[0])))
 
+/* ------------------------------------------------- the scaler, on the ARM ---
+
+  The FPGA scaler's own arithmetic, run over a captured frame so the front-end
+  can SHOW what the television is showing.
+
+  Everything here was read out of the hardware rather than guessed, which is the
+  only reason it is allowed to claim accuracy:
+
+  - The coefficient files are the ones the scaler is actually loaded with. They
+    carry integers at 128 scale; read_video_filter() in video.cpp multiplies by
+    two (by one after a "10bit" header) into the 256-scale words the fabric
+    stores, and a 64-phase file is DUPLICATED up to the 256 internal phases
+    rather than interpolated (scale_phases). Both rules are reproduced below,
+    so a filter we generate and a filter somebody else wrote are treated alike.
+
+  - The multiply-accumulate is ascal.vhd's: poly_cvt shifts each coefficient
+    left seven into 3.15, each tap multiplies a nine-bit zero-extended pixel,
+    the taps sum IN PAIRS, each pair is truncated by eight bits (poly_final
+    takes bits 26:8 - a floor, not a round), the two halves add, and bound()
+    clamps - negative to zero, anything at or past bit 15 to 255, else bits
+    14:7. The two separate truncations are why this cannot be folded into one
+    shift, and folding them was the first thing that made a preview wrong.
+
+  - The axis order is the fabric's: horizontal first, into line buffers the
+    vertical stage then reads.
+
+  What is deliberately NOT modelled: gamma (a LUT the scaler applies after
+  this), and the adaptive filters, whose second coefficient set is chosen per
+  pixel by luminance. A look wearing either is drawn without it and is honest
+  about being a picture of the filters alone - see vp_render_exact()'s return.
+*/
+
+#define VP_HW_PHASES 256
+
+struct vp_taps
+{
+	int t[VP_HW_PHASES][4];
+	int ok;
+};
+
+static int vp_load_taps(const char *name, vp_taps *out)
+{
+	memset(out, 0, sizeof(*out));
+	if (!name || !*name || !strcasecmp(name, "off")) return 0;
+
+	char path[1024];
+	snprintf(path, sizeof(path), "%s/filters/%s", getRootDir(), name);
+
+	FILE *f = fopen(path, "rt");
+	if (!f) return 0;
+
+	int raw[VP_HW_PHASES][4];
+	int n = 0, scale = 2, adaptive = 0;
+	char line[256];
+
+	while (fgets(line, sizeof(line), f))
+	{
+		char *p = line;
+		while (*p == ' ' || *p == '\t') p++;
+
+		if (!n && !strncasecmp(p, "10bit", 5)) { scale = 1; continue; }
+		if (!n && !strncasecmp(p, "adaptive", 8)) { adaptive = 1; continue; }
+
+		int a, b, c, d;
+		if (sscanf(p, "%d,%d,%d,%d", &a, &b, &c, &d) != 4) continue;
+		if (n >= VP_HW_PHASES) break;
+
+		raw[n][0] = a * scale; raw[n][1] = b * scale;
+		raw[n][2] = c * scale; raw[n][3] = d * scale;
+		n++;
+	}
+	fclose(f);
+
+	// An adaptive file's first half is the ordinary set; the second is chosen by
+	// luminance, which this does not model. Half of it is still the right picture
+	// of the sharpness, so it is used and the caller is told the look is partial.
+	if (adaptive) n /= 2;
+	if (n == 32) n = 16;                       // the legacy 16-phase pair form
+	if (n < 1) return 0;
+
+	int dup = VP_HW_PHASES / n;
+	if (dup * n != VP_HW_PHASES) return 0;     // not a phase count the fabric can hold
+
+	for (int i = 0; i < n; i++)
+		for (int k = 0; k < dup; k++)
+			memcpy(out->t[i * dup + k], raw[i], sizeof(raw[i]));
+
+	out->ok = 1;
+	return 1;
+}
+
+static inline int vp_bound(int v)
+{
+	if (v < 0) return 0;
+	if (v >= (1 << 15)) return 255;
+	return (v >> 7) & 0xff;
+}
+
+/*
+  One axis. Rows are contiguous in `src`; the caller transposes between passes by
+  calling this with the buffers swapped and the dimensions exchanged, which is
+  what the fabric's line buffers amount to.
+*/
+static void vp_axis(const uint32_t *src, int sw, int rows, uint32_t *dst, int dw,
+	const vp_taps *taps)
+{
+	for (int y = 0; y < rows; y++)
+	{
+		const uint32_t *srow = src + (size_t)y * sw;
+		uint32_t *drow = dst + (size_t)y * dw;
+
+		for (int x = 0; x < dw; x++)
+		{
+			// The source position this output pixel samples, and the phase inside it.
+			double u = ((double)x + 0.5) * sw / dw - 0.5;
+			int i = (int)floor(u);
+			int ph = (int)((u - i) * VP_HW_PHASES);
+			if (ph < 0) ph = 0;
+			if (ph >= VP_HW_PHASES) ph = VP_HW_PHASES - 1;
+
+			const int *c = taps->t[ph];
+			uint32_t px[4];
+			for (int t = 0; t < 4; t++)
+			{
+				int si = i - 1 + t;
+				if (si < 0) si = 0;
+				if (si >= sw) si = sw - 1;
+				px[t] = srow[si];
+			}
+
+			uint32_t out = 0xff000000u;
+			for (int sh = 16; sh >= 0; sh -= 8)
+			{
+				int p0 = (c[0] << 7) * (int)((px[0] >> sh) & 0xff)
+				       + (c[1] << 7) * (int)((px[1] >> sh) & 0xff);
+				int p1 = (c[2] << 7) * (int)((px[2] >> sh) & 0xff)
+				       + (c[3] << 7) * (int)((px[3] >> sh) & 0xff);
+				out |= (uint32_t)vp_bound((p0 >> 8) + (p1 >> 8)) << sh;
+			}
+			drow[x] = out;
+		}
+
+		/*
+		  The running core is watched by this loop as much as by the main one. The
+		  PSX turns the firmware's CD poll into a heartbeat and parks its savestate
+		  machine when the HPS goes quiet for about 31ms, and a full-canvas pass here
+		  is several hundred milliseconds of arithmetic - long enough to have cost a
+		  player their save the first time this ran. Every few rows is far more often
+		  than the deadline needs and costs one SPI word.
+		*/
+		if (!(y & 31)) user_io_core_alive_poll();
+	}
+}
+
+static void vp_transpose(const uint32_t *src, int w, int h, uint32_t *dst)
+{
+	for (int y = 0; y < h; y++)
+		for (int x = 0; x < w; x++)
+			dst[(size_t)x * h + y] = src[(size_t)y * w + x];
+}
+
+/*
+  The shadow mask, as sys/shadowmask.sv applies it.
+
+  A cell's word gives each channel a 1.4 fixed-point multiplier - bright cells
+  take {1,lut[7:4]}, dim cells {0,lut[3:0]} - and the fabric applies it as a
+  truncating shift-add, channel>>4 up to channel>>0, one term per set bit. The
+  simple three-bit masks (one bit per channel) are the same thing with the
+  multiplier at 1.0 or 0.
+
+  Only the first table in a file is read. Files that carry several under
+  "Resolution=" lines are choosing a cell size for the OUTPUT height, and the
+  preview and the background are drawn at canvas sizes rather than at the
+  scaler's, so picking by resolution here would be answering a question nobody
+  asked. The first table is the one the file leads with.
+*/
+#define VP_MASK_MAX 32
+
+struct vp_mask
+{
+	uint8_t mul[VP_MASK_MAX][VP_MASK_MAX][3];
+	int w, h, ok;
+};
+
+static int vp_load_mask(const char *name, vp_mask *out)
+{
+	memset(out, 0, sizeof(*out));
+	if (!name || !*name || !strcasecmp(name, "off")) return 0;
+
+	char path[1024];
+	snprintf(path, sizeof(path), "%s/shadow_masks/%s", getRootDir(), name);
+
+	FILE *f = fopen(path, "rt");
+	if (!f) return 0;
+
+	char line[512];
+	int rows = 0, cols = 0, want = 0;
+
+	while (fgets(line, sizeof(line), f))
+	{
+		char *p = line;
+		while (*p == ' ' || *p == '\t') p++;
+		char *hash = strpbrk(p, "#;\r\n");
+		if (hash) *hash = 0;
+		if (!*p) continue;
+
+		if (!strncasecmp(p, "resolution=", 11)) { if (want) break; continue; }
+		if (!strcasecmp(p, "v2")) continue;
+
+		int a, b;
+		if (!want && sscanf(p, "%d,%d", &a, &b) == 2 && a > 0 && b > 0)
+		{
+			cols = (a > VP_MASK_MAX) ? VP_MASK_MAX : a;
+			want = (b > VP_MASK_MAX) ? VP_MASK_MAX : b;
+			continue;
+		}
+		if (!want) continue;
+
+		int c = 0;
+		for (char *tok = strtok(p, ","); tok && c < cols; tok = strtok(0, ","))
+		{
+			unsigned v = 0;
+			if (sscanf(tok, "%x", &v) != 1) continue;
+
+			for (int ch = 0; ch < 3; ch++)
+			{
+				int bit = 10 - ch;                       // r,g,b = bits 10,9,8
+				int m;
+				if (v <= 7) m = ((v >> (2 - ch)) & 1) ? 0x10 : 0;
+				else m = ((v >> bit) & 1) ? (0x10 | ((v >> 4) & 0xF)) : (int)(v & 0xF);
+				out->mul[rows][c][ch] = (uint8_t)m;
+			}
+			c++;
+		}
+		if (c) rows++;
+		if (rows >= want) break;
+	}
+	fclose(f);
+
+	if (!rows || !cols) return 0;
+	out->w = cols;
+	out->h = rows;
+	out->ok = 1;
+	return 1;
+}
+
+static inline int vp_mask_mul(int ch, int mul)
+{
+	int s = 0;
+	for (int k = 0; k < 5; k++) if ((mul >> k) & 1) s += ch >> (4 - k);
+	return (s > 255) ? 255 : s;
+}
+
+static void vp_apply_mask(uint32_t *px, int w, int h, const vp_mask *m, int twox)
+{
+	int step = twox ? 2 : 1;
+
+	for (int y = 0; y < h; y++)
+	{
+		for (int x = 0; x < w; x++)
+		{
+			const uint8_t *mul = m->mul[(y / step) % m->h][(x / step) % m->w];
+			uint32_t c = px[(size_t)y * w + x];
+			uint32_t o = 0xff000000u;
+			for (int ch = 0; ch < 3; ch++)
+			{
+				int sh = 16 - ch * 8;
+				o |= (uint32_t)vp_mask_mul((int)((c >> sh) & 0xff), mul[ch]) << sh;
+			}
+			px[(size_t)y * w + x] = o;
+		}
+		if (!(y & 31)) user_io_core_alive_poll();
+	}
+}
+
+int vp_render_exact(int look, const uint32_t *src, int sw, int sh,
+	uint32_t *dst, int dw, int dh)
+{
+	if (look < 0 || look >= NPRESETS) return 0;
+	if (!src || !dst || sw < 1 || sh < 1 || dw < 1 || dh < 1) return 0;
+
+	const preset_def *d = &presets[look];
+
+	vp_taps hf, vf;
+	int have_h = vp_load_taps(d->hfilter, &hf);
+	int have_v = vp_load_taps(d->vfilter, &vf);
+
+	vp_mask mask;
+	int have_mask = vp_load_mask(d->mask, &mask);
+
+	// Nothing of this look lives in the scaler: None, or one whose whole effect is
+	// core-side. The caller draws the frame as captured rather than pretending.
+	if (!have_h && !have_v && !have_mask) return 0;
+
+	// Nearest is what an axis with no filter of its own gets, which is what the
+	// Sharp look asks the scaler for and what the others leave alone.
+	vp_taps nearest;
+	memset(&nearest, 0, sizeof(nearest));
+	for (int p = 0; p < VP_HW_PHASES; p++)
+	{
+		if (p < VP_HW_PHASES / 2) nearest.t[p][1] = 256;
+		else nearest.t[p][2] = 256;
+	}
+	nearest.ok = 1;
+
+	uint32_t *hbuf = (uint32_t*)malloc((size_t)dw * sh * 4);
+	uint32_t *tbuf = (uint32_t*)malloc((size_t)dw * sh * 4);
+	uint32_t *vbuf = (uint32_t*)malloc((size_t)dh * dw * 4);
+	if (!hbuf || !tbuf || !vbuf)
+	{
+		free(hbuf); free(tbuf); free(vbuf);
+		return 0;
+	}
+
+	// Horizontal, then the same routine down the columns of the result.
+	vp_axis(src, sw, sh, hbuf, dw, have_h ? &hf : &nearest);
+	vp_transpose(hbuf, dw, sh, tbuf);
+	vp_axis(tbuf, sh, dw, vbuf, dh, have_v ? &vf : &nearest);
+	vp_transpose(vbuf, dh, dw, dst);
+
+	// The mask rides the OUTPUT pixels, which is where the fabric applies it too.
+	if (have_mask)
+		vp_apply_mask(dst, dw, dh, &mask, d->maskmode && !strcasecmp(d->maskmode, "2x"));
+
+	free(hbuf); free(tbuf); free(vbuf);
+	return 1;
+}
+
 int vp_count() { return NPRESETS; }
 const char *vp_name(int i) { return (i >= 0 && i < NPRESETS) ? presets[i].name : "?"; }
 const char *vp_blurb(int i) { return (i >= 0 && i < NPRESETS) ? presets[i].blurb : ""; }
@@ -1645,16 +1973,91 @@ const uint32_t *vp_preview(int i, int w, int h, const uint32_t *ref)
 	double gba_g = pv_gba_gamma(i);
 
 	/*
-	  With a reference frame the source is that frame at 1:1 (it was decoded at
-	  exactly w x h). Without one, the synthetic pattern is drawn at a chunky scale
-	  so pixel edges and the mask stay visible.
+	  With a real frame, the look is applied by the scaler's own arithmetic instead
+	  of by the impression below - the same code that draws the in-game background.
+
+	  The frame has to be shrunk first, and that is not a shortcut: a polyphase
+	  filter at 1:1 is a NO-OP by construction (every output pixel lands on phase 0,
+	  which is the tap that copies), so a grid rendered over a frame already at tile
+	  size would come out invisible and the preview would be a confident lie. The
+	  television magnifies a 240p frame about four times onto a 1080p panel, so the
+	  source is reduced by four here and put back by the filter - which is the
+	  magnification the look was designed around, at the size the tile has to show it.
+
+	  Box-averaged rather than point-sampled on the way down, so shrinking does not
+	  itself invent the aliasing the filter is then blamed for.
+	*/
+	if (ref)
+	{
+		const int z = 4;
+		int nw = w / z, nh = h / z;
+		if (nw < 16) nw = (w < 16) ? w : 16;
+		if (nh < 16) nh = (h < 16) ? h : 16;
+
+		uint32_t *small = (uint32_t*)malloc((size_t)nw * nh * 4);
+		if (small)
+		{
+			for (int y = 0; y < nh; y++)
+			{
+				for (int x = 0; x < nw; x++)
+				{
+					int x0 = (x * w) / nw, x1 = ((x + 1) * w) / nw;
+					int y0 = (y * h) / nh, y1 = ((y + 1) * h) / nh;
+					if (x1 <= x0) x1 = x0 + 1;
+					if (y1 <= y0) y1 = y0 + 1;
+
+					int acc[3] = { 0, 0, 0 }, n = 0;
+					for (int sy = y0; sy < y1 && sy < h; sy++)
+					{
+						for (int sx = x0; sx < x1 && sx < w; sx++)
+						{
+							uint32_t c = ref[(size_t)sy * w + sx];
+							acc[0] += (c >> 16) & 0xff;
+							acc[1] += (c >> 8) & 0xff;
+							acc[2] += c & 0xff;
+							n++;
+						}
+					}
+					if (!n) n = 1;
+
+					uint8_t c[3] = { (uint8_t)(acc[0] / n), (uint8_t)(acc[1] / n), (uint8_t)(acc[2] / n) };
+
+					// The core's half first, because the core colours the picture the
+					// scaler then filters - the order the hardware runs them in.
+					for (int k = 0; k < 3; k++) c[k] = lut[k][c[k]];
+					if (pal) pv_apply_palette(pal, c);
+					else if (gba_g > 0) pv_apply_gba(gba_g, c);
+
+					small[(size_t)y * nw + x] = 0xff000000u | (c[0] << 16) | (c[1] << 8) | c[2];
+				}
+			}
+
+			if (vp_render_exact(i, small, nw, nh, pv_buf, w, h))
+			{
+				free(small);
+				return pv_buf;
+			}
+
+			// Nothing of this look lives in the scaler, so the coloured frame IS the
+			// preview - put it back at tile size and stop.
+			for (int y = 0; y < h; y++)
+				for (int x = 0; x < w; x++)
+					pv_buf[(size_t)y * w + x] = small[(size_t)(y * nh / h) * nw + (x * nw / w)];
+
+			free(small);
+			return pv_buf;
+		}
+	}
+
+	/*
+	  Without a frame, the synthetic pattern is drawn at a chunky scale so pixel
+	  edges and the mask stay visible, and the impression below stands in for the
+	  scaler: there is no real picture for the real arithmetic to be run over.
 	*/
 	int scale = (h / 60) + 2;
 	int sw = w / scale, sh = h / scale;
 	if (sw < 8) sw = 8;
 	if (sh < 8) sh = 8;
-
-	if (ref) { sw = w; sh = h; scale = 1; }
 
 	for (int y = 0; y < h; y++)
 	{

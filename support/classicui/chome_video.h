@@ -139,6 +139,19 @@ int  vp_lookshot_path(int i, char *out, int len);
 */
 const uint32_t *vp_preview(int i, int w, int h, const uint32_t *ref);
 
+/*
+  A captured frame, put through the scaler's own arithmetic for this look, so the
+  front-end can draw what the television is drawing rather than an impression of
+  it. See the long note on the definition for what is exact and what is not.
+
+  Returns 0 when the look has nothing in the scaler to apply (its whole effect is
+  core-side, or it is None), in which case the caller should use the frame as it
+  is. Costs a full-canvas pass of integer arithmetic: fine once when a menu opens,
+  not fine every frame.
+*/
+int vp_render_exact(int look, const uint32_t *src, int sw, int sh,
+	uint32_t *dst, int dw, int dh);
+
 /* --------------------------------------------------- the analog output ----- */
 
 /*
