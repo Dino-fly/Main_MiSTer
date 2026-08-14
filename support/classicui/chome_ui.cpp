@@ -1748,23 +1748,64 @@ static int deck_peek(int h)  { int p = h / 28; if (p < 3) p = 3; if (p > 8) p = 
 static int deck_inset(int w) { int i = w / 24; if (i < 3) i = 3; return i; }
 static int deck_rise(int h)  { return DECK_STRIPS * deck_peek(h); }
 
+// Where the deck's strip at `lvl` sits for a face at (x, y, w, h). One function, because
+// the resting deck and the riffle's landing positions must be the same rectangles or the
+// cycle ends on a visible jump.
+static void deck_strip_rect(int x, int y, int w, int h, int lvl,
+	int *rx, int *ry, int *rw, int *rh)
+{
+	int pk = deck_peek(h), ins = deck_inset(w);
+	*rx = x + lvl * ins;
+	*ry = y - lvl * pk;
+	*rw = w - 2 * lvl * ins;
+	*rh = lvl * pk + 2;
+}
+
 /*
-  When X last turned a multi-file card to its next file, for the deal that shows it: a
-  card back that starts exactly over the face and flattens up onto the deck, uncovering
-  the new cover beneath. 0 when no deal is in flight.
+  When X last turned a multi-file card to its next file, for the riffle that shows it -
+  Dinofly's choreography, replacing an earlier card-back deal: the front card slides out
+  to the RIGHT, the card behind it comes forward - a zoom, growing from the front strip
+  until it fills the slot - and the old front tucks back in on the LEFT, filing itself
+  at the back of the pile. The way a hand cycles a stack of photographs.
 
-  The deal is a moving plate rather than a sliding cover, and that is forced, not chosen:
-  sliding the artwork inside the card needs a clip rectangle, and gfx_clip_set() is one
-  global rectangle, not a stack - setting it inside a compose would silently drop the
-  region clip render_region() put there (see the marquee's note in chome_gfx.h, which hit
-  the same wall). An opaque rectangle needs no clip, and it happens to be the truer
-  picture: the file on show goes back on the pile, the next one is under it.
+  Three moving pieces, and the reason it can land without a seam is that their end
+  rectangles ARE the resting deck: the incoming card ends exactly at the face, the pile's
+  remaining strip walks from level 2 to level 1, and the outgoing card ends exactly at
+  the deepest strip - so the frame after the riffle, drawn through the ordinary path, is
+  identical to the riffle's own last instant.
 
-  The plate's geometry is a pure function of this timestamp and the clock, like every
-  animation here, so a partial frame and a full repaint of the same instant agree.
+  Everything is opaque blits and plates - no clipping, which gfx_clip_set() could not
+  give us anyway (one global rectangle, reserved for render_region; see the marquee's
+  note in chome_gfx.h). And every rectangle is a pure function of this timestamp and the
+  clock, so a partial frame and a full repaint of the same instant agree.
+
+  ver_riffle_prev is the item that was on show when X was pressed - the outgoing card's
+  cover. Its art is normally still cached (it was the face a frame ago); if it has been
+  evicted the outgoing card rides as a plain card back, which reads fine at speed.
 */
-#define VER_DEAL_MS 180UL
-static unsigned long ver_deal_at = 0;
+#define VER_RIFFLE_MS 320UL
+static unsigned long ver_riffle_at = 0;
+static int ver_riffle_prev = -1;
+
+/*
+  Whether the riffle is live THIS shelf pass, sampled once at the top of draw_shelf().
+
+  Once, because two halves of one compose ask it: draw_card() must leave the face, the
+  deck and the counter alone, and the second pass must then draw them in motion. Each
+  half reading the clock for itself would let a compose straddle the riffle's last
+  millisecond - the first half suppresses the face, the clock ticks, the second half
+  finds the riffle over and draws nothing, and that frame shows a bare slot. Sampled
+  once, the two halves always agree; and a pass that samples "live" while the clock has
+  just run out simply draws the pieces at their clamped end rectangles, which are the
+  resting deck to the pixel. Still a pure function of clock and state: a region replay
+  runs draw_shelf() again and re-samples.
+*/
+static int riffle_live;
+
+static int riffling(const chome_entry *e, int selected)
+{
+	return selected && e->kind == ENT_GAME && e->nvar > 1 && riffle_live;
+}
 
 /*
   Whether the shelf is where the player's presses are going.
@@ -1791,6 +1832,76 @@ static int shelf_has_focus()
 	return screen == SCR_HOME;
 }
 
+/*
+  A game card's face at any rectangle: the cover (or the fallback, or the still-loading
+  plate), the title band, the favourite star and the version counter. Split out of
+  draw_card() so the riffle can draw the incoming card as a real face at every size of
+  its zoom rather than as artwork that gains its dressing in a pop at the end.
+
+  `dress` says whether the band, the star and the counter are drawn at all: draw_card()
+  always dresses (every resting card wears its band, down to the 61-row cards at 240p),
+  while the riffle dresses a moving card only once it is big enough for the band not to
+  overflow it - a 14-row band on a 9-row rectangle would paint below the card.
+*/
+static void draw_card_face(chome_item *it, const chome_entry *e,
+	int x, int y, int w, int h, int selected, int dress)
+{
+	int aw = 0, ah = 0;
+	const uint32_t *art = art_get(e->game, &aw, &ah);
+	if (art) gfx_blit(art, aw, ah, x, y, w, h);
+	else if (art_state(e->game) == ART_MISSING) draw_fallback_card(it, x, y, w, h);
+	else
+	{
+		// Still loading: plate plus badge, so the shelf never shows a hole.
+		const chome_sys *s = lib_sys(it->sysidx);
+		gfx_fill(x, y, w, h, s ? s->tint : COL_PANELLO);
+		gfx_scrim(x, y, w, h, COL_SHADOW, 2);
+		gfx_frame_rect(x, y, w, h, COL_PANELLO, 1);
+	}
+
+	if (!dress) return;
+
+	// Cover title band, like the front of a real box.
+	if (art)
+	{
+		int bs = (w > 180) ? 2 : 1;
+		int bandh = 9 * bs + 5;
+		gfx_blend(x, y + h - bandh, w, bandh, COL_SHADOW, 190);
+		char up[CH_TITLE_LEN];
+		snprintf(up, sizeof(up), "%s", it->title);
+		gfx_shout(up);
+		gfx_text_c(gfx_clip(up, bs, w - 4), x + w / 2, y + h - bandh + 3, bs, COL_PANELHI, 0);
+	}
+
+	if (it->fav)
+	{
+		int box = 16;
+		gfx_fill(x + w - box - 6, y + 4, box + 4, box + 4, COL_SHADOW);
+		picto("star", x + w - box - 4, y + 6, box, COL_YELLOW);
+	}
+
+	/*
+	  Which of the files is on show, as a count on the face: the deck above the card
+	  already says "there are more", so the number no longer has to be read at a
+	  glance from an unselected card - it appears on the selected one, where X acts
+	  and where the card is at its largest. That is what let a count replace the old
+	  corner pictogram: 1/3 at the selected card's size is legible even at 240p, and
+	  it says which file and how many, which the pictogram never could.
+
+	  Top left, because the favourite star is top right and a game can be both. Over
+	  a scrim for the reason the title band is: it sits on artwork of every colour.
+	*/
+	if (e->nvar > 1 && selected)
+	{
+		char vc[16];
+		snprintf(vc, sizeof(vc), "%d/%d", e->vsel + 1, e->nvar);
+		int ts = (w > 180) ? 2 : 1;
+		int tw = gfx_text_w(vc, ts);
+		gfx_blend(x, y, tw + 8, 8 * ts + 6, COL_SHADOW, 190);
+		gfx_text(vc, x + 4, y + 3, ts, COL_PANELHI, 0);
+	}
+}
+
 static void draw_card(const chome_entry *e, int cx, int bottom, int w, int h, int selected)
 {
 	int x = cx - w / 2, y = bottom - h;
@@ -1804,6 +1915,11 @@ static void draw_card(const chome_entry *e, int cx, int bottom, int w, int h, in
 
 	gfx_fill(x + sd, y + sd, w, h, COL_SHADOW);
 
+	// Mid-riffle, the face, the deck and the counter all belong to draw_riffle() - the
+	// second pass over the shelf, which draws them where their motion has them this
+	// instant. What stays here is what does not move: the shadow and the focus ring.
+	int rif = riffling(e, selected);
+
 	/*
 	  The deck, before the face so the face sits on it. Back to front, each level one
 	  inset further in and one peek further up, filled before it frames so only its top
@@ -1816,14 +1932,13 @@ static void draw_card(const chome_entry *e, int cx, int bottom, int w, int h, in
 	  it, and a second scrim call there would checkerboard the background beside the
 	  strips, which are narrower than the card.
 	*/
-	if (on_deck)
+	if (on_deck && !rif)
 	{
-		int pk = deck_peek(h), ins = deck_inset(w);
 		int ns = (e->nvar - 1 < DECK_STRIPS) ? e->nvar - 1 : DECK_STRIPS;
 		for (int i = ns; i >= 1; i--)
 		{
-			int rx = x + i * ins, ry = y - i * pk;
-			int rw = w - 2 * i * ins, rh = i * pk + 2;
+			int rx, ry, rw, rh;
+			deck_strip_rect(x, y, w, h, i, &rx, &ry, &rw, &rh);
 			gfx_fill(rx, ry, rw, rh, selected ? COL_PANEL : COL_PANELLO);
 			gfx_frame_rect(rx, ry, rw, rh, selected ? COL_PANELHI : COL_PANEL, 1);
 		}
@@ -1886,89 +2001,9 @@ static void draw_card(const chome_entry *e, int cx, int bottom, int w, int h, in
 		chome_item *it = lib_item(e->game);
 		if (!it) return;
 
-		int aw = 0, ah = 0;
-		const uint32_t *art = art_get(e->game, &aw, &ah);
-		if (art) gfx_blit(art, aw, ah, x, y, w, h);
-		else if (art_state(e->game) == ART_MISSING) draw_fallback_card(it, x, y, w, h);
-		else
-		{
-			// Still loading: plate plus badge, so the shelf never shows a hole.
-			const chome_sys *s = lib_sys(it->sysidx);
-			gfx_fill(x, y, w, h, s ? s->tint : COL_PANELLO);
-			gfx_scrim(x, y, w, h, COL_SHADOW, 2);
-			gfx_frame_rect(x, y, w, h, COL_PANELLO, 1);
-		}
-
-		// Cover title band, like the front of a real box.
-		if (art)
-		{
-			int bs = (w > 180) ? 2 : 1;
-			int bandh = 9 * bs + 5;
-			gfx_blend(x, y + h - bandh, w, bandh, COL_SHADOW, 190);
-			char up[CH_TITLE_LEN];
-			snprintf(up, sizeof(up), "%s", it->title);
-			gfx_shout(up);
-			gfx_text_c(gfx_clip(up, bs, w - 4), x + w / 2, y + h - bandh + 3, bs, COL_PANELHI, 0);
-		}
-
-		if (it->fav)
-		{
-			int box = 16;
-			gfx_fill(x + w - box - 6, y + 4, box + 4, box + 4, COL_SHADOW);
-			picto("star", x + w - box - 4, y + 6, box, COL_YELLOW);
-		}
-
-		/*
-		  Which of the files is on show, as a count on the face: the deck above the card
-		  already says "there are more", so the number no longer has to be read at a
-		  glance from an unselected card - it appears on the selected one, where X acts
-		  and where the card is at its largest. That is what let a count replace the old
-		  corner pictogram: 1/3 at the selected card's size is legible even at 240p, and
-		  it says which file and how many, which the pictogram never could.
-
-		  Top left, because the favourite star is top right and a game can be both. Over
-		  a scrim for the reason the title band is: it sits on artwork of every colour.
-		*/
-		if (e->nvar > 1 && selected)
-		{
-			char vc[16];
-			snprintf(vc, sizeof(vc), "%d/%d", e->vsel + 1, e->nvar);
-			int ts = (w > 180) ? 2 : 1;
-			int tw = gfx_text_w(vc, ts);
-			gfx_blend(x, y, tw + 8, 8 * ts + 6, COL_SHADOW, 190);
-			gfx_text(vc, x + 4, y + 3, ts, COL_PANELHI, 0);
-		}
-
-		/*
-		  The deal: for VER_DEAL_MS after X, a card back flying from the face up onto the
-		  deck, uncovering the file now on show. Drawn over everything on the face and
-		  under the focus ring, and its rectangle interpolates from the face's exactly to
-		  the front strip's - so its last instant is the strip that is already there, and
-		  the landing needs no seam. Eased out, so it leaves the face quickly and settles.
-
-		  Skipped while the shelf is easing (selF != sel): a deal belongs to the card X
-		  was pressed on, and mid-slide the selected card is changing hands. Every term
-		  here is state or the clock, which keeps compose() a pure function of both.
-
-		  No band worry, deliberately: the plate never leaves the union of the face and
-		  the deck, and both are already in this card's recorded rows.
-		*/
-		if (e->nvar > 1 && selected && ver_deal_at && selF == sel)
-		{
-			unsigned long el = GetTimer(0) - ver_deal_at;
-			if (el < VER_DEAL_MS)
-			{
-				double pe = 1.0 - (1.0 - (double)el / VER_DEAL_MS) *
-					(1.0 - (double)el / VER_DEAL_MS);
-				int pk = deck_peek(h), ins = deck_inset(w);
-				int rx = x + (int)(ins * pe);
-				int ry = y - (int)(pk * pe);
-				int rw = w - (int)(2 * ins * pe);
-				int rh = h + (int)((pk + 2 - h) * pe);
-				gfx_fill(rx, ry, rw, rh, COL_PANEL);
-				gfx_frame_rect(rx, ry, rw, rh, COL_PANELHI, 1);
-			}
-		}
+		// Mid-riffle the slot shows its bare shadow plate for the moment the incoming
+		// card has not yet covered - the pile with its top card lifted off.
+		if (!rif) draw_card_face(it, e, x, y, w, h, selected, 1);
 	}
 
 	if (selected)
@@ -2002,10 +2037,139 @@ static void request_visible_art(const chome_profile *p)
 			if (!d) break;
 		}
 	}
+
+	/*
+	  And the cover BEHIND the selected multi-file card, before X is ever pressed. The
+	  riffle brings the next file forward already wearing its art, so that art has to be
+	  decoded while the card is still in the pile - a cover that only started decoding on
+	  the press would come forward as the loading plate and pop into a picture at rest,
+	  which is the one seam the choreography exists to avoid. Distance 1: the next file
+	  is exactly as likely to be looked at as the neighbouring card.
+	*/
+	const chome_entry *se = (sel >= 0 && sel < n) ? lib_view_entry(sel) : 0;
+	if (se && se->kind == ENT_GAME && se->nvar > 1)
+		art_request(lib_view_variant(sel, (se->vsel + 1) % se->nvar), 1);
+}
+
+/*
+  The riffle, drawn as a second pass AFTER every card on the shelf: its pieces cross the
+  neighbouring cards (the outgoing card slides right across the gap), and a piece drawn
+  inside draw_card()'s loop would be painted over by whichever neighbour the loop drew
+  next. Being one pass, it also owns the z-order outright, which changes at the halfway
+  point: while the outgoing card slides right it is the top of the pile and draws over
+  everything; once it turns back to file itself away it is the bottom, and draws first.
+
+  All three pieces end on the resting deck's own rectangles - deck_strip_rect() and the
+  face - so the ordinary draw that follows the riffle's last frame changes nothing.
+
+  Rows: nothing here leaves the band the shelf already records - the crest note in
+  draw_shelf() spans the deck's rise to the card's shadow, and the riffle moves only
+  sideways within it.
+*/
+static void draw_riffle(const chome_entry *e, const chome_profile *p)
+{
+	int w = p->sel_w, h = p->sel_h;
+	int x = (p->w - w) / 2, y = p->y_shelf - h;
+
+	double t = (double)(GetTimer(0) - ver_riffle_at) / VER_RIFFLE_MS;
+	if (t < 0) t = 0;
+	if (t > 1) t = 1;
+
+	int ns = (e->nvar - 1 < DECK_STRIPS) ? e->nvar - 1 : DECK_STRIPS;
+	chome_item *in_it = lib_item(e->game);
+	if (!in_it) return;
+
+	// The incoming card: from the front strip to the face, eased out, finished at 0.8
+	// of the cycle so the slot is whole while the outgoing card is still filing itself.
+	int ix, iy, iw, ih;
+	{
+		double q = t / 0.8; if (q > 1) q = 1;
+		q = 1.0 - (1.0 - q) * (1.0 - q);
+		int sx, sy, sw, sh;
+		deck_strip_rect(x, y, w, h, 1, &sx, &sy, &sw, &sh);
+		ix = sx + (int)((x - sx) * q);
+		iy = sy + (int)((y - sy) * q);
+		iw = sw + (int)((w - sw) * q);
+		ih = sh + (int)((h - sh) * q);
+	}
+
+	// The outgoing card: right until 0.45, then back left into the deepest strip,
+	// smoothstepped so the turn does not read as a bounce off a wall.
+	int ox, oy, ow, oh;
+	{
+		int rx = x + w * 3 / 5;
+		if (t < 0.45)
+		{
+			double q = t / 0.45;
+			q = 1.0 - (1.0 - q) * (1.0 - q);
+			ox = x + (int)((rx - x) * q);
+			oy = y; ow = w; oh = h;
+		}
+		else
+		{
+			double q = (t - 0.45) / 0.55;
+			q = q * q * (3.0 - 2.0 * q);
+			int tx, ty, tw2, th2;
+			deck_strip_rect(x, y, w, h, ns, &tx, &ty, &tw2, &th2);
+			ox = rx + (int)((tx - rx) * q);
+			oy = y + (int)((ty - y) * q);
+			ow = w + (int)((tw2 - w) * q);
+			oh = h + (int)((th2 - h) * q);
+		}
+	}
+
+	// The outgoing card's look: its own cover while it is card-sized, the deck's plate
+	// once it is nearly filed - so the instant it becomes a resting strip changes no
+	// pixel. The swap happens in motion, where it cannot be seen; at rest it could be.
+	int aw = 0, ah = 0;
+	const uint32_t *oart = (ver_riffle_prev >= 0) ? art_get(ver_riffle_prev, &aw, &ah) : 0;
+	int oplate = (!oart || oh < h / 4);
+
+	if (t >= 0.45)          // filing away: bottom of the pile, drawn first
+	{
+		if (oplate)
+		{
+			gfx_fill(ox, oy, ow, oh, COL_PANEL);
+			gfx_frame_rect(ox, oy, ow, oh, COL_PANELHI, 1);
+		}
+		else gfx_blit(oart, aw, ah, ox, oy, ow, oh);
+	}
+
+	// The rest of the pile walks one level forward: the strip at level 2 becomes the
+	// strip at level 1 while the front card it sat behind is away.
+	if (ns >= 2)
+	{
+		int ax, ay, aw2, ah2, bx, by, bw2, bh2;
+		deck_strip_rect(x, y, w, h, 2, &ax, &ay, &aw2, &ah2);
+		deck_strip_rect(x, y, w, h, 1, &bx, &by, &bw2, &bh2);
+		int px = ax + (int)((bx - ax) * t);
+		int py = ay + (int)((by - ay) * t);
+		int pw = aw2 + (int)((bw2 - aw2) * t);
+		int ph = ah2 + (int)((bh2 - ah2) * t);
+		gfx_fill(px, py, pw, ph, COL_PANEL);
+		gfx_frame_rect(px, py, pw, ph, COL_PANELHI, 1);
+	}
+
+	// The incoming card, dressed once the band fits inside it.
+	draw_card_face(in_it, e, ix, iy, iw, ih, 1, ih >= 48);
+
+	if (t < 0.45)           // sliding out: top of the pile, drawn last
+	{
+		if (oplate)
+		{
+			gfx_fill(ox, oy, ow, oh, COL_PANEL);
+			gfx_frame_rect(ox, oy, ow, oh, COL_PANELHI, 1);
+		}
+		else gfx_blit(oart, aw, ah, ox, oy, ow, oh);
+	}
 }
 
 static void draw_shelf(const chome_profile *p)
 {
+	// Sampled here and nowhere else - see riffle_live.
+	riffle_live = (ver_riffle_at && selF == sel &&
+		(GetTimer(0) - ver_riffle_at) < VER_RIFFLE_MS);
+
 	gfx_fill(0, p->y_shelf + 1, p->w, 1, COL_GRID);
 
 	/*
@@ -2050,6 +2214,13 @@ static void draw_shelf(const chome_profile *p)
 		int w = p->card_w + (int)((p->sel_w - p->card_w) * t);
 		int h = p->card_h + (int)((p->sel_h - p->card_h) * t);
 		draw_card(e, x, p->y_shelf, w, h, t > 0.5);
+	}
+
+	// The riffle's second pass - see draw_riffle() for why it cannot live in the loop.
+	if (riffle_live && sel >= 0 && sel < n)
+	{
+		const chome_entry *e = lib_view_entry(sel);
+		if (e && riffling(e, 1)) draw_riffle(e, p);
 	}
 }
 
@@ -14294,15 +14465,16 @@ static void animate()
 	if (!CheckTimer(ig_close_until)) mark_anim();
 
 	/*
-	  The deal after X, kept moving: frames while the plate is in flight, and one more
-	  once it has landed - the frame without the plate, which is the trap the promoted
-	  message above spells out. mark_slide() rather than mark_anim(), because the plate
-	  never leaves the card band; the press itself already repainted the world.
+	  The riffle after X, kept moving: frames while its pieces are in flight, and one
+	  more once they have landed - the frame drawn through the ordinary path, which is
+	  the trap the promoted message above spells out. mark_slide() rather than
+	  mark_anim(), because nothing here leaves the card band; the press itself already
+	  repainted the world.
 	*/
-	if (ver_deal_at)
+	if (ver_riffle_at)
 	{
-		if (now - ver_deal_at < VER_DEAL_MS) mark_slide();
-		else { ver_deal_at = 0; mark_slide(); }
+		if (now - ver_riffle_at < VER_RIFFLE_MS) mark_slide();
+		else { ver_riffle_at = 0; ver_riffle_prev = -1; mark_slide(); }
 	}
 
 	/*
@@ -14768,11 +14940,16 @@ int chome_handle(uint32_t key)
 			*/
 			if (screen == SCR_HOME)
 			{
+				// The file on show now is the riffle's outgoing card, so it is
+				// remembered before the cycle moves e->game off it.
+				const chome_entry *ce = lib_view_entry(sel);
+				int prev = (ce && ce->kind == ENT_GAME) ? ce->game : -1;
 				if (!lib_view_cycle(sel, 1)) { nudge(); break; }
-				// And the deal that shows it: see ver_deal_at. The press itself
+				// And the riffle that shows it: see ver_riffle_at. The press itself
 				// repaints the world (the title block's counter moved); the frames
 				// after it are cards only, and animate() carries those on the band.
-				ver_deal_at = GetTimer(0);
+				ver_riffle_prev = prev;
+				ver_riffle_at = GetTimer(0);
 				mark_dirty();
 				break;
 			}
