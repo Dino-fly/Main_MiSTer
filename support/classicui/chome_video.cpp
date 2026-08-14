@@ -24,12 +24,28 @@
   A look drives two machines at once.
 
   The scaler half (filters, mask, gamma) goes through a preset file exactly as
-  before. The core half is new: core_opts is a ;-separated list of
-  "Option Name=Value Name" pairs matched against the running core's CONF_STR by
-  NAME - a core that does not publish the option is simply left alone, which is
-  what makes one "None" entry safe on every system. Names, not bit positions,
-  for the same reason snacpad.cpp does it: a core update that inserts an option
-  renumbers every bit after it.
+  before. The core half is new: core_colour and core_struct are ;-separated
+  lists of "Option Name=Value Name" pairs matched against the running core's
+  CONF_STR by NAME - a core that does not publish the option is simply left
+  alone, which is what makes one "None" entry safe on every system. Names, not
+  bit positions, for the same reason snacpad.cpp does it: a core update that
+  inserts an option renumbers every bit after it.
+
+  Why the core half is TWO columns and not one: what a look does divides into
+  colour and structure, and only colour survives on an analog display.
+
+    core_colour   the palette, the colour correction - what the panel's dyes and
+                  filters did to the picture. A player with a Game Boy on a CRT
+                  wants DMG green exactly as much as one on HDMI.
+    core_struct   the pixel grid, the drop shadow, the panel's ghosting, and the
+                  integer scale that only exists to keep the grid's cells equal:
+                  everything that simulates the physical LCD. On a real CRT that
+                  is not a simulation of anything, it is just damage.
+
+  The same division runs through the scaler half - gamma is colour, the grid
+  filter and the mask are structure - which is why every look with a core_struct
+  gets a second preset file with the structure dropped. See look_is_panel() and
+  vp_preset_path_for().
 
   Nothing the core half does is ever saved into <CORE>.CFG. The look is applied
   on every launch from the shelf (and live from the Display screen), so a game
@@ -60,7 +76,8 @@ struct preset_def
 	const char *mask;         // 0 = no mask line, "off" = explicitly off
 	const char *maskmode;
 	const char *gamma;        // 0 = no gamma line, "off" = explicitly off
-	const char *core_opts;    // 0 = nothing, else "Name=Value;Name=Value"
+	const char *core_colour;  // 0 = nothing, else "Name=Value;Name=Value". Any output.
+	const char *core_struct;  // the LCD's own structure. Never on an analog display.
 	const char *palette;      // 0 = none, else root-relative .gbp path
 };
 
@@ -96,8 +113,9 @@ struct preset_def
   core's own Scale option is the one place it can be set per game from here.
   "Narrower" rounds down, so the image always fits.
 
-  CO_LCD_OFF is the reset half of "None" and covers GB and GBA in one string -
-  unmatched names are skipped by name lookup, so the GBA sees only its own.
+  It is therefore part of the STRUCTURE half and not the colour one: its whole
+  justification is the grid, and where there is no grid - an analog display -
+  there is no reason to overrule the player's own scaling.
 */
 #define CO_INTEGER  "Scale=Narrower HV-Integer"
 /*
@@ -107,13 +125,27 @@ struct preset_def
   said Off). The custom palette wins the colours, the SGB canvas keeps the
   border, and a player who disagrees flips it in Core options, where the
   per-game record outranks the look.
+
+  It stays with the colour half: an SGB border is a second machine's canvas, not
+  a simulation of the Game Boy's panel, and Super Game Boy on a television is
+  how that machine was actually played.
 */
-#define CO_GB_DMG   "Super Game Boy=On;Custom Palette=On;Screen Shadow=Yes;Frame blend=On;" CO_INTEGER
+#define CO_GB_DMG_COLOUR "Super Game Boy=On;Custom Palette=On"
+
+/*
+  Screen Shadow is the core's own drop shadow under each LCD pixel and Frame
+  blend is the panel's slow response. Both simulate the physical thing, so both
+  are structure - and Frame blend / Flickerblend with them, for all that a
+  flicker-heavy Lynx game looks rough without it. A CRT running raw is what the
+  cartridge really put out; the ghosting was the panel's doing, and the panel is
+  not there.
+*/
+#define CO_GB_DMG_PANEL  "Screen Shadow=Yes;Frame blend=On;" CO_INTEGER
 
 static const preset_def presets[] =
 {
 	{ "sharp", "Sharp", "No filtering. Square pixels, nothing added.",
-	  "off", "off", "off", "off", "off", "off", 0, 0 },
+	  "off", "off", "off", "off", "off", "off", 0, 0, 0 },
 
 	/*
 	  TrashUncle's "Sony PVM" from the distribution's Display Specific pack,
@@ -128,7 +160,7 @@ static const preset_def presets[] =
 	  "off",
 	  "Simple (Monochrome)/Aperture Grille (No Scanlines) (1968).txt",
 	  "1x",
-	  "Pure_Gamma/gamma_110.txt", 0, 0 },
+	  "Pure_Gamma/gamma_110.txt", 0, 0, 0 },
 
 	/*
 	  Short names on purpose: five tiles share a row on the console class since
@@ -136,7 +168,7 @@ static const preset_def presets[] =
 	  gate is the arbiter. The blurb carries the longer story.
 	*/
 	{ "pvm-svideo", "S-Video", "Slight horizontal bleed, scanlines: a console on a good PVM over S-Video.",
-	  F_SOFT, F_SHARP, F_SCAN, M_GRILLE, "1x", "off", 0, 0 },
+	  F_SOFT, F_SHARP, F_SCAN, M_GRILLE, "1x", "off", 0, 0, 0 },
 
 	/*
 	  The distribution's own Sony PVM mask at 1x, on Dinofly's call, in place of our
@@ -147,13 +179,13 @@ static const preset_def presets[] =
 	*/
 	{ "composite", "Composite", "Soft and blurry, as an RF or composite hookup looked.",
 	  F_BLURRY, F_SOFT, F_SCAN,
-	  "Simple (Monochrome)/Sony PVM (Generic) (~1980).txt", "1x", "off", 0, 0 },
+	  "Simple (Monochrome)/Sony PVM (Generic) (~1980).txt", "1x", "off", 0, 0, 0 },
 
 	{ "pal-tv", "PAL TV", "Softer still with lighter scanlines. Home computers on a telly.",
-	  F_SOFT, F_SOFT, F_SCANLT, M_GRILLE, "2x", "off", 0, 0 },
+	  F_SOFT, F_SOFT, F_SCANLT, M_GRILLE, "2x", "off", 0, 0, 0 },
 
 	{ "vga", "VGA Monitor", "Clean and slightly smoothed. No scanlines: a 31 kHz monitor had none.",
-	  F_SOFT, F_SOFT, "off", "off", "off", "off", 0, 0 },
+	  F_SOFT, F_SOFT, "off", "off", "off", "off", 0, 0, 0 },
 
 	/*
 	  The Game Boy pair. Colour comes from a real .gbp through the core's own
@@ -162,14 +194,16 @@ static const preset_def presets[] =
 	  core pixels by construction), the shadow is the core's own drop-shadow.
 	*/
 	{ "dmg", "Game Boy DMG", "Muted olive-green reflective LCD, pixel grid and shadow.",
-	  F_GRIDSH, F_GRIDSH, "off", "off", "off", "off", CO_GB_DMG, PAL_DMG },
+	  F_GRIDSH, F_GRIDSH, "off", "off", "off", "off",
+	  CO_GB_DMG_COLOUR, CO_GB_DMG_PANEL, PAL_DMG },
 
 	{ "pocket", "Game Boy Pocket", "Neutral grey reflective LCD, finer grid, pixel shadow.",
-	  F_GRIDSH, F_GRIDSH, "off", "off", "off", "off", CO_GB_DMG, PAL_POCKET },
+	  F_GRIDSH, F_GRIDSH, "off", "off", "off", "off",
+	  CO_GB_DMG_COLOUR, CO_GB_DMG_PANEL, PAL_POCKET },
 
 	{ "gbc", "Game Boy Color", "Reflective colour LCD with its pixel grid.",
 	  F_GRID, F_GRID, "off", "off", "off", "off",
-	  "GBC Colors=Corrected;Screen Shadow=No;Frame blend=Off;" CO_INTEGER, 0 },
+	  "GBC Colors=Corrected", "Screen Shadow=No;Frame blend=Off;" CO_INTEGER, 0 },
 
 	/*
 	  The three GBA screens map to the core's own "Modify Colors" profiles - the
@@ -178,15 +212,15 @@ static const preset_def presets[] =
 	*/
 	{ "agb001", "GBA (AGB-001)", "The original unlit screen. Dim and washed out.",
 	  F_GRID, F_GRID, "off", "off", "off", "off",
-	  "Modify Colors=GBA 2.2;" CO_INTEGER, 0 },
+	  "Modify Colors=GBA 2.2", CO_INTEGER, 0 },
 
 	{ "ags001", "GBA SP (AGS-001)", "Frontlit SP: brighter than AGB, still washed out.",
 	  F_GRID, F_GRID, "off", "off", "off", "off",
-	  "Modify Colors=GBA 1.6;" CO_INTEGER, 0 },
+	  "Modify Colors=GBA 1.6", CO_INTEGER, 0 },
 
 	{ "ags101", "GBA SP (AGS-101)", "Backlit SP: bright with proper contrast and colour.",
 	  F_GRID, F_GRID, "off", "off", "off", "off",
-	  "Modify Colors=Off;" CO_INTEGER, 0 },
+	  "Modify Colors=Off", CO_INTEGER, 0 },
 
 	/*
 	  The rest of the handhelds, same split, measured against each core's own
@@ -197,27 +231,34 @@ static const preset_def presets[] =
 	  core, which those smeary panels had in spades, so their looks turn it on.
 	  All of them swap the misaligned Dot Matrix mask for the grid filter and
 	  pin integer scale like the GB/GBA looks do.
+
+	  None of them carries a core_colour, and that is what decides their fate on
+	  an analog display: their whole colour rendition is a scaler gamma LUT, so
+	  they are worth offering there only while the scaler output still reaches
+	  the screen (vga_scaler), and worth nothing at all on direct_video or an
+	  analog takeover. look_shows_on_analog() is where that is decided, and the
+	  Display screen simply does not list them where they would be inert.
 	*/
 	{ "gg", "Game Gear", "Backlit but murky, with the Game Gear's poor contrast.",
-	  F_GRID, F_GRID, "off", "off", "off", G_GG, CO_INTEGER, 0 },
+	  F_GRID, F_GRID, "off", "off", "off", G_GG, 0, CO_INTEGER, 0 },
 
 	{ "gg-mod", "Game Gear (Backlit Mod)", "The common LED backlight mod: brighter, cleaner whites.",
-	  F_GRID, F_GRID, "off", "off", "off", G_GGMOD, CO_INTEGER, 0 },
+	  F_GRID, F_GRID, "off", "off", "off", G_GGMOD, 0, CO_INTEGER, 0 },
 
 	{ "lynx", "Atari Lynx", "Backlit colour LCD with a cool cast and washed blacks.",
 	  F_GRID, F_GRID, "off", "off", "off", G_LYNX,
-	  "Flickerblend=2 Frames;" CO_INTEGER, 0 },
+	  0, "Flickerblend=2 Frames;" CO_INTEGER, 0 },
 
 	{ "ws", "WonderSwan", "Reflective mono FSTN: warm grey, low contrast.",
 	  F_GRID, F_GRID, "off", "off", "off", G_WS,
-	  "Flickerblend=2 Frames;" CO_INTEGER, 0 },
+	  0, "Flickerblend=2 Frames;" CO_INTEGER, 0 },
 
 	{ "wsc", "WonderSwan Color", "Reflective colour panel: muted and slightly warm.",
 	  F_GRID, F_GRID, "off", "off", "off", G_WSC,
-	  "Flickerblend=2 Frames;" CO_INTEGER, 0 },
+	  0, "Flickerblend=2 Frames;" CO_INTEGER, 0 },
 
 	{ "ngpc", "Neo Geo Pocket Color", "Reflective pastel colour LCD, gentle contrast.",
-	  F_GRID, F_GRID, "off", "off", "off", G_NGPC, CO_INTEGER, 0 },
+	  F_GRID, F_GRID, "off", "off", "off", G_NGPC, 0, CO_INTEGER, 0 },
 
 	/*
 	  One switch to turn every layer of processing off: scaler filters, mask and
@@ -228,11 +269,11 @@ static const preset_def presets[] =
 	  in classicui_video.cfg is a raw preset index, so table order is ABI.
 	*/
 	{ "none", "None", "Every effect off: the core's own picture, nothing added.",
-	  "off", "off", "off", "off", "off", "off", 0, 0 },
+	  "off", "off", "off", "off", "off", "off", 0, 0, 0 },
 
 	// Appended after None for the same ABI reason None sits where it does.
 	{ "bvm-rgb", "BVM RGB", "Reference broadcast monitor: razor sharp, deep scanlines.",
-	  F_SHARP, F_SHARP, F_SCANDP, M_GRILLE, "1x", "off", 0, 0 },
+	  F_SHARP, F_SHARP, F_SCANDP, M_GRILLE, "1x", "off", 0, 0, 0 },
 };
 
 #define NPRESETS ((int)(sizeof(presets) / sizeof(presets[0])))
@@ -569,6 +610,77 @@ int vp_count() { return NPRESETS; }
 const char *vp_name(int i) { return (i >= 0 && i < NPRESETS) ? presets[i].name : "?"; }
 const char *vp_blurb(int i) { return (i >= 0 && i < NPRESETS) ? presets[i].blurb : ""; }
 
+/* --------------------------------------------- which output are we on? ---- */
+
+/*
+  Is the picture on an analog display, and only there?
+
+  The test is video_hdmi_connected() == 0: no HDMI sink attached. Nothing else is
+  needed, and nothing else would be honest. All three analog routings put the
+  picture on the VGA port - direct_video straight off the core's timing,
+  vga_scaler permanently, and video_menu_fb_analog()'s takeover for as long as
+  the front-end holds the screen - and none of them can be told apart from the
+  ini alone: a machine with vga_scaler=1 AND an HDMI display is an ordinary HDMI
+  machine. What settles it is whether there is an HDMI sink to be the display,
+  and if there is neither an HDMI sink nor an analog one then nobody is looking
+  at anything and this answer costs nothing.
+
+  Unknown (-1, i2c not up yet) counts as attached, the same cautious answer
+  video_scaler_is_visible() and vp_analog_facts() already give it: it is the
+  reading taken before the machine is fully awake, and guessing "analog" there
+  would drop the grid on an HDMI player for the first frames after boot.
+
+  Deliberately NOT video_scaler_is_visible(). That answers "does the scaler
+  output reach a screen", which is a different question: with vga_scaler=1 the
+  scaler is very much in the path and its output is going down a VGA cable to a
+  CRT - the one case where the grid filter would be drawn onto a real tube.
+
+  Not cached. The i2c byte behind it is the same one the Display gate already
+  reads every frame, and the two callers that are on a per-frame path (the menu
+  bar, for a handheld class only, and vp_output_poll() only while a look owns
+  core options) both check something cheaper first.
+*/
+int vp_output_is_analog()
+{
+	return (video_hdmi_connected() == 0) ? 1 : 0;
+}
+
+/*
+  A panel look: one that simulates the physical LCD, and therefore the only kind
+  an analog display has to be protected from. Derived from core_struct rather
+  than from a flag of its own so the two cannot drift apart - a look that
+  simulates a panel has panel options, and the CRT looks have none.
+*/
+static int look_is_panel(const preset_def *d)
+{
+	return d->core_struct ? 1 : 0;
+}
+
+/*
+  Would this look show the player anything on an analog display?
+
+  Only colour survives there, and a look's colour comes from one of two places.
+  The core's own (a palette upload, GBC Colors, Modify Colors) reaches any output
+  because it happens before the picture leaves the core. A scaler gamma LUT
+  reaches the screen only while the scaler output does - so the Game Gear,
+  Lynx, WonderSwan and NGPC looks, whose entire colour work is a LUT, are real on
+  a vga_scaler CRT and inert on direct_video or the takeover.
+
+  Non-panel looks (the CRT presets, Sharp, None) are not filtered at all: they
+  are unchanged by this whole mechanism, and offering someone a look with no
+  processing in it is never wasted.
+*/
+static int look_shows_on_analog(int i)
+{
+	const preset_def *d = &presets[i];
+
+	if (!look_is_panel(d)) return 1;
+	if (d->core_colour || d->palette) return 1;
+	if (d->gamma && strcasecmp(d->gamma, "off") && video_scaler_is_visible()) return 1;
+
+	return 0;
+}
+
 static const char *class_names[VC_COUNT] =
 {
 	"console", "arcade", "computer", "vga", "gb", "gbc", "gba",
@@ -670,11 +782,31 @@ static opt_set options_of(int vclass)
 	return r;
 }
 
+/*
+  On an analog display the list is shortened to the looks that still do something
+  there - see look_shows_on_analog(). Silently listing a look that cannot change
+  a single pixel is the worst of the three options: the player picks it, nothing
+  happens, and the front-end looks broken rather than honest.
+
+  The list shrinking is also what tells the menu bar whether the Display entry is
+  worth putting up at all: a class left with nothing but its off switch has no
+  choice to offer. Everything BELOW this - vp_default_for(), allowed_in(),
+  vp_effective() and the stored choice in classicui_video.cfg - walks the
+  unfiltered list on purpose, so plugging an HDMI cable in never rewrites what
+  the player chose.
+*/
 int vp_options_for(int vclass, int *out)
 {
 	opt_set o = options_of(vclass);
-	int n = (o.n > VP_MAX_OPTIONS) ? VP_MAX_OPTIONS : o.n;
-	if (out) for (int i = 0; i < n; i++) out[i] = o.list[i];
+	int analog = vp_output_is_analog();
+
+	int n = 0;
+	for (int i = 0; i < o.n && n < VP_MAX_OPTIONS; i++)
+	{
+		if (analog && !look_shows_on_analog(o.list[i])) continue;
+		if (out) out[n] = o.list[i];
+		n++;
+	}
 	return n;
 }
 
@@ -1180,22 +1312,44 @@ static void write_gbp(const gbp_spec *s)
 	gen_commit(s->rel, &g, 1);
 }
 
-static void write_preset(const preset_def *d)
+/*
+  Where a look's preset file lives, and its analog twin.
+
+  A panel look gets a second file with the structure lines forced off and the
+  gamma - the colour - kept: the same split the core half gets, applied to the
+  scaler. It is a real file rather than a runtime edit because video_loadPreset()
+  takes a path, and a file also means a player can read what we did to their
+  scaler.
+
+  It is loaded INSTEAD of the full preset on an analog display, never as well as,
+  so a session that starts on HDMI and ends on a CRT clears the grid out of the
+  scaler rather than leaving it there unseen. Only panel looks get one; a CRT
+  look on a CRT is the player's own arrangement and none of our business.
+*/
+static void preset_rel(const preset_def *d, int crt, char *out, int len)
+{
+	snprintf(out, len, "presets/%s %s%s.ini", PREFIX, d->name, crt ? " (CRT)" : "");
+}
+
+static void write_preset(const preset_def *d, int crt)
 {
 	genbuf g;
 	gb_reset(&g);
 
-	gb_addf(&g, "# %s - %s\n", d->name, d->blurb);
+	if (crt) gb_addf(&g, "# %s on an analog display - colour only, no panel structure\n", d->name);
+	else     gb_addf(&g, "# %s - %s\n", d->name, d->blurb);
 	gb_addf(&g, "# %s\n", GEN_MARK);
-	if (d->hfilter)  gb_addf(&g, "hfilter=%s\n", d->hfilter);
-	if (d->vfilter)  gb_addf(&g, "vfilter=%s\n", d->vfilter);
-	if (d->sfilter)  gb_addf(&g, "sfilter=%s\n", d->sfilter);
-	if (d->mask)     gb_addf(&g, "mask=%s\n", d->mask);
-	if (d->maskmode) gb_addf(&g, "maskmode=%s\n", d->maskmode);
+
+	const char *off = "off";
+	if (d->hfilter)  gb_addf(&g, "hfilter=%s\n", crt ? off : d->hfilter);
+	if (d->vfilter)  gb_addf(&g, "vfilter=%s\n", crt ? off : d->vfilter);
+	if (d->sfilter)  gb_addf(&g, "sfilter=%s\n", crt ? off : d->sfilter);
+	if (d->mask)     gb_addf(&g, "mask=%s\n", crt ? off : d->mask);
+	if (d->maskmode) gb_addf(&g, "maskmode=%s\n", crt ? off : d->maskmode);
 	if (d->gamma)    gb_addf(&g, "gamma=%s\n", d->gamma);
 
 	char rel[1024];
-	snprintf(rel, sizeof(rel), "presets/%s %s.ini", PREFIX, d->name);
+	preset_rel(d, crt, rel, sizeof(rel));
 	gen_commit(rel, &g, 0);
 }
 
@@ -1238,7 +1392,11 @@ void vp_install()
 	write_gbp(&pal_dmg);
 	write_gbp(&pal_pocket);
 
-	for (int i = 0; i < NPRESETS; i++) write_preset(&presets[i]);
+	for (int i = 0; i < NPRESETS; i++)
+	{
+		write_preset(&presets[i], 0);
+		if (look_is_panel(&presets[i])) write_preset(&presets[i], 1);
+	}
 }
 
 int vp_available(int i)
@@ -1246,11 +1404,16 @@ int vp_available(int i)
 	if (i < 0 || i >= NPRESETS) return 0;
 	const preset_def *d = &presets[i];
 
+	// On an analog display a panel look is the CRT twin, which needs neither the
+	// grid filter nor a mask - so asking for them would refuse a look that is
+	// perfectly usable there.
+	int crt = vp_output_is_analog() && look_is_panel(d);
+
 	char rel[1024];
-	snprintf(rel, sizeof(rel), "presets/%s %s.ini", PREFIX, d->name);
+	preset_rel(d, crt, rel, sizeof(rel));
 	if (!exists_rel(rel)) return 0;
 
-	const char *files[3] = { d->hfilter, d->sfilter, 0 };
+	const char *files[3] = { crt ? 0 : d->hfilter, crt ? 0 : d->sfilter, 0 };
 	for (int k = 0; k < 2; k++)
 	{
 		if (!files[k] || !strcasecmp(files[k], "off")) continue;
@@ -1258,7 +1421,7 @@ int vp_available(int i)
 		if (!exists_rel(rel)) return 0;
 	}
 
-	if (d->mask && strcasecmp(d->mask, "off"))
+	if (!crt && d->mask && strcasecmp(d->mask, "off"))
 	{
 		snprintf(rel, sizeof(rel), "shadow_masks/%s", d->mask);
 		if (!exists_rel(rel)) return 0;
@@ -1395,6 +1558,33 @@ int vp_preset_path(int i, char *out, int len)
 }
 
 /*
+  The preset to load for the output actually in use: the CRT twin for a panel look
+  on an analog display, the look's own file otherwise.
+
+  A missing twin refuses rather than falling back to the full preset. The fallback
+  is the one thing that must not happen - it would put the LCD grid on the tube,
+  which is the whole fault being fixed here - and vp_install() writes the twin on
+  every boot, so the only way to be here is a card somebody has taken files off.
+*/
+static int vp_preset_path_for(int i, int analog, char *out, int len)
+{
+	if (i < 0 || i >= NPRESETS) return 0;
+
+	int crt = analog && look_is_panel(&presets[i]);
+
+	char rel[1024];
+	preset_rel(&presets[i], crt, rel, sizeof(rel));
+	if (crt && !exists_rel(rel))
+	{
+		printf("ClassicUI: no analog preset for \"%s\" - leaving the scaler alone\n", presets[i].name);
+		return 0;
+	}
+
+	snprintf(out, len, "%s/%s", getRootDir(), rel);
+	return 1;
+}
+
+/*
   A static, distribution-provided preview beats a computed one: the real filters
   live in the FPGA scaler where nothing can read them back, so anything rendered
   at runtime is an approximation of an approximation. When the card carries
@@ -1448,6 +1638,13 @@ int vp_lookshot_path(int i, char *out, int len)
 static int vp_running_look = -1;
 
 /*
+  ...and which output it was applied FOR, so vp_output_poll() can tell that the
+  answer has gone stale. -1 is "no look owns anything", which is also what it
+  reads as before the first apply.
+*/
+static int vp_applied_analog = -1;
+
+/*
   What the look changed and what stood there before, so it can all be undone.
 
   Two consumers. Picking a look with no core half (None, or any CRT look after
@@ -1498,6 +1695,28 @@ void vp_forget_originals()
 {
 	nvp_origs = 0;
 	vp_running_look = -1;
+	vp_applied_analog = -1;
+}
+
+// One ;-separated half of a look, by name against the running core.
+static void vp_apply_opt_list(const preset_def *d, const char *opts)
+{
+	if (!opts) return;
+
+	char list[512];
+	snprintf(list, sizeof(list), "%s", opts);
+
+	char *save = 0;
+	for (char *pair = strtok_r(list, ";", &save); pair; pair = strtok_r(0, ";", &save))
+	{
+		char *eq = strchr(pair, '=');
+		if (!eq) continue;
+		*eq = 0;
+		vp_record_original(pair);
+		if (!core_opt_set_named(pair, eq + 1))
+			printf("ClassicUI: look \"%s\": core has no %s=%s, skipped\n",
+				d->name, pair, eq + 1);
+	}
 }
 
 static void vp_apply_core_side(int i, int with_palette)
@@ -1505,34 +1724,44 @@ static void vp_apply_core_side(int i, int with_palette)
 	if (i < 0 || i >= NPRESETS) return;
 	const preset_def *d = &presets[i];
 
-	if (!d->core_opts && !d->palette)
+	if (!d->core_colour && !d->core_struct && !d->palette)
 	{
 		// A look with no core half still undoes the one it replaces.
 		vp_restore_originals();
 		vp_running_look = -1;
+		vp_applied_analog = -1;
 		return;
 	}
 
 	if (core_opts_scan() <= 0) return;
+
+	int analog = vp_output_is_analog();
 	vp_running_look = i;
+	vp_applied_analog = analog;
 
-	if (d->core_opts)
-	{
-		char list[512];
-		snprintf(list, sizeof(list), "%s", d->core_opts);
+	/*
+	  Put everything back first, then set what this look wants on THIS output.
 
-		char *save = 0;
-		for (char *pair = strtok_r(list, ";", &save); pair; pair = strtok_r(0, ";", &save))
-		{
-			char *eq = strchr(pair, '=');
-			if (!eq) continue;
-			*eq = 0;
-			vp_record_original(pair);
-			if (!core_opt_set_named(pair, eq + 1))
-				printf("ClassicUI: look \"%s\": core has no %s=%s, skipped\n",
-					d->name, pair, eq + 1);
-		}
-	}
+	  Two things need that. A panel half applied on HDMI has to come off when the
+	  same session moves to a CRT, and there is no other record of what it set;
+	  and a look that follows another look only ever set the options the two have
+	  in common, so switching DMG (Super Game Boy=On) to the GBC screen used to
+	  leave the SGB border up. Restoring is a no-op when nothing was recorded,
+	  which is every launch - the core has just booted from the player's config.
+	*/
+	vp_restore_originals();
+
+	vp_apply_opt_list(d, d->core_colour);
+
+	/*
+	  The panel half, and only where there is a panel to simulate. On an analog
+	  display the pixel grid, the drop shadow and the ghosting are not a Game Boy
+	  screen, they are a defect - and the integer scale that exists to keep the
+	  grid honest has nothing left to be honest about.
+	*/
+	if (!analog) vp_apply_opt_list(d, d->core_struct);
+	else if (d->core_struct)
+		printf("ClassicUI: look \"%s\": analog display, panel effects left off\n", d->name);
 
 	if (d->palette)
 	{
@@ -1580,6 +1809,11 @@ void vp_arm_for_launch(int sysidx, int vclass_hint)
 	// video_loadPreset() takes a path it can open directly. The second line
 	// names the look so the core-side half can be applied once the core is up -
 	// an older line-1-only file still works, it just carries no core half.
+	//
+	// The path here is the look's own. Which of the two files really gets loaded
+	// is decided in vp_apply_pending(), on the far side of the core load, because
+	// that is where the answer to "which output" is worth having: this runs on the
+	// shelf and the core load re-execs the firmware in between.
 	fprintf(f, "%s/presets/%s %s.ini\n", getRootDir(), PREFIX, presets[p].name);
 	fprintf(f, "look=%s\n", presets[p].id);
 	fclose(f);
@@ -1606,10 +1840,12 @@ int vp_apply_now(int sysidx, int vclass_hint)
 	if (i < 0 || i >= NPRESETS) return 0;
 
 	char path[1024];
-	if (!vp_preset_path(i, path, sizeof(path))) return 0;
+	int analog = vp_output_is_analog();
 
-	printf("ClassicUI: applying video look \"%s\" to the running core\n", presets[i].name);
-	video_loadPreset(path, true);
+	printf("ClassicUI: applying video look \"%s\" to the running core%s\n",
+		presets[i].name, analog ? " (analog display)" : "");
+
+	if (vp_preset_path_for(i, analog, path, sizeof(path))) video_loadPreset(path, true);
 	vp_apply_core_side(i, 1);
 	return 1;
 }
@@ -1639,6 +1875,24 @@ void vp_apply_pending()
 
 	if (!path[0]) return;
 
+	/*
+	  The look is named, so the path is recomputed for the output this machine is
+	  actually on rather than trusting the one the shelf wrote. On an analog display
+	  that is the difference between the scaler getting the LCD grid and getting the
+	  colour alone; a file from an older build carries no name and is loaded as it
+	  stands, which is the behaviour it was written for.
+	*/
+	if (look[0])
+	{
+		for (int i = 0; i < NPRESETS; i++)
+		{
+			if (strcmp(presets[i].id, look)) continue;
+			if (!vp_preset_path_for(i, vp_output_is_analog(), path, sizeof(path))) path[0] = 0;
+			break;
+		}
+		if (!path[0]) return;
+	}
+
 	printf("ClassicUI: applying video look %s\n", path);
 	video_loadPreset(path, true);
 
@@ -1657,9 +1911,14 @@ void vp_apply_pending()
 	if (look[0])
 	{
 		for (int i = 0; i < NPRESETS; i++)
-			if (!strcmp(presets[i].id, look) && (presets[i].core_opts || presets[i].palette))
+			if (!strcmp(presets[i].id, look) &&
+			    (presets[i].core_colour || presets[i].core_struct || presets[i].palette))
 			{
 				vp_running_look = i;
+				// Parked for the output seen here, so vp_output_poll() does not
+				// mistake "not applied yet" for "the output changed" and play the
+				// core half early - the very interleaving the note above forbids.
+				vp_applied_analog = vp_output_is_analog();
 				break;
 			}
 	}
@@ -1668,6 +1927,37 @@ void vp_apply_pending()
 void vp_reapply_core_side()
 {
 	if (vp_running_look >= 0) vp_apply_core_side(vp_running_look, 1);
+}
+
+/*
+  The output can change under a running game: an HDMI cable pulled or pushed in,
+  or - the ordinary case - a machine that boots with no sink attached and only
+  finds out once i2c is up. Whatever was set for the output before is then simply
+  wrong, and the panel half is the half that matters: leave it and the player has
+  a pixel grid and a drop shadow on a CRT, set by a session they have already left
+  behind, with nothing in any menu admitting to it.
+
+  So re-evaluate rather than re-assert: both halves of the look are applied again
+  for the output that is there now, which for the core half means vp_origs puts
+  the panel options back to the player's own values before the colour half goes
+  on again. Cheap by construction - it costs an i2c byte only while a look owns
+  core options at all, which is the handheld case and nothing else.
+*/
+void vp_output_poll()
+{
+	if (vp_running_look < 0) return;
+
+	int analog = vp_output_is_analog();
+	if (analog == vp_applied_analog) return;
+
+	printf("ClassicUI: video output is now %s - re-evaluating look \"%s\"\n",
+		analog ? "analog" : "the scaler", presets[vp_running_look].name);
+
+	char path[1024];
+	if (vp_preset_path_for(vp_running_look, analog, path, sizeof(path)))
+		video_loadPreset(path, true);
+
+	vp_apply_core_side(vp_running_look, 1);
 }
 
 /* -------------------------------------------------- the analog output ----- */
@@ -1825,9 +2115,9 @@ static const gbp_spec *pv_palette(int i)
 // 0 = none, else the decode gamma the profile is labeled with.
 static double pv_gba_gamma(int i)
 {
-	if (!presets[i].core_opts) return 0;
-	if (strstr(presets[i].core_opts, "Modify Colors=GBA 2.2")) return 2.2;
-	if (strstr(presets[i].core_opts, "Modify Colors=GBA 1.6")) return 1.6;
+	if (!presets[i].core_colour) return 0;
+	if (strstr(presets[i].core_colour, "Modify Colors=GBA 2.2")) return 2.2;
+	if (strstr(presets[i].core_colour, "Modify Colors=GBA 1.6")) return 1.6;
 	return 0;
 }
 

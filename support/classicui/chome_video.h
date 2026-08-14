@@ -19,6 +19,12 @@
   Every class offers one entry that turns all processing off (Sharp for the CRT
   classes, None for handhelds - None also resets the core-side effects).
 
+  What a look does divides into colour and structure, and the division is data,
+  not a special case: the palette and the colour correction are one column of the
+  preset table, the pixel grid, the drop shadow and the panel's ghosting another.
+  On an analog display only the colour half is applied - see vp_output_is_analog()
+  below, and the table's own note about why.
+
   Previews are illustrations rendered in software from the same parameters, not
   captures of a running core.
 */
@@ -65,10 +71,39 @@ const char *vp_blurb(int i);
   no business being shown a PVM look, and a Mega Drive game has no business being
   shown an LCD one. vp_options_for() returns how many looks apply to a class and
   writes the preset indices into out[], most authentic first - so entry 0 is also
-  the default.
+  the default. out may be null when only the count is wanted.
+
+  On an analog display the list is shorter: a handheld look whose difference is a
+  pixel grid or a scaler gamma the scaler cannot deliver is left out rather than
+  offered and then found to do nothing. So the count is also the answer to "is
+  there a choice worth showing here", which is what the menu bar asks it.
 */
 #define VP_MAX_OPTIONS 8
 int  vp_options_for(int vclass, int *out);
+
+/*
+  1 when the picture is on an analog display and only there - no HDMI sink
+  attached, so whatever the routing (direct_video, vga_scaler, or the front-end's
+  own takeover) a CRT or a television is what the player is looking at.
+
+  This is what decides that a look drops its panel half: the LCD pixel grid, the
+  drop shadow and the panel's ghosting simulate a screen the player is not using,
+  and on a real tube they are damage. The colour half - a DMG palette, the GBA
+  models' colour correction - is exactly what a Game Boy on a CRT should have and
+  is applied on every output.
+
+  It is deliberately NOT video_scaler_is_visible(), which answers the different
+  question of whether the scaler output reaches a screen at all: with vga_scaler
+  the scaler is in the path and pointed straight down a VGA cable at a tube.
+*/
+int  vp_output_is_analog();
+
+/*
+  Notice an output change under a running game and re-evaluate the look for it.
+  Cheap to call every frame: it does nothing at all unless a look owns core
+  options, and nothing but an i2c byte unless the answer has changed.
+*/
+void vp_output_poll();
 
 // 1 when every file the preset needs exists.
 int  vp_available(int i);

@@ -438,10 +438,24 @@ static const char *mb_short[MB_COUNT] = { 0, 0, 0, "Close", 0 };
 static const char *mb_text(int i);
 
 /*
+  Whose picture the Display screen is about - the running game, or the card under
+  the cursor. Defined further down; the bar needs its CLASS to know whether the
+  entry is worth putting up on an analog display.
+*/
+static int disp_class();
+
+/*
   Every Display option lives in the scaler - filters, shadow mask, gamma - so the
   whole entry is dropped when the scaler's output is not what reaches the screen:
   direct_video, or an analog-only setup without vga_scaler. Showing a CRT filter
   picker to somebody already looking at a real CRT would be daft.
+
+  With one exception, and it is the reason this comment is no longer the whole
+  story: a handheld's look is not only scaler work. The palette is the core's own,
+  and a Game Boy on a CRT wants DMG green as much as one on HDMI does. Dropping
+  the entry there took the palette away from exactly the player who has no other
+  way to reach it - no OSD of ours, no ini key, and at 240p not even the second
+  gate below would have let them in.
 */
 static int mb_visible(int i)
 {
@@ -468,6 +482,19 @@ static int mb_visible(int i)
 	if (i == MB_CLOSE) return ig_active ? 1 : 0;
 
 	if (i != MB_DISPLAY) return 1;
+
+	/*
+	  The handheld exception, before the two gates that would otherwise refuse it.
+	  Additive on purpose: nothing that is on the bar today comes off it here.
+
+	  vp_options_for() has already dropped the looks that would be inert on this
+	  output, so a count below two means the class has nothing left but its off
+	  switch - a Game Gear on direct_video, whose entire colour work is a scaler
+	  gamma LUT that is not in the path. An entry leading to one immovable row
+	  would be the same lie in a different place.
+	*/
+	if (vp_class_is_handheld(disp_class()) && vp_output_is_analog() &&
+	    vp_options_for(disp_class(), 0) >= 2) return 1;
 
 	// Nothing in Display applies when the scaler is bypassed.
 	if (!video_scaler_is_visible()) return 0;
@@ -14155,6 +14182,18 @@ void chome_core_poll()
 					core_opts_apply_for_game(ig_item.sysidx, ig_item.path);
 			}
 		}
+		/*
+		  Once that has happened, watch for the output moving under the game: a
+		  cable pulled, or a machine that boots with no sink attached and only
+		  learns so when i2c comes up. The look then has to be re-evaluated for
+		  the output that is really there, or a pixel grid and a drop shadow set
+		  for HDMI stay on a CRT with nothing admitting to it.
+
+		  After the block above, never inside it: while the launch look is still
+		  parked, "not applied yet" and "the output changed" look the same from
+		  here, and playing the core half early is what corrupts an MGL launch.
+		*/
+		if (look_done) vp_output_poll();
 	}
 
 	if (done) return;
