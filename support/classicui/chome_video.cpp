@@ -100,15 +100,35 @@ struct preset_def
   unmatched names are skipped by name lookup, so the GBA sees only its own.
 */
 #define CO_INTEGER  "Scale=Narrower HV-Integer"
-#define CO_GB_DMG   "Custom Palette=On;Screen Shadow=Yes;Frame blend=On;" CO_INTEGER
+/*
+  Super Game Boy=On rides every DMG-family look: Dinofly runs Zelda with the
+  SGB border around the Pocket screen and asked for it as the default -
+  confirmed live off the core (the border in the capture; the stale CFG still
+  said Off). The custom palette wins the colours, the SGB canvas keeps the
+  border, and a player who disagrees flips it in Core options, where the
+  per-game record outranks the look.
+*/
+#define CO_GB_DMG   "Super Game Boy=On;Custom Palette=On;Screen Shadow=Yes;Frame blend=On;" CO_INTEGER
 
 static const preset_def presets[] =
 {
 	{ "sharp", "Sharp", "No filtering. Square pixels, nothing added.",
 	  "off", "off", "off", "off", "off", "off", 0, 0 },
 
-	{ "pvm-rgb", "PVM RGB", "Sharp RGB monitor with fine scanlines and an aperture grille.",
-	  F_SHARP, F_SHARP, F_SCAN, M_GRILLE, "1x", "off", 0, 0 },
+	/*
+	  TrashUncle's "Sony PVM" from the distribution's Display Specific pack,
+	  component for component - Dinofly picked it over our own recipe. The
+	  vfilter is adaptive (dark 30%, bright 70%), which read_video_filter()
+	  handles and simulate_look.py deliberately does not - lookshots for this
+	  one come from captures, not the model.
+	*/
+	{ "pvm-rgb", "PVM RGB", "Sony PVM: adaptive scanlines, aperture grille, warm gamma.",
+	  "Upscaling - Recommended/GS_Sharpness_050.txt",
+	  "Scanlines - Adaptive/SLA_Dk_030_Br_070.txt",
+	  "off",
+	  "Simple (Monochrome)/Aperture Grille (No Scanlines) (1968).txt",
+	  "1x",
+	  "Pure_Gamma/gamma_110.txt", 0, 0 },
 
 	/*
 	  Short names on purpose: five tiles share a row on the console class since

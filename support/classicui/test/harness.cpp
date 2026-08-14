@@ -479,6 +479,21 @@ static void build_sd()
 	mkpath(ROOT "/config");
 	mkpath(OUT);
 
+	/*
+	  The distribution files the Sony PVM look references (Display Specific pack,
+	  component for component). The card this fixture models has the distribution
+	  installed; without these, "every look's files are present" would fail on the
+	  one look that borrows community files instead of generating its own.
+	*/
+	mkpath(ROOT "/filters/Upscaling - Recommended");
+	touch(ROOT "/filters/Upscaling - Recommended", "GS_Sharpness_050.txt", 64);
+	mkpath(ROOT "/filters/Scanlines - Adaptive");
+	touch(ROOT "/filters/Scanlines - Adaptive", "SLA_Dk_030_Br_070.txt", 64);
+	mkpath(ROOT "/gamma/Pure_Gamma");
+	touch(ROOT "/gamma/Pure_Gamma", "gamma_110.txt", 64);
+	mkpath(ROOT "/shadow_masks/Simple (Monochrome)");
+	touch(ROOT "/shadow_masks/Simple (Monochrome)", "Aperture Grille (No Scanlines) (1968).txt", 64);
+
 	mkpath(ROOT "/games/SNES");
 	touch(ROOT "/games/SNES", "Super Metroid (Europe).sfc", 4096);
 	touch(ROOT "/games/SNES", "Super Mario World (Europe).sfc", 4096);

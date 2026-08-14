@@ -742,6 +742,13 @@ void cfg_parse()
 	  narrower direction is safe as a default - text drawn tighter than the measurements
 	  still fits everywhere they fit, where +1 would clip the lines fitted tightest.
 	*/
+	/*
+	  Integer scaling out of the box, on Dinofly's call (2026-08-14): every
+	  system, sharp pixels over exact fit. A player who wants the screen filled
+	  sets vscale_mode=0 in the ini or flips Picture Size per game - both
+	  override this, which is all a default should be.
+	*/
+	cfg.vscale_mode = 1;
 	cfg.classicui_tracking = -1;
 	// And lowercase with it, for the same reason and from the same request: titles and
 	// labels drawn as they are written, not shouted.
