@@ -7455,9 +7455,36 @@ static int still_in_corner()
   16:9 one, where it must still be a bar, because a 4:3 picture on a wide screen is supposed
   to be letterboxed and stretching it would be a different bug.
 */
+/*
+  Put every system on the look that turns processing off.
+
+  The sections below measure the still by COUNTING pixels that still carry the flat
+  colour the fake grab produced, and a look with a scaler half legitimately changes
+  every one of them - the LCD grid alone boosts the cell body to keep its average,
+  so a flat frame comes out flat-but-different and the count is zero. Those sections
+  are about whether the still is drawn and how much of it shows; that it is drawn
+  THROUGH the look is a different property, asserted on its own in
+  assert_ingame_look_background(). The last option of every class is its off switch -
+  see the check that says so - so this is a state a player can reach, not a lever
+  that only exists for tests.
+*/
+static void looks_all_off()
+{
+	for (int i = 0; i < lib_sys_count(); i++)
+	{
+		const chome_sys *s = lib_sys(i);
+		if (!s) continue;
+
+		int opts[VP_MAX_OPTIONS];
+		int n = vp_options_for(s->vclass, opts);
+		if (n > 0) vp_set(i, s->vclass, opts[n - 1]);
+	}
+}
+
 static void assert_ingame_still()
 {
 	printf("\n== the still of the game, and which screens show it ==\n");
+	looks_all_off();
 
 	enum { S_HOME = 0, S_DISC = 17 };
 
@@ -7692,8 +7719,96 @@ static void ig_menu_reopen(uint32_t flat)
   instead of 16.3..47.5, and a dark scene is dark instead of being lifted into the same flat
   grey a black one was.
 */
+/*
+  The background is the game AS THE TELEVISION SHOWS IT.
+
+  The capture is pre-scaler, so before this the menu sat over a Game Boy with no
+  grid and a console with no scanlines - a picture of something nobody was
+  looking at. vp_render_exact() puts the look's own coefficients over the still,
+  so what is behind the menu is what is on the screen.
+
+  Proved by difference rather than by hash: a flat frame through the LCD grid
+  cannot stay flat (the gutters darken, the cell body is boosted to hold the
+  average), so "the same frame drawn under two looks differs" is the property,
+  and it cannot pass by accident on a build that ignores the look. The count of
+  surviving flat pixels says which way round it is: all of them under the off
+  switch, none under the grid.
+
+  The alive-poll count is the second half of the test and the one with teeth: a
+  full-canvas pass is hundreds of milliseconds of arithmetic, and the PSX parks
+  its savestate machine when the firmware goes quiet for ~31ms. A build that
+  forgets to pump the poll inside the pass is a build that loses saves, and
+  nothing on screen would ever show it.
+*/
+static void assert_ingame_look_background()
+{
+	printf("\n== the look, over the still ==\n");
+
+	harness_set_grab_flat(STILL_FLAT);
+	harness_set_menu_core(0);
+	harness_set_fb_supported(1);
+	harness_set_osd_visible(0);
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, cfg.classicui_profile);
+
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "gb\nTetris (World).gb\n"); fclose(f); }
+	}
+	harness_set_core_name("GAMEBOY");
+
+	int gb = -1;
+	for (int i = 0; i < lib_sys_count(); i++)
+	{
+		const chome_sys *s = lib_sys(i);
+		if (s && !strcasecmp(s->id, "gb")) { gb = i; break; }
+	}
+	check(gb >= 0, "the fixture card has a Game Boy system to put a look on");
+
+	int opts[VP_MAX_OPTIONS];
+	int n = vp_options_for(VC_GB, opts);
+
+	// The off switch first: the still passes through and every pixel of it survives.
+	vp_set(gb, VC_GB, opts[n - 1]);
+	chome_handle(0);
+	if (chome_ingame_active()) press(KEY_MENU, 14);
+	press(KEY_MENU, 20);
+	frame(14);
+	check(chome_ingame_active(), "the menu is up over the game");
+	int plain = still_on_screen();
+	printf("  %d pixels of the untouched still\n", plain);
+	check(plain > 0, "with processing off the background is the capture itself");
+
+	// Then the DMG look, whose grid lives in the scaler: the same frame, changed.
+	press(KEY_MENU, 16);
+	frame(8);
+	vp_set(gb, VC_GB, opts[0]);
+	harness_reset_alive_polls();
+	press(KEY_MENU, 20);
+	frame(14);
+
+	int shaped = still_on_screen();
+	int polls = harness_alive_polls();
+	printf("  %d pixels survive the grid, %d liveness poll(s) during the pass\n",
+		shaped, polls);
+
+	check(strstr(vp_name(opts[0]), "DMG") != 0, "and the look under test is the DMG one");
+	check(shaped < plain,
+		"the background wears the look: the grid changes the frame the menu sits on");
+	check(polls > 0,
+		"and the core was told we are still alive while the pass ran");
+
+	// Put the shelf's own state back, and the look with it.
+	vp_set(gb, VC_GB, opts[n - 1]);
+	press(KEY_MENU, 16);
+	frame(8);
+	harness_set_grab_flat(0);
+}
+
 static void assert_ingame_dim()
 {
+	looks_all_off();
 	printf("\n== the dim and the scrim over a paused game ==\n");
 
 	enum { S_HOME = 0, S_SORT = 3 };
@@ -21926,6 +22041,7 @@ int main()
 	// section asks whether the still is on screen at all, this one asks how much of it the two
 	// dims leave. It leaves the canvas exactly as that one does.
 	assert_ingame_dim();
+	assert_ingame_look_background();
 	// And after that one, for the third time for the same reason: this section opens the
 	// in-game menu too, to reach the one state where "a core owns the drive" can be seen
 	// from a host test. Everything else in it would run anywhere.

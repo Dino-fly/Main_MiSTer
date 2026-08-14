@@ -95,6 +95,10 @@ void harness_set_grab_flat(uint32_t argb);
 int  harness_grab_calls();
 void harness_reset_grab_calls();
 
+// Liveness polls the front-end sent the core while computing - see the stub.
+int harness_alive_polls();
+void harness_reset_alive_polls();
+
 int harness_muted();
 int harness_mute_changes();
 void harness_set_muted(int v);
