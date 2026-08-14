@@ -1094,6 +1094,35 @@ static chome_item *susp_target()
 }
 
 /*
+  Who the Display screen is about, and which hardware class that is.
+
+  From the shelf: the card under the cursor, like every panel. In a game: the game
+  that is RUNNING - Dinofly opened Display over a running Wipeout disc and was
+  offered the Game Boy looks, because the shelf behind the menu was still parked on
+  Link's Awakening. Same rule as susp_target() above and for the same reason: in a
+  game, the shelf's selection has nothing to do with what is on screen. One accessor
+  used by the draw, the cursor walk, the open and the apply, so the four cannot
+  disagree about whose picture is being changed.
+*/
+static chome_item *disp_target()
+{
+	if (ig_active)
+	{
+		chome_item *run = ig_running_disc();
+		if (run) return run;
+		if (ig_have_item) return &ig_item;
+	}
+	return cur_game();
+}
+
+static int disp_class()
+{
+	chome_item *it = disp_target();
+	if (!it) return VC_CONSOLE;
+	return class_of(it->sysidx, it->path);
+}
+
+/*
   True when this game's core is known to have no save states, so the strip can say so
   instead of offering slots that can never fill.
 
@@ -4428,9 +4457,9 @@ static void draw_display_screen(const chome_profile *p)
 	int s = p->ts_ui;
 	int tiny = p->ts_tiny;
 
-	chome_item *it = cur_game();
+	chome_item *it = disp_target();
 	int sysidx = it ? it->sysidx : -1;
-	int vclass = sel_class();
+	int vclass = disp_class();
 
 	int opts[VP_MAX_OPTIONS];
 	int n = vp_options_for(vclass, opts);
@@ -10445,7 +10474,7 @@ static void move_h(int dir)
 	case SCR_DISPLAY:
 	{
 		int opts[VP_MAX_OPTIONS];
-		int nn = vp_options_for(sel_class(), opts);
+		int nn = vp_options_for(disp_class(), opts);
 		int next = wrap_step(look_row, nn, dir);
 		if (next == look_row) return;
 		look_row = next;
@@ -10932,7 +10961,7 @@ int chome_list_cursor(int axis, int *count)
 		case SCR_DISPLAY:
 		{
 			int opts[VP_MAX_OPTIONS];
-			n = vp_options_for(sel_class(), opts);
+			n = vp_options_for(disp_class(), opts);
 			cur = look_row;
 			break;
 		}
@@ -10998,8 +11027,8 @@ static void accept()
 		{
 		case MB_DISPLAY:
 		{
-			chome_item *lit = cur_game();
-			int vclass = sel_class();
+			chome_item *lit = disp_target();
+			int vclass = disp_class();
 			int cur = vp_effective(lit ? lit->sysidx : -1, vclass);
 
 			int opts[VP_MAX_OPTIONS];
@@ -11057,10 +11086,10 @@ static void accept()
 
 	case SCR_DISPLAY:
 	{
-		chome_item *lit = cur_game();
+		chome_item *lit = disp_target();
 		if (!lit) { nudge(); break; }
 
-		int vclass = sel_class();
+		int vclass = disp_class();
 		int opts[VP_MAX_OPTIONS];
 		int n = vp_options_for(vclass, opts);
 		if (look_row < 0 || look_row >= n) { nudge(); break; }
@@ -11068,7 +11097,9 @@ static void accept()
 		vp_set(lit->sysidx, vclass, opts[look_row]);
 
 		// The game it applies to is on screen behind this menu, so show it there now.
-		if (ig_active && ig_is_running(lit)) vp_apply_now(lit->sysidx, vclass);
+		// In-game disp_target() IS the running game by construction, so ig_active is
+		// the whole test.
+		if (ig_active) vp_apply_now(lit->sysidx, vclass);
 
 		printf("ClassicUI: %s (%s) now uses look \"%s\"\n",
 			lib_sys(lit->sysidx) ? lib_sys(lit->sysidx)->name : "?",

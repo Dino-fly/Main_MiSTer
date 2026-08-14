@@ -71,6 +71,7 @@ struct preset_def
 #define F_SCANLT  PREFIX " Scanlines Light.txt"
 #define F_SCANDP  PREFIX " Scanlines Deep.txt"
 #define F_GRID    PREFIX " LCD Grid.txt"
+#define F_GRIDSH  PREFIX " LCD Grid Shadow.txt"
 #define M_GRILLE  PREFIX " Grille.txt"
 #define M_MATRIX  PREFIX " Dot Matrix.txt"
 #define G_GG      PREFIX " Game Gear.txt"
@@ -132,11 +133,11 @@ static const preset_def presets[] =
 	  already-colourised picture. The grid is the polyphase filter (aligned to
 	  core pixels by construction), the shadow is the core's own drop-shadow.
 	*/
-	{ "dmg", "Game Boy DMG", "The original olive-green reflective LCD, with its pixel grid.",
-	  F_GRID, F_GRID, "off", "off", "off", "off", CO_GB_DMG, PAL_DMG },
+	{ "dmg", "Game Boy DMG", "Muted olive-green reflective LCD, pixel grid and shadow.",
+	  F_GRIDSH, F_GRIDSH, "off", "off", "off", "off", CO_GB_DMG, PAL_DMG },
 
-	{ "pocket", "Game Boy Pocket", "Neutral grey reflective LCD, better contrast, finer grid.",
-	  F_GRID, F_GRID, "off", "off", "off", "off", CO_GB_DMG, PAL_POCKET },
+	{ "pocket", "Game Boy Pocket", "Neutral grey reflective LCD, finer grid, pixel shadow.",
+	  F_GRIDSH, F_GRIDSH, "off", "off", "off", "off", CO_GB_DMG, PAL_POCKET },
 
 	{ "gbc", "Game Boy Color", "Reflective colour LCD with its pixel grid.",
 	  F_GRID, F_GRID, "off", "off", "off", "off",
@@ -626,14 +627,32 @@ static void write_filter(const char *name, int kind, double scan_depth)
 #define GRID_GUTTER 0.22   // dark line width, as a fraction of the cell
 #define GRID_DEPTH  0.42   // how dark: 0 = invisible, 1 = black
 
-static void write_filter_grid(const char *name)
+/*
+  The reflective LCD's drop shadow, as the old distribution "LCD Effect" filters
+  drew it and Dinofly remembers it: every pixel casts faintly onto the leading
+  band of the next cell, down and to the right. In a linear filter that is a
+  ghost tap - the band takes SHADOW_MIX of the previous source pixel - plus a
+  small unconditional dim so the shadow still reads where neighbours are equal.
+  Localised to the band by phase, which a mask could never do: it rides the
+  source pixel at any integer scale, like the gutter above it. The same file
+  serves both axes, so the diagonal falls out of separability.
+*/
+#define SHADOW_WIDTH 0.30  // leading band of the cell that carries the shadow
+#define SHADOW_MIX   0.35  // how much of the previous pixel the band starts with
+#define SHADOW_DIM   0.10  // unconditional darkening at the band's start
+
+static void write_filter_grid(const char *name, int shadow)
 {
 	genbuf g;
 	gb_reset(&g);
 
 	gb_addf(&g, "# %s\n", GEN_MARK);
-	gb_addf(&g, "# LCD grid: gutter %.0f%% of the cell at %.0f%% depth\n\n",
-		GRID_GUTTER * 100, GRID_DEPTH * 100);
+	if (shadow)
+		gb_addf(&g, "# LCD grid: gutter %.0f%%/%.0f%%, pixel shadow %.0f%% over the leading %.0f%%\n\n",
+			GRID_GUTTER * 100, GRID_DEPTH * 100, SHADOW_MIX * 100, SHADOW_WIDTH * 100);
+	else
+		gb_addf(&g, "# LCD grid: gutter %.0f%% of the cell at %.0f%% depth\n\n",
+			GRID_GUTTER * 100, GRID_DEPTH * 100);
 
 	double half = GRID_GUTTER / 2;
 	double soft = 1.0 / PHASES;                     // one-phase shoulders
@@ -659,7 +678,27 @@ static void write_filter_grid(const char *name)
 			w[2] = t;
 		}
 
-		filter_line(&g, w, boost * (1.0 - GRID_DEPTH * e));
+		double gain = boost * (1.0 - GRID_DEPTH * e);
+
+		/*
+		  The cell body runs from the gutter's far shoulder to the next gutter,
+		  i.e. source pixel [2]'s territory: phases past 0.5+half. The shadow
+		  band is its first SHADOW_WIDTH, fading linearly. Mixing toward tap [1]
+		  keeps the row sum constant, so only the gain dim changes brightness.
+		*/
+		if (shadow && x > 0.5 + half)
+		{
+			double into = (x - (0.5 + half)) / (1.0 - (0.5 + half));
+			if (into < SHADOW_WIDTH)
+			{
+				double f = 1.0 - into / SHADOW_WIDTH;
+				w[1] += SHADOW_MIX * f * w[2];
+				w[2] -= SHADOW_MIX * f * w[2];
+				gain *= 1.0 - SHADOW_DIM * f;
+			}
+		}
+
+		filter_line(&g, w, gain);
 	}
 
 	char rel[1024];
@@ -758,15 +797,18 @@ static const lut_spec lut_ngpc   = { { 38, 38, 36 },  { 226, 224, 214 }, 0.96 };
   OSD) can load: 4 colours, lightest to darkest, 3 bytes each; the reserved tail
   carries the ownership mark (see gen_owned).
 
-  DMG is the bgb green - the palette the emulation world settled on as "the"
-  Game Boy look. The Pocket is GrafxGray's neutral warm grey, the closest
-  shipped match for that screen. Both also drive the preview rendering, so the
-  numbers live here rather than only in the files.
+  DMG was the bgb green - the palette the emulation world settled on - until
+  Dinofly judged it too vibrant against the real thing, which it is: bgb's
+  lightest stop is a spring green no unlit reflective screen ever showed. These
+  are the greyer olives measured off photographed DMG-01 screens. The Pocket is
+  GrafxGray's neutral warm grey, the closest shipped match for that screen, and
+  passed his eye as-is. Both also drive the preview rendering, so the numbers
+  live here rather than only in the files.
 */
 struct gbp_spec { const char *rel; uint8_t c[4][3]; };
 
 static const gbp_spec pal_dmg =
-{ PAL_DMG,    { { 0xE0, 0xF8, 0xD0 }, { 0x88, 0xC0, 0x70 }, { 0x34, 0x68, 0x56 }, { 0x08, 0x18, 0x20 } } };
+{ PAL_DMG,    { { 0xC4, 0xCF, 0xA1 }, { 0x8B, 0x95, 0x6D }, { 0x4D, 0x53, 0x3C }, { 0x1F, 0x1F, 0x1F } } };
 
 static const gbp_spec pal_pocket =
 { PAL_POCKET, { { 0xE0, 0xDB, 0xCD }, { 0xA8, 0x9F, 0x94 }, { 0x70, 0x6B, 0x66 }, { 0x2B, 0x2B, 0x26 } } };
@@ -824,7 +866,8 @@ void vp_install()
 	// The BVM's line structure: a reference monitor resolves the gaps a
 	// consumer set smears over, which on real hardware reads as deep scanlines.
 	write_filter(F_SCANDP, 0, 0.45);
-	write_filter_grid(F_GRID);
+	write_filter_grid(F_GRID, 0);
+	write_filter_grid(F_GRIDSH, 1);
 
 	write_mask(M_GRILLE, 0);
 	write_mask(M_MATRIX, 1);
@@ -983,6 +1026,14 @@ int vp_preset_path(int i, char *out, int len)
 int vp_lookshot_path(int i, char *out, int len)
 {
 	if (i < 0 || i >= NPRESETS) return 0;
+
+	/*
+	  Never for None. Its honest preview is the player's own unprocessed frame,
+	  and the shipped none.png made every system's None tile the same picture -
+	  which is what Dinofly reported. Refused here rather than only unshipped,
+	  so the copies already on cards go quiet too.
+	*/
+	if (!strcmp(presets[i].id, "none")) return 0;
 
 	char rel[256];
 	snprintf(rel, sizeof(rel), "classicui/lookshots/%s.png", presets[i].id);
