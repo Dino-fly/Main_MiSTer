@@ -372,7 +372,23 @@ int video_fb_state() { return 0; }
 
 static int scaler_visible = 1;
 void harness_set_scaler_visible(int v) { scaler_visible = v; }
-int video_hdmi_connected() { return scaler_visible; }
+
+/*
+  Whether an HDMI sink is attached, which on hardware is one i2c byte and is NOT the
+  same question as "does the scaler output reach a screen". The two agree on the
+  ordinary machines - HDMI attached, or a CRT on the takeover - and part company on
+  exactly the setup the LCD looks had to be fixed for: vga_scaler=1 with no HDMI,
+  where the scaler is in the path and pointing straight at a tube.
+
+  So it follows scaler_visible by default (HDMI_FOLLOW), which leaves every test
+  written before this one saying what it always said, and can be pinned on its own
+  to model that third machine.
+*/
+#define HDMI_FOLLOW (-2)
+static int hdmi_connected = HDMI_FOLLOW;
+void harness_set_hdmi_connected(int v) { hdmi_connected = v; }
+
+int video_hdmi_connected() { return (hdmi_connected == HDMI_FOLLOW) ? scaler_visible : hdmi_connected; }
 int video_scaler_is_visible() { return scaler_visible; }
 void video_menu_bg(int, int) {}
 

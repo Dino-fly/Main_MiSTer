@@ -10725,6 +10725,205 @@ static void assert_video()
 		harness_reset_status();
 	}
 
+	/*
+	  The same look on an analog display, where half of it is damage.
+
+	  A CRT has a structure of its own and does not want a simulated one: the pixel
+	  grid, the drop shadow, the panel's ghosting and the integer scale that exists
+	  only to keep the grid's cells equal all stay off there. The colour does not -
+	  DMG green is what the cartridge looked like whatever it is plugged into, and on
+	  this machine it is the one thing the player cannot reach any other way.
+
+	  Both directions are exercised, because the failure that matters is not "the grid
+	  was drawn on a CRT" but "the grid was left switched on in the core's live status
+	  by a session that has moved to a CRT", where nothing on screen admits to it.
+	*/
+	{
+		static const char *gb_core[] =
+		{
+			"GAMEBOY",
+			"FS1,GBCGB BIN,Load ROM",
+			"P1O12,Custom Palette,Off,Auto,On",
+			"h1P1FC3,GBP,Load Palette",
+			"P1o4,Screen Shadow,No,Yes",
+			"P1OG,Frame blend,Off,On",
+			"P1OLM,Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer",
+			0
+		};
+		harness_set_confstr_table(gb_core);
+		harness_set_menu_core(0);
+		harness_reset_file_tx();
+		harness_reset_preset();
+		vp_forget_originals();
+
+		int gbsys = -1;
+		for (int i = 0; i < lib_sys_count(); i++) if (!strcmp(lib_sys(i)->id, "gb")) gbsys = i;
+
+		int o2[VP_MAX_OPTIONS];
+		int prior = vp_effective(gbsys, VC_GB);
+
+		// The player's own configuration, deliberately not the defaults: a V-Integer
+		// scale is what the undo has to hand back, and a 0 would pass by accident.
+		harness_set_opt("12", 1);          // Custom Palette = Auto
+		harness_set_opt("4", 0, 1);        // Screen Shadow = No
+		harness_set_opt("G", 0);           // Frame blend = Off
+		harness_set_opt("LM", 1);          // Scale = V-Integer
+
+		harness_set_scaler_visible(1);
+		check(vp_output_is_analog() == 0, "an attached HDMI sink is not an analog display");
+
+		vp_options_for(VC_GB, o2);
+		vp_set(gbsys, VC_GB, o2[0]);                     // DMG
+		vp_apply_now(gbsys, VC_GB);
+		check(harness_opt_val("4", 1) == 1 && harness_opt_val("G") == 1 && harness_opt_val("LM") == 2,
+			"on HDMI the DMG look sets the panel half");
+		check(strstr(harness_last_preset(), "Game Boy DMG.ini") != 0,
+			"and the scaler is given the grid preset");
+
+		// The HDMI cable comes out and a CRT is all that is left.
+		harness_set_scaler_visible(0);
+		check(vp_output_is_analog() == 1, "no HDMI sink reads as an analog display");
+		harness_reset_file_tx();
+		vp_output_poll();
+
+		check(harness_opt_val("4", 1) == 0, "moving to a CRT takes the pixel shadow back off");
+		check(harness_opt_val("G") == 0, "and the frame blend with it");
+		check(harness_opt_val("LM") == 1, "and hands the scale back as the PLAYER had it, not as a default");
+		check(harness_opt_val("12") == 2, "while the palette stays exactly where it was");
+		check(strstr(harness_last_preset(), "(CRT)") != 0,
+			"and the scaler is reloaded with the preset that has no grid in it");
+
+		// ...and goes back in.
+		harness_set_scaler_visible(1);
+		vp_output_poll();
+		check(harness_opt_val("4", 1) == 1 && harness_opt_val("LM") == 2,
+			"back on HDMI the panel half comes back");
+		check(!strstr(harness_last_preset(), "(CRT)"), "with the grid preset again");
+
+		/*
+		  And a session that never saw HDMI at all. This is the ordinary case - a
+		  machine that boots on a CRT - and the panel half must not be set even once,
+		  because there is no second event here to take it off again.
+		*/
+		vp_forget_originals();
+		harness_set_opt("12", 1);
+		harness_set_opt("4", 0, 1);
+		harness_set_opt("G", 0);
+		harness_set_opt("LM", 1);
+		harness_set_scaler_visible(0);
+		harness_reset_file_tx();
+		vp_apply_now(gbsys, VC_GB);
+
+		check(harness_opt_val("4", 1) == 0 && harness_opt_val("G") == 0 && harness_opt_val("LM") == 1,
+			"a look applied on a CRT leaves every panel option alone");
+		check(harness_opt_val("12") == 2, "the palette is still forced on there");
+		check(strstr(harness_last_file_tx(), "ClassicHome DMG Green.gbp") != 0,
+			"and the palette file still goes to the core");
+
+		harness_set_scaler_visible(1);
+		vp_set(gbsys, VC_GB, prior);
+		harness_set_confstr_table(0);
+		harness_set_menu_core(1);
+		harness_reset_file_tx();
+		harness_reset_status();
+		vp_forget_originals();
+	}
+
+	/*
+	  Which looks are worth offering on an analog display, and which would be a lie.
+
+	  A look is listed there when its colour can actually arrive. The core's own
+	  colour always can - a palette upload, GBC Colors, Modify Colors all happen
+	  before the picture leaves the core. A scaler gamma LUT arrives only while the
+	  scaler output does, so the Game Gear and its neighbours are real on a
+	  vga_scaler CRT and inert on direct_video or the front-end's own takeover.
+	*/
+	{
+		int o2[VP_MAX_OPTIONS];
+
+		harness_set_scaler_visible(1);
+		int gg_hdmi = vp_options_for(VC_GG, o2);
+		int gb_hdmi = vp_options_for(VC_GB, o2);
+
+		// A CRT with the scaler bypassed: direct_video, or the analog takeover.
+		harness_set_scaler_visible(0);
+		check(vp_options_for(VC_GB, o2) == gb_hdmi, "every Game Boy screen is still offered on a CRT");
+		check(vp_options_for(VC_GBA, o2) == 4, "so are the three GBA models and the off switch");
+		check(vp_options_for(VC_GBC, o2) == 2, "and the GBC screen");
+		check(vp_options_for(VC_CONSOLE, o2) == 5, "and the CRT classes are untouched by any of this");
+
+		int gg_an = vp_options_for(VC_GG, o2);
+		printf("  Game Gear with the scaler bypassed: %d look(s), first is %s\n",
+			gg_an, gg_an ? vp_name(o2[0]) : "-");
+		check(gg_an == 1 && !strcmp(vp_name(o2[0]), "None"),
+			"a look whose only colour is a scaler gamma is not offered where the scaler is bypassed");
+
+		int inert = 0;
+		const int gamma_only[] = { VC_LYNX, VC_WS, VC_WSC, VC_NGPC };
+		for (int k = 0; k < 4; k++) if (vp_options_for(gamma_only[k], o2) != 1) inert = 1;
+		check(!inert, "the same for the Lynx, both WonderSwans and the NGPC");
+
+		/*
+		  vga_scaler=1 with no HDMI sink: analog, and yet the scaler IS in the path,
+		  pointed down a VGA cable at the tube. This is the setup the two questions
+		  come apart on, and the one video_scaler_is_visible() cannot answer.
+		*/
+		harness_set_scaler_visible(1);
+		harness_set_hdmi_connected(0);
+		check(vp_output_is_analog() == 1, "vga_scaler with no HDMI sink is still an analog display");
+		check(vp_options_for(VC_GG, o2) == gg_hdmi,
+			"where the scaler does reach the CRT, the gamma looks are offered again");
+
+		harness_set_hdmi_connected(-2);          // back to following the scaler
+		harness_set_scaler_visible(1);
+	}
+
+	/*
+	  The analog twin of every panel preset, on the card: the same split applied to
+	  the scaler half. Structure lines forced off, the gamma - which is colour - kept.
+	*/
+	{
+		struct { const char *name; int gamma; } tw[] =
+		{
+			{ "Game Boy DMG", 0 }, { "Game Boy Pocket", 0 }, { "Game Boy Color", 0 },
+			{ "GBA (AGB-001)", 0 }, { "Game Gear", 1 }, { "WonderSwan", 1 },
+		};
+
+		for (int k = 0; k < (int)(sizeof(tw) / sizeof(tw[0])); k++)
+		{
+			char p[1024];
+			snprintf(p, sizeof(p), "%s/presets/ClassicHome %s (CRT).ini", ROOT, tw[k].name);
+			FILE *f = fopen(p, "rt");
+
+			int grid = 0, hoff = 0, gam = 0;
+			if (f)
+			{
+				char line[512];
+				while (fgets(line, sizeof(line), f))
+				{
+					if (strstr(line, "LCD Grid")) grid = 1;
+					if (!strncmp(line, "hfilter=off", 11)) hoff = 1;
+					if (!strncmp(line, "gamma=", 6) && !strstr(line, "off")) gam = 1;
+				}
+				fclose(f);
+			}
+
+			char what[160];
+			snprintf(what, sizeof(what), "%s: the analog preset exists and carries no pixel grid", tw[k].name);
+			check(f && hoff && !grid, what);
+
+			snprintf(what, sizeof(what), "%s: and keeps the panel's colour LUT", tw[k].name);
+			check(gam == tw[k].gamma, what);
+		}
+
+		// A CRT look simulates nobody's panel, so it has no twin and needs none.
+		char p[1024];
+		snprintf(p, sizeof(p), "%s/presets/ClassicHome PVM RGB (CRT).ini", ROOT);
+		FILE *f = fopen(p, "rt");
+		check(!f, "a CRT look gets no analog twin");
+		if (f) fclose(f);
+	}
+
 	// Every handheld class must have at least one look, and no CRT leakage.
 	{
 		int hh[] = { VC_GB, VC_GBC, VC_GBA, VC_GG, VC_LYNX, VC_WS, VC_WSC, VC_NGPC };
@@ -22212,6 +22411,59 @@ int main()
 		frame(6);
 		check(harness_fb_analog() == 0, "HDMI attached: the analog output is left alone");
 		check(theme_get()->w == 1280, "and the UI keeps the full canvas");
+	}
+
+	/*
+	  ...with one exception, and it is the reason the section above says "Display must
+	  vanish" rather than "Display must always vanish".
+
+	  A handheld's look is not only scaler work. The palette is the core's own, and a
+	  Game Boy on a CRT wants DMG green as much as one on HDMI does - so dropping the
+	  entry on an analog set took the palette away from the only player who has no
+	  other way to reach it. Both gates have to give: the scaler one, and the 240p one
+	  the takeover triggers by shrinking the canvas to the TV mode.
+
+	  A console on the same wire is unchanged, because every look it could pick lives
+	  in the scaler that is not in the path.
+	*/
+	printf("\n== a handheld keeps its palette on an analog set ==\n");
+	{
+		enum { W_DISPLAY = 4 };
+
+		cfg.classicui_profile = 0;
+		harness_set_fb(1280, 720);
+		gfx_shutdown();
+		theme_update(1280, 720, 0);
+
+		harness_set_scaler_visible(0);
+		chome_leave();
+		press(KEY_MENU, 20);
+		frame(10);
+
+		check(theme_get()->id == PROF_LO, "the takeover has the UI at 240p, where Display is normally gone");
+
+		check(shelf_go("gb", "Tetris (World).gb") >= 0, "the Game Boy card is on the shelf");
+		check(bar_open(W_DISPLAY), "Display is reachable for a handheld on an analog set");
+		dump("analog-handheld-display");
+		press(KEY_ESC, 10);
+		bar_walk_home();
+
+		check(shelf_go("snes", "Super Metroid (Europe).sfc") >= 0, "and the SNES card too");
+		check(!bar_open(W_DISPLAY), "a console on the same output still has no Display entry");
+		bar_walk_home();
+
+		/*
+		  Put the canvas back. The takeover shrank it to the TV mode, and the sections
+		  below draw into whatever is left here - the on-screen keyboard's legend is
+		  one pixel over the line at 320x240, which showed up as a clipped-copy failure
+		  in a screen this section never touches.
+		*/
+		harness_set_scaler_visible(1);
+		chome_leave();
+		frame(4);
+		harness_set_fb(1280, 720);
+		gfx_shutdown();
+		theme_update(1280, 720, 0);
 	}
 
 	/*
