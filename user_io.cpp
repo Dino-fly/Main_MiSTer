@@ -593,6 +593,22 @@ void user_io_status_set(const char *opt, uint32_t value, int ex)
 	}
 }
 
+/*
+  One cheap liveness poll at the running core, callable from UI code that is about
+  to spend tens of milliseconds without returning to the main loop.
+
+  The PSX core turns the firmware's routine CD poll into a heartbeat (hps_ext.v
+  toggles a bit on every CD_GET, PSX.sv counts ~31ms of silence as "the HPS is
+  busy") and parks its savestate machine while the HPS looks busy - so a front-end
+  that composes frames for 30-45ms starves it and savestates silently stop being
+  serviced. The poll is the same UIO_CD_GET the main loop already sends every
+  pass; sending it more often is more of the same traffic, not a new kind.
+*/
+void user_io_core_alive_poll()
+{
+	if (is_psx()) psx_poll();
+}
+
 int user_io_status_save(const char *filename)
 {
 	/*

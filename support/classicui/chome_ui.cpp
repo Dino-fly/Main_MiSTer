@@ -4209,9 +4209,28 @@ static void draw_suspend(const chome_profile *p)
 	int x0 = (p->w - (n * tw + (n - 1) * gap)) / 2;
 	int ty = y + p->thumb_y;
 
+	/*
+	  The fallback cover has to be the cover of the strip's own game. cur_entry() is
+	  the shelf's cursor, and the strip is not always about the card under it: opened
+	  from the disc dialog in a game, the shelf behind is parked wherever the player
+	  last browsed - which is how a PlayStation suspend point came to wear a Game Gear
+	  game's box art. The cursor's cover is only trusted when it names the same file
+	  this strip is about. A disc has no card to agree with, so it falls back to its
+	  own fetched cover; a slot with neither shows plainly as a save with no picture.
+	*/
 	const chome_entry *e = cur_entry();
 	int aw = 0, ah = 0;
-	const uint32_t *art = (e && e->kind == ENT_GAME) ? art_get(e->game, &aw, &ah) : 0;
+	const uint32_t *art = 0;
+	if (e && e->kind == ENT_GAME && it)
+	{
+		const chome_item *ei = lib_item(e->game);
+		if (ei && !strcmp(ei->path, it->path)) art = art_get(e->game, &aw, &ah);
+	}
+
+	const uint32_t *dart = 0;
+	char dap[1024];
+	if (!art && it && susp_is_disc && disc_art_path(it->path, dap, sizeof(dap)))
+		dart = art_thumb(dap, tw, th);
 
 	for (int i = 0; i < n; i++)
 	{
@@ -4255,6 +4274,7 @@ static void draw_suspend(const chome_profile *p)
 
 			if (shot) gfx_blit(shot, tw, th, x, ty, tw, th);
 			else if (art) gfx_blit(art, aw, ah, x, ty, tw, th);
+			else if (dart) gfx_blit(dart, tw, th, x, ty, tw, th);
 			else gfx_fill(x, ty, tw, th, COL_BG);
 
 			if (!shot) gfx_scrim(x, ty, tw, th, COL_SHADOW, 4);
@@ -12096,7 +12116,68 @@ static int susp_write()
 	if (!ig_have_item || !ss_can_save()) return 0;
 
 	int slot = susp_slot();
+
+	/*
+	  The suspend slot is a SWITCHED slot, and a switched save dies silently on a
+	  core whose savestate manager only applies the slot while the OSD is away
+	  and the core is running - measured on the PSX core by reading the slot
+	  counters out of DDR. This ran with the menu's OSD hold up and the pause
+	  on, ss_do_save() reported the pulse as sent, and the record below then
+	  named a state that never landed: a Resume into nothing. So everything
+	  comes off first - the quit is ending the session anyway - and the record
+	  is only written once the file is really there. process_ss() flushes the
+	  core's state to the card from THIS loop, so waiting means pumping it, not
+	  sleeping.
+	*/
+#ifndef CHOME_HOST_TEST
+	char target[1024];
+	int have_target = lib_slot_target(&ig_item, slot, target, sizeof(target));
+
+	struct stat st;
+	unsigned long pre_mtime = 0;
+	long long pre_size = -1;
+	if (have_target && !stat(target, &st)) { pre_mtime = (unsigned long)st.st_mtime; pre_size = st.st_size; }
+#endif
+
+	ss_pause_release(ig_paused);
+	ig_paused = 0;
+	OsdStatusHold(0);
+
 	if (!ss_do_save(slot)) return 0;
+
+#ifndef CHOME_HOST_TEST
+	/*
+	  Compiled out of the host harness: there is no core there to bump the DDR
+	  counter and no process_ss() to flush it, so the wait could only ever time
+	  out. On hardware it is the difference between a Resume and a lie.
+	*/
+	if (have_target)
+	{
+		int landed = 0;
+		for (int i = 0; i < 60 && !landed; i++)          // ~6s at 100ms steps
+		{
+			process_ss(0);
+			/*
+			  And the core's liveness poll, which this loop otherwise starves: the
+			  PSX savestate machine watches the CD poll as a heartbeat (see the
+			  suspend strip's spin note) and treats 31ms of silence as "the HPS is
+			  reading my state" - a quit that blocks here without polling would
+			  wedge the very save it is waiting for.
+			*/
+			user_io_core_alive_poll();
+			if (!stat(target, &st) &&
+				((unsigned long)st.st_mtime != pre_mtime || st.st_size != pre_size || pre_size < 0))
+				landed = 1;
+			else
+				usleep(100 * 1000);
+		}
+		if (!landed)
+		{
+			printf("ClassicUI: the suspend state never reached the card - no resume offered\n");
+			return 0;
+		}
+	}
+#endif
 
 	const chome_sys *sy = lib_sys(ig_item.sysidx);
 	if (!sy) return 0;
@@ -12249,9 +12330,34 @@ static int slot_png_path(const chome_item *it, int slot, char *out, int len)
   looking at - and taking it now means the picture does not depend on how long the core
   takes to write its state, or on the menu still being open by then.
 */
+/*
+  Whether a frame has anything on it, by the test the ig_open() grab retry uses: a
+  sparse sample, because 2 million pixels are asked about a property almost any real
+  frame answers within the first few hundred.
+*/
+static int shot_lit(const uint32_t *px, int n)
+{
+	for (int i = 0; i < n; i += 97)
+	{
+		uint32_t c = px[i] & 0xffffff;
+		if (((c >> 16) & 0xff) > 24 || ((c >> 8) & 0xff) > 24 || (c & 0xff) > 24)
+			return 1;
+	}
+	return 0;
+}
+
 static int ss_write_thumb(const chome_item *it, int slot)
 {
 	if (!it || !ig_shot || ig_shot_w < 1 || ig_shot_h < 1) return 0;
+
+	/*
+	  A lifeless frame is not a picture of the game. The still can genuinely be
+	  black - ig_open() retries the grab and then believes it, because a fade or a
+	  loading screen really is black - and writing it beside a real 4MB state made
+	  a 602-byte void the slot's face. No thumbnail is the better answer: the tile
+	  then wears the game's own cover (see draw_suspend()) instead of a black square.
+	*/
+	if (!shot_lit(ig_shot, ig_shot_w * ig_shot_h)) return 0;
 
 	char png[1024];
 	if (!slot_png_path(it, slot, png, sizeof(png))) return 0;
@@ -12347,6 +12453,9 @@ static int pend_reserved = -1;           // which slot holds it, for the copy in
   and it has to go back on the moment the state lands.
 */
 static int pend_repause = 0;             // the pause we took off, to put back
+static int pend_rehold = 0;              // the OSD hold we took off, likewise
+static unsigned long pend_retry_at = 0;  // when to press the core again, 0 = no more
+static int pend_retries = 0;             // how many presses are left
 static int pend_pre_ok = 0;              // was there a file there before
 static unsigned long pend_pre_mtime = 0;
 static long long pend_pre_size = 0;
@@ -12396,18 +12505,43 @@ static int pend_direct_start(const chome_item *it, int slot)
 	ss_pause_release(ig_paused);
 	ig_paused = 0;
 
+	/*
+	  And off with the OSD hold, for the same window. Measured on the PSX core
+	  (20260809) by reading the savestate slot counters out of DDR: with
+	  OSD_STATUS held, a save pulse is serviced only for the slot that is
+	  already active - switch slots first and the pulse dies silently. Menu
+	  closed, all four slots save. So the core's savestate manager applies the
+	  slot selection only while the OSD is away, and the hold comes off for the
+	  save exactly like the pause does. Nothing shows: the hold draws no
+	  overlay, and it goes back up when the state lands.
+	*/
+	OsdStatusHold(0);
+
 	if (!ss_do_save(slot))
 	{
+		OsdStatusHold(1);
 		if (was) ig_paused = ss_pause_engage();
 		return 0;
 	}
 
+	pend_rehold = 1;
 	pend_repause = was;
 	pend_slot = slot;
 	pend_reserved = -1;
 	pend_after = (unsigned long)time(0);
 	pend_until = GetTimer(8000);
 	pend_failed = -1;
+
+	/*
+	  Ask again if nothing lands. A pulse is consumed only when the core's savestate
+	  machine is idle, and it spends ~2s after every save waiting out the HPS
+	  heartbeat (see the suspend strip's spin note) - a pulse inside that window
+	  dies with no error anywhere. The state it would have saved is unchanged - the
+	  menu is up and the game held - so pressing the same button again is exactly
+	  what the player would do, minus the player.
+	*/
+	pend_retry_at = GetTimer(3000);
+	pend_retries = 1;
 
 	ss_write_thumb(it, slot);              // the picture is of now, as in pend_start()
 	printf("ClassicUI: slot %d is waiting for the core to write it\n", slot + 1);
@@ -12490,6 +12624,14 @@ void chome_pend_poll()
 			&& (!pend_pre_ok || (unsigned long)st.st_mtime != pend_pre_mtime
 				|| (long long)st.st_size != pend_pre_size));
 
+		if (!done && pend_retries > 0 && pend_retry_at && CheckTimer(pend_retry_at))
+		{
+			pend_retries--;
+			pend_retry_at = GetTimer(3000);
+			printf("ClassicUI: slot %d again - the first press may have hit the core mid-drain\n", pend_slot + 1);
+			ss_do_save(pend_slot);
+		}
+
 		if (!done && pend_until && !CheckTimer(pend_until)) return;
 
 		/*
@@ -12501,7 +12643,14 @@ void chome_pend_poll()
 		/*
 		  Only while the menu is still up. The player may have closed it while this was in
 		  flight, and pausing a core they are playing would freeze the game on them.
+		  The hold goes up before the pause: an OSD-gated pause only bites while
+		  OSD_STATUS is high.
 		*/
+		if (pend_rehold)
+		{
+			if (ig_active) OsdStatusHold(1);
+			pend_rehold = 0;
+		}
 		if (pend_repause)
 		{
 			if (ig_active) ig_paused = ss_pause_engage();
@@ -12746,6 +12895,16 @@ int chome_test_ss_load(int slot)
 	printf("ClassicUI: ss_load %d via MiSTer_cmd -> %s\n", slot, r ? "pulsed" : "no hooks");
 	return r;
 }
+
+// And the save pulse, for the same reason: measuring which slots a core
+// actually services (the PSX core advertises four and answered for one).
+int chome_test_ss_save(int slot)
+{
+	int r = ss_do_save(slot);
+	printf("ClassicUI: ss_save %d via MiSTer_cmd -> %s\n", slot, r ? "pulsed" : "no hooks");
+	return r;
+}
+
 
 /* ------------------------------------------------------- in-game screens --- */
 
@@ -13218,18 +13377,7 @@ static int ig_open()
 				break;
 			}
 
-			int lit = 0;
-			int n = ig_shot_w * ig_shot_h;
-			for (int i = 0; i < n; i += 97)
-			{
-				uint32_t c = ig_shot[i] & 0xffffff;
-				if (((c >> 16) & 0xff) > 24 || ((c >> 8) & 0xff) > 24 || (c & 0xff) > 24)
-				{
-					lit = 1;
-					break;
-				}
-			}
-			if (lit || tries >= 3) break;
+			if (shot_lit(ig_shot, ig_shot_w * ig_shot_h) || tries >= 3) break;
 			usleep(50 * 1000);
 		}
 		why = screenshot_grab_why();
@@ -14790,7 +14938,20 @@ int chome_handle(uint32_t key)
 	  drive that has gone away for a few seconds shows a disc still turning and a percentage
 	  that has stopped, which is the honest pair of facts.
 	*/
-	if (disc_or_rip_present() || (screen == SCR_DISC && !disc_picking && ig_running_disc()))
+	/*
+	  Not while the suspend strip is up. The PSX core watches the firmware's CD poll
+	  as a liveness signal (hps_ext.v toggles a heartbeat on CD_GET; PSX.sv calls the
+	  HPS "busy" after ~31ms of silence), and its savestate machine refuses to return
+	  to idle while the HPS looks busy - so it takes exactly one save per menu visit
+	  and silently drops the rest. A spinning disc costs ~30-45ms of compose per
+	  frame, which starves that poll continuously. The strip is the save UI, so while
+	  it is on screen the disc under it holds still and the main loop runs fast enough
+	  to keep the heartbeat alive - measured on the device by reading the savestate
+	  slot counters out of DDR: with the spin on, slots 2 and 3 never serviced; menu
+	  closed (fast loop), every slot serviced repeatedly.
+	*/
+	if (screen != SCR_SUSPEND &&
+		(disc_or_rip_present() || (screen == SCR_DISC && !disc_picking && ig_running_disc())))
 	{
 		/*
 		  Faster than the other animations, because the disc travels further per frame -

@@ -6779,15 +6779,17 @@ static void assert_disc_shelf_slots()
 	*/
 	{
 		/*
-		  Plain frames, no key presses: the strip's cursor survives a close and
-		  the next part of this section reopens it expecting the filled slot
-		  under the cursor - a RIGHT/LEFT nudge here got refused on one side and
-		  moved on the other, and three checks downstream failed on an empty
-		  slot. The dialog's spinner and the title marquee mark the frame dirty
-		  on their own, which is repaint enough for the counter.
+		  Repaints are forced with a RIGHT/LEFT pair rather than waited for: the
+		  spinner deliberately stops while the strip is up (its repaints starved
+		  the PSX core's heartbeat and cost every save after the first - see the
+		  spin scheduler in chome_ui.cpp), so idle frames are quiet here now. The
+		  pair is safe because wrap_step is symmetric on every list: whatever
+		  RIGHT did, LEFT undoes, and the cursor lands back on the slot the next
+		  part of this section expects.
 		*/
 		int before = chome_test_disc_draws();
-		frame(6);
+		press(KEY_RIGHT);
+		press(KEY_LEFT);
 		check(chome_test_disc_draws() > before,
 			"the strip keeps the disc dialog painted behind itself");
 	}

@@ -6588,6 +6588,10 @@ int input_test(int getchar)
 					{
 						chome_test_ss_load(atoi(cmd + 8));
 					}
+					else if (!strncmp(cmd, "ss_save ", 8))
+					{
+						chome_test_ss_save(atoi(cmd + 8));
+					}
 				}
 			}
 
