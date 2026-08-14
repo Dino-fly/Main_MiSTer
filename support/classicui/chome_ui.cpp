@@ -90,6 +90,7 @@ static int ig_selected_running = 0;          // shelf parked on the running game
 */
 static int ig_first_open = 1;
 static unsigned long ig_close_until = 0;     // "press A again to close the game"
+static int ig_reopen_display = 0;            // the menu was closed FROM Display - land back on it
 static int wifi_row = 0;                     // which network is picked
 static int wifi_top = 0;                     // first one on screen
 static char wifi_pick[NET_SSID];             // ...and its name, kept across the keyboard
@@ -4292,16 +4293,14 @@ static void draw_suspend(const chome_profile *p)
 }
 
 /*
-  The Display screen, laid out like the SNES Classic's: a row of preview tiles for
-  the looks that apply to this game, each with a radio underneath, and a frame
-  strip below it with arrows. Up/Down moves between the two zones, Left/Right
-  within one.
+  The Display screen: one large preview of the look under the cursor, its
+  description under it, and a centered row of small tiles to choose from - the
+  layout Dinofly asked for once the preset lists started growing. Left/Right
+  walks the tiles, A applies. No radio buttons: the look in use wears a bright
+  outline, the cursor wears the same focus ring the suspend strip uses, and the
+  big preview always shows the cursor - three facts, three marks, none of them
+  a widget.
 */
-static void draw_radio(int cx, int cy, int r, int on)
-{
-	gfx_frame_rect(cx - r, cy - r, r * 2, r * 2, COL_INK, 1);
-	if (on) gfx_fill(cx - r / 2, cy - r / 2, r, r, COL_RED);
-}
 
 /*
   A stored picture, cropped the same way the live frame is.
@@ -4355,98 +4354,83 @@ static void draw_display_screen(const chome_profile *p)
 	if (n < 1) return;
 	if (look_row >= n) look_row = n - 1;
 
-	/*
-	  Height is derived from the content rather than guessed, so the bands cannot
-	  collide and there is no dead space at the bottom. Vertical order:
-	  header, tiles, tile labels, radios, description.
-	*/
 	int pw = (p->w * 92) / 100;
-	int gap = 6 * s;
 	int pad = 6 * s;
+	int gap = 3 * s;
 
-	int tile_w = (pw - pad * 2 - gap * (n - 1)) / n;
-	int tile_h = (tile_w * 3) / 4;
+	/*
+	  The selector tiles are a fixed size and the row is centered, so two looks sit
+	  as a pair in the middle rather than as two slabs filling the width - the old
+	  layout divided the row among however many looks there were, which read as a
+	  different screen per system. They only shrink when a class genuinely offers
+	  more than fit.
+	*/
+	int tw = 66 * s;   // wide enough that "COMPOSITE" fits its label budget at every profile
+	int th = (tw * 3) / 4;
+	int fit = (pw - pad * 2 - gap * (n - 1)) / n;
+	if (tw > fit) { tw = fit < 24 ? 24 : fit; th = (tw * 3) / 4; }
 
 	int h_title = 10 * s + 6;          // draw_panel_ex's own title bar
 	int h_header = 13 * tiny;
-	int h_label = 11 * tiny;
-	int h_radio = 12 * s;
 	int h_blurb = (p->id == PROF_LO) ? 0 : 2 * (10 * tiny);
+	// Two lines: "GAME BOY POCKET" does not fit a small tile on one, and a name
+	// with letters missing is worse than a second line under every tile.
+	int h_label = 2 * (10 * tiny) + tiny;
 
-	int ph = h_title + pad + h_header + tile_h + 4 * s + h_label + h_radio + h_blurb + pad;
-	if (ph > (p->h * 94) / 100)
-	{
-		// Too tall for the canvas: give the tiles back the difference.
-		int over = ph - (p->h * 94) / 100;
-		tile_h -= over;
-		if (tile_h < 24) tile_h = 24;
-		ph = h_title + pad + h_header + tile_h + 4 * s + h_label + h_radio + h_blurb + pad;
-	}
+	/*
+	  The big preview takes whatever height the rest leaves, at 4:3 - derived, like
+	  the old layout's bands, so nothing collides and nothing is guessed. Order top
+	  to bottom: which hardware, the preview, what the look is, the tiles to pick
+	  from, their names.
+	*/
+	int ph_max = (p->h * 94) / 100;
+	int bh_big = ph_max - (h_title + pad + h_header + 6 * s + h_blurb + 4 * s + th + h_label + pad);
+	int bw_big = (bh_big * 4) / 3;
+	if (bw_big > pw - pad * 2) { bw_big = pw - pad * 2; bh_big = (bw_big * 3) / 4; }
+	if (bh_big < th) { bh_big = th; bw_big = (bh_big * 4) / 3; }
+
+	int ph = h_title + pad + h_header + bh_big + 6 * s + h_blurb + 4 * s + th + h_label + pad;
 
 	panel_box b = draw_panel_ex(p, pw, ph, "Display");
 
 	int in_use = vp_effective(sysidx, vclass);
-
-	/*
-	  Preview over the user's own game. Paused in-game we have the live frame,
-	  which is as current as it gets; from the menu we fall back to the reference
-	  shot captured during play, then to a suspend thumbnail.
-	*/
-	const uint32_t *ref = ig_active ? ig_live_ref(tile_w, tile_h) : 0;
-	if (!ref)
-	{
-		char rp[1024];
-		if (ref_shot_for(it, rp, sizeof(rp))) ref = ref_zoom(rp, tile_w, tile_h);
-	}
 
 	// Which hardware these looks belong to.
 	char hdr[64];
 	snprintf(hdr, sizeof(hdr), "FOR %s", vp_class_label(vclass));
 	gfx_text(gfx_clip(hdr, tiny, b.w - 12 * s), b.x + pad, b.y + 2 * s, tiny, COL_PANELLO, 0);
 
-	int top = b.y + 2 * s + h_header;
-	int label_y = top + tile_h + 4 * s;
-	int radio_y = label_y + h_label + h_radio / 2 - 2 * s;
-	int blurb_y = label_y + h_label + h_radio;
+	int big_y = b.y + 2 * s + h_header;
+	int big_x = b.x + (b.w - bw_big) / 2;
 
-	int total = tile_w * n + gap * (n - 1);
-	int tx = b.x + (b.w - total) / 2;
-
-	for (int i = 0; i < n; i++)
+	/*
+	  The preview is of the look under the cursor, so browsing the tiles is what
+	  changes it. A shipped lookshot outranks the computed illustration - see
+	  vp_lookshot_path() - and the computed one composes over the player's own
+	  game: the live frame in-game, the reference shot from the menu.
+	*/
 	{
-		int x = tx + i * (tile_w + gap);
-		int on = (i == look_row);
-
-		if (on)
-		{
-			gfx_fill(x - 3 * s, top - 2 * s, tile_w + 6 * s,
-				tile_h + 2 * s + h_label + h_radio, COL_BLUE);
-		}
-
-		/*
-		  A shipped lookshot outranks the computed illustration - see
-		  vp_lookshot_path(). art_thumb() caches by path, so this costs one
-		  decode per look, not one per frame.
-		*/
 		const uint32_t *img = 0;
 		char lsp[1024];
-		if (vp_lookshot_path(opts[i], lsp, sizeof(lsp)))
-			img = art_thumb(lsp, tile_w, tile_h);
-		if (!img) img = vp_preview(opts[i], tile_w, tile_h, ref);
-		if (img) gfx_blit(img, tile_w, tile_h, x, top, tile_w, tile_h);
-		else gfx_fill(x, top, tile_w, tile_h, COL_BGDARK);
-		gfx_frame_rect(x - 1, top - 1, tile_w + 2, tile_h + 2, on ? COL_WHITE : COL_INK, 1);
-
-		char up[64];
-		snprintf(up, sizeof(up), "%s", vp_name(opts[i]));
-		gfx_shout(up);
-		gfx_text_c(gfx_clip(up, tiny, tile_w), x + tile_w / 2, label_y, tiny,
-			on ? COL_WHITE : COL_INK, 0);
-
-		draw_radio(x + tile_w / 2, radio_y, 4 * s, opts[i] == in_use);
+		if (vp_lookshot_path(opts[look_row], lsp, sizeof(lsp)))
+			img = art_thumb(lsp, bw_big, bh_big);
+		if (!img)
+		{
+			const uint32_t *ref = ig_active ? ig_live_ref(bw_big, bh_big) : 0;
+			if (!ref)
+			{
+				char rp[1024];
+				if (ref_shot_for(it, rp, sizeof(rp))) ref = ref_zoom(rp, bw_big, bh_big);
+			}
+			img = vp_preview(opts[look_row], bw_big, bh_big, ref);
+		}
+		if (img) gfx_blit(img, bw_big, bh_big, big_x, big_y, bw_big, bh_big);
+		else gfx_fill(big_x, big_y, bw_big, bh_big, COL_BGDARK);
+		gfx_frame_rect(big_x - 1, big_y - 1, bw_big + 2, bh_big + 2, COL_INK, 1);
 	}
 
-	// What the highlighted look actually is.
+	// What the cursor's look actually is, under the picture of it.
+	int blurb_y = big_y + bh_big + 6 * s;
 	if (h_blurb)
 	{
 		char lines[4][64];
@@ -4457,6 +4441,61 @@ static void draw_display_screen(const chome_profile *p)
 			snprintf(up, sizeof(up), "%s", lines[i]);
 			gfx_shout(up);
 			gfx_text_c(up, b.x + b.w / 2, blurb_y + i * 10 * tiny, tiny, COL_INK, 0);
+		}
+	}
+
+	int tile_y = blurb_y + h_blurb + 4 * s;
+	int total = tw * n + gap * (n - 1);
+	int tx = b.x + (b.w - total) / 2;
+
+	for (int i = 0; i < n; i++)
+	{
+		int x = tx + i * (tw + gap);
+		int on = (i == look_row);
+
+		const uint32_t *img = 0;
+		char lsp[1024];
+		if (vp_lookshot_path(opts[i], lsp, sizeof(lsp)))
+			img = art_thumb(lsp, tw, th);
+		if (!img)
+		{
+			const uint32_t *ref = ig_active ? ig_live_ref(tw, th) : 0;
+			if (!ref)
+			{
+				char rp[1024];
+				if (ref_shot_for(it, rp, sizeof(rp))) ref = ref_zoom(rp, tw, th);
+			}
+			img = vp_preview(opts[i], tw, th, ref);
+		}
+		if (img) gfx_blit(img, tw, th, x, tile_y, tw, th);
+		else gfx_fill(x, tile_y, tw, th, COL_BGDARK);
+
+		/*
+		  Two marks, same grammar as the suspend strip: the look in use wears the
+		  bright outline, the cursor wears the focus ring outside it. When they are
+		  the same tile it wears both, which is the answer to "am I already on it".
+		*/
+		gfx_frame_rect(x - 1, tile_y - 1, tw + 2, th + 2,
+			opts[i] == in_use ? COL_WHITE : COL_INK, opts[i] == in_use ? 2 : 1);
+		if (on) gfx_frame_rect(x - 3, tile_y - 3, tw + 6, th + 6, COL_FOCUS, 2);
+
+		/*
+		  Wrapped to two lines, then each line clipped to the tile's pitch plus
+		  half a gap each side - centered, two neighbours doing the same meet at
+		  the middle of the gap and never overlap. The clip stays because
+		  wrap_text cannot split a single long word, and an unclipped
+		  "COMPOSITE" centered over a narrow tile walks into both neighbours.
+		*/
+		char lines[4][64];
+		int nl = wrap_text(vp_name(opts[i]), tw + gap * 2, tiny, lines, 2);
+		for (int l = 0; l < nl; l++)
+		{
+			char up[64];
+			snprintf(up, sizeof(up), "%s", lines[l]);
+			gfx_shout(up);
+			gfx_text_c(gfx_clip(up, tiny, tw + gap * 2), x + tw / 2,
+				tile_y + th + 5 + l * 10 * tiny, tiny,
+				on ? COL_WHITE : COL_INK, 0);
 		}
 	}
 
@@ -13233,6 +13272,17 @@ static void ig_close(int restore_video)
 	ig_active = 0;
 
 	/*
+	  Closing the menu FROM the Display screen is how a look is checked against the
+	  game - press Home on a tile, watch the picture, press Home again to compare
+	  the next one. Landing anywhere else makes the player walk the menu bar back
+	  for every comparison, so the next open returns here. Remembered only when the
+	  close came from that screen: backing out of it first is the player saying they
+	  are done with it. restore_video excludes the quit paths, which end the session
+	  the memory belongs to.
+	*/
+	ig_reopen_display = (restore_video && screen == SCR_DISPLAY);
+
+	/*
 	  The staged SNAC-ownership rows land here, on every way out of the menu - back to the
 	  game, quitting to the shelf, or handing the screen to the classic OSD. That is the
 	  whole point of staging them: applying one takes the player's pad away, so it happens
@@ -13569,6 +13619,10 @@ static int ig_open()
 		disc_dlg_enter();
 		screen = SCR_DISC;
 	}
+
+	// ...unless the last close was from the Display screen - see ig_close(). The
+	// cursor (look_row) is a static, so the tile they were comparing is still under it.
+	if (ig_reopen_display) screen = SCR_DISPLAY;
 
 	gfx_damage_all();
 	mark_dirty();                 // damage alone does not schedule a draw

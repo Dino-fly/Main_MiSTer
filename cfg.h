@@ -158,7 +158,8 @@ typedef struct {
 	  reusing the uint8_t one; see the comment on opt_def in support/classicui/chome_opt.h.
 	*/
 	int8_t classicui_tracking;
-	// 1 (default) - titles and labels are shouted in capitals, as they always were.
+	// 0 (default) - titles and labels drawn as they are written; 1 shouts them in
+	// capitals, as the front-end originally did.
 	uint8_t classicui_caps;
 	/*
 	  1 (default) - the front-end asks for the menu framebuffer at half the display

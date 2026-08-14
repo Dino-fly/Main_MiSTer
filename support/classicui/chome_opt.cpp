@@ -242,7 +242,7 @@ static const opt_def opts[] =
 	*/
 	{ "classicui_tracking", "Letter Spacing",
 	  "Space between letters. Positive fits fewer words.",
-	  OG_MENU, OPT_NUMBER, 0, -2, 2, 1, 0, 0, 0, 0, 0, 0, &cfg.classicui_tracking, OW_NOW },
+	  OG_MENU, OPT_NUMBER, 0, -2, 2, 1, 0, -1, -1, 0, 0, 0, &cfg.classicui_tracking, OW_NOW },
 
 	/*
 	  And whether this menu shouts. On, which is what it has always done, every title and
@@ -253,7 +253,7 @@ static const opt_def opts[] =
 	*/
 	{ "classicui_caps", "Capital Letters",
 	  "Off draws titles and labels as they are written.",
-	  OG_MENU, OPT_LIST, 0, 0, 1, 1, 0, 1, 1, ch_offon, NCH(ch_offon), &cfg.classicui_caps, 0, OW_NOW },
+	  OG_MENU, OPT_LIST, 0, 0, 1, 1, 0, 0, 0, ch_offon, NCH(ch_offon), &cfg.classicui_caps, 0, OW_NOW },
 };
 
 #define NOPTS ((int)(sizeof(opts) / sizeof(opts[0])))

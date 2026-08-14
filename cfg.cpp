@@ -736,12 +736,16 @@ void cfg_parse()
 	strcpy(cfg.main, "MiSTer");
 	cfg.classicui_overscan = 6;
 	/*
-	  Zero, and it has to stay zero: every panel width and every hand-fitted line in the
-	  front-end was measured at the ROM font's 8-pixel advance, so 0 is the only value
-	  that is the layout those measurements describe. See support/classicui/GUIDE.md.
+	  Minus one, by the owner's eye: he ran the front-end at -1 for a while and asked for
+	  it as the default. Every panel width and hand-fitted line was measured at the ROM
+	  font's 8-pixel advance (see support/classicui/GUIDE.md), which is why only the
+	  narrower direction is safe as a default - text drawn tighter than the measurements
+	  still fits everywhere they fit, where +1 would clip the lines fitted tightest.
 	*/
-	cfg.classicui_tracking = 0;
-	cfg.classicui_caps = 1;
+	cfg.classicui_tracking = -1;
+	// And lowercase with it, for the same reason and from the same request: titles and
+	// labels drawn as they are written, not shouted.
+	cfg.classicui_caps = 0;
 	strcpy(cfg.classicui_artdir, "boxart");
 	strcpy(cfg.classicui_arturl, "https://thumbnails.libretro.com");
 	has_video_sections = false;
