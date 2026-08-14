@@ -4775,20 +4775,29 @@ static void draw_display_screen(const chome_profile *p)
 	  game: the live frame in-game, the reference shot from the menu.
 	*/
 	{
+		/*
+		  The player's own game first, the shipped picture second.
+
+		  That order is the other way round from how this started, and the reason
+		  is that the preview stopped being an impression: vp_preview() now runs
+		  the look through the scaler's own arithmetic over a real frame (see
+		  vp_render_exact), so it beats any picture we could ship - it is this
+		  game, on this machine, with this look. A lookshot is what shows when
+		  there is no frame to use yet, which on a fresh card is most of them.
+		*/
 		const uint32_t *img = 0;
-		char lsp[1024];
-		if (vp_lookshot_path(opts[look_row], lsp, sizeof(lsp)))
-			img = art_thumb(lsp, bw_big, bh_big);
-		if (!img)
+		const uint32_t *ref = ig_active ? ig_live_ref(bw_big, bh_big) : 0;
+		if (!ref)
 		{
-			const uint32_t *ref = ig_active ? ig_live_ref(bw_big, bh_big) : 0;
-			if (!ref)
-			{
-				char rp[1024];
-				if (ref_shot_for(it, rp, sizeof(rp))) ref = ref_zoom(rp, bw_big, bh_big);
-			}
-			img = vp_preview(opts[look_row], bw_big, bh_big, ref);
+			char rp[1024];
+			if (ref_shot_for(it, rp, sizeof(rp))) ref = ref_zoom(rp, bw_big, bh_big);
 		}
+		if (ref) img = vp_preview(opts[look_row], bw_big, bh_big, ref);
+
+		char lsp[1024];
+		if (!img && vp_lookshot_path(opts[look_row], lsp, sizeof(lsp)))
+			img = art_thumb(lsp, bw_big, bh_big);
+		if (!img) img = vp_preview(opts[look_row], bw_big, bh_big, 0);
 		if (img) gfx_blit(img, bw_big, bh_big, big_x, big_y, bw_big, bh_big);
 		else gfx_fill(big_x, big_y, bw_big, bh_big, COL_BGDARK);
 		gfx_frame_rect(big_x - 1, big_y - 1, bw_big + 2, bh_big + 2, COL_INK, 1);
@@ -4818,20 +4827,20 @@ static void draw_display_screen(const chome_profile *p)
 		int x = tx + i * (tw + gap);
 		int on = (i == look_row);
 
+		// Same order as the big preview above, and for the same reason.
 		const uint32_t *img = 0;
-		char lsp[1024];
-		if (vp_lookshot_path(opts[i], lsp, sizeof(lsp)))
-			img = art_thumb(lsp, tw, th);
-		if (!img)
+		const uint32_t *tref = ig_active ? ig_live_ref(tw, th) : 0;
+		if (!tref)
 		{
-			const uint32_t *ref = ig_active ? ig_live_ref(tw, th) : 0;
-			if (!ref)
-			{
-				char rp[1024];
-				if (ref_shot_for(it, rp, sizeof(rp))) ref = ref_zoom(rp, tw, th);
-			}
-			img = vp_preview(opts[i], tw, th, ref);
+			char rp[1024];
+			if (ref_shot_for(it, rp, sizeof(rp))) tref = ref_zoom(rp, tw, th);
 		}
+		if (tref) img = vp_preview(opts[i], tw, th, tref);
+
+		char lsp[1024];
+		if (!img && vp_lookshot_path(opts[i], lsp, sizeof(lsp)))
+			img = art_thumb(lsp, tw, th);
+		if (!img) img = vp_preview(opts[i], tw, th, 0);
 		if (img) gfx_blit(img, tw, th, x, tile_y, tw, th);
 		else gfx_fill(x, tile_y, tw, th, COL_BGDARK);
 
