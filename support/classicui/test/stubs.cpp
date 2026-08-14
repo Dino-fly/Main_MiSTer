@@ -178,6 +178,7 @@ static const struct { const char *name; char kind; void *var; } stub_vars[] =
 	{ "CLASSICUI_CAPS",          'u', &cfg.classicui_caps },
 	{ "CLASSICUI_ARTDIR",        's', cfg.classicui_artdir },
 	{ "CLASSICUI_ARTFETCH",      'u', &cfg.classicui_artfetch },
+	{ "CLASSICUI_ARTFILL",       'u', &cfg.classicui_artfill },
 	{ "CLASSICUI_GAMELIST",      'u', &cfg.classicui_gamelist },
 	{ "CLASSICUI_FREEZE",        'u', &cfg.classicui_freeze },
 	{ "CLASSICUI_ARTURL",        's', cfg.classicui_arturl },

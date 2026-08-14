@@ -436,21 +436,39 @@ saying which picture belongs to which game, and that file is read as it is: no s
 scrape, no renaming, nothing to copy. ScreenScraper art scraped with Skraper is the
 common case and needs nothing done to it.
 
-Scrapes with no `gamelist.xml` work too, as long as the pictures are named after the
-ROM file: `games/<System>/media/box2d/`, `boxart/`, `images/`, `media/mixed/`,
-`media/screenshot/` and `screenshots/` are all looked in.
+The layout ScreenScraper's own tools write works as it is, including the part that
+trips other front-ends up — the picture named after the **game** rather than after the
+ROM file:
+
+```
+games/PSX/media/box2d/Final Fantasy VII.png       <- the name in your gamelist.xml
+games/PSX/media/screenshot/Final Fantasy VII.png
+games/PSX/Final Fantasy VII (USA) (Disc 1).cue    <- the ROM
+```
+
+That name comes out of `gamelist.xml`, so it needs `classicui_gamelist` on (it is, by
+default). Scrapes with no `gamelist.xml` work too, as long as the pictures are named
+after the ROM file. The folders looked in, best first:
+`games/<System>/media/box2d/`, `media/Box2D/`, `boxart/`, `images/`,
+`media/images/`, `media/mixed/`, `media/` (the picture straight in there, which is
+what Taki's consolemode packs do), `media/screenshot/`, `screenshots/`, and last
+`media/<ROM>-BG.png`. In every one of them both spellings are tried — the game's name
+first, then the ROM's.
 
 What a gamelist says wins over the art in `classicui_artdir`, because it is your own
-scrape naming exact files rather than us guessing from a name. If its pictures are
-worse than the ones in your art pack, `classicui_gamelist=0` turns it off. Only
-pictures are read — names and descriptions are not, since titles here come from
-filenames.
+scrape naming exact files rather than us guessing from a name — and so do those media
+folders, because they are your scrape too and `classicui_artdir` is where *our*
+downloads land. If their pictures are worse than the ones in your art pack,
+`classicui_gamelist=0` turns the whole thing off. Only pictures and that one name are
+read — descriptions and genres are not, and the name is never shown, since titles here
+come from filenames.
 
 ### Where a cover is looked for, in order
 
-1. **Whatever is already on the card** — a `gamelist.xml`, a scraper's media folder, your
-   `classicui_artdir`, or a picture beside the ROM. Nothing is ever downloaded over a
-   picture you already have, so a scrape you did yourself is never overwritten.
+1. **Whatever is already on the card**, in this order: a `gamelist.xml` naming an exact
+   file, then a scraper's media folder beside the ROMs, then your `classicui_artdir`,
+   then a picture beside the ROM. Nothing is ever downloaded over a picture you already
+   have, so a scrape you did yourself is never overwritten.
 2. **ScreenScraper**, if you have turned it on and given it your account.
 3. **The libretro thumbnail pack**, if `classicui_artfetch` is on.
 4. Nothing: a plain plate in the system's colour.
@@ -460,6 +478,38 @@ credentials you have said which database you want your shelf built from, and a d
 cover is written to the card and then never looked for again — so whichever source answers
 first is the one you are stuck with. Anything ScreenScraper has no cover for falls through
 to the pack, and so does everything if your daily quota runs out.
+
+### Where the downloaded covers go
+
+Into `classicui_artdir`, which is **`/media/fat/boxart` unless you changed it** — not
+under `games/`, not under `media/`, and nowhere temporary. The layout is the libretro
+thumbnail one:
+
+```
+/media/fat/boxart/Sony - PlayStation/Named_Boxarts/Final Fantasy VII (USA) (Disc 1).png
+```
+
+with libretro's long name for the system, not your games folder's name. That is the whole
+cache: back that folder up and you keep every cover the front-end has ever fetched; delete
+a file from it and that cover is fetched again next time you scroll past the game. It is
+also read *after* a scrape you did yourself, so putting a cover there never overrides one
+of yours.
+
+### Filling in the rest of the shelf by itself
+
+Covers are fetched for the cards you scroll to, which means a big library only fills in
+where you have been. `classicui_artfill=1` — on by default, and it does nothing unless
+`classicui_artfetch` is on — keeps working through the rest whenever the shelf has nothing
+else to do, so the library fills in over time while you are picking a game.
+
+It is the lowest-priority thing the front-end does. It never holds up the card you are
+looking at: it does not start while any cover is still being drawn, and if it is already
+downloading something when you scroll onto an unscraped game, it drops its own download
+and gives you the connection. It obeys every limit in the section below — the same one
+request per 1.2 seconds, the same 90% stand-down, the same week-long memory of games the
+database has no cover for — and it stops by itself once it has been round the whole
+library with nothing left to ask about. Set it to `0` if you would rather nothing happened
+except when you scroll.
 
 ### Your ScreenScraper allowance, and how it is looked after
 
@@ -646,8 +696,9 @@ All optional; the defaults are what most people want.
 | `classicui` | `0` | Turns the front-end on |
 | `classicui_profile` | `0` | Layout size: auto, or force hd/sd/240p |
 | `classicui_overscan` | `6` | Percent kept clear of the screen edge, for a CRT |
-| `classicui_artdir` | `boxart` | Where cover art lives, under the games folder |
+| `classicui_artdir` | `boxart` | Where cover art lives, and where downloaded covers are kept. Relative to the **SD root**, so the default is `/media/fat/boxart` |
 | `classicui_artfetch` | `0` | Download missing cover art over the network |
+| `classicui_artfill` | `1` | Keep fetching the covers you have not browsed to, from an idle shelf. Needs `classicui_artfetch` |
 | `classicui_arturl` | libretro's thumbnail server | Where `classicui_artfetch` fetches from |
 | `classicui_gamelist` | `1` | Read `gamelist.xml`, so art scraped elsewhere works here |
 | `classicui_freeze` | `1` | Hold the game still while the menu is open |
