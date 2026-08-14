@@ -578,3 +578,7 @@ A7800|Rescue on Fractalus! (USA).a78
 A7800|Choplifter! (USA).a78
 A7800|Desert Falcon (USA).a78
 A7800|One-on-One Basketball (USA).a78
+
+# --- Game Gear in its own folder (the gg system reads games/GameGear)
+GameGear|Columns (USA, Europe).gg
+GameGear|Aladdin (USA, Europe, Brazil) (En).gg

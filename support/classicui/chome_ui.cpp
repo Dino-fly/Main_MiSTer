@@ -1358,6 +1358,13 @@ static const struct { const char *id; const char *icon; } sysicon_alias[] =
 	{ "megacd",   "md"     },
 	{ "pcecd",    "tg16"   },
 	{ "neogeocd", "neogeo" },
+	/*
+	  The console the cartridge shares a core with, not a handheld lookalike -
+	  the same borrowing the CD systems above do. RetroArch's licensed set has a
+	  real Game Gear glyph, so the better fix is a run of tools/icons32.py; until
+	  someone does that run, only that tool may put artwork in chome_icons32.h.
+	*/
+	{ "gg",       "sms"    },
 };
 
 /*
@@ -9530,6 +9537,13 @@ static void launch_write_mgl(const chome_sys *s, const char *relpath, const chom
 
 	fprintf(f, "<mistergamedescription>\n");
 	fprintf(f, "\t<rbf>%s</rbf>\n", rbf ? rbf : s->rbf);
+	/*
+	  Before the file line: the setname re-homes the core, and the file's bare
+	  relative path resolves against that home. Without it a Game Gear path
+	  would be looked for under games/SMS - measured on the device, where the
+	  combined form resolves games/GameGear/... and lands in the GG slot.
+	*/
+	if (s->setname[0]) fprintf(f, "\t<setname>%s</setname>\n", s->setname);
 	fprintf(f, "\t<file delay=\"%d\" type=\"%c\" index=\"%d\" path=\"%s\"/>\n",
 		s->delay ? s->delay : 2, type == 's' ? 's' : 'f', index, relpath);
 	fprintf(f, "</mistergamedescription>\n");
@@ -9574,9 +9588,27 @@ static void do_launch(int sysidx, const char *relpath, chome_item *it, const cho
 				const char *slash = strrchr(rbfpath, '/');
 				core = slash ? slash + 1 : rbfpath;
 			}
+			// A setname re-homes the core, and the running core answers to that
+			// name - so it is also the name this record must expect back.
+			if (s->setname[0]) core = s->setname;
 			fprintf(f, "%s\n%s\n%s\n", s->id, relpath, core);
 			fclose(f);
 		}
+	}
+
+	/*
+	  A .gg living in the Master System folder still has to reach the core's GG
+	  slot (FS2, MGL index 2). The Game Gear shelf row already launches there;
+	  this covers the same cartridge filed under SMS, where the row's slot is
+	  the Master System one. Without it the file falls into FS1 and the core
+	  runs it as a Master System ROM - the wrong-slot fallback is silent, so
+	  the game "works" in the wrong video mode.
+	*/
+	static const chome_slot gg_slot = { 'f', 2 };
+	if (!slot && !strcmp(s->id, "sms"))
+	{
+		const char *dot = strrchr(relpath, '.');
+		if (dot && !strcasecmp(dot + 1, "gg")) slot = &gg_slot;
 	}
 
 	if (!s->mra && !s->rbf[0]) { nudge(); return; }

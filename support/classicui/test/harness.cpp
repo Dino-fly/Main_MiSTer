@@ -636,6 +636,12 @@ static void build_sd()
 	// different screens.
 	mkpath(ROOT "/games/SMS");
 	touch(ROOT "/games/SMS", "Sonic The Hedgehog 2 (Europe) (GG).gg", 2048);
+
+	// Game Gear's own folder: the gg system reads it (the .gg above stays a
+	// Master System item, because it lives in the SMS folder).
+	mkpath(ROOT "/games/GameGear");
+	touch(ROOT "/games/GameGear", "Columns (USA, Europe).gg", 2048);
+	touch(ROOT "/games/GameGear", "Aladdin (USA, Europe, Brazil) (En).gg", 2048);
 	/*
 	  The same title beside it in the same folder and the same core, differing only by
 	  extension - and they are different games with different levels, which is why the
@@ -2206,6 +2212,56 @@ static void assert_cd_systems()
 		snprintf(msg, sizeof(msg), "%s says %s about save states", w->name,
 			w->ss == CH_SS_UNKNOWN ? "nothing" : "no");
 		check(s->savestates == w->ss, msg);
+	}
+
+	/*
+	  The cartridge slots of the shared SMS core, same discipline as the discs
+	  above. The MGL index is the DIGIT in the core's file entry, and an index
+	  matching no entry falls through SILENTLY to the first one - measured on
+	  the device: SMS publishes "H8FS1,SMSSG SC" and "H8FS2,GG"; index 0 and 1
+	  both land in FS1, only 2 reaches the GG slot and its 160x144 mode. A .gg
+	  in the FS1 slot runs as a Master System ROM: the right core comes up and
+	  the game plays wrong, which is why this is a table check and not a hunch.
+	*/
+	printf("\n== the SMS core's two cartridge slots ==\n");
+	{
+		struct cart { const char *id, *dir, *setname; int index; };
+		static const cart carts[] =
+		{
+			{ "sms", "SMS",      "",         1 },   // "H8FS1,SMSSG SC" in sms.sv
+			{ "gg",  "GameGear", "GameGear", 2 },   // "H8FS2,GG" in sms.sv
+		};
+
+		for (unsigned i = 0; i < sizeof(carts) / sizeof(carts[0]); i++)
+		{
+			int sx = -1;
+			for (int j = 0; j < lib_sys_count(); j++)
+				if (!strcmp(lib_sys(j)->id, carts[i].id)) sx = j;
+
+			char msg[160];
+			snprintf(msg, sizeof(msg), "%s is a system on the shelf", carts[i].id);
+			check(sx >= 0, msg);
+			if (sx < 0) continue;
+
+			const chome_sys *s = lib_sys(sx);
+			snprintf(msg, sizeof(msg), "%s reads the %s folder", carts[i].id, carts[i].dir);
+			check(!strcmp(s->dir, carts[i].dir), msg);
+			snprintf(msg, sizeof(msg), "%s launches into the core's FS%d slot, by digit",
+				carts[i].id, carts[i].index);
+			check(s->type == 'f' && s->index == carts[i].index, msg);
+			snprintf(msg, sizeof(msg), "%s rides the SMS core", carts[i].id);
+			check(!strcmp(s->rbf, "_Console/SMS"), msg);
+
+			/*
+			  The setname is what makes the shared core resolve this system's own
+			  games folder: an MGL file path is relative to the core's HOME, and
+			  without <setname>GameGear</setname> a Game Gear path is looked for
+			  under games/SMS. Measured on the device both ways.
+			*/
+			snprintf(msg, sizeof(msg), "%s %s the core",
+				carts[i].id, carts[i].setname[0] ? "re-homes" : "does not re-home");
+			check(!strcmp(s->setname, carts[i].setname), msg);
+		}
 	}
 
 	lib_view_build(VIEW_ALL, -1, SORT_TITLE);
@@ -15848,9 +15904,16 @@ static void assert_scan_slices()
 	  see chome_ss.cpp) changed what build_sd() puts on the fake card, exactly as the note
 	  above says to do rather than leaving the old literal to fail here forever.
 	*/
-	check(fixture_fp == 0x98342fd1,
+	/*
+	  Re-read again for the Game Gear system (its own row reading games/GameGear,
+	  plus the two fixture carts in build_sd()), following the note above: the
+	  numbers below are what a full run printed with the new system in the table,
+	  taken deliberately rather than pasted blind - the root view moved because
+	  the shelf gained a system, and the item fingerprint because two files did.
+	*/
+	check(fixture_fp == 0xad88a908,
 		"the sliced walk produces the library the whole-system walk produced, item for item");
-	check(fixture_root == 0xdbc6df21, "and the shelf it builds, card for card and group for group");
+	check(fixture_root == 0xc868c2f2, "and the shelf it builds, card for card and group for group");
 
 	stress_build();
 

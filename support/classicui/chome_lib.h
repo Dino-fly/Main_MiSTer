@@ -57,6 +57,15 @@ struct chome_sys
 	int  savestates;     // CH_SS_*: what is known before the core is loaded
 	int  vclass;         // VC_* in chome_video.h: picks the default video look
 	uint32_t tint;       // fallback-card plate colour
+
+	/*
+	  MGL <setname>, empty for almost every system. A shared core launched with
+	  one takes this identity instead of its own: games folder, <name>.CFG,
+	  savestates/<name>/ - which is how Game Gear rides the SMS core yet owns
+	  games/GameGear and its own settings. The launch writes it into the MGL and
+	  into the current-game record, since the running core will answer to it.
+	*/
+	char setname[16];
 };
 
 #define IT_GAME   0

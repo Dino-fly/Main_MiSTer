@@ -33,6 +33,13 @@ struct sys_def
 	uint32_t tint;
 	int romset;          // last, so the rows above keep their positional layout
 	int savestates;      // CH_SS_*, and after romset for the same reason
+	/*
+	  MGL <setname>: re-homes a shared core, so its games folder, config and
+	  savestates take this name instead of the core's own. Game Gear is the case
+	  that needs it: same SMS core, games in games/GameGear. Trailing so only
+	  the rows that use it carry it - everything else aggregates to 0.
+	*/
+	const char *setname;
 };
 
 /*
@@ -66,7 +73,20 @@ static const sys_def defaults[] =
 	{ "gba",   "Game Boy Advance",              "GBA",  "_Console/GBA",          "GBA",     "gba",          "Nintendo - Game Boy Advance",                    'f', 0, 2, 0, 0, 0x4a3c8a, 0, CH_SS_YES     },
 	{ "n64",   "Nintendo 64",                   "N64",  "_Console/N64",          "N64",     "n64,z64,v64",  "Nintendo - Nintendo 64",                         'f', 0, 3, 0, 0, 0x2b5e8a, 0, CH_SS_NO      },
 	{ "md",    "Mega Drive",                    "MD",   "_Console/Genesis",      "Genesis", "md,bin,gen",   "Sega - Mega Drive - Genesis",                    'f', 0, 2, 0, 0, 0x2b4c7e, 0, CH_SS_NO      },
-	{ "sms",   "Master System",                 "SMS",  "_Console/SMS",          "SMS",     "sms,gg,sg",    "Sega - Master System - Mark III",                'f', 0, 2, 0, 0, 0x7e3a2b, 0, CH_SS_YES     },
+	/*
+	  The MGL slot index is the DIGIT in the core's file entry ("FS2,GG" wants
+	  index 2), not the entry's position - and an index that matches no entry
+	  falls through silently to the FIRST file entry, which is how Game Gear
+	  games spent a while loading into the Master System slot and running in
+	  the wrong video mode. Measured on the device: SMS publishes
+	  "H8FS1,SMSSG SC" and "H8FS2,GG"; index 0 and 1 both land in FS1, only
+	  index 2 reaches the GG slot (native 160x144). So the SMS row says 1
+	  explicitly, and Game Gear gets a row of its own: same core, its own games
+	  folder, the GG slot, its own art and video class. A .gg filed under
+	  games/SMS is re-slotted at launch - see do_launch().
+	*/
+	{ "sms",   "Master System",                 "SMS",  "_Console/SMS",          "SMS",     "sms,gg,sg",    "Sega - Master System - Mark III",                'f', 1, 2, 0, 0, 0x7e3a2b, 0, CH_SS_YES     },
+	{ "gg",    "Game Gear",                     "GG",   "_Console/SMS",          "GameGear","gg",           "Sega - Game Gear",                               'f', 2, 2, 0, 0, 0x24345e, 0, CH_SS_YES, "GameGear" },
 	{ "tg16",  "TurboGrafx-16",                 "TG16", "_Console/TurboGrafx16", "TGFX16",  "pce,sgx",      "NEC - PC Engine - TurboGrafx 16",                'f', 0, 2, 0, 0, 0x8a6e2b, 0, CH_SS_NO      },
 	{ "a7800", "Atari 7800",                    "A78",  "_Console/Atari7800",    "A7800",   "a78,a26,bin",  "Atari - 7800",                                   'f', 0, 2, 0, 0, 0x6e2b2b, 0, CH_SS_NO      },
 	{ "psx",   "PlayStation",                   "PSX",  "_Console/PSX",          "PSX",     "cue,chd,exe",  "Sony - PlayStation",                             's', 1, 3, 0, 0, 0x4a4c58, 0, CH_SS_YES     },
@@ -189,6 +209,7 @@ static void add_sys(const sys_def *d)
 	s->savestates = d->savestates;
 	s->vclass = vclass_for(d->id, d->computer, d->mra);
 	s->tint = 0xff000000u | d->tint;
+	if (d->setname) snprintf(s->setname, sizeof(s->setname), "%s", d->setname);
 }
 
 static char *trim(char *s)
