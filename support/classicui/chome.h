@@ -89,6 +89,11 @@ void chome_core_boot();
 */
 int chome_test_ss_load(int slot);
 
+// How many frames have painted the disc dialog - the strip opened from that
+// dialog promises to keep painting it behind itself, and a screen-id check
+// cannot see whether the promise holds.
+int chome_test_disc_draws();
+
 /*
   Called from HandleUI() in every core, every frame. In a game core it grabs one
   reference frame a little after launch, so the Display screen can preview the

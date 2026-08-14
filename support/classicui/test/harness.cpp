@@ -6769,6 +6769,28 @@ static void assert_disc_shelf_slots()
 	press(KEY_DOWN);
 	check(chome_screen_id() == S_SUSPEND,
 		"Down reaches the disc's suspend points from the shelf, with no mount involved");
+
+	/*
+	  And the dialog stays painted behind the strip. Panels draw after the strip,
+	  so stepping to S_SUSPEND used to stop drawing the dialog entirely - what
+	  showed through was the shelf, parked on whatever card was browsed last,
+	  and a PSX save appeared to belong to a Game Gear game. Asked of the draw
+	  counter, not the screen id: the id said S_SUSPEND in the broken build too.
+	*/
+	{
+		/*
+		  Plain frames, no key presses: the strip's cursor survives a close and
+		  the next part of this section reopens it expecting the filled slot
+		  under the cursor - a RIGHT/LEFT nudge here got refused on one side and
+		  moved on the other, and three checks downstream failed on an empty
+		  slot. The dialog's spinner and the title marquee mark the frame dirty
+		  on their own, which is repaint enough for the counter.
+		*/
+		int before = chome_test_disc_draws();
+		frame(6);
+		check(chome_test_disc_draws() > before,
+			"the strip keeps the disc dialog painted behind itself");
+	}
 	dump("disc-shelf-1-slots");
 
 	press(KEY_ESC);
@@ -13403,6 +13425,27 @@ static void assert_look_applies_to_the_running_core()
 	chome_handle(0);
 	if (chome_ingame_active()) press(KEY_MENU, 14);
 	frame(6);
+
+	/*
+	  A menu opened onto a blanked screen retries its grab before believing it.
+	  Closing the menu resumes the core, the PSX blanks its video for a few
+	  frames on the way back, and a reopen inside that window grabbed pure black
+	  - which a save then wrote as the slot's picture (a real 4MB SLES-00838
+	  state wearing a 602-byte black PNG, found by Dinofly). The stub's flat
+	  frame IS that blank; the retry shows up only as repeated grab calls.
+	*/
+	{
+		harness_set_grab_flat(0xff000000u);
+		harness_reset_grab_calls();
+		press(KEY_MENU, 20);
+		frame(6);
+		check(chome_ingame_active(), "the menu still opens over a blanked screen");
+		check(harness_grab_calls() >= 4, "a blank still is retried before it is believed");
+		press(KEY_MENU, 20);
+		frame(6);
+		harness_set_grab_flat(0);
+		check(!chome_ingame_active(), "and the blank-open session closed cleanly");
+	}
 
 	press(KEY_MENU, 20);
 	for (int i = 0; i < 40 && lib_scanning(); i++) frame(2);

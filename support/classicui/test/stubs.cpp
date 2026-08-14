@@ -995,8 +995,15 @@ void harness_set_grab_flat(uint32_t argb) { grab_flat = argb; }
 static const char *grab_why = "not attempted";
 const char *screenshot_grab_why(void) { return grab_why; }
 
+// Attempts, not successes: the blank-frame retry in ig_open() is visible only
+// as the same call being made again.
+static int grab_calls = 0;
+int harness_grab_calls() { return grab_calls; }
+void harness_reset_grab_calls() { grab_calls = 0; }
+
 int screenshot_grab(uint32_t *dst, int max_px, int *out_w, int *out_h)
 {
+	grab_calls++;
 	int w = 320, h = 240;
 	if (!grab_ok) { grab_why = "the harness was told to refuse"; return 0; }
 	if (w * h > max_px) { grab_why = "the frame is larger than the buffer offered"; return 0; }

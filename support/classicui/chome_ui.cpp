@@ -6052,6 +6052,18 @@ static int core_holds_disc();
 
 static void disc_susp_bind(const disc_dlg *d)
 {
+	/*
+	  Rebinding the SAME disc keeps its slot bits. The memset below wipes them,
+	  and nobody re-runs the opener's lib_refresh_slots() while the strip is
+	  already up - which is exactly when this now runs, because the dialog
+	  stays painted behind the open strip. Without this, six painted frames
+	  turned the filled slot the strip opened on into "empty - nothing to
+	  start". A different disc starts from zero, as it must.
+	*/
+	uint8_t had_slots = disc_susp_item.slots;
+	char had_path[sizeof(disc_susp_item.path)];
+	snprintf(had_path, sizeof(had_path), "%s", disc_susp_item.path);
+
 	disc_susp_item.path[0] = 0;
 
 	if (d->running || disc_type() != DISC_T_PSX) return;
@@ -6064,6 +6076,8 @@ static void disc_susp_bind(const disc_dlg *d)
 	disc_susp_item.sysidx = (int16_t)d->sysidx;
 	snprintf(disc_susp_item.path, sizeof(disc_susp_item.path), "%s", disc_serial());
 	snprintf(disc_susp_item.title, sizeof(disc_susp_item.title), "%s", d->title);
+
+	if (!strcmp(disc_susp_item.path, had_path)) disc_susp_item.slots = had_slots;
 }
 
 static chome_item *disc_susp_item_get()
@@ -7821,8 +7835,16 @@ static void draw_disc_picker(const chome_profile *p, const disc_dlg *d)
 	}
 }
 
+// How many times the dialog has actually been painted. The strip opened from
+// the dialog claims to keep it on screen; this is how a test checks the claim
+// against the drawing rather than against the screen variable.
+static int disc_draws = 0;
+int chome_test_disc_draws() { return disc_draws; }
+
 static void draw_disc(const chome_profile *p)
 {
+	disc_draws++;
+
 	disc_dlg d;
 	disc_dlg_get(&d);
 
@@ -9994,10 +10016,25 @@ static void compose()
 	*/
 	draw_running_warning(p);
 
-	int overlay = overlay_up();
+	/*
+	  The strip reached from the disc dialog keeps the dialog on screen behind
+	  it. Panels normally draw last and cover the shelf, so stepping from
+	  SCR_DISC to SCR_SUSPEND stopped drawing the dialog - and what showed
+	  through was the shelf, parked on whatever card was browsed last. Saving a
+	  PSX state under a huge Game Gear card is how this surfaced: the player
+	  read that card as the slot's picture, because nothing on screen said the
+	  shelf had wandered in. The dialog is what Down was pressed ON, so it is
+	  what belongs in the background.
+	*/
+	int strip_over_disc = (screen == SCR_SUSPEND && susp_is_disc);
+	if (strip_over_disc) draw_disc(p);
+
+	int overlay = overlay_up() || strip_over_disc;
 	// Black over a still of the game and COL_BGDARK over the front-end's own background, for
 	// the reason spelled out at ig_build_background(): over a photograph this colour is a
 	// floor and not a dim, and it was flattening every dark scene to grey.
+	// The scrim also covers the dialog the strip is drawn over, so the strip
+	// reads as the focused layer and the dialog as the background it is.
 	if (overlay) gfx_scrim(0, 0, p->w, p->h, ig_still_shown(p) ? COL_BLACK : COL_BGDARK, 2);
 
 	draw_suspend(p);
@@ -13161,11 +13198,39 @@ static int ig_open()
 	const char *why = "no room for a frame of that size";
 	if (ig_shot)
 	{
-		if (!screenshot_grab(ig_shot, max_px, &ig_shot_w, &ig_shot_h))
+		/*
+		  A blank frame is retried before it is believed. Closing this menu
+		  resumes the core, and the PSX blanks its video for a few frames on the
+		  way back - so a reopen inside that window (easy from a pad, and exactly
+		  what exploring a confusing screen produces) grabbed pure black, and the
+		  save a moment later wrote that black as the slot's picture: a real
+		  4MB state wearing a 602-byte void. The retry costs three short waits
+		  only when the screen really is black - a fade or a loading screen
+		  sometimes is - and then black is the true still and it is kept.
+		*/
+		for (int tries = 0; ; tries++)
 		{
-			free(ig_shot);
-			ig_shot = 0;
-			ig_shot_w = ig_shot_h = 0;
+			if (!screenshot_grab(ig_shot, max_px, &ig_shot_w, &ig_shot_h))
+			{
+				free(ig_shot);
+				ig_shot = 0;
+				ig_shot_w = ig_shot_h = 0;
+				break;
+			}
+
+			int lit = 0;
+			int n = ig_shot_w * ig_shot_h;
+			for (int i = 0; i < n; i += 97)
+			{
+				uint32_t c = ig_shot[i] & 0xffffff;
+				if (((c >> 16) & 0xff) > 24 || ((c >> 8) & 0xff) > 24 || (c & 0xff) > 24)
+				{
+					lit = 1;
+					break;
+				}
+			}
+			if (lit || tries >= 3) break;
+			usleep(50 * 1000);
 		}
 		why = screenshot_grab_why();
 	}
