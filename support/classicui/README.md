@@ -718,11 +718,12 @@ black screen), `gamepad_defaults` (silently moves every button in every core)
 and `vscale_mode`. The reasoning is in `chome_ini.cpp` beside the table so it is
 not re-argued.
 
-**And the front-end's own eleven other options are not here either**, which is the
+**And the front-end's own twelve other options are not here either**, which is the
 rule worth stating in its own right: a setting whose *absence* already gives the
 front-end what it wants does not belong in a set that writes lines into somebody's
 file. `cfg_parse()` already defaults `classicui_freeze` to 1, `classicui_gamelist`
-to 1, `classicui_overscan` to 6, `classicui_artdir` to `boxart`, `classicui_arturl`
+to 1, `classicui_artfill` to 1, `classicui_overscan` to 6, `classicui_artdir` to
+`boxart`, `classicui_arturl`
 to libretro's thumbnail server and `classicui_profile` to auto, so writing them would
 add lines that change nothing and that the player then owns - and a written line
 cannot tell "never set" from "set on purpose". `classicui_freeze=0` is exactly the deliberate choice of somebody whose
@@ -906,18 +907,50 @@ which is the escape hatch for the one case validation can miss.
 
 ## Cover art
 
-Lookup order:
+Lookup order, and it is settled in one place - `find_local_art()` in
+`chome_art.cpp`, which carries this list and the reasoning:
 
-0. whatever `gamelist.xml` names for that game, when the games folder has one -
-   see below
-1. the scraper media folders beside the ROMs, named after the ROM file:
-   `<games dir>/media/box2d/<ROM name>.png`, then `boxart`, `images`,
-   `media/images`, `media/mixed`, `media/screenshot`, `screenshots`
-2. our own `classicui_artdir` (default `boxart`), in three shapes:
+1. whatever `gamelist.xml` names outright for that game, when the games folder has
+   one - see below
+2. the scraper media folders beside the ROMs, best folder first, and **inside each
+   folder the game's `gamelist.xml` `<name>` before the ROM's own file name**:
+   `<games dir>/media/box2d/`, `media/Box2D/`, `boxart/`, `images/`,
+   `media/images/`, `media/mixed/`, `media/` (the file itself, Taki's consolemode
+   layout), `media/screenshot/`, `screenshots/`, and last of all
+   `media/<ROM>-BG.png`
+3. our own `classicui_artdir` (default `boxart`, **relative to the SD root**, so
+   `/media/fat/boxart`), in three shapes:
    `<artdir>/<System Name>/Named_Boxarts/<ROM name>.png` - the libretro convention
    the community packs use - then `<artdir>/<games dir>/<ROM name>.png`, then
    `<artdir>/<games dir>/<cleaned title>.png`
-3. next to the ROM
+4. next to the ROM
+
+**Layer 2's `<name>` spelling is the one people ask for by name.** It is what
+ScreenScraper's own tools, EmulationStation and Recalbox write - the picture is
+called after the game, not after the file:
+
+```
+games/PSX/media/box2d/Final Fantasy VII.png          <- the <name> in gamelist.xml
+games/PSX/Final Fantasy VII (USA) (Disc 1).cue       <- the ROM
+```
+
+A card scraped that way is invisible to a matcher that only knows ROM names, which
+is what this front-end had until `gl_name()` was added to `chome_gamelist.cpp`. Both
+spellings are tried in every folder, the `<name>` one first because it is the
+spelling the tool that wrote the folder uses.
+
+**Layer 3 is also the download cache.** Every cover fetched from ScreenScraper or
+from the libretro pack is written to
+`<artdir>/<System Name>/Named_Boxarts/<ROM name>.png` and read back from there on
+the next boot. There is no other cache: nothing is kept under `games/`, under
+`media/`, or in `/tmp` past the fetch. A player looking for the covers the
+front-end downloaded is looking for `/media/fat/boxart`.
+
+**Why layer 2 beats layer 3**, which reads backwards until you remember what layer 3
+holds: our downloads. If `artdir` came first, a cover we fetched would permanently
+hide a cover the player scraped for themselves, with no way back short of deleting
+our file. A scrape they chose beats a cover we chose for them; `artdir` still answers
+for every game their scrape did not cover, which on a real card is most of it.
 
 `.jpg` is tried too, but the bundled Imlib2 links only libpng, so JPEG support
 depends on the shipped `libImlib2.so` loaders - PNG is the safe format.
@@ -930,9 +963,49 @@ fast as anyone scrolls. Decoded cards are cached at the selected-card size with 
 24 MB LRU, aspect-fitted onto the system's plate colour rather than stretched.
 
 Fetching (`classicui_artfetch=1`, **off by default**) forks `curl` for one image at
-a time and polls it without blocking. It writes into layer 2's first shape, so a
+a time and polls it without blocking. It writes into layer 3's first shape, so a
 fetch permanently populates the local pack and the next boot needs no network. It is
 opt-in because it necessarily sends ROM names to a third party.
+
+### Filling in the rest of the library
+
+Fetching on demand only ever fills in the part of a shelf somebody has scrolled
+through. `classicui_artfill=1` (on by default, and inert without
+`classicui_artfetch`) adds a background sweep of the whole library, run from
+`art_step()` when there is nothing else at all to do, so the rest fills in over time.
+
+It is the lowest-priority thing the art module does, and every rule below is a hard
+constraint rather than a preference - see `fill_step()` in `chome_art.cpp`:
+
+- **It never delays the card under the cursor.** It does not start while anything is
+  queued for decode, and a fetch it *has* started is killed the moment the shelf
+  wants the one download slot (`fill_yield()`). That costs the request already in
+  flight, which is the price of the promise.
+- **It cannot stall the main loop.** At most `ART_FILL_SCAN` (2) items are examined
+  per turn, one `art_source_for()` each, and turns come `ART_FILL_EVERY` (15) frames
+  apart - about eight items a second, a 1500-game library swept in a few minutes.
+  The fetch itself is the existing forked `curl`, reaped without blocking. This
+  matters beyond smoothness: the PSX core treats the firmware's CD poll as a
+  heartbeat and wedges its savestate machine if a pass runs long.
+- **It cannot outspend an allowance.** It goes through the same `cover_ss_start()`
+  the shelf uses, so `SS_MIN_REQUEST_GAP_MS`, every hold, and the ko reserve at
+  `SS_KO_SPECULATIVE_PCT` all apply - and this is the most speculative caller there
+  is. The on-card miss store applies too, for free, because the sweep walks the same
+  ladder: a game the database has already said it has nothing for is not on the
+  ScreenScraper rung at all, so sweeping an already-scraped library costs nothing.
+  When the request floor says no, the sweep *holds* on that game rather than moving
+  past it, so the floor delays a game and never skips one.
+- **A re-ask waits for a whole fruitless sweep.** Phase 0 passes over games whose
+  miss has merely aged out; phase 1 includes them, and is only entered once a
+  complete sweep has found no never-asked game left. That is `queue_best()`'s
+  fairness rule applied to the sweep.
+- **And there is a ceiling**, `ART_FILL_MAX` (400) fetches a session, which bounds
+  the case with no bound of its own: a device with no network, where every attempt
+  fails as transport, writes nothing down, and would otherwise be retried for as long
+  as the shelf is up.
+
+A sweep that finds nothing to do in either phase stops for the session - which is
+short on this device, since a core change restarts the firmware.
 
 ### gamelist.xml
 
@@ -972,10 +1045,11 @@ gamelist naming only one picture uses), then `<mix>`, `<titleshot>`, `<fanart>`.
 `<cartridge>` and `<boxback>` are deliberately never covers - a logo on transparency
 or the back of a box on a card would look like a bug.
 
-Only pictures are read. Names, genres and descriptions are not: titles come from
-filenames, and the title *grouping* that puts three dumps of one game behind one card
-is built on that, so taking names from a gamelist would quietly change which games
-share a card.
+`<name>` is read as well, and it is read as a **file name and never as a title**:
+titles here come from filenames, and the title *grouping* that puts three dumps of
+one game behind one card is built on that, so displaying a gamelist's name would
+quietly change which games share a card. It exists only so layer 2 can find
+`media/box2d/<name>.png`. Genres, descriptions and ratings are not read at all.
 
 **Why gamelist wins over `classicui_artdir`.** It is the one layer where the player
 has said *this file belongs to this game* rather than us guessing from a name, and it
@@ -991,8 +1065,9 @@ puts no media paths in it, matching media to ROM names under
 `downloaded_media/<system>/covers/` instead ("ES-DE does not use tags inside the
 gamelist.xml files to find game media",
 [USERGUIDE.md](https://gitlab.com/es-de/emulationstation-de/-/blob/master/USERGUIDE.md)).
-Its gamelists are read here and simply name nothing, which is why layer 1 exists: the
-same filename-matching idea, against the folders Skraper and Batocera write.
+Its gamelists are read here and name no pictures - only the `<name>` that layer 2
+then looks for on disk, which is why that layer exists: the same filename-matching
+idea, against the folders Skraper, Recalbox and Batocera write.
 
 **What it costs.** Parsing is lazy and per system - the first time a card from that
 system asks for art, not during the library scan, which is already the slow part of a

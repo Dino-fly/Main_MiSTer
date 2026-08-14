@@ -10122,6 +10122,500 @@ static void assert_pack_provenance()
 	check(art_state(smwjp) != ART_READY, "and that game has no cover on the card again");
 }
 
+/*
+  ==========================================================================
+  The layouts a PC scraper leaves on the card, and which of them wins.
+  ==========================================================================
+
+  A beta tester could not get his offline covers onto the shelf. His card is scraped into
+  the layout ScreenScraper's own tools write - which is also EmulationStation's, and
+  Recalbox's, and the one every "romset media pack" on the internet is packed in:
+
+      games/<system>/media/box2d/<name>.png
+      games/<system>/media/screenshot/<name>.png
+
+  and the load-bearing part is <name>. It is not the ROM's file name. It is what the
+  scraper decided the game is called, recorded in that system's gamelist.xml, and it is
+  the one thing this front-end could not read: the file on his card is
+  "Final Fantasy VII.png" and the ROM is "Final Fantasy VII (USA) (Disc 1).cue", so every
+  filename matcher in chome_art.cpp walked straight past it.
+
+  So this section is written around that mapping, and around the order the layouts are
+  tried in, because the order is the other half of the answer and none of it shows in a
+  screenshot: a card with three pictures for one game looks the same whichever of them was
+  chosen. cover_colour() is what tells them apart - every fixture below is a flat plate of
+  its own colour, so the middle pixel of the decoded cover names the file it came from.
+
+  The fixtures are written here and taken away again rather than built into build_sd(),
+  for one reason: every count in assert_index() and assert_gamelist() is a statement about
+  exactly which covers that card carries, and a section that added three more would move
+  numbers that are load-bearing somewhere else.
+*/
+/*
+  Walk the ladder for these items and nothing else.
+
+  art_redo() cannot be used here. It asks for every item at priority 0, and the decode
+  queue holds QUEUE_MAX of them and refuses to displace an equal priority - so on a card
+  with more games than that it walks the first 32 and leaves the rest untouched at
+  ART_NONE. Which 32 is an accident of the scan order, and it does not include the games
+  this section is about. Asking for exactly the handful under test is both what the shelf
+  does when it draws them and the only way for the answer not to depend on where in the
+  library they happen to sit.
+*/
+static void art_only(const int *items, int n)
+{
+	art_shutdown();
+	art_init(theme_get()->sel_w, theme_get()->sel_h);
+
+	for (int i = 0; i < n; i++) art_request(items[i], 0);
+	for (int i = 0; i < n * 3 + 10; i++) art_step();
+}
+
+static void layout_cover(const char *path, uint32_t col)
+{
+	char dir[1024];
+	snprintf(dir, sizeof(dir), "%s", path);
+
+	char *slash = strrchr(dir, '/');
+	if (slash) { *slash = 0; mkpath(dir); }
+
+	make_cover(path, 400, 600, col);
+}
+
+// The pictures this section puts on the card, so the tidy-up cannot drift from the setup.
+static const char *const layout_files[] =
+{
+	ROOT "/games/PSX/gamelist.xml",
+	ROOT "/games/PSX/media/box2d/Final Fantasy VII.png",
+	ROOT "/games/PSX/media/box2d/Final Fantasy VII (USA) (Disc 1).png",
+	ROOT "/games/PSX/media/Box2D/Final Fantasy VII - Disc Two.png",
+	ROOT "/games/PSX/media/screenshot/Final Fantasy VII - Disc Two.png",
+	ROOT "/games/PSX/media/box2d/Final Fantasy VII (USA) (Disc 3).png",
+	ROOT "/games/PSX/media/screenshot/Final Fantasy VII - Disc Three.png",
+	ROOT "/games/NGP/media/SNK vs Capcom (USA).png",
+	ROOT "/games/NGP/media/SNK vs Capcom (USA)-BG.png",
+	ROOT "/games/Genesis/media/box2d/Sonic The Hedgehog 2 (Europe).png",
+	ROOT "/games/Genesis/media/box2d/Streets of Rage 2 (Europe).png",
+};
+#define LAYOUT_FILE_COUNT ((int)(sizeof(layout_files) / sizeof(layout_files[0])))
+
+static void assert_art_layouts()
+{
+	printf("\n== the scraper layouts on the card, and their order ==\n");
+
+	int d1 = item_by_path("PSX", "Final Fantasy VII (USA) (Disc 1).cue");
+	int d2 = item_by_path("PSX", "Final Fantasy VII (USA) (Disc 2).cue");
+	int d3 = item_by_path("PSX", "Final Fantasy VII (USA) (Disc 3).cue");
+	int npc = item_by_path("NGP", "SNK vs Capcom (USA).npc");
+	int sor2 = item_by_path("Genesis", "Streets of Rage 2 (Europe).bin");
+	int soneur = item_by_path("Genesis", "Sonic The Hedgehog 2 (Europe).md");
+
+	check(d1 >= 0 && d2 >= 0 && d3 >= 0 && npc >= 0 && sor2 >= 0 && soneur >= 0,
+		"the six games this section needs are all in the index");
+
+	check(art_state(d1) != ART_READY && art_state(d2) != ART_READY &&
+		art_state(d3) != ART_READY && art_state(npc) != ART_READY,
+		"and the four that are about to be given pictures have none now");
+
+	/* ------------------------------------ the ScreenScraper / ES / Recalbox layout --- */
+
+	/*
+	  A gamelist that names no pictures at all - only what each game is called. That is the
+	  whole of the tester's case and it is what ES-DE and a Skraper romset scrape both
+	  produce: the XML says the name, the name is the file name, and the pictures are on
+	  disk beside the ROMs under media/.
+
+	  Disc 1 gets two candidates in the *same* folder, one under each spelling, so the
+	  check is which spelling wins rather than whether a file was found at all.
+	*/
+	put_file(ROOT "/games/PSX/gamelist.xml",
+		"<?xml version=\"1.0\"?>\n"
+		"<gameList>\n"
+		"\t<game>\n"
+		"\t\t<path>./Final Fantasy VII (USA) (Disc 1).cue</path>\n"
+		"\t\t<name>Final Fantasy VII</name>\n"
+		"\t</game>\n"
+		"\t<game>\n"
+		"\t\t<path>./Final Fantasy VII (USA) (Disc 2).cue</path>\n"
+		"\t\t<name>Final Fantasy VII - Disc Two</name>\n"
+		"\t</game>\n"
+		"\t<game>\n"
+		"\t\t<path>./Final Fantasy VII (USA) (Disc 3).cue</path>\n"
+		"\t\t<name>Final Fantasy VII - Disc Three</name>\n"
+		"\t</game>\n"
+		"</gameList>\n");
+
+	layout_cover(ROOT "/games/PSX/media/box2d/Final Fantasy VII.png", 0xff11cc66);
+	layout_cover(ROOT "/games/PSX/media/box2d/Final Fantasy VII (USA) (Disc 1).png", 0xffcc6611);
+
+	// Disc 2: the box under Zapatoo's capitalised folder, the screenshot under the ordinary
+	// one. Two things at once - the spelling of the folder, and box before screenshot.
+	layout_cover(ROOT "/games/PSX/media/Box2D/Final Fantasy VII - Disc Two.png", 0xff6611cc);
+	layout_cover(ROOT "/games/PSX/media/screenshot/Final Fantasy VII - Disc Two.png", 0xffcc1166);
+
+	// Disc 3: a box named after the ROM against a screenshot named after the game. The
+	// folder ranks above the spelling, so the box wins.
+	layout_cover(ROOT "/games/PSX/media/box2d/Final Fantasy VII (USA) (Disc 3).png", 0xff33aa99);
+	layout_cover(ROOT "/games/PSX/media/screenshot/Final Fantasy VII - Disc Three.png", 0xffaa3399);
+
+	gl_forget();
+
+	// The six games under test, walked directly rather than through art_redo(). See art_only().
+	const int mine[6] = { d1, d2, d3, npc, sor2, soneur };
+	art_only(mine, 6);
+
+	int psx = sysidx_by_dir("PSX");
+	check(gl_count(psx) == 3, "a gamelist that names only <name>s still contributes its entries");
+	check(gl_rejected(psx) == 0, "and is not rejected for naming no pictures");
+
+	check(cover_is(d1, 0xff11cc66, "FF7 disc 1"),
+		"media/box2d/<gamelist name>.png is found - the layout the tester asked for");
+	check(cover_is(d2, 0xff6611cc, "FF7 disc 2"),
+		"media/Box2D with capitals is read too, and a box beats a screenshot");
+	check(cover_is(d3, 0xff33aa99, "FF7 disc 3"),
+		"and a box named after the ROM beats a screenshot named after the game: the folder"
+		" ranks above the spelling");
+
+	/*
+	  And the off switch takes the whole mapping with it, because it is the gamelist that
+	  supplies the name. With classicui_gamelist=0 there is no name to look up, so disc 1
+	  falls to the file named after the ROM in the same folder - which is the picture that
+	  proves the two spellings are genuinely two lookups and not one.
+	*/
+	cfg.classicui_gamelist = 0;
+	art_only(mine, 6);
+	check(cover_is(d1, 0xffcc6611, "FF7 disc 1, gamelist off"),
+		"classicui_gamelist=0 drops the <name> lookup back to the ROM's own name");
+	check(art_state(d2) == ART_MISSING,
+		"and a game whose only pictures are filed under its <name> has none at all");
+
+	cfg.classicui_gamelist = 1;
+	art_only(mine, 6);
+
+	/* ------------------------------------------------- Taki's consolemode layout --- */
+
+	/*
+	  media/<rom>.png with no type folder at all, and its background beside it. The
+	  background is the weakest thing this function will accept, so it is found when it is
+	  alone and loses the moment anything else turns up.
+	*/
+	layout_cover(ROOT "/games/NGP/media/SNK vs Capcom (USA)-BG.png", 0xff2255aa);
+	art_only(mine, 6);
+	check(cover_is(npc, 0xff2255aa, "NGP background"),
+		"media/<rom>-BG.png is found when it is the only picture there");
+
+	layout_cover(ROOT "/games/NGP/media/SNK vs Capcom (USA).png", 0xff5522aa);
+	art_only(mine, 6);
+	check(cover_is(npc, 0xff5522aa, "NGP box"),
+		"and the picture proper beats the background as soon as there is one");
+
+	/* --------------------------------------------- the order against our own folder --- */
+
+	/*
+	  The two layers this order was always going to be argued about, checked against each
+	  other on games that already carry a picture from the other layer.
+
+	  Sonic 2 (Europe) has a cover in our own artdir - the fetch cache - and a stale
+	  gamelist entry that falls through to it. A scrape the player made themselves must
+	  beat it, or a cover we downloaded would permanently hide one they chose, with no way
+	  back short of deleting our file.
+
+	  Streets of Rage 2 has a gamelist entry naming an exact file, which must beat both:
+	  it is the one layer where the player said which picture belongs to which game rather
+	  than us matching names.
+	*/
+	layout_cover(ROOT "/games/Genesis/media/box2d/Sonic The Hedgehog 2 (Europe).png", 0xff887711);
+	layout_cover(ROOT "/games/Genesis/media/box2d/Streets of Rage 2 (Europe).png", 0xff119988);
+	art_only(mine, 6);
+
+	check(cover_is(soneur, 0xff887711, "Sonic 2 Europe"),
+		"a scrape beside the ROMs beats our own art folder, which is where downloads land");
+	check(cover_is(sor2, 0xff7040b0, "Streets of Rage 2"),
+		"and a gamelist naming an exact file beats the scrape folder as well");
+
+	/* ------------------------------------------------------------- and out --- */
+
+	for (int i = 0; i < LAYOUT_FILE_COUNT; i++) unlink(layout_files[i]);
+
+	gl_forget();
+	art_only(mine, 6);
+
+	check(gl_count(psx) == 0, "with the fixture gamelist gone, that system contributes nothing again");
+	check(art_state(d1) == ART_MISSING && art_state(npc) == ART_MISSING,
+		"and the games it lent pictures to are back to none");
+	check(cover_is(soneur, 0xff2b4c7e, "Sonic 2 Europe, restored"),
+		"while the shelf every later section expects is exactly as it was");
+
+	// And the whole shelf back through the usual door, so the next section starts from the
+	// state every section before this one leaves.
+	art_redo();
+}
+
+/*
+  ==========================================================================
+  The background sweep: covers for the games nobody has browsed to.
+  ==========================================================================
+
+  Covers are fetched for the cards the shelf is drawing, which means a library only ever
+  fills in where somebody has scrolled. classicui_artfill adds a sweep of the whole item
+  array, run from an idle shelf, so the rest of it fills in over time.
+
+  Everything about it is a scheduling property and none of it shows in a pixel: a cover the
+  sweep fetched is indistinguishable from one the shelf fetched, and a sweep that ran at the
+  wrong moment - ahead of the card under the cursor, or straight through somebody's
+  ScreenScraper allowance - produces exactly the same shelf as one that behaved. So this
+  section asserts against the counters the sweep keeps, and it asserts the refusals rather
+  than the fetches: what must be checked is that it does *not* run.
+
+  Not one request leaves this process, by the same device the two sections above use: the
+  minimum gap between requests is held closed with ss_note_request(), which is the last gate
+  before a curl is forked. Under it the whole sweep runs - the cursor, the ladder, the miss
+  store, the fairness rule - and the fork is never reached. The one thing that cannot be
+  reached from here is the cancellation, fill_yield(): it needs a download actually in
+  flight, which needs a fork and a network this harness must not have. That is device-only
+  and is reported as such rather than modelled here.
+*/
+
+// The key the ScreenScraper stores are written under for one item: the ROM file as it sits
+// on the card, archive rather than member, which is what rom_filename() in chome_art.cpp
+// sends. Written out here because the stores are keyed on it and a test that wrote a
+// different key would be recording a miss against a game nothing will ever look up.
+static const char *ss_key_name(const chome_item *it, char *out, int len)
+{
+	char work[CH_PATH_LEN];
+	snprintf(work, sizeof(work), "%s", it->path);
+
+	char *zip = (char*)strcasestr(work, ".zip/");
+	if (zip) zip[4] = 0;
+
+	const char *fn = strrchr(work, '/');
+	snprintf(out, len, "%s", fn ? fn + 1 : work);
+	return out;
+}
+
+static void fill_passes(int n)
+{
+	for (int i = 0; i < n; i++) art_step();
+}
+
+static void assert_art_fill()
+{
+	printf("\n== the background sweep: filling in the covers nobody asked for ==\n");
+
+	int metroid = item_by_path("SNES", "Super Metroid (Europe).sfc");
+	check(metroid >= 0, "the game with a cover this section needs is indexed");
+
+	/*
+	  The libretro pack pointed at a port nothing is listening on, for the whole section.
+
+	  The sweep can reach the pack rung for a game ScreenScraper cannot be asked about, and
+	  that rung forks a curl without consulting the minimum gap - so with the shipped default
+	  URL a test of the sweep would be a test that downloads from thumbnails.libretro.com.
+	  A refused connection on the loopback cannot leave the machine and cannot resolve
+	  anything either.
+	*/
+	char arturl0[512];
+	snprintf(arturl0, sizeof(arturl0), "%s", cfg.classicui_arturl);
+	snprintf(cfg.classicui_arturl, sizeof(cfg.classicui_arturl), "http://127.0.0.1:1");
+
+	cfg.classicui_artfetch = 1;
+	cfg.classicui_screenscraper = 1;
+	strcpy(cfg.classicui_ss_user, FIX_SSID);
+	strcpy(cfg.classicui_ss_pass, FIX_SSPASS);
+	ss_forget_state();
+
+	unlink(art_ss_miss_path());
+	art_ss_miss_reload();
+
+	ss_note_request();
+	check(ss_may_ask_now(SS_ASK_SPECULATIVE) == 0,
+		"with the minimum gap held closed, no request can leave this process at all");
+	check(ss_may_request() == 1, "while the ladder's own question is unaffected, as it must be");
+
+	/* ------------------------------------------------- the two switches --- */
+
+	cfg.classicui_artfill = 0;
+	art_fresh_slots();
+	fill_passes(200);
+	check(art_fill_last() == -1 && art_fill_cursor() == 0,
+		"with classicui_artfill off the sweep does not look at a single game");
+
+	cfg.classicui_artfill = 1;
+	cfg.classicui_artfetch = 0;
+	art_fresh_slots();
+	fill_passes(200);
+	check(art_fill_last() == -1 && art_fill_cursor() == 0,
+		"and with classicui_artfetch off it does not either, whatever the fill setting says");
+
+	cfg.classicui_artfetch = 1;
+
+	/* ------------------------------- and the card the player is looking at --- */
+
+	/*
+	  The hard one. While anything at all is queued the sweep must not move, because
+	  everything in that queue is a card the shelf has asked for and is drawing.
+
+	  Driven with two cards asked for on every pass, which is what a player sitting on the
+	  shelf produces: one with a cover to decode and one with none, so the queue is never
+	  empty and the ladder is walked for a game that would spend a request. The ScreenScraper
+	  rung is reached 200 times and the sweep never gets a turn.
+
+	  Two mechanisms deliver that between them and this pins the behaviour rather than either
+	  one of them: art_step() returns as soon as a pass is spent on a queued card, so the
+	  sweep is not even reached, and fill_step() refuses on a non-empty queue anyway - which
+	  is what covers the one case the first does not, four stood-down re-asks in a row with
+	  work still queued behind them.
+	*/
+	int smwjp = item_by_path("SNES", "Super Mario World (Japan).sfc");
+	check(smwjp >= 0, "and the coverless game it needs as well");
+
+	art_fresh_slots();
+	unsigned asks0 = art_ss_asks();
+
+	for (int i = 0; i < 200; i++)
+	{
+		art_request(metroid, 0);
+		art_request(smwjp, 1);
+		art_step();
+	}
+
+	check(art_ss_asks() > asks0, "the shelf itself reaches the ScreenScraper rung while it scrolls");
+	check(art_fill_last() == -1 && art_fill_cursor() == 0,
+		"and the sweep does not look at one game while a card is waiting to be drawn");
+	check(art_fill_asks() == 0, "so it has fetched nothing");
+
+	/* ------------------------------------------ an idle shelf, and the floor --- */
+
+	/*
+	  Now with nothing queued. The sweep works through the item array in order, so the game
+	  it stops at is the first one the ladder would spend a request on - asserted against
+	  art_next_source(), which is the same ladder the sweep calls.
+	*/
+	art_fresh_slots();
+
+	int first = -1, second = -1, packs = 0;
+	for (int i = 0; i < lib_item_count(); i++)
+	{
+		int src = art_next_source(i);
+		if (src == ART_SRC_SS)
+		{
+			if (first < 0) first = i;
+			else if (second < 0) second = i;
+		}
+		else if (src == ART_SRC_LIBRETRO && (second < 0)) packs++;
+	}
+	check(first >= 0 && second >= 0, "two games on this card would spend a ScreenScraper request");
+
+	/*
+	  And nothing before them falls to the libretro pack, which is the precondition that
+	  keeps this section off the network: the pack rung forks a download without consulting
+	  the minimum gap, so a card whose first coverless game had no systemeid would have the
+	  sweep fetching rather than holding, and every count below would be about something
+	  else. If this ever fails, the fixture card has changed and the section needs a game
+	  chosen deliberately rather than found.
+	*/
+	check(packs == 0,
+		"and nothing before them falls to the libretro pack, so the sweep gets there without forking");
+
+	art_fresh_slots();
+	unsigned asks1 = art_ss_asks();
+	unsigned holds0 = art_fill_holds();
+
+	/*
+	  Enough passes for the cursor to reach anything on this card, and no more of a claim
+	  than that: the sweep looks at ART_FILL_SCAN items every ART_FILL_EVERY passes, so a
+	  whole library needs that many times its own length. The pacing itself is checked
+	  above, by the sweep having moved nothing at all in 200 passes with a card queued.
+	*/
+	int sweep = ART_FILL_EVERY * (lib_item_count() + 8);
+	fill_passes(sweep);
+
+	check(art_fill_last() == first,
+		"an idle shelf lets the sweep run, and it picks up the first game that would spend a request");
+	check(art_ss_asks() == asks1,
+		"without reaching the rung for it: the floor between requests is asked before the ladder is acted on");
+	check(art_fill_asks() == 0, "so nothing was fetched, and nothing was spent");
+	check(art_fill_holds() > holds0, "the wait is recorded as a hold");
+
+	/*
+	  Held rather than skipped, which is the difference between the floor delaying a game and
+	  the floor losing it. The cursor is left ON that game, so the sweep offers it again -
+	  rather than moving past it and coming back in three minutes' time.
+	*/
+	check(art_fill_cursor() == first, "with the cursor left on that game rather than past it");
+
+	fill_passes(ART_FILL_EVERY * 6);
+	check(art_fill_last() == first && art_fill_cursor() == first,
+		"and it is still waiting on the same game several sweeps later");
+	check(art_fill_asks() == 0, "having still spent nothing");
+
+	/* --------------------------------------------- and the fairness rule --- */
+
+	/*
+	  A game whose miss has aged out of its window is askable again - and must not be asked
+	  ahead of a game nobody has ever asked about. queue_best() enforces that for the shelf;
+	  the sweep enforces it by phase, and this is where the two are the same rule.
+
+	  Set up on the game the sweep just stopped at, so the check is that it moves on rather
+	  than that it happened to choose something else.
+	*/
+	chome_item *fit = lib_item(first);
+	char fname[CH_PATH_LEN];
+	ss_key_name(fit, fname, sizeof(fname));
+	const char *fsys = ss_system_id(lib_sys(fit->sysidx)->id, fname);
+	check(fsys != 0, "that game's platform can be asked about at all");
+
+	art_ss_miss_record(fsys, fname);
+	check(miss_backdate(ART_SS_MISS_DAYS) == 1, "one recorded miss, aged out of its window");
+	art_ss_miss_reload();
+
+	check(art_ss_miss_stale(fsys, fname) == 1, "so that game is a re-ask: asked about once, eligible again");
+	check(art_next_source(first) == ART_SRC_SS, "and still on the ScreenScraper rung");
+
+	art_fresh_slots();
+	fill_passes(sweep);
+
+	check(art_fill_phase() == 0, "the sweep is still in its first-ask phase");
+	check(art_fill_last() == second,
+		"and it walks past the re-ask to the next game nobody has ever asked about");
+	check(art_fill_cursor() == second, "leaving the cursor past the re-ask and on that one");
+	check(art_fill_asks() == 0, "and still nothing has been fetched");
+
+	/*
+	  Whereas a miss that still counts takes the game off the ScreenScraper rung altogether,
+	  which is the store doing the job it was written for - the sweep inherits it for free,
+	  because it walks the same ladder. Without that, a sweep of a shelf the database has
+	  never heard of would ask about all of it again on every boot.
+	*/
+	unlink(art_ss_miss_path());
+	art_ss_miss_reload();
+	art_ss_miss_record(fsys, fname);
+	check(art_ss_miss_known(fsys, fname) == 1, "a miss inside its window is remembered");
+	check(art_next_source(first) != ART_SRC_SS,
+		"and takes that game off the rung entirely, for the sweep as much as for the shelf");
+
+	/* ------------------------------------------------------------- and out --- */
+
+	check(art_fetch_active() == 0, "no pack download was started anywhere in this section");
+	check(disc_art_active() == 0, "and no ScreenScraper one either");
+	check(art_fill_asks() == 0, "and the sweep itself fetched nothing at all");
+	check(art_fill_yields() == 0, "nor did it ever have anything to hand back");
+
+	cfg.classicui_artfill = 0;
+	cfg.classicui_artfetch = 0;
+	cfg.classicui_screenscraper = 0;
+	cfg.classicui_ss_user[0] = 0;
+	cfg.classicui_ss_pass[0] = 0;
+	snprintf(cfg.classicui_arturl, sizeof(cfg.classicui_arturl), "%s", arturl0);
+
+	ss_forget_state();
+	unlink(art_ss_miss_path());
+	art_ss_miss_reload();
+	art_redo();
+
+	check(art_state(metroid) == ART_READY, "and the shelf is decoded again for whatever comes next");
+}
+
 static int count_lines(const char *rel, int *bad_sum, int *maxlen)
 {
 	char p[1024];
@@ -21794,6 +22288,18 @@ int main()
 	cfg.classicui_caps = 1;
 	snprintf(cfg.classicui_artdir, sizeof(cfg.classicui_artdir), "boxart");
 	cfg.classicui_gamelist = 1;                       // as cfg.cpp defaults it
+
+	/*
+	  Off for the suite, though cfg.cpp defaults it on, and this one is a safety rule rather
+	  than a measurement one: the background sweep walks the whole library from an idle
+	  shelf, and on a game with no ScreenScraper systemeid the rung it reaches is the
+	  libretro pack - which forks a download without consulting the minimum request gap. The
+	  suite runs art_step() tens of thousands of times with an empty queue, so with this on
+	  by default the harness would spend those passes fetching from thumbnails.libretro.com.
+	  assert_art_fill() turns it on for its own section, with the pack URL pointed at a dead
+	  loopback port for exactly the same reason.
+	*/
+	cfg.classicui_artfill = 0;
 	cfg.osd_timeout = 0;
 
 	/*
@@ -21853,6 +22359,18 @@ int main()
 	*/
 	assert_art_fetch_order();
 	assert_pack_provenance();
+	/*
+	  And the two that finish the art module off, in this order and here rather than up with
+	  assert_gamelist(): both need the shelf those sections leave and both put it back.
+
+	  The layouts one writes pictures onto the fake card and takes them away again, which is
+	  why it cannot run before assert_index() and assert_gamelist() - every cover count in
+	  those is a statement about exactly which pictures that card carries. The sweep one runs
+	  after it because it is about which game the sweep picks up first, and that answer is a
+	  property of which games have covers.
+	*/
+	assert_art_layouts();
+	assert_art_fill();
 	assert_physical_disc();
 	assert_disc_serials();
 	// Directly after it, because it drives the same state machine with the same fake

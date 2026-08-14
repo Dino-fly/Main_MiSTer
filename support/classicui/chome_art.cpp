@@ -9,11 +9,13 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <time.h>
+#include <signal.h>
 
 #include "chome_art.h"
 #include "chome_lib.h"
 #include "chome_gamelist.h"
 #include "chome_ss.h"
+#include "chome_proc.h"
 #include "../../file_io.h"
 #include "../../cfg.h"
 #include "../../lib/imlib2/Imlib2.h"
@@ -662,8 +664,15 @@ const char *art_pack_path()
 	return ks_path(&pack_marks);
 }
 
+// Defined with the media layouts. Cleared here and in art_shutdown() because it is a
+// per-system negative cache and a rescan may have given a system a media folder - or a
+// different games dir entirely.
+static void media_root_forget();
+
 void art_init(int cw, int chh)
 {
+	media_root_forget();
+
 	if (cw != card_w || chh != card_h)
 	{
 		art_shutdown();
@@ -704,6 +713,12 @@ void art_init(int cw, int chh)
 */
 static void pack_retry_clear();
 
+/*
+  And the background fill's cursor, for the same reason: it is an item index into a library
+  that a rescan renumbers. See fill_step().
+*/
+static void fill_clear();
+
 void art_shutdown()
 {
 	if (slots)
@@ -718,6 +733,8 @@ void art_shutdown()
 	cache_count = 0;
 
 	pack_retry_clear();
+	fill_clear();
+	media_root_forget();
 	ss_ask_last = -1;
 }
 
@@ -795,6 +812,13 @@ static void rom_relpath(const chome_item *it, char *out, int len)
 	if (zip) zip[4] = 0;
 }
 
+/*
+  The ROM's file name with its extension, defined down with the ScreenScraper query that
+  is its main caller. Declared here because find_local_art() needs the same string: one of
+  the layouts in the wild names its pictures after the file rather than after the game.
+*/
+static void rom_filename(const chome_item *it, char *out, int len);
+
 static int file_exists_abs(const char *p)
 {
 	struct stat st;
@@ -820,43 +844,147 @@ static int art_cache_path(const chome_item *it, char *out, int len)
 
 /*
   The media folders the PC scrapers write beside the ROMs, relative to the system's
-  games dir, best first. Named after the ROM file, as every one of them does:
-  <games dir>/media/box2d/Sonic The Hedgehog 2 (Europe).png
+  games dir, best first - and, per folder, what the files in it are named after.
 
-  "media/box2d" and its siblings are Skraper's romset layout - which is what most
-  people who have scraped with ScreenScraper end up with - and "images"/"boxart"
-  are what Batocera's own scraper writes into the ROM folder. Box art first,
-  screenshots last: any of them beats a blank plate, but a box is what the card is
-  shaped for.
+  Two spellings of the name, because the layouts in the wild disagree about it and the
+  disagreement is the whole of the beta tester's complaint:
+
+    by ROM       <games dir>/media/box2d/Sonic The Hedgehog 2 (Europe).png
+    by <name>    <games dir>/media/box2d/Sonic The Hedgehog 2.png
+
+  The second is the ScreenScraper / EmulationStation / Recalbox convention: the picture
+  is named after the game's <name> in gamelist.xml, which is what the scraper decided the
+  game is called and not what the file on the card is called. A card scraped that way is
+  invisible to a matcher that only knows ROM names, which is what this front-end had.
+  Both are tried, best folder first and within a folder the <name> first - see
+  find_local_art() for why that order and not the other one.
+
+  Where each entry comes from:
+
+    media/box2d, media/screenshot, media/images, media/mixed   Skraper's romset layout,
+        which is what most people who have scraped with ScreenScraper end up with, and
+        the layout the tester asked for by name.
+    media/Box2D   Zapatoo's packs, spelled with capitals. Redundant on the SD card, which
+        is FAT and case-insensitive, and not redundant at all on an ext4 USB drive.
+    boxart, images   what Batocera's own scraper writes into the ROM folder.
+    media/<rom>.png and media/<rom>-BG.png   Taki's consolemode packs, which put the
+        picture straight in media/ with no type folder. The exact spelling of the key
+        varies between packs, so both the ROM's name and its full file name are tried;
+        the -BG one is a background rather than a box, so it goes last of everything.
+
+  Box art first, screenshots last: any of them beats a blank plate, but a box is what the
+  card is shaped for. A background is worse than a screenshot, so it is after that.
 */
-static const char *const scraper_dirs[] =
+#define ML_BYROM   1     // named after the ROM, extension stripped
+#define ML_BYNAME  2     // named after gamelist.xml's <name>
+#define ML_BYFILE  4     // named after the ROM file, extension and all
+#define ML_BOTH    (ML_BYROM | ML_BYNAME)
+
+struct art_media_dir
 {
-	"media/box2d",
-	"boxart",
-	"images",
-	"media/images",
-	"media/mixed",
-	"media/screenshot",
-	"screenshots",
+	const char *dir;      // relative to the system's games dir
+	int keys;             // which of the three spellings to try
+	const char *suffix;   // between the key and the extension, or 0
 };
-#define SCRAPER_DIR_COUNT ((int)(sizeof(scraper_dirs) / sizeof(scraper_dirs[0])))
+
+static const art_media_dir media_dirs[] =
+{
+	{ "media/box2d",      ML_BOTH,                       0 },
+	{ "media/Box2D",      ML_BOTH,                       0 },
+	{ "boxart",           ML_BOTH,                       0 },
+	{ "images",           ML_BOTH,                       0 },
+	{ "media/images",     ML_BOTH,                       0 },
+	{ "media/mixed",      ML_BOTH,                       0 },
+	{ "media",            ML_BYROM | ML_BYFILE,          0 },
+	{ "media/screenshot", ML_BOTH,                       0 },
+	{ "screenshots",      ML_BOTH,                       0 },
+	{ "media",            ML_BYROM | ML_BYFILE,       "-BG" },
+};
+#define MEDIA_DIR_COUNT ((int)(sizeof(media_dirs) / sizeof(media_dirs[0])))
 
 /*
-  Finds a local file for this game, trying the layouts in order:
+  Whether this system has a media/ folder beside its ROMs at all, remembered for the
+  session.
 
-    0. whatever gamelist.xml names, when the player has scraped with anything else
-    1. the scraper media folders beside the ROMs
-    2. our own <artdir>, in the three shapes the community art packs come in
-    3. next to the ROM itself
+  Six of the ten folders above live under media/, and on a card that has never been
+  scraped none of them exist - so without this every card the shelf walks pays twelve
+  failed lookups on the SD to learn nothing. One stat per system answers all six.
 
-  gamelist.xml goes first on purpose. It is the one layer where the player has said
-  which file belongs to which game rather than us guessing from a name, and it is
-  the output of a deliberate scrape with a tool they chose; our <artdir> is a
-  convention we invented, and its third shape matches on a cleaned title, which is
-  the loosest match here. A gamelist entry that names a file which is not on the
-  card is not allowed to win, though - gl_art() only answers with a file that
-  exists - so a stale scrape leaves the later layers to do their job instead of
-  producing a blank card.
+  Remembered rather than re-asked because this is called from the pass that draws, and
+  it is only ever a *negative* that is cached for long: a card that gains a media folder
+  mid-session is a player copying files onto the SD behind a running front-end, and
+  Options > Rescan Library clears this along with everything else. See art_init().
+*/
+static int8_t media_root[CH_MAX_SYS];      // 0 unknown, 1 present, -1 absent
+
+static void media_root_forget()
+{
+	memset(media_root, 0, sizeof(media_root));
+}
+
+static int media_root_ok(int sysidx, const char *gd)
+{
+	if (sysidx < 0 || sysidx >= CH_MAX_SYS) return 1;
+	if (media_root[sysidx]) return media_root[sysidx] > 0;
+
+	char p[1152];
+	snprintf(p, sizeof(p), "%s/media", gd);
+
+	struct stat st;
+	int ok = (!stat(p, &st) && S_ISDIR(st.st_mode)) ? 1 : 0;
+
+	media_root[sysidx] = ok ? 1 : -1;
+	return ok;
+}
+
+/*
+  ---------------------------------------------------------------------------
+  Finding a cover on the card: the whole order, and why it is this one.
+  ---------------------------------------------------------------------------
+
+  This is rung one of the ladder at the top of chome_art.h - "a file already on the card" -
+  and it is where every question about which art pack wins is settled. Nothing below the
+  shelf's own online fetch can overrule it: a cover found here is the cover drawn, and both
+  network rungs exist only to put a file where this function will find it next time.
+
+    1. whatever gamelist.xml names outright - <boxart>, then <thumbnail>, then <image>.
+    2. the scraper media folders beside the ROMs, best folder first, and inside each folder
+       the gamelist <name> before the ROM's own file name.
+    3. our own <artdir>, which is <SD root>/boxart unless classicui_artdir says otherwise,
+       in the three shapes the community art packs come in. THIS IS ALSO WHERE EVERY COVER
+       THIS FRONT-END DOWNLOADS IS WRITTEN - see art_cache_path(): a ScreenScraper or
+       libretro fetch lands in <artdir>/<libretro system name>/Named_Boxarts/<ROM>.png and
+       is found here on every boot afterwards.
+    4. next to the ROM itself.
+
+  Why that order, layer by layer, since every one of them was a decision:
+
+  gamelist.xml first, because it is the one layer where the player has said which file
+  belongs to which game rather than us guessing from a name, and it is the output of a
+  deliberate scrape with a tool they chose. A gamelist entry naming a file that is not on
+  the card is not allowed to win, though - gl_art() only answers with a file that exists -
+  so a stale scrape leaves the later layers to do their job instead of blanking the card.
+
+  The media folders second, above our own artdir, for the same reason and one step weaker:
+  the player scraped this, we did not, and the name is theirs even though the pairing is a
+  filename match rather than a statement. Inside a folder the <name> spelling is tried
+  before the ROM one because it is the spelling the tool that wrote the folder uses; the
+  ROM one is there for packs assembled by hand and for cards with no gamelist at all.
+
+  Our artdir third, and *below* the scrape, which is the part that looks backwards until
+  you remember what is in it: our downloads. If artdir came first then a cover this
+  front-end fetched would permanently hide a cover the player scraped themselves for the
+  same game, and there would be no way back short of deleting our file. So a scrape they
+  chose beats a cover we chose for them, and the artdir keeps answering for every game
+  their scrape did not cover - which on a real card is most of it.
+
+  Beside the ROM last, because a picture in a games folder is as likely to be a screenshot
+  somebody dropped there as it is to be a box.
+
+  The cost of all this is stats on an SD card, on the pass that draws, so it is bounded
+  rather than let run: media_root_ok() takes the six media/ folders out in one stat for a
+  card that has never been scraped, and the <name> spellings are only tried for systems
+  whose gamelist.xml actually names one.
 */
 static int find_local_art(const chome_item *it, char *out, int len)
 {
@@ -870,29 +998,70 @@ static int find_local_art(const chome_item *it, char *out, int len)
 	char safe[CH_PATH_LEN];
 	sanitize(base, safe, sizeof(safe));
 
+	char file[CH_PATH_LEN];
+	rom_filename(it, file, sizeof(file));
+
 	const char *roots[2] = { getRootDir(), "/media/usb0" };
 	const char *exts[2] = { "png", "jpg" };
 
 	char gd[1024];
 	int have_gd = lib_sys_games_dir(it->sysidx, gd, sizeof(gd));
 
-	// 0. what the player's own scrape says, read from gamelist.xml.
-	{
-		char rel[CH_PATH_LEN];
-		rom_relpath(it, rel, sizeof(rel));
-		if (gl_art(it->sysidx, rel, out, len)) return 1;
-	}
+	char rel[CH_PATH_LEN];
+	rom_relpath(it, rel, sizeof(rel));
 
-	// 1. the scraper media folders beside the ROMs, for a card scraped without a
-	//    gamelist.xml or whose gamelist names no pictures (ES-DE writes none).
+	// 1. what the player's own scrape says, read from gamelist.xml.
+	if (gl_art(it->sysidx, rel, out, len)) return 1;
+
+	/*
+	  2. the scraper media folders beside the ROMs, for a card scraped without a
+	     gamelist.xml, or whose gamelist names its pictures by <name> instead of by path
+	     (the ScreenScraper/ES/Recalbox layout), or which names no pictures at all
+	     (ES-DE writes none).
+
+	     The gamelist <name>, sanitized as well as raw: a name with a '/' or a ':' in it
+	     cannot be a file name, and the scrapers substitute for those the same way
+	     libretro does. Only tried when the two spellings differ, which is rarely.
+	*/
 	if (have_gd)
 	{
-		for (int m = 0; m < SCRAPER_DIR_COUNT; m++)
+		char name[CH_PATH_LEN];
+		char nsafe[CH_PATH_LEN];
+		int have_name = gl_name(it->sysidx, rel, name, sizeof(name));
+
+		nsafe[0] = 0;
+		if (have_name)
 		{
-			for (int e = 0; e < 2; e++)
+			sanitize(name, nsafe, sizeof(nsafe));
+			if (!strcmp(nsafe, name)) nsafe[0] = 0;
+		}
+
+		int media_ok = media_root_ok(it->sysidx, gd);
+
+		for (int m = 0; m < MEDIA_DIR_COUNT; m++)
+		{
+			const art_media_dir *md = &media_dirs[m];
+			if (!media_ok && !strncmp(md->dir, "media", 5)) continue;
+
+			const char *sfx = md->suffix ? md->suffix : "";
+
+			const char *keys[4];
+			int nk = 0;
+			if ((md->keys & ML_BYNAME) && have_name)
 			{
-				snprintf(out, len, "%s/%s/%s.%s", gd, scraper_dirs[m], base, exts[e]);
-				if (file_exists_abs(out)) return 1;
+				keys[nk++] = name;
+				if (nsafe[0]) keys[nk++] = nsafe;
+			}
+			if (md->keys & ML_BYROM) keys[nk++] = base;
+			if (md->keys & ML_BYFILE) keys[nk++] = file;
+
+			for (int k = 0; k < nk; k++)
+			{
+				for (int e = 0; e < 2; e++)
+				{
+					snprintf(out, len, "%s/%s/%s%s.%s", gd, md->dir, keys[k], sfx, exts[e]);
+					if (file_exists_abs(out)) return 1;
+				}
 			}
 		}
 	}
@@ -901,7 +1070,8 @@ static int find_local_art(const chome_item *it, char *out, int len)
 	{
 		if (!roots[r]) continue;
 
-		// 2a. libretro layout: <artdir>/<System Name>/Named_Boxarts/<ROM name>.png
+		// 3a. libretro layout: <artdir>/<System Name>/Named_Boxarts/<ROM name>.png.
+		//     Also art_cache_path(), which is where our own downloads land.
 		if (s->lr[0])
 		{
 			for (int e = 0; e < 2; e++)
@@ -911,14 +1081,14 @@ static int find_local_art(const chome_item *it, char *out, int len)
 			}
 		}
 
-		// 2b. flat per-system folder: <artdir>/<games dir>/<ROM name>.png
+		// 3b. flat per-system folder: <artdir>/<games dir>/<ROM name>.png
 		for (int e = 0; e < 2; e++)
 		{
 			snprintf(out, len, "%s/%s/%s/%s.%s", roots[r], dir, s->dir, safe, exts[e]);
 			if (file_exists_abs(out)) return 1;
 		}
 
-		// 2c. cleaned display title, for hand-made packs
+		// 3c. cleaned display title, for hand-made packs
 		for (int e = 0; e < 2; e++)
 		{
 			snprintf(out, len, "%s/%s/%s/%s.%s", roots[r], dir, s->dir, it->title, exts[e]);
@@ -926,17 +1096,17 @@ static int find_local_art(const chome_item *it, char *out, int len)
 		}
 	}
 
-	// 3. next to the ROM itself
+	// 4. next to the ROM itself
 	if (have_gd)
 	{
-		char rel[CH_PATH_LEN];
-		snprintf(rel, sizeof(rel), "%s", it->path);
-		char *slash = strrchr(rel, '/');
-		if (slash) *slash = 0; else rel[0] = 0;
+		char folder[CH_PATH_LEN];
+		snprintf(folder, sizeof(folder), "%s", it->path);
+		char *slash = strrchr(folder, '/');
+		if (slash) *slash = 0; else folder[0] = 0;
 
 		for (int e = 0; e < 2; e++)
 		{
-			if (rel[0]) snprintf(out, len, "%s/%s/%s.%s", gd, rel, base, exts[e]);
+			if (folder[0]) snprintf(out, len, "%s/%s/%s.%s", gd, folder, base, exts[e]);
 			else snprintf(out, len, "%s/%s.%s", gd, base, exts[e]);
 			if (file_exists_abs(out)) return 1;
 		}
@@ -1425,6 +1595,16 @@ static pid_t curl_spawn(const char *url, const char *dst, int secret, const char
 // Defined with the ScreenScraper fetch below. Declared here because the two share the one
 // download slot, and this is the caller that has to ask about it first.
 static int ss_fetch_active();
+
+/*
+  Defined with the background sweep at the bottom of this file: hand the one download slot
+  back if what is in it is the sweep's own.
+
+  Declared up here because the two callers that can want the slot - a card the shelf is
+  drawing and a disc the player is holding - both live above it, and both are entitled to
+  it. It does nothing at all when the fetch in flight belongs to either of them.
+*/
+static void fill_yield();
 
 static int fetch_start(int item)
 {
@@ -2026,8 +2206,18 @@ int disc_art_request(const char *key, const char *sysid, const char *romnom, con
 	// discs does not sit waiting for a picture of the one before.
 	if (ssf_pid > 0)
 	{
-		disc_why("a fetch for another key is already in flight", key);
-		return !strcmp(ssf_key, key);
+		/*
+		  Unless it belongs to the background sweep, which gives it up here for the same
+		  reason it gives it up to a card on screen - and with more of a claim, since this is
+		  the deliberate request the whole ko reserve exists to keep room for. The dialog
+		  asks again on its next draw and finds the slot free. See fill_yield().
+		*/
+		fill_yield();
+		if (ssf_pid > 0)
+		{
+			disc_why("a fetch for another key is already in flight", key);
+			return !strcmp(ssf_key, key);
+		}
 	}
 
 	if (!cfg.classicui_artfetch) { disc_why("classicui_artfetch is off", key); return 0; }
@@ -3393,6 +3583,291 @@ static int cover_ss_start(int item)
 	return 1;
 }
 
+/* ------------------------------------ filling in the covers nobody asked for --- */
+
+/*
+  The low-priority half of the fetcher: a sweep of the whole library, from an idle shelf,
+  so a card fills in over time instead of only where the player has scrolled.
+
+  Everything above this line is demand-driven - the shelf asks for the covers it is about
+  to draw and the ladder is walked for those. That is right for the card under the cursor
+  and useless for the other 1400 games on the owner's shelf, which are only ever scraped
+  if somebody scrolls onto them and waits there.
+
+  So: one cursor over the item array, advanced from art_step() when there is nothing else
+  at all to do. It is deliberately the last thing this module does and the first thing it
+  gives up, and every one of the rules below is a hard constraint rather than a
+  preference.
+
+  ---------------------------------------------------------------------------
+  It cannot delay the card the player is looking at.
+  ---------------------------------------------------------------------------
+
+  Two mechanisms, because "does not start" and "gets out of the way" are different
+  promises and only both together make the guarantee:
+
+    it never starts while the decode queue holds anything at all. Every entry in that
+    queue is a card the shelf has asked for because it is drawing it, so a non-empty
+    queue means the player is looking at something that is not finished. Same gate
+    pack_retry_step() uses, and this runs after that.
+
+    a fetch it *did* start is dropped the moment the shelf wants the download slot. See
+    fill_yield(), called from art_step_one()'s "one download at a time" branch. That
+    costs the request that was already in flight - ScreenScraper counts it whether or not
+    we read the answer - which is the price of the promise, and it is bounded by how
+    often a player scrolls onto an unscraped card inside a one-second window.
+
+  ---------------------------------------------------------------------------
+  It cannot stall the main loop.
+  ---------------------------------------------------------------------------
+
+  The firmware's main loop is a heartbeat the PSX core's savestate machine watches, and a
+  pass over ~31 ms wedges it. So the work per pass is bounded twice over: at most
+  ART_FILL_SCAN items are looked at, and the look is one art_source_for() each - the same
+  stat of the card the shelf already pays for every card it draws. The fetch itself is a
+  forked curl, reaped without blocking, exactly as the demand path does it.
+
+  And it does not even do that on every frame. ART_FILL_EVERY passes go by between sweeps
+  of the cursor, which paces the stats at a few items a second: a 1500-game library is
+  swept in about three minutes of sitting on the shelf, which is far faster than the
+  requests can go out anyway.
+
+  ---------------------------------------------------------------------------
+  It cannot outspend somebody's ScreenScraper allowance.
+  ---------------------------------------------------------------------------
+
+  Nothing here invents a request rate. A fetch goes through the same cover_ss_start() the
+  shelf uses, so it is subject to SS_MIN_REQUEST_GAP_MS, to ss_may_request()'s holds, and
+  to the ko reserve that stands speculative asking down at SS_KO_SPECULATIVE_PCT - and
+  this is the most speculative caller there is. On top of that:
+
+    the miss store is honoured, because art_source_for() honours it. A game the database
+    has already said it has nothing for is not on the ScreenScraper rung at all, so a
+    sweep costs nothing for it - which is the whole reason ss-misses.txt exists and the
+    reason a sweep of a scraped library is free rather than 1469 requests a boot.
+
+    a re-ask waits for a whole fruitless sweep. Phase 0 skips the games whose miss has
+    merely aged out; only when a complete sweep has found no first ask left anywhere does
+    phase 1 include them. That is queue_best()'s fairness rule applied to the sweep: an
+    ask that has never been made is likelier to match, and the unmatched allowance is the
+    thing being spent.
+
+    and there is a ceiling. ART_FILL_MAX fetches in a session and the sweep stops, whatever
+    the state of the library - which also bounds the case with no ceiling of its own, a
+    device with no network, where every fetch fails on transport and nothing is ever
+    learnt or written down.
+
+  A sweep that finds nothing to do in either phase stops for the session. "For the
+  session" is short on this device: the firmware is restarted by every core change, so the
+  next game launched starts a fresh sweep, and a library that has grown or a quota that
+  has rolled over is picked up then. Options > Rescan Library clears it too, through
+  art_shutdown().
+*/
+
+static int fill_cursor = 0;      // next item to look at
+static int fill_phase = 0;       // 0: first asks only. 1: re-asks as well
+static int fill_found = 0;       // this sweep has started something
+static int fill_done = 0;        // nothing left to do, for the session
+static int fill_tick = 0;
+/*
+  The child the sweep started, or -1.
+
+  A pid rather than a flag, because a flag cannot be cleared reliably from here: a fetch
+  that finishes normally is reaped in fetch_poll()/ss_fetch_poll(), which know nothing
+  about this, and a flag left set would make fill_yield() kill the *next* download - which
+  would be a foreground one, for the card under the cursor, killed by the mechanism that
+  exists to protect it. Comparing the pid cannot go wrong that way: the slot is only ours
+  while the process in it is the one we forked.
+*/
+static pid_t fill_pid = -1;
+static unsigned fill_asks = 0;
+static unsigned fill_yields = 0;
+static unsigned fill_holds = 0;
+static int fill_last = -1;
+
+static void fill_clear()
+{
+	fill_cursor = 0;
+	fill_phase = 0;
+	fill_found = 0;
+	fill_done = 0;
+	fill_tick = 0;
+	fill_pid = -1;
+	fill_last = -1;
+	// fill_asks and fill_yields are session counters and deliberately survive a rescan:
+	// they are the diagnostics for "how much has this cost", which is a question about the
+	// process rather than about the current library.
+}
+
+unsigned art_fill_asks() { return fill_asks; }
+unsigned art_fill_yields() { return fill_yields; }
+unsigned art_fill_holds() { return fill_holds; }
+int art_fill_last() { return fill_last; }
+int art_fill_cursor() { return fill_cursor; }
+int art_fill_phase() { return fill_phase; }
+int art_fill_done() { return fill_done; }
+
+int art_fill_active()
+{
+	if (fill_pid <= 0) return 0;
+	return (ssf_pid == fill_pid || fetch_pid == fill_pid) ? 1 : 0;
+}
+
+/*
+  Give the download slot back, because the shelf wants it.
+
+  The child is signalled and handed to chome_proc rather than waited for: a curl that has
+  not died yet is the normal case at the instant it is killed, and a blocking wait here
+  would freeze the frame this exists to protect. See chome_proc.h.
+
+  The item goes back to ART_NONE, which is re-requestable, and nothing whatever is written
+  down about it - no miss, no pack mark, no absent flag. A request we abandoned taught us
+  nothing about the game, and recording anything from it would be the same class of bug as
+  reading a quota refusal as "this game has no cover".
+*/
+static void fill_yield()
+{
+	if (fill_pid <= 0) return;
+
+	if (ssf_pid == fill_pid)
+	{
+		int item = ssf_cover_item();
+
+		chome_child_stop(ssf_pid, SIGKILL, 0);
+		ssf_pid = -1;
+		ssf_reset();
+
+		if (slots && item >= 0 && item < nslots) slots[item].state = ART_NONE;
+		fill_yields++;
+	}
+	else if (fetch_pid == fill_pid)
+	{
+		chome_child_stop(fetch_pid, SIGKILL, 0);
+		fetch_pid = -1;
+		if (fetch_tmp[0]) unlink(fetch_tmp);
+
+		if (slots && fetch_item >= 0 && fetch_item < nslots) slots[fetch_item].state = ART_NONE;
+		fetch_item = -1;
+		fetch_key = 0;
+		fill_yields++;
+	}
+
+	fill_pid = -1;
+}
+
+// Advance the sweep by one item's worth of work. 1 when a fetch was started.
+static int fill_step()
+{
+	if (!cfg.classicui_artfill || !cfg.classicui_artfetch) return 0;
+	if (!slots || fill_done) return 0;
+
+	if (nqueue) return 0;                            // behind every card being drawn
+	if (ss_fetch_active() || fetch_pid > 0) return 0;
+	if (pack_retry_n) return 0;                      // and behind the player's own retries
+
+	if (++fill_tick < ART_FILL_EVERY) return 0;
+	fill_tick = 0;
+
+	if (fill_asks >= (unsigned)ART_FILL_MAX) { fill_done = 1; return 0; }
+
+	int n = lib_item_count();
+	if (n > nslots) n = nslots;
+	if (n < 1) return 0;
+
+	for (int look = 0; look < ART_FILL_SCAN; look++)
+	{
+		if (fill_cursor >= n)
+		{
+			fill_cursor = 0;
+
+			/*
+			  A sweep round the whole library that started nothing. In phase 0 that means
+			  there is no game left that has never been asked about, which is the moment
+			  the re-asks have waited for; in phase 1 it means there is nothing left at
+			  all, and the sweep stops.
+			*/
+			if (!fill_found)
+			{
+				if (fill_phase == 0) fill_phase = 1;
+				else { fill_done = 1; return 0; }
+			}
+			fill_found = 0;
+		}
+
+		int item = fill_cursor++;
+		art_slot *s = &slots[item];
+
+		// Anything the shelf is already dealing with is not this sweep's business.
+		if (s->state == ART_READY || s->state == ART_PENDING || s->state == ART_FETCHING) continue;
+
+		char local[1024];
+		int src = art_source_for(item, local, sizeof(local));
+
+		/*
+		  ART_SRC_LOCAL is not acted on. A cover already on the card is not a gap, and
+		  decoding it here would fill the LRU with pictures nobody is looking at and evict
+		  the ones somebody is. The shelf decodes it when it draws it.
+		*/
+		if (src != ART_SRC_SS && src != ART_SRC_LIBRETRO) continue;
+
+		if (src == ART_SRC_SS)
+		{
+			// The fairness rule, swept: a first ask everywhere before a re-ask anywhere.
+			if (fill_phase == 0 && ss_reask_item(item)) continue;
+
+			/*
+			  And the floor between requests - asked here rather than left to
+			  cover_ss_start() to refuse, and the candidate is *held* rather than spent.
+
+			  Two reasons, and the second is the one that matters. Refusing inside
+			  cover_ss_start() would count an ask - see art_ss_asks() - for a request that
+			  was never going to be made, which would make the counter that says how much of
+			  an allowance the shelf spends useless for the caller that spends most of it.
+			  And letting the cursor move on would mean the floor *skipped* a game rather
+			  than delayed it: the sweep offers a candidate every ART_FILL_EVERY passes and
+			  the floor allows one every SS_MIN_REQUEST_GAP_MS, so on the device a moving
+			  cursor would leave most of the library for the sweep after next.
+
+			  So the cursor goes back to this item and the sweep waits. It is the lowest
+			  priority thing in the module; waiting is what it is for.
+			*/
+			if (!ss_may_ask_now(SS_ASK_SPECULATIVE))
+			{
+				fill_cursor = item;
+				fill_found = 1;
+				fill_last = item;
+				fill_holds++;
+				return 0;
+			}
+
+			fill_found = 1;
+			if (cover_ss_start(item))
+			{
+				fill_pid = ssf_pid;
+				fill_asks++;
+				fill_last = item;
+				return 1;
+			}
+
+			return 0;
+		}
+
+		s->tried_fetch = 1;
+		fill_found = 1;
+		if (fetch_start(item))
+		{
+			fill_pid = fetch_pid;
+			fill_asks++;
+			fill_last = item;
+			return 1;
+		}
+
+		return 0;
+	}
+
+	return 0;
+}
+
 /*
   One item's turn at the ladder. 1 when the pass is spent - a decode done, a fetch started,
   an answer settled, or nothing more to be done for this game - and 0 only when the item was
@@ -3448,7 +3923,18 @@ static int art_step_one(int item)
 		  which is long enough for it to have become the common case rather than the odd one.
 		  ART_NONE is re-requestable, and the shelf asks again for every card it draws.
 		*/
-		if (ss_fetch_active() || fetch_pid > 0) { s->state = ART_NONE; return 1; }
+		if (ss_fetch_active() || fetch_pid > 0)
+		{
+			/*
+			  Unless the fetch holding the slot is the background sweep's, in which case it
+			  gets out of the way: this item is one the shelf asked for, which means it is a
+			  card being drawn, and the whole promise of the sweep is that it never delays
+			  one. The slot is free on the next pass. See fill_yield().
+			*/
+			fill_yield();
+			s->state = ART_NONE;
+			return 1;
+		}
 
 		if (src == ART_SRC_SS)
 		{
@@ -3526,5 +4012,12 @@ void art_step()
 
 	// Nothing left that wants a frame, so the player's own preference gets one. Refuses
 	// unless the queue is empty and the setting is on - see pack_retry_step().
-	pack_retry_step();
+	if (pack_retry_step()) return;
+
+	/*
+	  And last of everything, the covers nobody has asked for: the background sweep, which
+	  refuses unless the queue is empty, no download is in flight, no pack retry is waiting
+	  and enough passes have gone by. See fill_step() for the whole of the scheduling.
+	*/
+	fill_step();
 }

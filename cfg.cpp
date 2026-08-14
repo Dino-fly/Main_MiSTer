@@ -163,6 +163,7 @@ static const ini_var_t ini_vars[] =
 	{ "CLASSICUI_CAPS", (void*)(&(cfg.classicui_caps)), UINT8, 0, 1 },
 	{ "CLASSICUI_ARTDIR", (void*)(&(cfg.classicui_artdir)), STRING, 0, sizeof(cfg.classicui_artdir) - 1 },
 	{ "CLASSICUI_ARTFETCH", (void*)(&(cfg.classicui_artfetch)), UINT8, 0, 1 },
+	{ "CLASSICUI_ARTFILL", (void*)(&(cfg.classicui_artfill)), UINT8, 0, 1 },
 	{ "CLASSICUI_GAMELIST", (void*)(&(cfg.classicui_gamelist)), UINT8, 0, 1 },
 	{ "CLASSICUI_FREEZE", (void*)(&(cfg.classicui_freeze)), UINT8, 0, 1 },
 	{ "CLASSICUI_ARTURL", (void*)(&(cfg.classicui_arturl)), STRING, 0, sizeof(cfg.classicui_arturl) - 1 },
@@ -689,6 +690,15 @@ void cfg_parse()
 	  Off is for the case where it names worse pictures than the local art pack.
 	*/
 	cfg.classicui_gamelist = 1;
+
+	/*
+	  On by default, and inert without classicui_artfetch, which is the switch that decides
+	  whether art may be fetched at all. This one only decides *when*: with it on, a shelf
+	  with nothing to draw goes on filling in the covers nobody has browsed to, instead of
+	  the library only ever filling where somebody happened to scroll. It cannot delay a
+	  card on screen and it cannot outspend the ceilings in chome_art.cpp.
+	*/
+	cfg.classicui_artfill = 1;
 
 	/*
 	  Off, and not merely off by default: no build we ship carries the devid that
