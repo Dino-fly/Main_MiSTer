@@ -24672,15 +24672,13 @@ int main()
 	  may put artwork in that header. Working it out here a second way is exactly how a
 	  renamed id would keep passing while the shelf had already fallen back.
 
-	  Saturn is named, because it is the one system with nothing to borrow. If a Saturn icon
-	  is ever generated this list gets shorter, and a system arriving in it that was not
-	  there before is a regression.
+	  There used to be a list of known exceptions here, and Saturn was on it - the one
+	  system with nothing to borrow. It has its own drawing now, so the list is gone and
+	  coverage is total: any system falling back to the folder is a regression.
 	*/
 	printf("\n== system icons ==\n");
 	{
-		static const char *const no_icon[] = { "saturn" };
-
-		int missing = 0, unexpected = 0;
+		int unexpected = 0;
 		for (int i = 0; i < lib_sys_count(); i++)
 		{
 			const chome_sys *sy = lib_sys(i);
@@ -24691,16 +24689,10 @@ int main()
 				printf("  system \"%s\" draws \"%s\"\n", sy->id, icon);
 			if (icon) continue;
 
-			int allowed = 0;
-			for (size_t k = 0; k < sizeof(no_icon) / sizeof(no_icon[0]); k++)
-				if (!strcasecmp(no_icon[k], sy->id)) allowed = 1;
-
-			printf("  no icon for system \"%s\"%s\n", sy->id, allowed ? " (known)" : "");
-			if (allowed) missing++; else unexpected++;
+			printf("  no icon for system \"%s\"\n", sy->id);
+			unexpected++;
 		}
-		check(!unexpected, "every system draws an icon, or is one of the known few that cannot");
-		check(missing == (int)(sizeof(no_icon) / sizeof(no_icon[0])),
-			"and the systems falling back to the folder are exactly the ones listed here");
+		check(!unexpected, "every system draws an icon, with nothing left to the folder fallback");
 
 		int bad = 0;
 		for (size_t k = 0; k < sizeof(sysicons) / sizeof(sysicons[0]); k++)
