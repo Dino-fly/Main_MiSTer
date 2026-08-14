@@ -13,8 +13,18 @@
   Local layout follows the libretro thumbnail convention, which is what the
   community art packs already use:
       <artdir>/<System Name>/Named_Boxarts/<ROM name>.png
-  Fetched art is written into that same layout, so a fetch permanently populates
-  the local pack and the next boot needs no network.
+  where <artdir> is classicui_artdir under the SD ROOT - /media/fat/boxart by
+  default - and <System Name> is libretro's long name for the platform.
+
+  THAT IS ALSO THE CACHE. Every cover this front-end downloads, from either
+  network source, is written into that exact path and read back from it on the
+  next boot; there is no separate cache directory anywhere. A player looking for
+  "where did the covers it downloaded go" is looking for that folder, and there
+  is nothing under games/ or media/ to find.
+
+  The layouts a PC scraper writes beside the ROMs are read as well, and are
+  preferred to <artdir> - see find_local_art() in chome_art.cpp, which carries
+  the full precedence order and the reasoning for it.
 
   ---------------------------------------------------------------------------
 
@@ -23,8 +33,9 @@
   function rather than repeating the order, so there is one copy of it to be wrong.
 
     1. a file already on the card, through find_local_art(): whatever gamelist.xml
-       names, then the scraper media folders beside the ROMs, then our own artdir,
-       then next to the ROM. This is the cache and it is the top of the ladder.
+       names, then the scraper media folders beside the ROMs - by the game's
+       gamelist <name> before the ROM's own file name - then our own artdir, then
+       next to the ROM. This is the cache and it is the top of the ladder.
     2. ScreenScraper, when the player has turned it on and given it an account.
     3. the libretro thumbnail pack.
     4. nothing: a plate in the system's colour, ART_MISSING.
@@ -364,6 +375,79 @@ int art_queue_next();
   Makes no request of its own and needs no network: it reads a file that is already there.
 */
 int art_ss_settle(int item, const char *reply_path);
+
+/*
+  ---------------------------------------------------------------------------
+  The background sweep: covers for the games nobody has browsed to.
+  ---------------------------------------------------------------------------
+
+  Everything above is demand-driven - the shelf asks for the covers it is about to draw.
+  That fills in the part of a library somebody has scrolled through and nothing else, so
+  on a 1469-game card most of the shelf stays coloured plates for ever.
+
+  classicui_artfill turns on a sweep of the whole item array, run from art_step() when
+  there is nothing else at all to do: no decode queued, no download in flight, no pack
+  retry waiting. It is the lowest-priority thing this module does, it drops a fetch it
+  has already started the moment the shelf wants the download slot, and it walks the same
+  ladder and the same throttles the demand path does - so it cannot ask about a game the
+  miss store has already answered for, and it cannot ask faster than SS_MIN_REQUEST_GAP_MS.
+
+  See fill_step() in chome_art.cpp for the whole of the scheduling and for why each bound
+  is the number it is. These are the diagnostics, and what the harness asserts on: none of
+  this shows in a pixel, since a cover fetched by the sweep is indistinguishable from one
+  fetched by the shelf.
+
+    art_fill_asks()    fetches the sweep has started this session
+    art_fill_yields()  times it has given a started fetch back to the shelf
+    art_fill_holds()   times it has picked a game and then waited on the minimum gap
+                       between requests rather than moving on - which is what keeps the
+                       floor a delay for that game and not a skip
+    art_fill_last()    the item it last acted on: started a fetch for, or held. -1 for
+                       a sweep that has not chosen anything yet
+    art_fill_cursor()  where the sweep has got to in the item array
+    art_fill_phase()   0 while it is still finding games nobody has ever asked about;
+                       1 once a whole sweep found none and the re-asks get their turn
+    art_fill_done()    1 when it has stopped for the session - swept both phases with
+                       nothing left, or reached its ceiling
+    art_fill_active()  1 while the download in flight is the sweep's own
+*/
+// How many library items one sweep pass may look at. Each look is an art_source_for(),
+// which is the same handful of stats the shelf pays for every card it draws.
+#define ART_FILL_SCAN 2
+
+/*
+  And how many art_step() passes go by between them - so about four looks a second at 60 Hz,
+  eight items a second, and a 1500-game library swept in a few minutes of sitting on the
+  shelf.
+
+  A frame count rather than a clock, deliberately. art_step() is called once a frame from
+  HandleUI(), so this paces the stats against the thing whose budget actually matters, and
+  it makes the sweep something a host test can drive without a wall clock. The *requests*
+  are paced by SS_MIN_REQUEST_GAP_MS instead, which is a real clock, because that one is a
+  promise to somebody else's server.
+*/
+#define ART_FILL_EVERY 15
+
+/*
+  The session ceiling on fetches the sweep may start.
+
+  400 covers is more than a player fills in in one sitting on the shelf and far below either
+  ScreenScraper allowance (20000 requests a day, 2000 unmatched). It is not meant to be the
+  binding limit - the gap, the ko reserve and the miss store are - but to bound the cases
+  that have no limit of their own. The one that matters is a device with no network: every
+  attempt fails as transport, which correctly writes nothing down about any game, and would
+  otherwise be retried on every sweep for as long as the shelf is up.
+*/
+#define ART_FILL_MAX 400
+
+unsigned art_fill_asks();
+unsigned art_fill_yields();
+unsigned art_fill_holds();
+int art_fill_last();
+int art_fill_cursor();
+int art_fill_phase();
+int art_fill_done();
+int art_fill_active();
 
 // Suspend-point thumbnails, written next to the savestate by process_ss().
 // Small ring cache keyed by path; decoded on demand at w x h.

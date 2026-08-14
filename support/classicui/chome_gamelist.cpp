@@ -33,7 +33,17 @@ struct gl_ent
 {
 	uint64_t hpath;      // normalised path relative to the games dir
 	uint64_t hbase;      // its last component only
-	int32_t  off;        // art path, into the arena
+	int32_t  off;        // art path, into the arena. -1 when the entry names none
+	/*
+	  <name>, into the arena, or -1.
+
+	  Not metadata for its own sake - this shelf draws its own titles from the file name and
+	  has no use for a scraper's. It is here because it is a *file name*: the layout Skraper
+	  and the Recalbox/ES packs write names each picture after the game's <name> rather than
+	  after the ROM, so media/box2d/<name>.png cannot be found without reading this. See
+	  find_local_art() in chome_art.cpp for where it is used.
+	*/
+	int32_t  noff;
 	int16_t  sysidx;
 };
 
@@ -185,14 +195,21 @@ static const char *const art_tags[] =
 
 #define GL_TEXT_MAX 512
 
+// The two fields that are not pictures, given numbers past the end of art_tags so that one
+// `field` covers all of them and the rank comparison below can never mistake one for a
+// picture.
+#define GL_FIELD_PATH (ART_TAG_COUNT)
+#define GL_FIELD_NAME (ART_TAG_COUNT + 1)
+
 struct gl_ctx
 {
 	int sysidx;
 	int in_game;
-	int field;                  // index into art_tags, ART_TAG_COUNT for <path>, -1 none
+	int field;                  // index into art_tags, GL_FIELD_PATH/NAME, -1 none
 	int text_len;
 	char text[GL_TEXT_MAX];
 	char path[GL_TEXT_MAX];
+	char name[GL_TEXT_MAX];
 	char art[GL_TEXT_MAX];
 	int  art_rank;
 	int  full;                  // hit a cap
@@ -255,30 +272,65 @@ static void trim_text(char *s)
 static int tag_field(const char *tag)
 {
 	for (int i = 0; i < ART_TAG_COUNT; i++) if (!strcasecmp(tag, art_tags[i])) return i;
-	if (!strcasecmp(tag, "path")) return ART_TAG_COUNT;
+	if (!strcasecmp(tag, "path")) return GL_FIELD_PATH;
+	if (!strcasecmp(tag, "name")) return GL_FIELD_NAME;
 	return -1;
 }
 
+/*
+  1 when this picture path is one we are willing to resolve.
+
+  "~/..." is a path on the machine that did the scraping, and MiSTer has no home
+  directory worth resolving it against. ".." could name anything on the card and a
+  gamelist has no business doing so. Both are dropped rather than guessed at.
+*/
+static int art_usable(const char *art)
+{
+	if (!art[0]) return 0;
+	if (art[0] == '~') return 0;
+	if (strstr(art, "..")) return 0;
+	return 1;
+}
+
+/*
+  An entry is worth keeping when it names a picture *or* a name, which is a widening: it
+  used to be pictures only.
+
+  A <name> with no picture beside it is exactly the ES-DE and Skraper-romset case - the
+  gamelist says what the game is called and the pictures are matched to that name on disk
+  under media/box2d/ - so an entry thrown away for naming no <image> is the entry that
+  would have found the cover. Entries that name neither are still dropped: they are a
+  hash and two -1s that nothing can ever answer with.
+*/
 static void commit(gl_ctx *c)
 {
-	if (!c->path[0] || !c->art[0]) return;
+	if (!c->path[0]) return;
 
-	/*
-	  "~/..." is a path on the machine that did the scraping, and MiSTer has no home
-	  directory worth resolving it against. ".." could name anything on the card and
-	  a gamelist has no business doing so. Both are dropped rather than guessed at.
-	*/
-	if (c->art[0] == '~') return;
-	if (strstr(c->art, "..")) return;
+	int usable = art_usable(c->art);
+	if (!usable && !c->name[0]) return;
 
-	int off = arena_put(c->art);
-	if (off < 0) { c->full = 1; return; }
+	int off = -1;
+	if (usable)
+	{
+		off = arena_put(c->art);
+		if (off < 0) { c->full = 1; return; }
+	}
+
+	int noff = -1;
+	if (c->name[0])
+	{
+		noff = arena_put(c->name);
+		if (noff < 0) { c->full = 1; return; }
+	}
+
+	if (off < 0 && noff < 0) return;
 
 	gl_ent *e = ent_new();
 	if (!e) { c->full = 1; return; }
 
 	e->sysidx = (int16_t)c->sysidx;
 	e->off = off;
+	e->noff = noff;
 	keys_of(c->path, &e->hpath, &e->hbase);
 }
 
@@ -296,6 +348,7 @@ static int sax(XMLEvent evt, const XMLNode *node, SXML_CHAR *text, const int n, 
 		{
 			c->in_game = strcasecmp(node->tag, "game") ? 0 : 1;
 			c->path[0] = 0;
+			c->name[0] = 0;
 			c->art[0] = 0;
 			c->art_rank = ART_TAG_COUNT;
 			c->field = -1;
@@ -354,7 +407,8 @@ static int sax(XMLEvent evt, const XMLNode *node, SXML_CHAR *text, const int n, 
 
 			if (c->text[0])
 			{
-				if (c->field == ART_TAG_COUNT) snprintf(c->path, sizeof(c->path), "%s", c->text);
+				if (c->field == GL_FIELD_PATH) snprintf(c->path, sizeof(c->path), "%s", c->text);
+				else if (c->field == GL_FIELD_NAME) snprintf(c->name, sizeof(c->name), "%s", c->text);
 				else if (c->field < c->art_rank)
 				{
 					snprintf(c->art, sizeof(c->art), "%s", c->text);
@@ -470,7 +524,23 @@ static int resolve(int sysidx, const char *rel, char *out, int len)
 	return file_exists(out);
 }
 
-int gl_art(int sysidx, const char *relpath, char *out, int len)
+/*
+  The entry for one game, or 0.
+
+  `want_name` picks which of the two fields the caller needs, and entries that have not got
+  it are passed over rather than matched and then found empty. That matters because the two
+  fields are populated independently now: a gamelist can name a picture for one game, a
+  <name> for another, and both for a third, and a lookup that stopped at the first entry
+  with the right path would answer "no name" for a file whose name is in the entry the
+  filename fallback would have found.
+
+  The path is what identifies a game, and it is tried first. The last component on its own
+  is a fallback for gamelists whose <path> is not relative to the games dir the way ES
+  writes it - an absolute path from a PC is the case that turns up - and it is second
+  because it cannot tell two same-named files in different folders apart, so a real path
+  match must always beat it.
+*/
+static const gl_ent *gl_find(int sysidx, const char *relpath, int want_name)
 {
 	if (sysidx < 0 || sysidx >= CH_MAX_SYS || !relpath || !*relpath) return 0;
 	if (!cfg.classicui_gamelist) return 0;
@@ -481,23 +551,34 @@ int gl_art(int sysidx, const char *relpath, char *out, int len)
 	uint64_t hpath, hbase;
 	keys_of(relpath, &hpath, &hbase);
 
-	/*
-	  The path is what identifies a game, and it is tried first. The last component
-	  on its own is a fallback for gamelists whose <path> is not relative to the
-	  games dir the way ES writes it - an absolute path from a PC is the case that
-	  turns up - and it is second because it cannot tell two same-named files in
-	  different folders apart, so a real path match must always beat it.
-	*/
 	const gl_ent *base_hit = 0;
 	for (int i = 0; i < nents; i++)
 	{
 		if (ents[i].sysidx != sysidx) continue;
-		if (ents[i].hpath == hpath) return resolve(sysidx, arena + ents[i].off, out, len);
+		if ((want_name ? ents[i].noff : ents[i].off) < 0) continue;
+
+		if (ents[i].hpath == hpath) return &ents[i];
 		if (!base_hit && ents[i].hbase == hbase) base_hit = &ents[i];
 	}
 
-	if (base_hit) return resolve(sysidx, arena + base_hit->off, out, len);
-	return 0;
+	return base_hit;
+}
+
+int gl_art(int sysidx, const char *relpath, char *out, int len)
+{
+	const gl_ent *e = gl_find(sysidx, relpath, 0);
+	if (!e) return 0;
+
+	return resolve(sysidx, arena + e->off, out, len);
+}
+
+int gl_name(int sysidx, const char *relpath, char *out, int len)
+{
+	const gl_ent *e = gl_find(sysidx, relpath, 1);
+	if (!e) return 0;
+
+	snprintf(out, len, "%s", arena + e->noff);
+	return out[0] ? 1 : 0;
 }
 
 int gl_loaded(int sysidx)

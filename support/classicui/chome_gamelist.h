@@ -18,7 +18,9 @@
       which exists on a MiSTer card, so neither is looked for.)
     - Root is <gameList>, whose children are <game> and <folder>. Only <game> is
       read: a <folder> names a directory, and the shelf has no card for one.
-    - <path> names the ROM, <image>/<thumbnail>/<boxart>/... name pictures.
+    - <path> names the ROM, <image>/<thumbnail>/<boxart>/... name pictures, and
+      <name> is what the scraper decided the game is called - which is a file name
+      as well as a title, because the media layouts below are keyed on it.
     - A picture path is absolute, or relative to the ROM folder and conventionally
       starts with "./", or starts with "~/" for the user's home directory. The
       first two are resolved; "~/" is not, since MiSTer has no meaningful home and
@@ -29,8 +31,9 @@
   ES-DE is the exception worth knowing about: it writes gamelist.xml but does not
   put media paths in it at all, matching media to ROM names under
   downloaded_media/<system>/covers/ instead. Its gamelists are still read here -
-  they simply name no pictures, and the lookup falls through to the layers in
-  chome_art.cpp, one of which is the same filename-matching idea.
+  they name no pictures, only the <name> that chome_art.cpp then looks for on disk,
+  and past that the lookup falls through to the layers in chome_art.cpp, one of
+  which is the same filename-matching idea.
 
   Deliberately bounded, because this is a user-supplied file of unknown size on a
   card we did not write: a file larger than GL_MAX_BYTES is not opened at all, the
@@ -67,13 +70,33 @@
 */
 int gl_art(int sysidx, const char *relpath, char *out, int len);
 
+/*
+  What gamelist.xml *calls* this game - its <name> - or 0 when it names none. Same
+  `relpath` as gl_art(), same lazy load.
+
+  Not for display. The shelf builds its own titles out of the file name and has no
+  use for a scraper's idea of one; this exists because <name> is a file name in the
+  layout ScreenScraper's own tools write, where the pictures beside the ROMs are
+  called after the game rather than after the ROM:
+
+      <system>/media/box2d/<name>.png
+      <system>/media/screenshot/<name>.png
+
+  So a card scraped by Skraper, Recalbox or ES into that layout is unreadable without
+  this mapping - the file on it is "Sonic The Hedgehog 2.png" and the ROM is
+  "Sonic The Hedgehog 2 (Europe).md". See find_local_art() in chome_art.cpp.
+*/
+int gl_name(int sysidx, const char *relpath, char *out, int len);
+
 // Drops every parsed gamelist, so a rescan picks up a re-scrape.
 void gl_forget();
 
 /*
   Diagnostics, and what the tests assert on:
     gl_loaded()  1 once this system has been looked at
-    gl_count()   entries taken from this system's gamelist
+    gl_count()   entries taken from this system's gamelist - every <game> that named a
+                 usable picture, a <name>, or both. An entry that named neither is not
+                 one, since there would be nothing to answer with.
     gl_rejected() 1 when this system had a gamelist we refused: malformed, too
                  large, or over a cap. Distinct from "no entries", which is also
                  what a valid ES-DE gamelist gives.
