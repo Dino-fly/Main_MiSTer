@@ -1932,12 +1932,19 @@ static void draw_card(const chome_entry *e, int cx, int bottom, int w, int h, in
 	int on_deck = (e->kind == ENT_GAME && e->nvar > 1);
 	slide_note_rows(y - CARD_RING - (on_deck ? deck_rise(h) : 0), bottom + sd);
 
-	gfx_fill(x + sd, y + sd, w, h, COL_SHADOW);
-
-	// Mid-riffle, the face, the deck and the counter all belong to draw_riffle() - the
-	// second pass over the shelf, which draws them where their motion has them this
-	// instant. What stays here is what does not move: the shadow and the focus ring.
+	/*
+	  Mid-riffle, EVERYTHING about this card belongs to draw_riffle() - the second pass
+	  over the shelf, which draws each piece where its motion has it this instant: the
+	  faces, the deck, the shadows riding the moving cards, and the focus ring bound to
+	  the INCOMING card from the first frame. Nothing static may remain here: a shadow
+	  plate left at the old rectangle reads as a black container the new card grows
+	  inside of - Dinofly's words, "there is no such thing" - and a ring left here sits
+	  on a card that no longer has the focus. The slot shows plain background until the
+	  incoming card covers it, which is the point.
+	*/
 	int rif = riffling(e, selected);
+
+	if (!rif) gfx_fill(x + sd, y + sd, w, h, COL_SHADOW);
 
 	/*
 	  The deck, before the face so the face sits on it. Back to front, each level one
@@ -2025,14 +2032,14 @@ static void draw_card(const chome_entry *e, int cx, int bottom, int w, int h, in
 		if (!rif) draw_card_face(it, e, x, y, w, h, selected, 1);
 	}
 
-	if (selected)
+	if (selected && !rif)
 	{
 		// Bright while the shelf has the cursor, muted while the bar or the badge does.
 		// See shelf_has_focus() for why the ring is dimmed rather than dropped.
 		gfx_frame_rect(x - CARD_RING, y - CARD_RING, w + 2 * CARD_RING, h + 2 * CARD_RING,
 			shelf_has_focus() ? COL_FOCUS : COL_DIM, CARD_RING);
 	}
-	else
+	else if (!selected)
 	{
 		gfx_scrim(x, y, w, h, COL_BGDARK, 2);
 		gfx_frame_rect(x, y, w, h, COL_SHADOW, 1);
@@ -2187,11 +2194,27 @@ static void draw_riffle(const chome_entry *e, const chome_profile *p)
 		gfx_frame_rect(px, py, pw, ph, COL_PANELHI, 1);
 	}
 
-	// The incoming card, dressed once the band fits inside it.
-	draw_card_face(in_it, e, ix, iy, iw, ih, 1, ih >= 48);
-
-	if (t < 0.5)            // sliding out: top of the pile, drawn last
+	/*
+	  The incoming card: its own drop shadow riding its rectangle (the resting card's
+	  shadow, at whatever size the card is this instant - so the landing frame's shadow
+	  is the resting frame's), the face dressed once the band fits inside it, and the
+	  FOCUS RING, bound to this card from the first frame and growing with it. The ring
+	  belongs to the card that is receiving the focus - it transfers on the press, not
+	  on the landing - and while the old front card is still lifting off it simply
+	  passes in front of ring and all.
+	*/
 	{
+		int isd = card_shadow(ih);
+		gfx_fill(ix + isd, iy + isd, iw, ih, COL_SHADOW);
+	}
+	draw_card_face(in_it, e, ix, iy, iw, ih, 1, ih >= 48);
+	gfx_frame_rect(ix - CARD_RING, iy - CARD_RING, iw + 2 * CARD_RING, ih + 2 * CARD_RING,
+		shelf_has_focus() ? COL_FOCUS : COL_DIM, CARD_RING);
+
+	if (t < 0.5)            // sliding out: top of the pile, drawn last, shadow and all
+	{
+		int osd = card_shadow(oh);
+		gfx_fill(ox + osd, oy + osd, ow, oh, COL_SHADOW);
 		if (oplate)
 		{
 			gfx_fill(ox, oy, ow, oh, COL_PANEL);
