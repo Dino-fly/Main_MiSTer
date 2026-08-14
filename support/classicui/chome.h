@@ -89,6 +89,10 @@ void chome_core_boot();
 */
 int chome_test_ss_load(int slot);
 
+// Its save twin, for measuring which slots a core actually services.
+int chome_test_ss_save(int slot);
+
+
 // How many frames have painted the disc dialog - the strip opened from that
 // dialog promises to keep painting it behind itself, and a screen-id check
 // cannot see whether the promise holds.

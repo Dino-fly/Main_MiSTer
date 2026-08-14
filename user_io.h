@@ -187,6 +187,8 @@ uint32_t user_io_hd_mask(const char *opt);
 uint32_t user_io_status_get(const char *opt, int ex = 0);
 void user_io_status_set(const char *opt, uint32_t value, int ex = 0);
 int user_io_status_save(const char *filename);
+// A single cheap liveness poll at the running core - see the note in user_io.cpp.
+void user_io_core_alive_poll();
 void user_io_status_reset();
 
 uint32_t user_io_get_file_crc();
