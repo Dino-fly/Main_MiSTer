@@ -1898,18 +1898,32 @@ void vp_arm_for_launch(int sysidx, int vclass_hint)
   is a no-op on every apply after the first at a given scale, and the file is
   shared by every look that names it.
 */
-static void vp_grid_for_now()
+static int vp_grid_for_now()
 {
 	int n = vp_output_scale();
-	if (n < 2) return;
+	if (n < 2) return 0;
 
 	static int last = 0;
-	if (n == last) return;
+	if (n == last) return 0;
 	last = n;
 
 	printf("ClassicUI: the scaler is giving each pixel %dx, rebuilding the LCD grid\n", n);
 	write_filter_grid(F_GRID, 0, n);
 	write_filter_grid(F_GRIDSH, 1, n);
+	return 1;
+}
+
+// Whether this look's picture depends on the grid, and therefore on the scale.
+static int vp_uses_grid(int i)
+{
+	if (i < 0 || i >= NPRESETS) return 0;
+
+	const preset_def *d = &presets[i];
+	const char *f[2] = { d->hfilter, d->vfilter };
+	for (int k = 0; k < 2; k++)
+		if (f[k] && (!strcasecmp(f[k], F_GRID) || !strcasecmp(f[k], F_GRIDSH))) return 1;
+
+	return 0;
 }
 
 int vp_apply_now(int sysidx, int vclass_hint)
@@ -2028,6 +2042,26 @@ void vp_reapply_core_side()
 void vp_output_poll()
 {
 	if (vp_running_look < 0) return;
+
+	/*
+	  The magnification is not knowable when a look is armed, and often not even at
+	  the moment the core boots: the scaler is still describing the menu, or the core
+	  has not put a picture up yet. The first GBA launch after the scale-aware grid
+	  landed rebuilt it for 3x - the MENU's scale - and the game then ran at 4x with
+	  a grid built for somebody else. So the scale is watched here, where the output
+	  is already watched, and a change rebuilds the grid AND hands the fabric the new
+	  coefficients: a filter file nobody reloads is a file nobody sees.
+	*/
+	if (vp_grid_for_now() && vp_uses_grid(vp_running_look))
+	{
+		char gpath[1024];
+		if (vp_preset_path_for(vp_running_look, vp_applied_analog, gpath, sizeof(gpath)))
+		{
+			printf("ClassicUI: re-applying \"%s\" so the new grid reaches the scaler\n",
+				presets[vp_running_look].name);
+			video_loadPreset(gpath, true);
+		}
+	}
 
 	int analog = vp_output_is_analog();
 	if (analog == vp_applied_analog) return;
