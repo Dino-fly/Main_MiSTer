@@ -1044,6 +1044,8 @@ mister_scaler *mister_scaler_init()
 	memset(&ms, 0, sizeof(ms));
 	ms.height = scaler_src_h;
 	ms.output_height = scaler_out_h;
+	ms.width = scaler_src_h * 4 / 3;
+	ms.output_width = scaler_out_h * 4 / 3;
 	return &ms;
 }
 
