@@ -13386,6 +13386,13 @@ int chome_test_core_opt(const char *spec)
 {
 	if (!spec || !*spec) return 0;
 
+	/*
+	  Scan first. The option table is built when the player opens the core's own
+	  settings, and a script never does that - so without this every name came back
+	  "no such option" on a machine that plainly had it.
+	*/
+	if (!core_opts_count()) core_opts_scan();
+
 	char name[CO_NAME_LEN];
 	snprintf(name, sizeof(name), "%s", spec);
 
@@ -13749,7 +13756,7 @@ static void ig_build_background(const chome_profile *p)
 			// And the grid is rebuilt for the magnification in force BEFORE the still
 			// is filtered: a still drawn through the previous core's grid is the same
 			// bug one layer down.
-			vp_grid_for_now();
+			vp_grid_for_now(1);
 
 			int look = vp_effective(it->sysidx, class_of(it->sysidx, it->path));
 			filtered = (uint32_t*)malloc((size_t)fw * fh * 4);

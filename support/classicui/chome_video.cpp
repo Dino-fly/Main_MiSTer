@@ -15,6 +15,7 @@
 #include "../../user_io.h"
 #include "../../video.h"
 #include "../../scaler.h"
+#include "../../hardware.h"
 
 #define PREFIX "ClassicHome"
 #define PENDING "/tmp/classicui_preset"
@@ -1933,8 +1934,25 @@ void vp_arm_for_launch(int sysidx, int vclass_hint)
   is a no-op on every apply after the first at a given scale, and the file is
   shared by every look that names it.
 */
-int vp_grid_for_now()
+int vp_grid_for_now(int force)
 {
+	/*
+	  Asked at most once a second, and that rate limit is the whole point of this
+	  guard rather than tidiness.
+
+	  vp_output_scale() reads the scaler's header through mister_scaler_init(),
+	  which opens /dev/mem, maps it, reads six words, unmaps and - being upstream
+	  code with its own diagnostics - prints a line every single time. Called from
+	  the per-frame poll that watches for an output change, that was sixty maps and
+	  sixty log writes a second onto the SD card, and Dinofly saw it as the whole
+	  screen wobbling vertically while the menu was up. The scale only changes when
+	  a core or a video mode does, so once a second is already far more often than
+	  the question can have a new answer.
+	*/
+	static unsigned long next_look = 0;
+	if (!force && next_look && !CheckTimer(next_look)) return 0;
+	next_look = GetTimer(1000);
+
 	int n = vp_output_scale();
 	if (n < 2) return 0;
 
