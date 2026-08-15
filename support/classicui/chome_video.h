@@ -192,10 +192,13 @@ const uint32_t *vp_preview(int i, int w, int h, const uint32_t *ref, int sw_nati
 */
 /*
   Rebuild the LCD grid for the magnification the scaler is giving right now, if it
-  has changed. Returns 1 when the file was rewritten. Cheap and idempotent: the
-  generator only writes when the bytes differ.
+  has changed. Returns 1 when the file was rewritten. The generator only writes
+  when the bytes differ, but ASKING costs a map of /dev/mem and a log line from
+  upstream code, so the question is rate-limited to once a second - pass force
+  when the answer is needed immediately, which is the menu opening over a game
+  and about to draw the still through this very grid.
 */
-int vp_grid_for_now();
+int vp_grid_for_now(int force = 0);
 
 int vp_render_exact(int look, const uint32_t *src, int sw, int sh,
 	uint32_t *dst, int dw, int dh);
