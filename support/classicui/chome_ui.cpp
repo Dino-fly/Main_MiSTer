@@ -13709,8 +13709,22 @@ static void ig_build_background(const chome_profile *p)
 	  Fit, not stretch: a 4:3 core on a 16:9 canvas keeps its shape, with the
 	  surround left black. Then dim, so panel text stays readable over anything.
 	*/
-	int fw, fh;
-	shot_fit(p->w, p->h, p->px, &fw, &fh, 0, 0);
+	/*
+	  The size the television is showing, not a fit of the frame to the canvas.
+
+	  The scaler puts a 256x224 core in 1170x896 on a 1080p panel with integer
+	  scaling; fitting the same frame to the canvas gives 1440x1080, which is a
+	  visibly larger picture and puts every scanline and grid line at a spacing the
+	  game does not have. Asking the scaler where the game really is makes the
+	  background the same picture, the same size, in the same place - which is the
+	  whole claim this background makes.
+
+	  The fit is kept for when there is nothing to ask: no core running, or a
+	  scaler that will not answer.
+	*/
+	int fw = 0, fh = 0;
+	if (!vp_output_rect(&fw, &fh) || fw > p->w || fh > p->h || fw < 16 || fh < 16)
+		shot_fit(p->w, p->h, p->px, &fw, &fh, 0, 0);
 
 	int ox = (p->w - fw) / 2, oy = (p->h - fh) / 2;
 

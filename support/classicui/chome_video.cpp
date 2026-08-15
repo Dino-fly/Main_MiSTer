@@ -1177,6 +1177,34 @@ static void write_filter(const char *name, int kind, double scan_depth)
   integer-scaling setting between them worked out to. 0 when there is nothing
   running to ask about, which is the harness and the menu.
 */
+/*
+  The rectangle the scaler is putting the GAME in, in panel pixels.
+
+  Not the same as fitting the frame to the canvas, which is what the menu
+  background used to do: with integer scaling a 256x224 core lands in 1170x896 on
+  a 1080p panel, while an aspect fit of the same frame is 1440x1080. Dinofly saw
+  exactly that - "the background image of mario is bigger than what the nes core
+  rendered" - and the scanline filter, rendered over the wrong height, put its
+  lines at a spacing the game never had.
+
+  Read from the scaler's own header, so it is the geometry actually on the
+  television rather than one computed from the ini and hoped for. 0 when nothing
+  is running to ask.
+*/
+int vp_output_rect(int *w, int *h)
+{
+	mister_scaler *ms = mister_scaler_init();
+	if (!ms) return 0;
+
+	int ow = ms->output_width, oh = ms->output_height;
+	mister_scaler_free(ms);
+
+	if (ow < 16 || oh < 16) return 0;
+	if (w) *w = ow;
+	if (h) *h = oh;
+	return 1;
+}
+
 static int vp_output_scale()
 {
 	mister_scaler *ms = mister_scaler_init();

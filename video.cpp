@@ -3528,11 +3528,19 @@ static void vga_fb_takeover_update()
 	  screenshots and anything else wanting /tmp.
 	*/
 	{
-		static int p_req = -1, p_fb = -1, p_hdmi = -1, p_held = -1;
+		/*
+		  fb_num is NOT part of "something moved": it is the double buffer, and it
+		  alternates every single frame while the front-end draws - so including it
+		  defeated the guard this comment sits under and printed at 60 Hz anyway,
+		  which is what Dinofly saw as the screen wobbling whenever the menu was up.
+		  It is still reported, because it is useful in the line; it just no longer
+		  decides that the line should be written.
+		*/
+		static int p_req = -1, p_hdmi = -1, p_held = -1;
 		int hp = hdmi_present();
-		if (p_req != menu_fb_analog_req || p_fb != fb_num || p_hdmi != hp || p_held != vga_fb_takeover)
+		if (p_req != menu_fb_analog_req || p_hdmi != hp || p_held != vga_fb_takeover)
 		{
-			p_req = menu_fb_analog_req; p_fb = fb_num; p_hdmi = hp; p_held = vga_fb_takeover;
+			p_req = menu_fb_analog_req; p_hdmi = hp; p_held = vga_fb_takeover;
 			printf("video: takeover check - req=%d fb=%d hdmi=%d held=%d\n",
 				menu_fb_analog_req, fb_num, hp, vga_fb_takeover);
 		}

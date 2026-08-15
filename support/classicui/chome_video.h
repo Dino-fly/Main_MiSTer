@@ -200,6 +200,13 @@ const uint32_t *vp_preview(int i, int w, int h, const uint32_t *ref, int sw_nati
 */
 int vp_grid_for_now(int force = 0);
 
+/*
+  The rectangle the scaler is putting the running game in, in panel pixels - what
+  the television is actually showing, which is not the same as the frame fitted to
+  the canvas. Returns 0 when there is nothing running to ask.
+*/
+int vp_output_rect(int *w, int *h);
+
 int vp_render_exact(int look, const uint32_t *src, int sw, int sh,
 	uint32_t *dst, int dw, int dh);
 
