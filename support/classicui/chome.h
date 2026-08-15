@@ -92,6 +92,15 @@ int chome_test_ss_load(int slot);
 // Its save twin, for measuring which slots a core actually services.
 int chome_test_ss_save(int slot);
 
+/*
+  Set one of the running core's options from a script: "Name=Value", matched by
+  name against the core's own CONF_STR. Returns 1 when the core had that option
+  and took the value. See the note at its call site in input.cpp for why this
+  exists - photographing a look under many core-side combinations is not
+  something a pad can be scripted to do.
+*/
+int chome_test_core_opt(const char *spec);
+
 
 // How many frames have painted the disc dialog - the strip opened from that
 // dialog promises to keep painting it behind itself, and a screen-id check

@@ -6592,6 +6592,21 @@ int input_test(int getchar)
 					{
 						chome_test_ss_save(atoi(cmd + 8));
 					}
+					/*
+					  Set one of the running core's options by the name it gives itself,
+					  e.g. `echo "core_opt Composite Blend=On" > /dev/MiSTer_cmd`.
+
+					  Test access, like the two above it and for the same reason: the
+					  looks a player chooses are half core-side, and judging them means
+					  photographing the same frame under many combinations of the core's
+					  own options. Doing that by hand is dozens of menu presses per shot,
+					  and a pad cannot be scripted. Values are matched by name against the
+					  CONF_STR, so a core that does not offer the option simply says so.
+					*/
+					else if (!strncmp(cmd, "core_opt ", 9))
+					{
+						chome_test_core_opt(cmd + 9);
+					}
 				}
 			}
 

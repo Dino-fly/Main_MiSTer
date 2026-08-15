@@ -13376,6 +13376,30 @@ int chome_test_ss_load(int slot)
 
 // And the save pulse, for the same reason: measuring which slots a core
 // actually services (the PSX core advertises four and answered for one).
+/*
+  "Name=Value" against the running core, for the capture scripts that photograph a
+  look under many core-side combinations. core_opt_set_named() does the matching
+  and the refusing; this only splits the string and says what happened, loudly,
+  because a script cannot see the screen.
+*/
+int chome_test_core_opt(const char *spec)
+{
+	if (!spec || !*spec) return 0;
+
+	char name[CO_NAME_LEN];
+	snprintf(name, sizeof(name), "%s", spec);
+
+	char *eq = strchr(name, '=');
+	if (!eq) { printf("ClassicUI: core_opt wants Name=Value, got \"%s\"\n", spec); return 0; }
+	*eq = 0;
+
+	const char *val = spec + (eq - name) + 1;
+	int ok = core_opt_set_named(name, val);
+	printf("ClassicUI: core_opt \"%s\" = \"%s\" -> %s\n", name, val,
+		ok ? "set" : "the core has no such option or value");
+	return ok;
+}
+
 int chome_test_ss_save(int slot)
 {
 	int r = ss_do_save(slot);
