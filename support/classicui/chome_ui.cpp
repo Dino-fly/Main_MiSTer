@@ -69,6 +69,9 @@ static int ig_shot_w = 0, ig_shot_h = 0;
 
 static uint32_t *ig_bg = 0;           // capture scaled to the canvas and dimmed
 static int ig_bg_w = 0, ig_bg_h = 0;
+// Where the picture really landed inside it - the scaler's own rectangle - so the
+// report says what was drawn rather than working it out a second time.
+static int ig_bg_pic_w = 0, ig_bg_pic_h = 0, ig_bg_pic_x = 0, ig_bg_pic_y = 0;
 
 static int ig_paused = 0;                    // the core is actually halted
 static int ig_frozen = 0;                    // held still by a state instead of a pause
@@ -13727,6 +13730,7 @@ static void ig_build_background(const chome_profile *p)
 		shot_fit(p->w, p->h, p->px, &fw, &fh, 0, 0);
 
 	int ox = (p->w - fw) / 2, oy = (p->h - fh) / 2;
+	ig_bg_pic_w = fw; ig_bg_pic_h = fh; ig_bg_pic_x = ox; ig_bg_pic_y = oy;
 
 	for (int i = 0; i < p->w * p->h; i++) ig_bg[i] = COL_BLACK;
 
@@ -14100,10 +14104,15 @@ static int ig_open()
 	  dialog left showing.
 	*/
 	{
-		int fw = 0, fh = 0, ox = 0, oy = 0;
-		if (ig_bg) shot_fit(ig_bg_w, ig_bg_h, p->px, &fw, &fh, &ox, &oy);
+		/*
+		  Reported from what was actually drawn, not recomputed here. This used to run
+		  shot_fit() again for the message and printed 1440x1080 while the background
+		  had really been drawn at the scaler's 1170x896 - a diagnostic answering its
+		  own question instead of the code's, which is worse than no diagnostic.
+		*/
 		printf("ClassicUI: the menu background: %s, canvas %dx%d px=%d, picture %dx%d at %d,%d\n",
-			ig_bg ? "built" : "none", p->w, p->h, p->px, fw, fh, ox, oy);
+			ig_bg ? "built" : "none", p->w, p->h, p->px,
+			ig_bg_pic_w, ig_bg_pic_h, ig_bg_pic_x, ig_bg_pic_y);
 	}
 
 	/*
