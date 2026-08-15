@@ -157,6 +157,15 @@ it left a state save with a classic-OSD panel over the game and the framebuffer 
 state the next menu open drew garbage from. It is now skipped when the front-end is
 up, which hides its own OSD anyway.
 
+**`mister_scaler_quiet()`** (`scaler.cpp`) silences the two diagnostics
+`mister_scaler_init()` prints on every call — a 16-byte hex dump and a line of
+geometry. Off by default, so every upstream path prints exactly what it always did.
+Classic Home reads that header once a second to learn how large the scaler is drawing
+the game (the in-game menu's background has to be that size, and by the time it is
+built the framebuffer has taken the screen and the scaler describes the menu instead).
+Two log lines a second is an SD-card write a second, which showed up as the picture
+wobbling.
+
 **`screenshot_grab()`** (`scaler.cpp`) reads the current scaler output into a caller's
 buffer. Used for the still the in-game menu is drawn over, and for slot pictures. The
 existing screenshot path writes files on a worker thread; this needed the pixels

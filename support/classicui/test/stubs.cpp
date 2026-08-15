@@ -1044,6 +1044,8 @@ static int scaler_src_h = 0, scaler_out_h = 0;
 
 void harness_set_scale(int src_h, int out_h) { scaler_src_h = src_h; scaler_out_h = out_h; }
 
+void mister_scaler_quiet(int) {}
+
 mister_scaler *mister_scaler_init()
 {
 	if (scaler_src_h < 1) return 0;
