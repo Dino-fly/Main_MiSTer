@@ -190,12 +190,21 @@ def ascal_1d(rows, sw, dw, hw_taps, phase_bias):
 # ------------------------------------------------------------------ masks ---
 
 def load_mask(path):
-    """w,h then h rows of hex words. Returns per-cell (rm,gm,bm) 1.4 multipliers."""
+    """w,h then h rows of hex words. Returns per-cell (rm,gm,bm) 1.4 multipliers.
+
+    Only the FIRST table is read. Several distribution masks carry a second one
+    under a "Resolution=" line for taller modes, and reading on past it produced
+    rows of two different widths in one grid - which then indexed off the end of a
+    row. setShadowMask() in video.cpp picks a table by output height; the preview
+    and the tools want the one the file leads with.
+    """
     dims, cells = None, []
     for line in open(path):
         line = line.split('#')[0].split(';')[0].strip()
         if not line: continue
-        if line.lower().startswith('resolution='): continue
+        if line.lower().startswith('resolution='):
+            if cells: break                      # the next table is for another mode
+            continue
         if line.lower() == 'v2': continue
         if dims is None and ',' in line:
             w,h = line.split(','); dims = (int(w),int(h)); continue
@@ -211,6 +220,12 @@ def load_mask(path):
                           for bit in (10,9,8))
             row.append(m)
         if row: cells.append(row)
+        if dims and len(cells) >= dims[1]: break
+
+    # Ragged rows would index off the end later; a short one is a truncated line.
+    if cells:
+        wide = min(len(r) for r in cells)
+        cells = [r[:wide] for r in cells if len(r) >= wide]
     return cells
 
 def mask_mul(ch, mul):
