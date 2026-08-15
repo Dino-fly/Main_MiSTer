@@ -16,6 +16,7 @@
 #include "chome_gamelist.h"
 #include "chome_ss.h"
 #include "chome_proc.h"
+#include "chome.h"
 #include "../../file_io.h"
 #include "../../cfg.h"
 #include "../../lib/imlib2/Imlib2.h"
@@ -3764,6 +3765,18 @@ static int fill_step()
 	if (nqueue) return 0;                            // behind every card being drawn
 	if (ss_fetch_active() || fetch_pid > 0) return 0;
 	if (pack_retry_n) return 0;                      // and behind the player's own retries
+
+	/*
+	  And never while the in-game menu is up.
+
+	  This sweep forks a curl for each cover it wants, and a fork of THIS process is
+	  not cheap - the library alone is megabytes of page tables to copy - so each one
+	  is a stall of tens of milliseconds. Behind the shelf that is invisible; over a
+	  paused game, where the screen is one still picture and the eye has nothing else
+	  to look at, Dinofly saw it as the whole screen wobbling. The covers can wait
+	  for him to come back to the shelf: nothing on screen here is waiting for them.
+	*/
+	if (chome_ingame_active()) return 0;
 
 	if (++fill_tick < ART_FILL_EVERY) return 0;
 	fill_tick = 0;
