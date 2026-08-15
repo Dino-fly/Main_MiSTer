@@ -6607,6 +6607,11 @@ int input_test(int getchar)
 					{
 						chome_test_core_opt(cmd + 9);
 					}
+					// Press the menu button - `echo "menu" > /dev/MiSTer_cmd`.
+					else if (!strcmp(cmd, "menu"))
+					{
+						chome_test_menu();
+					}
 				}
 			}
 
