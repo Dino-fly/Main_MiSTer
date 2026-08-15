@@ -16261,6 +16261,64 @@ static void assert_ingame()
 	  the release of it (menu.cpp: case KEY_F12 | UPSTROKE), so leaving that half
 	  unclaimed put MiSTer's own menu on screen the moment the in-game menu closed.
 	*/
+	/*
+	  The same button from the test hook, which is how the cost of this screen gets
+	  measured on the device without a hand on the pad. It has to travel the player's
+	  own path or it would measure a path nobody takes.
+	*/
+	check(!chome_ingame_active(), "the game is running, no menu");
+	chome_test_menu();
+	for (int i = 0; i < 4; i++) { harness_advance(16); chome_handle(0); }
+	check(chome_ingame_active(), "the test hook opens the in-game menu");
+	chome_test_menu();
+	for (int i = 0; i < 4; i++) { harness_advance(16); chome_handle(0); }
+	check(!chome_ingame_active(), "and closes it again");
+	/*
+	  And with that menu up, the background cover sweep stands down.
+
+	  It forks a curl per cover it wants, and a fork of the firmware is not cheap - so
+	  each one is a stall of tens of milliseconds. Behind the shelf that is invisible;
+	  over a paused game, where the screen is one still picture, Dinofly saw it as the
+	  whole screen wobbling. Both halves are checked, because "the cursor did not move"
+	  on its own would also be true of a sweep that was switched off.
+	*/
+	{
+		char arturl0[512];
+		snprintf(arturl0, sizeof(arturl0), "%s", cfg.classicui_arturl);
+		snprintf(cfg.classicui_arturl, sizeof(cfg.classicui_arturl), "http://127.0.0.1:1");
+		int fill0 = cfg.classicui_artfill, fetch0 = cfg.classicui_artfetch;
+		cfg.classicui_artfill = 1;
+		cfg.classicui_artfetch = 1;
+
+		chome_test_menu();
+		for (int i = 0; i < 4; i++) { harness_advance(16); chome_handle(0); }
+		check(chome_ingame_active(), "a game is paused under the menu");
+
+		art_fresh_slots();
+		fill_passes(200);
+		check(art_fill_cursor() == 0 && art_fill_last() == -1,
+			"and the cover sweep does not look at a single game while it is up");
+
+		chome_test_menu();
+		for (int i = 0; i < 4; i++) { harness_advance(16); chome_handle(0); }
+		check(!chome_ingame_active(), "back in the game");
+
+		art_fresh_slots();
+		fill_passes(200);
+		check(art_fill_cursor() > 0, "and the sweep carries on the moment the menu is gone");
+
+		cfg.classicui_artfill = fill0;
+		cfg.classicui_artfetch = fetch0;
+		snprintf(cfg.classicui_arturl, sizeof(cfg.classicui_arturl), "%s", arturl0);
+	}
+
+	// And leaves nothing behind: a press with no release would eat the next real one.
+	press(KEY_MENU, 20);
+	check(chome_ingame_active(), "the pad's own button still works after it");
+	press(KEY_MENU, 16);
+	check(!chome_ingame_active(), "and still closes");
+	frame(8);
+
 	press(KEY_MENU, 20);
 	check(chome_ingame_active(), "the menu is up");
 	check(chome_handle(KEY_MENU) == 1, "the menu button closes it, and is consumed");

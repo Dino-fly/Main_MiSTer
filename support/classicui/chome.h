@@ -101,6 +101,14 @@ int chome_test_ss_save(int slot);
 */
 int chome_test_core_opt(const char *spec);
 
+/*
+  Press the menu button. Test access, like the three above it: the in-game menu is the
+  one screen whose cost only shows over a paused game - a second of stalled frames is
+  the whole picture wobbling there and invisible everywhere else - so measuring it has
+  to be possible without a hand on the pad.
+*/
+int chome_test_menu();
+
 
 // How many frames have painted the disc dialog - the strip opened from that
 // dialog promises to keep painting it behind itself, and a screen-id check

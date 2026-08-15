@@ -14825,8 +14825,31 @@ static void animate()
 */
 static int eat_menu_release = 0;
 
+/*
+  Test access to the menu button itself: 2 = send the press, 1 = its release.
+
+  Two shots rather than one because the front-end claims both halves of that button
+  (see eat_menu_release above), and a press with no release behind it would leave the
+  next real press eaten. Synthesising the key rather than calling ig_open() directly
+  is the point: what needs proving is the path the player takes, and every bug this
+  has been used to find lived somewhere on that path rather than inside ig_open().
+*/
+static int test_menu_req = 0;
+
+int chome_test_menu()
+{
+	test_menu_req = 2;
+	return 1;
+}
+
 int chome_handle(uint32_t key)
 {
+	if (!key && test_menu_req)
+	{
+		key = (test_menu_req == 2) ? KEY_MENU : (KEY_MENU | UPSTROKE);
+		test_menu_req--;
+	}
+
 	uint32_t igk = key & ~UPSTROKE;
 	int igpress = key && !(key & UPSTROKE);
 	int igmenu = (igk == KEY_MENU || igk == KEY_F12);
