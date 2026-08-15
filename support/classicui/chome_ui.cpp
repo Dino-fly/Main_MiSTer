@@ -881,7 +881,7 @@ static void fb_size_sync()
 static const uint32_t *ig_live_ref(int w, int h);
 static void ig_close(int restore_video);
 static int user_slots();
-static void ig_select_running();
+static int ig_select_running();
 static int ss_can_save();
 static int susp_matches(const chome_item *it);
 static int ig_load_item();
@@ -13838,9 +13838,19 @@ static void ig_close(int restore_video)
   player already is. The index may still be scanning, so this is retried until it
   succeeds or the scan finishes.
 */
-static void ig_select_running()
+/*
+  Park the shelf on the game that is playing. Returns 1 when it landed.
+
+  Every open, not only the first. It used to latch: browse to another system, resume
+  the game, press the menu button again and the shelf was still standing where the
+  browsing had left it - which reads as the front-end having forgotten what you are
+  playing. Dinofly asked for the opposite and it is the better rule: the menu over a
+  game opens ON that game, and browsing is something you do from there rather than a
+  place the menu remembers for you.
+*/
+static int ig_select_running()
 {
-	if (!ig_have_item || ig_selected_running) return;
+	if (!ig_have_item) return 0;
 
 	/*
 	  Through the view, so the running game is found even when it is not the file its
@@ -13849,13 +13859,14 @@ static void ig_select_running()
 	  player started the second dump of a title.
 	*/
 	int at = lib_view_select_path(ig_item.sysidx, ig_item.path);
-	if (at < 0) return;
+	if (at < 0) return 0;
 
 	sel = at;
 	selF = at;
 	sel_shown = at;                   // placed, not moved - see view_rebuild()
 	ig_selected_running = 1;
 	mark_dirty();
+	return 1;
 }
 
 /*
@@ -14102,7 +14113,16 @@ static int ig_open()
 	bar_y = 0;
 	strip_y = 0;
 
-	ig_select_running();
+	/*
+	  And if the game is not in the view the player last browsed to, go back to the
+	  view it was launched from and look again - the session record is what knows it.
+	  Without this the "open on the running game" rule would hold only while the
+	  player happened to be standing in the right folder.
+	*/
+	if (!ig_select_running() && ig_have_item)
+	{
+		if (session_restore()) ig_select_running();
+	}
 
 	/*
 	  Over a disc the menu opens on the disc's own dialog, not on the shelf.

@@ -16310,6 +16310,52 @@ static void assert_ingame()
 	press(KEY_ESC, 10);
 	press(KEY_ESC, 10);
 
+	/*
+	  Browsing away and coming back lands on the game that is PLAYING.
+
+	  The shelf used to keep whatever the player had browsed to: park on another
+	  card, resume the game, press the menu button again, and the front-end was
+	  standing somewhere unrelated to what was on the television. Dinofly asked for
+	  the opposite, and this is the check that says so - the cursor is an observable,
+	  unlike the background bug above it, so this one can be proved.
+	*/
+	{
+		int running_at = chome_sel_index();
+
+		/*
+		  Into another VIEW, not merely along the row. Moving the cursor inside the
+		  same view was already put back - ig_close() clears the latch, so the next
+		  open re-parks - and a test that only did that passed with the fix removed.
+		  What was really lost is the view: browse into a folder, resume, come back,
+		  and the shelf was standing in that folder with the running game nowhere on
+		  screen.
+		*/
+		shelf_root();
+		press(KEY_ENTER, 14);                  // into the first folder on the root
+		frame(10);
+		int browsed = chome_sel_index();
+		printf("  shelf: running game at %d, browsed into a folder at %d\n",
+			running_at, browsed);
+
+		press(KEY_MENU, 16);                       // back into the game
+		frame(8);
+		press(KEY_MENU, 20);                       // and back to the menu
+		frame(12);
+
+		/*
+		  Back on the running game's own card, which means the view came back too:
+		  the index alone could coincide, so the entry under the cursor is checked
+		  against the game that is playing.
+		*/
+		int at = chome_sel_index();
+		const chome_entry *e = lib_view_entry(at);
+		const chome_item *ci = (e && e->kind == ENT_GAME) ? lib_item(e->game) : 0;
+		printf("  after resuming and reopening, the cursor is on %s\n",
+			ci ? ci->title : "(not a game)");
+		check(ci && !strcmp(ci->path, "Tetris (World).gb"),
+			"and the menu opens on the running game again, not where the browsing stopped");
+	}
+
 	// A on the running game resumes rather than reloading it.
 	check(chome_ingame_active(), "still in the menu");
 	harness_clear_launch();
