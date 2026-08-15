@@ -100,6 +100,9 @@ int  harness_grab_calls();
 void harness_reset_grab_calls();
 
 // Liveness polls the front-end sent the core while computing - see the stub.
+// What the scaler reports: source height and output height, 0 = nothing running.
+void harness_set_scale(int src_h, int out_h);
+
 int harness_alive_polls();
 void harness_reset_alive_polls();
 

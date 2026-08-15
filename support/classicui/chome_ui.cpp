@@ -388,11 +388,22 @@ static void ref_shot_path(const char *sysid, const char *rompath, char *out, int
 static_assert(CH_SLOTS_USER == CHOME_STRIP_SLOTS,
 	"the strip lays out a different number of slots than it draws");
 
-#define MB_DISPLAY  0
-#define MB_OPTIONS  1
-#define MB_POWER    2
+/*
+  Bar order, which is these numbers: mb_at() walks them and the labels below are
+  indexed by them.
+
+  The running core comes first and Power last, on Dinofly's call. The core's own
+  entry is the one a player opens on purpose - it is named after what they are
+  playing and holds that machine's settings - while Power is the one nobody wants
+  often and everybody wants to reach deliberately. Putting the frequent thing where
+  the cursor already is, and the irreversible one at the far end, is the same
+  argument twice.
+*/
+#define MB_CORE     0
+#define MB_DISPLAY  1
+#define MB_OPTIONS  2
 #define MB_CLOSE    3
-#define MB_CORE     4
+#define MB_POWER    4
 #define MB_COUNT    5
 
 /*
@@ -410,7 +421,7 @@ static_assert(CH_SLOTS_USER == CHOME_STRIP_SLOTS,
   walks in mb_count_visible() and mb_at(), and a swap rather than an addition leaves all
   three alone.
 */
-static const char *mb_label[MB_COUNT] = { "Display", "Options", "Power", "Close Game", "Core" };
+static const char *mb_label[MB_COUNT] = { "Core", "Display", "Options", "Close Game", "Power" };
 
 /*
   A shorter word for a cell too narrow for the real one, and a null where there is no
@@ -428,7 +439,7 @@ static const char *mb_label[MB_COUNT] = { "Display", "Options", "Power", "Close 
   and shortening it there on the strength of the canvas size alone would be giving up room
   the player actually has.
 */
-static const char *mb_short[MB_COUNT] = { 0, 0, 0, "Close", 0 };
+static const char *mb_short[MB_COUNT] = { 0, 0, 0, "Close", 0 };   // by slot: only Close needs one
 
 /*
   The core entry is labelled with the running system rather than the word "Core": a player
@@ -4730,7 +4741,7 @@ static void draw_display_screen(const chome_profile *p)
 	  different screen per system. They only shrink when a class genuinely offers
 	  more than fit.
 	*/
-	int tw = 66 * s;   // wide enough that "COMPOSITE" fits its label budget at every profile
+	int tw = 70 * s;   // wide enough that "COMPOSITE" fits its label budget at every profile
 	int th = (tw * 3) / 4;
 	int fit = (pw - pad * 2 - gap * (n - 1)) / n;
 	if (tw > fit) { tw = fit < 24 ? 24 : fit; th = (tw * 3) / 4; }
@@ -4855,19 +4866,22 @@ static void draw_display_screen(const chome_profile *p)
 
 		/*
 		  Wrapped to two lines, then each line clipped to the tile's pitch plus
-		  half a gap each side - centered, two neighbours doing the same meet at
-		  the middle of the gap and never overlap. The clip stays because
-		  wrap_text cannot split a single long word, and an unclipped
-		  "COMPOSITE" centered over a narrow tile walks into both neighbours.
+		  half a gap EACH SIDE - which is tw + gap, not tw + gap*2. The wider
+		  budget was mine and it collided on the device: a label centred on its
+		  tile and allowed a full gap of overhang each side overlaps its
+		  neighbour's by exactly one gap, which read as "PVM RGBBVM RGB" across
+		  the console row. At tw + gap two neighbours meet in the middle of the
+		  gap and stop. The clip stays because wrap_text cannot split a single
+		  long word.
 		*/
 		char lines[4][64];
-		int nl = wrap_text(vp_name(opts[i]), tw + gap * 2, tiny, lines, 2);
+		int nl = wrap_text(vp_name(opts[i]), tw + gap, tiny, lines, 2);
 		for (int l = 0; l < nl; l++)
 		{
 			char up[64];
 			snprintf(up, sizeof(up), "%s", lines[l]);
 			gfx_shout(up);
-			gfx_text_c(gfx_clip(up, tiny, tw + gap * 2), x + tw / 2,
+			gfx_text_c(gfx_clip(up, tiny, tw + gap), x + tw / 2,
 				tile_y + th + 5 + l * 10 * tiny, tiny,
 				on ? COL_WHITE : COL_INK, 0);
 		}

@@ -26,6 +26,7 @@
 
 #include "../../../cfg.h"
 #include "../../../video.h"
+#include "../../../scaler.h"
 #include "../../../osd.h"
 #include "../../../hardware.h"
 #include "../../../menu.h"
@@ -1021,6 +1022,34 @@ static uint32_t grab_flat = 0;
 void harness_set_grab_flat(uint32_t argb) { grab_flat = argb; }
 
 static const char *grab_why = "not attempted";
+/*
+  The scaler's header, which the grid generator reads to learn how many output
+  pixels each source pixel is getting. There is no fabric here, so it answers
+  "nothing running" and the generator falls back to its fixed gutter - the
+  behaviour every look had before the scale-aware grid, which is what the
+  fingerprinted screens in this suite were drawn with.
+
+  harness_set_scale() lets a test say otherwise, so the scale-aware shape can be
+  asserted without a device.
+*/
+static int scaler_src_h = 0, scaler_out_h = 0;
+
+void harness_set_scale(int src_h, int out_h) { scaler_src_h = src_h; scaler_out_h = out_h; }
+
+mister_scaler *mister_scaler_init()
+{
+	if (scaler_src_h < 1) return 0;
+
+	static mister_scaler ms;
+	memset(&ms, 0, sizeof(ms));
+	ms.height = scaler_src_h;
+	ms.output_height = scaler_out_h;
+	return &ms;
+}
+
+int mister_scaler_read(mister_scaler *, unsigned char *, mister_scaler_format_t) { return -1; }
+void mister_scaler_free(mister_scaler *) {}
+
 const char *screenshot_grab_why(void) { return grab_why; }
 
 // Attempts, not successes: the blank-frame retry in ig_open() is visible only

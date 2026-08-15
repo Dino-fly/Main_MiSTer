@@ -14,6 +14,7 @@
 #include "../../file_io.h"
 #include "../../user_io.h"
 #include "../../video.h"
+#include "../../scaler.h"
 
 #define PREFIX "ClassicHome"
 #define PENDING "/tmp/classicui_preset"
@@ -219,15 +220,15 @@ static const preset_def presets[] =
 	  Pokefan531 correction, authored per model, applied before scaling. AGS-101
 	  is the backlit panel people mod their consoles towards: near-raw colour.
 	*/
-	{ "agb001", "GBA (AGB-001)", "The original unlit screen. Dim and washed out.",
+	{ "agb001", "GBA", "The original unlit screen. Dim and washed out.",
 	  F_GRID, F_GRID, "off", "off", "off", "off",
 	  "Modify Colors=GBA 2.2", CO_INTEGER, 0 },
 
-	{ "ags001", "GBA SP (AGS-001)", "Frontlit SP: brighter than AGB, still washed out.",
+	{ "ags001", "GBA SP", "Frontlit SP: brighter than AGB, still washed out.",
 	  F_GRID, F_GRID, "off", "off", "off", "off",
 	  "Modify Colors=GBA 1.6", CO_INTEGER, 0 },
 
-	{ "ags101", "GBA SP (AGS-101)", "Backlit SP: bright with proper contrast and colour.",
+	{ "ags101", "GBA SP Brighter", "Backlit SP: bright with proper contrast and colour.",
 	  F_GRID, F_GRID, "off", "off", "off", "off",
 	  "Modify Colors=Off", CO_INTEGER, 0 },
 
@@ -1125,6 +1126,33 @@ static void write_filter(const char *name, int kind, double scan_depth)
 #define GRID_DEPTH  0.42   // how dark: 0 = invisible, 1 = black
 
 /*
+  How many output pixels the scaler is currently giving each source pixel.
+
+  The grid has to know. A polyphase filter is sampled only at the phases the
+  current scale visits - N of them, evenly spaced - and a gutter narrower than
+  that spacing can fall clean between two of them and darken NOTHING. That is not
+  a theory: at 720p the Game Boy gets 5x and its grid is visible, the Game Boy
+  Advance gets exactly 4x and Dinofly reported no grid at all. The phases 4x
+  visits are 32, 96, 160 and 224 of 256, and a gutter centred on 128 spanning
+  100..156 misses every one of them. 2x and 3x miss it too.
+
+  Read from the scaler's own header rather than computed from the ini, so it is
+  the magnification actually in force, whatever the mode, the aspect and the
+  integer-scaling setting between them worked out to. 0 when there is nothing
+  running to ask about, which is the harness and the menu.
+*/
+static int vp_output_scale()
+{
+	mister_scaler *ms = mister_scaler_init();
+	if (!ms) return 0;
+
+	int n = (ms->height > 0) ? (ms->output_height / ms->height) : 0;
+	mister_scaler_free(ms);
+
+	return (n >= 2 && n <= 16) ? n : 0;
+}
+
+/*
   The reflective LCD's drop shadow, as the old distribution "LCD Effect" filters
   drew it and Dinofly remembers it: every pixel casts faintly onto the leading
   band of the next cell, down and to the right. In a linear filter that is a
@@ -1138,42 +1166,63 @@ static void write_filter(const char *name, int kind, double scan_depth)
 #define SHADOW_MIX   0.35  // how much of the previous pixel the band starts with
 #define SHADOW_DIM   0.10  // unconditional darkening at the band's start
 
-static void write_filter_grid(const char *name, int shadow)
+static void write_filter_grid(const char *name, int shadow, int scale)
 {
 	genbuf g;
 	gb_reset(&g);
 
-	gb_addf(&g, "# %s\n", GEN_MARK);
-	if (shadow)
-		gb_addf(&g, "# LCD grid: gutter %.0f%%/%.0f%%, pixel shadow %.0f%% over the leading %.0f%%\n\n",
-			GRID_GUTTER * 100, GRID_DEPTH * 100, SHADOW_MIX * 100, SHADOW_WIDTH * 100);
-	else
-		gb_addf(&g, "# LCD grid: gutter %.0f%% of the cell at %.0f%% depth\n\n",
-			GRID_GUTTER * 100, GRID_DEPTH * 100);
+	/*
+	  With the scale known, the gutter is put where a sample will actually land:
+	  one output pixel per source pixel, dark, and the rest of the cell boosted to
+	  hold the average - which is what an LCD grid is. The window is centred on the
+	  visited phase nearest the cell boundary and made a little narrower than the
+	  spacing between phases, so exactly one of them is inside it.
 
-	double half = GRID_GUTTER / 2;
+	  Without a scale (no core running, or a mode nobody can read) it falls back to
+	  the fixed 22% gutter, which is right at 5x and above and is what shipped
+	  before. See vp_output_scale().
+	*/
+	double centre = 0.5, half = GRID_GUTTER / 2;
+	double duty = GRID_GUTTER;
+
+	if (scale >= 2)
+	{
+		double step = 1.0 / scale;
+		double best = 0, bestd = 2;
+		for (int x = 0; x < scale; x++)
+		{
+			double u = ((double)x + 0.5) / scale - 0.5;
+			double frac = u - floor(u);
+			double d = fabs(frac - 0.5);
+			if (d < bestd) { bestd = d; best = frac; }
+		}
+		centre = best;
+		half = (step * 0.8) / 2;
+		duty = step;                       // one output pixel in every `scale`
+	}
+
+	gb_addf(&g, "# %s\n", GEN_MARK);
+	gb_addf(&g, "# LCD grid for %dx: one dark pixel per source pixel at %.0f%% depth%s\n\n",
+		scale ? scale : 0, GRID_DEPTH * 100, shadow ? ", with the pixel shadow" : "");
+
 	double soft = 1.0 / PHASES;                     // one-phase shoulders
-	double boost = 1.0 / (1.0 - GRID_DEPTH * GRID_GUTTER);
-	if (boost > 1.12) boost = 1.12;
+	double boost = 1.0 / (1.0 - GRID_DEPTH * duty);
+	if (boost > 1.30) boost = 1.30;
 
 	for (int p = 0; p < PHASES; p++)
 	{
 		double x = (double)p / PHASES;
-		double d = fabs(x - 0.5);
+		// Distance to the gutter's centre, the short way round the cell.
+		double d = fabs(x - centre);
+		if (d > 0.5) d = 1.0 - d;
 
 		double e = 0;                               // gutter envelope
 		if (d < half) e = 1.0;
 		else if (d < half + soft) e = 1.0 - (d - half) / soft;
 
 		double w[4] = { 0, 0, 0, 0 };
-		if (x < 0.5 - half) w[1] = 1.0;
-		else if (x > 0.5 + half) w[2] = 1.0;
-		else
-		{
-			double t = (x - (0.5 - half)) / GRID_GUTTER;
-			w[1] = 1.0 - t;
-			w[2] = t;
-		}
+		if (x < 0.5) w[1] = 1.0;
+		else w[2] = 1.0;
 
 		double gain = boost * (1.0 - GRID_DEPTH * e);
 
@@ -1183,9 +1232,9 @@ static void write_filter_grid(const char *name, int shadow)
 		  band is its first SHADOW_WIDTH, fading linearly. Mixing toward tap [1]
 		  keeps the row sum constant, so only the gain dim changes brightness.
 		*/
-		if (shadow && x > 0.5 + half)
+		if (shadow && x > 0.5)
 		{
-			double into = (x - (0.5 + half)) / (1.0 - (0.5 + half));
+			double into = (x - 0.5) / 0.5;
 			if (into < SHADOW_WIDTH)
 			{
 				double f = 1.0 - into / SHADOW_WIDTH;
@@ -1385,8 +1434,8 @@ void vp_install()
 	// The BVM's line structure: a reference monitor resolves the gaps a
 	// consumer set smears over, which on real hardware reads as deep scanlines.
 	write_filter(F_SCANDP, 0, 0.45);
-	write_filter_grid(F_GRID, 0);
-	write_filter_grid(F_GRIDSH, 1);
+	write_filter_grid(F_GRID, 0, vp_output_scale());
+	write_filter_grid(F_GRIDSH, 1, vp_output_scale());
 
 	write_mask(M_GRILLE, 0);
 	write_mask(M_MATRIX, 1);
@@ -1843,10 +1892,32 @@ void vp_arm_for_launch(int sysidx, int vclass_hint)
   The core half is status bits and a palette upload, none of which move video modes
   either.
 */
+/*
+  The grid is rebuilt for the magnification in force before any look that uses
+  one is loaded. Cheap: gen_commit() only writes when the bytes change, so this
+  is a no-op on every apply after the first at a given scale, and the file is
+  shared by every look that names it.
+*/
+static void vp_grid_for_now()
+{
+	int n = vp_output_scale();
+	if (n < 2) return;
+
+	static int last = 0;
+	if (n == last) return;
+	last = n;
+
+	printf("ClassicUI: the scaler is giving each pixel %dx, rebuilding the LCD grid\n", n);
+	write_filter_grid(F_GRID, 0, n);
+	write_filter_grid(F_GRIDSH, 1, n);
+}
+
 int vp_apply_now(int sysidx, int vclass_hint)
 {
 	int i = vp_effective(sysidx, vclass_hint);
 	if (i < 0 || i >= NPRESETS) return 0;
+
+	vp_grid_for_now();
 
 	char path[1024];
 	int analog = vp_output_is_analog();
@@ -1863,6 +1934,8 @@ void vp_apply_pending()
 {
 	FILE *f = fopen(PENDING, "rt");
 	if (!f) return;
+
+	vp_grid_for_now();
 
 	char path[1024] = {};
 	char look[128] = {};
