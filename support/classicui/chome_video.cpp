@@ -2348,20 +2348,26 @@ const uint32_t *vp_preview(int i, int w, int h, const uint32_t *ref)
 	  With a real frame, the look is applied by the scaler's own arithmetic instead
 	  of by the impression below - the same code that draws the in-game background.
 
-	  The frame has to be shrunk first, and that is not a shortcut: a polyphase
-	  filter at 1:1 is a NO-OP by construction (every output pixel lands on phase 0,
-	  which is the tap that copies), so a grid rendered over a frame already at tile
-	  size would come out invisible and the preview would be a confident lie. The
-	  television magnifies a 240p frame about four times onto a 1080p panel, so the
-	  source is reduced by four here and put back by the filter - which is the
-	  magnification the look was designed around, at the size the tile has to show it.
+	  ORDER MATTERS, and getting it wrong is what Dinofly caught: the filter has to
+	  run at the magnification the TELEVISION uses, and only then may the result be
+	  zoomed into. Filtering a frame that is already at tile size sizes every grid
+	  cell and mask stripe for a 130-pixel tile instead of for a 960-pixel picture,
+	  which is a photograph of a screen nobody owns.
+
+	  So the source is reduced to the scale the scaler sees (vp_output_scale(), one
+	  source pixel per N output pixels), the look is applied there, and the tile is
+	  a 1:1 CROP of that full-size render - the zoom, after the fact, showing the
+	  real structure at its real size. Falls back to a magnification of four when
+	  nothing is running to ask, which is about what a 240p frame gets on a 1080p
+	  panel.
 
 	  Box-averaged rather than point-sampled on the way down, so shrinking does not
 	  itself invent the aliasing the filter is then blamed for.
 	*/
 	if (ref)
 	{
-		const int z = 4;
+		int z = vp_output_scale();
+		if (z < 2) z = 4;
 		int nw = w / z, nh = h / z;
 		if (nw < 16) nw = (w < 16) ? w : 16;
 		if (nh < 16) nh = (h < 16) ? h : 16;
