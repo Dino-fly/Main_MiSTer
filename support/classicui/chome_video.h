@@ -207,6 +207,13 @@ int vp_grid_for_now(int force = 0);
 */
 int vp_output_rect(int *w, int *h);
 
+/*
+  Keep the game's own geometry current, cheaply. Called every frame; reads the
+  scaler at most once a second and never while our framebuffer owns the output,
+  because from then on the scaler is describing the menu rather than the game.
+*/
+void vp_output_watch();
+
 int vp_render_exact(int look, const uint32_t *src, int sw, int sh,
 	uint32_t *dst, int dw, int dh);
 

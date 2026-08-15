@@ -102,6 +102,8 @@ void harness_reset_grab_calls();
 // Liveness polls the front-end sent the core while computing - see the stub.
 // What the scaler reports: source height and output height, 0 = nothing running.
 void harness_set_scale(int src_h, int out_h);
+// Whether our own framebuffer owns the output, i.e. the menu has taken the screen.
+void harness_set_fb_state(int v);
 
 int harness_alive_polls();
 void harness_reset_alive_polls();

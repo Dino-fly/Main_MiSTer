@@ -370,7 +370,15 @@ int video_menu_fb_present(int n)
 void video_fb_enable(int, int) {}
 void video_loadPreset(char *, bool);
 
-int video_fb_state() { return 0; }
+/*
+  Whether OUR framebuffer owns the output. Settable, because the in-game menu's
+  background depends on it: once the takeover happens the scaler describes the
+  menu rather than the game, and the geometry the background needs has to have
+  been latched before that. A stub stuck at 0 can never show that.
+*/
+static int fb_state = 0;
+void harness_set_fb_state(int v) { fb_state = v; }
+int video_fb_state() { return fb_state; }
 
 static int scaler_visible = 1;
 void harness_set_scaler_visible(int v) { scaler_visible = v; }

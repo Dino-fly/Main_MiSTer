@@ -1191,28 +1191,63 @@ static void write_filter(const char *name, int kind, double scan_depth)
   television rather than one computed from the ini and hoped for. 0 when nothing
   is running to ask.
 */
+/*
+  What the scaler last said about the GAME, read once a second and remembered.
+
+  Two reasons it is a latch rather than a question asked when the answer is
+  wanted. The first is cost: mister_scaler_init() opens /dev/mem, maps it, reads
+  six words, unmaps, and - being upstream code with its own diagnostics - prints
+  a line every single time. Asked per frame that was sixty maps and sixty SD-card
+  writes a second, which Dinofly saw as the whole screen wobbling.
+
+  The second is that by the time the answer is wanted, it is no longer available.
+  Opening the in-game menu hands the screen to our framebuffer, and from that
+  moment the scaler is describing US - 1920x1080 - not the game. The background
+  built right after asked, believed the answer, and drew the still full-screen
+  over a game that was really in 1170x896. So the read stands down whenever our
+  framebuffer owns the output, and what is kept is the last thing the scaler said
+  while the game still had the screen.
+*/
+static int vp_out_w = 0, vp_out_h = 0, vp_src_h = 0;
+
+void vp_output_watch()
+{
+	static unsigned long next = 0;
+	if (next && !CheckTimer(next)) return;
+	next = GetTimer(1000);
+
+	if (video_fb_state()) return;          // our framebuffer, not the game's picture
+
+	/*
+	  Forgotten when there is nothing to read, rather than kept. A core that has not
+	  put a picture up yet answers the same as no core at all, and holding the last
+	  answer would draw the next game's background at the last game's size - the
+	  fallback fit is the honest thing to do when the geometry is not known.
+	*/
+	mister_scaler *ms = mister_scaler_init();
+	if (!ms)
+	{
+		vp_out_w = vp_out_h = vp_src_h = 0;
+		return;
+	}
+
+	vp_out_w = ms->output_width;
+	vp_out_h = ms->output_height;
+	vp_src_h = ms->height;
+	mister_scaler_free(ms);
+}
+
 int vp_output_rect(int *w, int *h)
 {
-	mister_scaler *ms = mister_scaler_init();
-	if (!ms) return 0;
-
-	int ow = ms->output_width, oh = ms->output_height;
-	mister_scaler_free(ms);
-
-	if (ow < 16 || oh < 16) return 0;
-	if (w) *w = ow;
-	if (h) *h = oh;
+	if (vp_out_w < 16 || vp_out_h < 16) return 0;
+	if (w) *w = vp_out_w;
+	if (h) *h = vp_out_h;
 	return 1;
 }
 
 static int vp_output_scale()
 {
-	mister_scaler *ms = mister_scaler_init();
-	if (!ms) return 0;
-
-	int n = (ms->height > 0) ? (ms->output_height / ms->height) : 0;
-	mister_scaler_free(ms);
-
+	int n = (vp_src_h > 0) ? (vp_out_h / vp_src_h) : 0;
 	return (n >= 2 && n <= 16) ? n : 0;
 }
 
@@ -1968,19 +2003,17 @@ int vp_grid_for_now(int force)
 	  Asked at most once a second, and that rate limit is the whole point of this
 	  guard rather than tidiness.
 
-	  vp_output_scale() reads the scaler's header through mister_scaler_init(),
-	  which opens /dev/mem, maps it, reads six words, unmaps and - being upstream
-	  code with its own diagnostics - prints a line every single time. Called from
-	  the per-frame poll that watches for an output change, that was sixty maps and
-	  sixty log writes a second onto the SD card, and Dinofly saw it as the whole
-	  screen wobbling vertically while the menu was up. The scale only changes when
-	  a core or a video mode does, so once a second is already far more often than
-	  the question can have a new answer.
+	  The scale comes from vp_output_watch(), which reads the scaler header at most
+	  once a second for the reasons given there; this keeps its own limit on top so
+	  that the comparison and the two file writes below are not attempted per frame
+	  either. The scale only changes when a core or a video mode does, so once a
+	  second is already far more often than the question can have a new answer.
 	*/
 	static unsigned long next_look = 0;
 	if (!force && next_look && !CheckTimer(next_look)) return 0;
 	next_look = GetTimer(1000);
 
+	vp_output_watch();
 	int n = vp_output_scale();
 	if (n < 2) return 0;
 
