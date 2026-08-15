@@ -109,6 +109,9 @@ int chome_test_core_opt(const char *spec);
 */
 int chome_test_menu();
 
+// The rectangle the in-game background's picture was drawn in, as drawn.
+int chome_test_bg_rect(int *w, int *h, int *x, int *y);
+
 
 // How many frames have painted the disc dialog - the strip opened from that
 // dialog promises to keep painting it behind itself, and a screen-id check

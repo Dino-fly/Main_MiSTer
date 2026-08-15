@@ -14836,6 +14836,16 @@ static int eat_menu_release = 0;
 */
 static int test_menu_req = 0;
 
+int chome_test_bg_rect(int *w, int *h, int *x, int *y)
+{
+	if (!ig_bg) return 0;
+	if (w) *w = ig_bg_pic_w;
+	if (h) *h = ig_bg_pic_h;
+	if (x) *x = ig_bg_pic_x;
+	if (y) *y = ig_bg_pic_y;
+	return 1;
+}
+
 int chome_test_menu()
 {
 	test_menu_req = 2;
@@ -14849,6 +14859,17 @@ int chome_handle(uint32_t key)
 		key = (test_menu_req == 2) ? KEY_MENU : (KEY_MENU | UPSTROKE);
 		test_menu_req--;
 	}
+
+	/*
+	  Keep the game's own rectangle current, whatever the look is and whether or not
+	  one is running at all. The in-game menu draws its background at that size, and
+	  by the time it needs the number our framebuffer has already taken the screen -
+	  from then on the scaler only describes us. Here rather than in chome_core_poll()
+	  because this runs on every pass through the UI, look or no look. Costs one
+	  header read a second, and nothing at all while the screen is ours: see
+	  vp_output_watch().
+	*/
+	vp_output_watch();
 
 	uint32_t igk = key & ~UPSTROKE;
 	int igpress = key && !(key & UPSTROKE);

@@ -16274,6 +16274,42 @@ static void assert_ingame()
 	for (int i = 0; i < 4; i++) { harness_advance(16); chome_handle(0); }
 	check(!chome_ingame_active(), "and closes it again");
 	/*
+	  The background is the game's own rectangle, at the game's own size.
+
+	  The scaler puts a 224-line core in 448 lines on this canvas; fitting the frame
+	  to the canvas instead gives the full 720, which is a visibly bigger picture
+	  with every scanline at a spacing the game never had - "the background image of
+	  mario is bigger than what the nes core rendered". Asking the scaler for that
+	  rectangle is only half of it: by the time the background is built, the menu's
+	  own framebuffer owns the output and the scaler answers 1080 for OUR canvas. So
+	  what is drawn has to be what the scaler said while the game still had the
+	  screen, and that is what this pins.
+	*/
+	{
+		harness_set_scale(224, 448);        // 2x on this 1280x720 canvas
+		harness_set_fb_state(0);
+		for (int i = 0; i < 3; i++) { harness_advance(1100); chome_handle(0); }
+
+		harness_set_fb_state(1);            // the takeover, as it happens on the way in
+		harness_set_scale(720, 720);        // and the scaler now describing the menu
+
+		chome_test_menu();
+		for (int i = 0; i < 4; i++) { harness_advance(16); chome_handle(0); }
+		check(chome_ingame_active(), "the menu is up over the game");
+
+		int bw = 0, bh = 0;
+		check(chome_test_bg_rect(&bw, &bh, 0, 0), "and it built a background");
+		check(bh == 448, "drawn at the height the game really has, not the canvas's");
+		check(bw == 448 * 4 / 3, "and at that width");
+
+		chome_test_menu();
+		for (int i = 0; i < 4; i++) { harness_advance(16); chome_handle(0); }
+		harness_set_fb_state(0);
+		harness_set_scale(0, 0);
+		for (int i = 0; i < 3; i++) { harness_advance(1100); chome_handle(0); }
+	}
+
+	/*
 	  And with that menu up, the background cover sweep stands down.
 
 	  It forks a curl per cover it wants, and a fork of the firmware is not cheap - so
