@@ -386,68 +386,6 @@ static inline int vp_bound(int v)
 	return (v >> 7) & 0xff;
 }
 
-/*
-  One axis. Rows are contiguous in `src`; the caller transposes between passes by
-  calling this with the buffers swapped and the dimensions exchanged, which is
-  what the fabric's line buffers amount to.
-*/
-static void vp_axis(const uint32_t *src, int sw, int rows, uint32_t *dst, int dw,
-	const vp_taps *taps)
-{
-	for (int y = 0; y < rows; y++)
-	{
-		const uint32_t *srow = src + (size_t)y * sw;
-		uint32_t *drow = dst + (size_t)y * dw;
-
-		for (int x = 0; x < dw; x++)
-		{
-			// The source position this output pixel samples, and the phase inside it.
-			double u = ((double)x + 0.5) * sw / dw - 0.5;
-			int i = (int)floor(u);
-			int ph = (int)((u - i) * VP_HW_PHASES);
-			if (ph < 0) ph = 0;
-			if (ph >= VP_HW_PHASES) ph = VP_HW_PHASES - 1;
-
-			const int *c = taps->t[ph];
-			uint32_t px[4];
-			for (int t = 0; t < 4; t++)
-			{
-				int si = i - 1 + t;
-				if (si < 0) si = 0;
-				if (si >= sw) si = sw - 1;
-				px[t] = srow[si];
-			}
-
-			uint32_t out = 0xff000000u;
-			for (int sh = 16; sh >= 0; sh -= 8)
-			{
-				int p0 = (c[0] << 7) * (int)((px[0] >> sh) & 0xff)
-				       + (c[1] << 7) * (int)((px[1] >> sh) & 0xff);
-				int p1 = (c[2] << 7) * (int)((px[2] >> sh) & 0xff)
-				       + (c[3] << 7) * (int)((px[3] >> sh) & 0xff);
-				out |= (uint32_t)vp_bound((p0 >> 8) + (p1 >> 8)) << sh;
-			}
-			drow[x] = out;
-		}
-
-		/*
-		  The running core is watched by this loop as much as by the main one. The
-		  PSX turns the firmware's CD poll into a heartbeat and parks its savestate
-		  machine when the HPS goes quiet for about 31ms, and a full-canvas pass here
-		  is several hundred milliseconds of arithmetic - long enough to have cost a
-		  player their save the first time this ran. Every few rows is far more often
-		  than the deadline needs and costs one SPI word.
-		*/
-		if (!(y & 31)) user_io_core_alive_poll();
-	}
-}
-
-static void vp_transpose(const uint32_t *src, int w, int h, uint32_t *dst)
-{
-	for (int y = 0; y < h; y++)
-		for (int x = 0; x < w; x++)
-			dst[(size_t)x * h + y] = src[(size_t)y * w + x];
-}
 
 /*
   The shadow mask, as sys/shadowmask.sv applies it.
@@ -541,7 +479,66 @@ static inline int vp_mask_mul(int ch, int mul)
 	return (s > 255) ? 255 : s;
 }
 
-static void vp_apply_mask(uint32_t *px, int w, int h, const vp_mask *m, int twox)
+
+/*
+  A WINDOW of the full-size render, computed without rendering the rest.
+
+  The preview needs a 1:1 crop of the picture as the television draws it - filter
+  first at the television's magnification, zoom afterwards - and rendering a whole
+  960x640 frame per tile only to throw away nine tenths of it would cost six
+  full-canvas passes every time the cursor moves. A polyphase is separable and each
+  output pixel reads four source pixels, so a window can be computed on its own:
+  only the source rows the window reaches go through the horizontal pass.
+
+  Written to be fast enough to sit in a menu open, which the first version was not:
+  the per-pixel work is a table lookup and twelve multiplies, with the sampling plan
+  for each axis computed ONCE rather than per pixel (a floor and a divide per pixel
+  per row is most of a full-canvas pass), and the vertical stage reading the
+  horizontal stage's rows directly instead of transposing the frame twice.
+
+  x0,y0,w,h are in the coordinates of the virtual dw x dh output.
+*/
+struct vp_plan { int s[4]; const int *c; };
+
+static void vp_plan_axis(int sw, int dw, int x0, int n, const vp_taps *taps,
+	int soff, vp_plan *out)
+{
+	for (int x = 0; x < n; x++)
+	{
+		double u = ((double)(x0 + x) + 0.5) * sw / dw - 0.5;
+		int i = (int)floor(u);
+		int ph = (int)((u - i) * VP_HW_PHASES);
+		if (ph < 0) ph = 0;
+		if (ph >= VP_HW_PHASES) ph = VP_HW_PHASES - 1;
+
+		for (int t = 0; t < 4; t++)
+		{
+			int si = i - 1 + t - soff;
+			if (si < 0) si = 0;
+			if (si >= sw - soff) si = sw - soff - 1;
+			out[x].s[t] = si;
+		}
+		out[x].c = taps->t[ph];
+	}
+}
+
+static inline uint32_t vp_tap4(const uint32_t p[4], const int *c)
+{
+	uint32_t out = 0xff000000u;
+	for (int sh8 = 16; sh8 >= 0; sh8 -= 8)
+	{
+		int a = (c[0] << 7) * (int)((p[0] >> sh8) & 0xff)
+		      + (c[1] << 7) * (int)((p[1] >> sh8) & 0xff);
+		int b = (c[2] << 7) * (int)((p[2] >> sh8) & 0xff)
+		      + (c[3] << 7) * (int)((p[3] >> sh8) & 0xff);
+		out |= (uint32_t)vp_bound((a >> 8) + (b >> 8)) << sh8;
+	}
+	return out;
+}
+
+// The mask rides absolute output pixels, so a window has to say where it starts.
+static void vp_apply_mask_at(uint32_t *px, int w, int h, int x0, int y0,
+	const vp_mask *m, int twox)
 {
 	int step = twox ? 2 : 1;
 
@@ -549,13 +546,13 @@ static void vp_apply_mask(uint32_t *px, int w, int h, const vp_mask *m, int twox
 	{
 		for (int x = 0; x < w; x++)
 		{
-			const uint8_t *mul = m->mul[(y / step) % m->h][(x / step) % m->w];
+			const uint8_t *mul = m->mul[((y0 + y) / step) % m->h][((x0 + x) / step) % m->w];
 			uint32_t c = px[(size_t)y * w + x];
 			uint32_t o = 0xff000000u;
 			for (int ch = 0; ch < 3; ch++)
 			{
-				int sh = 16 - ch * 8;
-				o |= (uint32_t)vp_mask_mul((int)((c >> sh) & 0xff), mul[ch]) << sh;
+				int sh8 = 16 - ch * 8;
+				o |= (uint32_t)vp_mask_mul((int)((c >> sh8) & 0xff), mul[ch]) << sh8;
 			}
 			px[(size_t)y * w + x] = o;
 		}
@@ -563,11 +560,11 @@ static void vp_apply_mask(uint32_t *px, int w, int h, const vp_mask *m, int twox
 	}
 }
 
-int vp_render_exact(int look, const uint32_t *src, int sw, int sh,
-	uint32_t *dst, int dw, int dh)
+int vp_render_exact_rect(int look, const uint32_t *src, int sw, int sh,
+	int dw, int dh, int x0, int y0, int w, int h, uint32_t *dst)
 {
 	if (look < 0 || look >= NPRESETS) return 0;
-	if (!src || !dst || sw < 1 || sh < 1 || dw < 1 || dh < 1) return 0;
+	if (!src || !dst || sw < 1 || sh < 1 || dw < 1 || dh < 1 || w < 1 || h < 1) return 0;
 
 	const preset_def *d = &presets[look];
 
@@ -578,12 +575,9 @@ int vp_render_exact(int look, const uint32_t *src, int sw, int sh,
 	vp_mask mask;
 	int have_mask = vp_load_mask(d->mask, &mask);
 
-	// Nothing of this look lives in the scaler: None, or one whose whole effect is
-	// core-side. The caller draws the frame as captured rather than pretending.
 	if (!have_h && !have_v && !have_mask) return 0;
 
-	// Nearest is what an axis with no filter of its own gets, which is what the
-	// Sharp look asks the scaler for and what the others leave alone.
+	// What an axis with no filter of its own gets, which is what Sharp asks for.
 	vp_taps nearest;
 	memset(&nearest, 0, sizeof(nearest));
 	for (int p = 0; p < VP_HW_PHASES; p++)
@@ -593,27 +587,68 @@ int vp_render_exact(int look, const uint32_t *src, int sw, int sh,
 	}
 	nearest.ok = 1;
 
-	uint32_t *hbuf = (uint32_t*)malloc((size_t)dw * sh * 4);
-	uint32_t *tbuf = (uint32_t*)malloc((size_t)dw * sh * 4);
-	uint32_t *vbuf = (uint32_t*)malloc((size_t)dh * dw * 4);
-	if (!hbuf || !tbuf || !vbuf)
+	// The source rows this window reaches: the taps around its first and last rows.
+	double u0 = ((double)y0 + 0.5) * sh / dh - 0.5;
+	double u1 = ((double)(y0 + h - 1) + 0.5) * sh / dh - 0.5;
+	int r0 = (int)floor(u0) - 1, r1 = (int)floor(u1) + 2;
+	if (r0 < 0) r0 = 0;
+	if (r1 > sh - 1) r1 = sh - 1;
+	int rows = r1 - r0 + 1;
+
+	vp_plan *hp = (vp_plan*)malloc(sizeof(vp_plan) * w);
+	vp_plan *vp = (vp_plan*)malloc(sizeof(vp_plan) * h);
+	uint32_t *hbuf = (uint32_t*)malloc((size_t)w * rows * 4);
+	if (!hp || !vp || !hbuf) { free(hp); free(vp); free(hbuf); return 0; }
+
+	vp_plan_axis(sw, dw, x0, w, have_h ? &hf : &nearest, 0, hp);
+	vp_plan_axis(sh, dh, y0, h, have_v ? &vf : &nearest, r0, vp);
+
+	for (int y = 0; y < rows; y++)
 	{
-		free(hbuf); free(tbuf); free(vbuf);
-		return 0;
+		const uint32_t *srow = src + (size_t)(r0 + y) * sw;
+		uint32_t *drow = hbuf + (size_t)y * w;
+		for (int x = 0; x < w; x++)
+		{
+			const vp_plan *pl = &hp[x];
+			uint32_t px[4] = { srow[pl->s[0]], srow[pl->s[1]], srow[pl->s[2]], srow[pl->s[3]] };
+			drow[x] = vp_tap4(px, pl->c);
+		}
+		if (!(y & 31)) user_io_core_alive_poll();
 	}
 
-	// Horizontal, then the same routine down the columns of the result.
-	vp_axis(src, sw, sh, hbuf, dw, have_h ? &hf : &nearest);
-	vp_transpose(hbuf, dw, sh, tbuf);
-	vp_axis(tbuf, sh, dw, vbuf, dh, have_v ? &vf : &nearest);
-	vp_transpose(vbuf, dh, dw, dst);
+	for (int y = 0; y < h; y++)
+	{
+		const vp_plan *pl = &vp[y];
+		const uint32_t *r[4];
+		for (int t = 0; t < 4; t++)
+		{
+			int idx = pl->s[t];
+			if (idx < 0) idx = 0;
+			if (idx > rows - 1) idx = rows - 1;
+			r[t] = hbuf + (size_t)idx * w;
+		}
 
-	// The mask rides the OUTPUT pixels, which is where the fabric applies it too.
+		uint32_t *drow = dst + (size_t)y * w;
+		for (int x = 0; x < w; x++)
+		{
+			uint32_t px[4] = { r[0][x], r[1][x], r[2][x], r[3][x] };
+			drow[x] = vp_tap4(px, pl->c);
+		}
+		if (!(y & 31)) user_io_core_alive_poll();
+	}
+
 	if (have_mask)
-		vp_apply_mask(dst, dw, dh, &mask, d->maskmode && !strcasecmp(d->maskmode, "2x"));
+		vp_apply_mask_at(dst, w, h, x0, y0, &mask,
+			d->maskmode && !strcasecmp(d->maskmode, "2x"));
 
-	free(hbuf); free(tbuf); free(vbuf);
+	free(hp); free(vp); free(hbuf);
 	return 1;
+}
+
+int vp_render_exact(int look, const uint32_t *src, int sw, int sh,
+	uint32_t *dst, int dw, int dh)
+{
+	return vp_render_exact_rect(look, src, sw, sh, dw, dh, 0, 0, dw, dh, dst);
 }
 
 int vp_count() { return NPRESETS; }
@@ -1898,7 +1933,7 @@ void vp_arm_for_launch(int sysidx, int vclass_hint)
   is a no-op on every apply after the first at a given scale, and the file is
   shared by every look that names it.
 */
-static int vp_grid_for_now()
+int vp_grid_for_now()
 {
 	int n = vp_output_scale();
 	if (n < 2) return 0;
@@ -2342,10 +2377,11 @@ static void src_pixel(const uint32_t *ref, int x, int y, int w, int h, uint8_t o
 	out[2] = (uint8_t)(c & 0xff);
 }
 
-const uint32_t *vp_preview(int i, int w, int h, const uint32_t *ref)
+const uint32_t *vp_preview(int i, int w, int h, const uint32_t *ref, int sw_native, int sh_native)
 {
 	if (i < 0 || i >= NPRESETS || w < 8 || h < 8) return 0;
 	if (pv_buf && pv_idx == i && pv_w == w && pv_h == h && pv_ref == ref) return pv_buf;
+	if (ref && (sw_native < 1 || sh_native < 1)) ref = 0;
 
 	if (!pv_buf || pv_w != w || pv_h != h)
 	{
@@ -2379,85 +2415,86 @@ const uint32_t *vp_preview(int i, int w, int h, const uint32_t *ref)
 	double gba_g = pv_gba_gamma(i);
 
 	/*
-	  With a real frame, the look is applied by the scaler's own arithmetic instead
-	  of by the impression below - the same code that draws the in-game background.
+	  With a real frame, the look is applied by the scaler's own arithmetic - the
+	  same code that draws the in-game background - and the tile is a 1:1 CROP of
+	  that render. Filter at the size the television draws, zoom afterwards.
 
-	  ORDER MATTERS, and getting it wrong is what Dinofly caught: the filter has to
-	  run at the magnification the TELEVISION uses, and only then may the result be
-	  zoomed into. Filtering a frame that is already at tile size sizes every grid
-	  cell and mask stripe for a 130-pixel tile instead of for a 960-pixel picture,
-	  which is a photograph of a screen nobody owns.
-
-	  So the source is reduced to the scale the scaler sees (vp_output_scale(), one
-	  source pixel per N output pixels), the look is applied there, and the tile is
-	  a 1:1 CROP of that full-size render - the zoom, after the fact, showing the
-	  real structure at its real size. Falls back to a magnification of four when
-	  nothing is running to ask, which is about what a 240p frame gets on a 1080p
-	  panel.
-
-	  Box-averaged rather than point-sampled on the way down, so shrinking does not
-	  itself invent the aliasing the filter is then blamed for.
+	  The frame arrives at its NATIVE resolution and is resampled exactly once, on
+	  the way out. The version before this took a frame that had already been
+	  magnified to tile size, shrank it back down and blew it up again: two lossy
+	  passes, which is why Dinofly said the Sharp tile looked nothing like the core's
+	  own sharp pixels - it was a box-average of a magnification. Sharp asks the
+	  scaler for no filter at all, so here it is nearest-neighbour from the native
+	  pixels, which is exactly what square pixels are.
 	*/
 	if (ref)
 	{
-		int z = vp_output_scale();
-		if (z < 2) z = 4;
-		int nw = w / z, nh = h / z;
-		if (nw < 16) nw = (w < 16) ? w : 16;
-		if (nh < 16) nh = (h < 16) ? h : 16;
+		int n = vp_output_scale();
+		if (n < 2) n = 4;                       // nothing running to ask: a 1080p-ish guess
 
-		uint32_t *small = (uint32_t*)malloc((size_t)nw * nh * 4);
-		if (small)
+		// The virtual picture the television would be drawing, and the window of it
+		// this tile shows, centred.
+		int vw = sw_native * n, vh = sh_native * n;
+		while ((vw < w || vh < h) && n < 16) { n++; vw = sw_native * n; vh = sh_native * n; }
+
+		int cw = (w < vw) ? w : vw;
+		int ch2 = (h < vh) ? h : vh;
+		int x0 = (vw - cw) / 2, y0 = (vh - ch2) / 2;
+
+		// The core's half first, on the native pixels, because the core colours the
+		// picture the scaler then filters - the order the hardware runs them in.
+		uint32_t *coloured = (uint32_t*)malloc((size_t)sw_native * sh_native * 4);
+		if (coloured)
 		{
-			for (int y = 0; y < nh; y++)
+			for (int y = 0; y < sh_native; y++)
 			{
-				for (int x = 0; x < nw; x++)
+				for (int x = 0; x < sw_native; x++)
 				{
-					int x0 = (x * w) / nw, x1 = ((x + 1) * w) / nw;
-					int y0 = (y * h) / nh, y1 = ((y + 1) * h) / nh;
-					if (x1 <= x0) x1 = x0 + 1;
-					if (y1 <= y0) y1 = y0 + 1;
+					uint32_t p = ref[(size_t)y * sw_native + x];
+					uint8_t c[3] = { (uint8_t)((p >> 16) & 0xff), (uint8_t)((p >> 8) & 0xff),
+						(uint8_t)(p & 0xff) };
 
-					int acc[3] = { 0, 0, 0 }, n = 0;
-					for (int sy = y0; sy < y1 && sy < h; sy++)
-					{
-						for (int sx = x0; sx < x1 && sx < w; sx++)
-						{
-							uint32_t c = ref[(size_t)sy * w + sx];
-							acc[0] += (c >> 16) & 0xff;
-							acc[1] += (c >> 8) & 0xff;
-							acc[2] += c & 0xff;
-							n++;
-						}
-					}
-					if (!n) n = 1;
-
-					uint8_t c[3] = { (uint8_t)(acc[0] / n), (uint8_t)(acc[1] / n), (uint8_t)(acc[2] / n) };
-
-					// The core's half first, because the core colours the picture the
-					// scaler then filters - the order the hardware runs them in.
 					for (int k = 0; k < 3; k++) c[k] = lut[k][c[k]];
 					if (pal) pv_apply_palette(pal, c);
 					else if (gba_g > 0) pv_apply_gba(gba_g, c);
 
-					small[(size_t)y * nw + x] = 0xff000000u | (c[0] << 16) | (c[1] << 8) | c[2];
+					coloured[(size_t)y * sw_native + x] =
+						0xff000000u | (c[0] << 16) | (c[1] << 8) | c[2];
 				}
 			}
 
-			if (vp_render_exact(i, small, nw, nh, pv_buf, w, h))
+			uint32_t *win = (uint32_t*)malloc((size_t)cw * ch2 * 4);
+			if (win)
 			{
-				free(small);
+				if (!vp_render_exact_rect(i, coloured, sw_native, sh_native,
+					vw, vh, x0, y0, cw, ch2, win))
+				{
+					/*
+					  Nothing of this look lives in the scaler - Sharp, None - so the
+					  window IS the native pixels repeated, which is the picture a
+					  scaler with no filter puts on the screen.
+					*/
+					for (int y = 0; y < ch2; y++)
+						for (int x = 0; x < cw; x++)
+							win[(size_t)y * cw + x] =
+								coloured[(size_t)((y0 + y) / n) * sw_native + ((x0 + x) / n)];
+				}
+
+				// Centre the window in the tile; a tile larger than the render (a
+				// tiny core, a huge tile) keeps the surround rather than stretching.
+				int ox = (w - cw) / 2, oy = (h - ch2) / 2;
+				for (int y = 0; y < h; y++)
+					for (int x = 0; x < w; x++)
+						pv_buf[(size_t)y * w + x] = 0xff000000u;
+
+				for (int y = 0; y < ch2; y++)
+					memcpy(pv_buf + (size_t)(oy + y) * w + ox, win + (size_t)y * cw, (size_t)cw * 4);
+
+				free(win);
+				free(coloured);
 				return pv_buf;
 			}
-
-			// Nothing of this look lives in the scaler, so the coloured frame IS the
-			// preview - put it back at tile size and stop.
-			for (int y = 0; y < h; y++)
-				for (int x = 0; x < w; x++)
-					pv_buf[(size_t)y * w + x] = small[(size_t)(y * nh / h) * nw + (x * nw / w)];
-
-			free(small);
-			return pv_buf;
+			free(coloured);
 		}
 	}
 
