@@ -1196,9 +1196,10 @@ static void write_filter(const char *name, int kind, double scan_depth)
 
   Two reasons it is a latch rather than a question asked when the answer is
   wanted. The first is cost: mister_scaler_init() opens /dev/mem, maps it, reads
-  six words, unmaps, and - being upstream code with its own diagnostics - prints
-  a line every single time. Asked per frame that was sixty maps and sixty SD-card
-  writes a second, which Dinofly saw as the whole screen wobbling.
+  six words and unmaps - and, until it was asked not to, printed two lines of
+  diagnostics while it was at it. Asked per frame that was sixty maps and a
+  hundred and twenty SD-card writes a second, which Dinofly saw as the whole
+  screen wobbling. Quiet now, but sixty maps a second is still sixty too many.
 
   The second is that by the time the answer is wanted, it is no longer available.
   Opening the in-game menu hands the screen to our framebuffer, and from that
@@ -1224,7 +1225,9 @@ void vp_output_watch()
 	  answer would draw the next game's background at the last game's size - the
 	  fallback fit is the honest thing to do when the geometry is not known.
 	*/
+	mister_scaler_quiet(1);
 	mister_scaler *ms = mister_scaler_init();
+	mister_scaler_quiet(0);
 	if (!ms)
 	{
 		vp_out_w = vp_out_h = vp_src_h = 0;

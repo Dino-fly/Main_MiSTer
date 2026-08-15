@@ -31,6 +31,13 @@ typedef struct {
 #define MISTER_SCALER_BASEADDR     0x20000000
 #define MISTER_SCALER_BUFFERSIZE   2048*3*1024
 
+/*
+  Silence mister_scaler_init()'s two per-call diagnostics. For callers that read
+  the header on a timer rather than because a player asked for something - see the
+  note at the top of scaler.cpp. Off by default.
+*/
+void mister_scaler_quiet(int on);
+
 mister_scaler *mister_scaler_init();
 int mister_scaler_read(mister_scaler *,unsigned char *buffer, mister_scaler_format_t format = ARGB32);
 void mister_scaler_free(mister_scaler *);

@@ -35,6 +35,20 @@ const int VEC_WIDTH = 16;
 #include "profiling.h"
 #endif
 
+/*
+  The two printf()s below are upstream's own diagnostics, and they run on every
+  single call: a 16-byte hex dump and a line of geometry. That was fine when the
+  only caller was a screenshot the player asked for. Classic Home reads the same
+  header once a second to learn how large the scaler is drawing the game, and two
+  log lines a second is a write to the SD card a second, which Dinofly saw as the
+  picture wobbling while the menu was up.
+
+  So they can be silenced by the caller that repeats. Off by default, so every
+  upstream path prints exactly what it printed before.
+*/
+static int ms_quiet = 0;
+void mister_scaler_quiet(int on) { ms_quiet = on; }
+
 mister_scaler * mister_scaler_init()
 {
     mister_scaler *ms = (mister_scaler *)calloc(1, sizeof(mister_scaler));
@@ -54,7 +68,7 @@ mister_scaler * mister_scaler_init()
         return NULL;
     }
     buffer = (unsigned char *)(ms->map+ms->map_off);
-    printf (" 1: %02X %02X %02X %02X   %02X %02X %02X %02X   %02X %02X %02X %02X   %02X %02X %02X %02X\n",
+    if (!ms_quiet) printf (" 1: %02X %02X %02X %02X   %02X %02X %02X %02X   %02X %02X %02X %02X   %02X %02X %02X %02X\n",
             buffer[0],buffer[1],buffer[2],buffer[3],buffer[4],buffer[5],buffer[6],buffer[7],
             buffer[8],buffer[9],buffer[10],buffer[11],buffer[12],buffer[13],buffer[14],buffer[15]);
     if (buffer[0]!=1 || buffer[1]!=1) {
@@ -70,7 +84,7 @@ mister_scaler * mister_scaler_init()
     ms->output_width =buffer[12]<<8 | buffer[13];
     ms->output_height=buffer[14]<<8 | buffer[15];
 
-    printf ("Image: Width=%i Height=%i  Line=%i  Header=%i output_width=%i output_height=%i \n",ms->width,ms->height,ms->line,ms->header,ms->output_width,ms->output_height);
+    if (!ms_quiet) printf ("Image: Width=%i Height=%i  Line=%i  Header=%i output_width=%i output_height=%i \n",ms->width,ms->height,ms->line,ms->header,ms->output_width,ms->output_height);
    /*
     printf (" 1: %02X %02X %02X %02X   %02X %02X %02X %02X   %02X %02X %02X %02X   %02X %02X %02X %02X\n",
             buffer[0],buffer[1],buffer[2],buffer[3],buffer[4],buffer[5],buffer[6],buffer[7],
