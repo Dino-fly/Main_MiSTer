@@ -11519,9 +11519,9 @@ static void assert_video()
 
 	// The handheld curves must actually differ from one another.
 	{
-		const uint32_t *a = vp_preview(vp_default_for(VC_GB), 160, 120, 0);
+		const uint32_t *a = vp_preview(vp_default_for(VC_GB), 160, 120, 0, 0, 0);
 		uint32_t first_gb = a ? a[0] : 0;
-		const uint32_t *b2 = vp_preview(vp_default_for(VC_GBA), 160, 120, 0);
+		const uint32_t *b2 = vp_preview(vp_default_for(VC_GBA), 160, 120, 0, 0, 0);
 		uint32_t first_gba = b2 ? b2[0] : 0;
 		check(first_gb != first_gba, "DMG and AGB previews are not identical");
 	}
@@ -11554,7 +11554,7 @@ static void assert_video()
 	}
 
 	// Previews must render at any size.
-	const uint32_t *pv = vp_preview(1, 320, 240, 0);
+	const uint32_t *pv = vp_preview(1, 320, 240, 0, 0, 0);
 	check(pv != 0, "preview renders");
 	int varied = 0;
 	if (pv) for (int i = 1; i < 320 * 240; i++) if (pv[i] != pv[0]) { varied = 1; break; }
@@ -11563,14 +11563,21 @@ static void assert_video()
 	// A real reference frame must actually change the preview, and the look must
 	// still be applied on top of it rather than the frame being passed through.
 	{
+		/*
+		  A NATIVE frame, which is what a preview now takes: the look is applied at
+		  the television's magnification and the tile is a crop of that, so handing
+		  it an already-magnified picture would be handing it the wrong scale. 80x60
+		  stands in for a core's own frame.
+		*/
 		int n2 = 320 * 240;
-		uint32_t *ref = (uint32_t*)malloc(n2 * 4);
-		for (int i = 0; i < n2; i++) ref[i] = 0xff4080c0;      // flat mid blue
+		int rw = 80, rh = 60;
+		uint32_t *ref = (uint32_t*)malloc((size_t)rw * rh * 4);
+		for (int i = 0; i < rw * rh; i++) ref[i] = 0xff4080c0;      // flat mid blue
 
-		const uint32_t *synth = vp_preview(P_TEST_DMG, 320, 240, 0);
+		const uint32_t *synth = vp_preview(P_TEST_DMG, 320, 240, 0, 0, 0);
 		uint32_t s0 = synth ? synth[0] : 0;
 
-		const uint32_t *over = vp_preview(P_TEST_DMG, 320, 240, ref);
+		const uint32_t *over = vp_preview(P_TEST_DMG, 320, 240, ref, rw, rh);
 		check(over != 0, "preview renders over a reference frame");
 
 		int differs = 0;

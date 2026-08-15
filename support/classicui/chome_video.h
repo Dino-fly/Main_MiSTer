@@ -172,7 +172,13 @@ int  vp_lookshot_path(int i, char *out, int len);
   buffer at MISTER_SCALER_BASEADDR holds the core's frame *before* scaling). So the
   content is real, the effect is simulated.
 */
-const uint32_t *vp_preview(int i, int w, int h, const uint32_t *ref);
+/*
+  A preview tile: the look over the player's own frame, or over a test pattern when
+  there is none. `ref` is the core's frame at its NATIVE resolution (sw_native x
+  sh_native) - not a magnified crop, because the look is applied at the television's
+  magnification and the tile is a 1:1 crop of that. Pass 0 for the pattern.
+*/
+const uint32_t *vp_preview(int i, int w, int h, const uint32_t *ref, int sw_native, int sh_native);
 
 /*
   A captured frame, put through the scaler's own arithmetic for this look, so the
@@ -184,8 +190,24 @@ const uint32_t *vp_preview(int i, int w, int h, const uint32_t *ref);
   is. Costs a full-canvas pass of integer arithmetic: fine once when a menu opens,
   not fine every frame.
 */
+/*
+  Rebuild the LCD grid for the magnification the scaler is giving right now, if it
+  has changed. Returns 1 when the file was rewritten. Cheap and idempotent: the
+  generator only writes when the bytes differ.
+*/
+int vp_grid_for_now();
+
 int vp_render_exact(int look, const uint32_t *src, int sw, int sh,
 	uint32_t *dst, int dw, int dh);
+
+/*
+  The same, for one window of a virtual dw x dh render - which is what a preview
+  tile is: the look applied at the magnification the television uses, then cropped
+  1:1. Only the source rows the window reaches are touched, so a tile costs its own
+  pixels rather than a full frame.
+*/
+int vp_render_exact_rect(int look, const uint32_t *src, int sw, int sh,
+	int dw, int dh, int x0, int y0, int w, int h, uint32_t *dst);
 
 /* --------------------------------------------------- the analog output ----- */
 
