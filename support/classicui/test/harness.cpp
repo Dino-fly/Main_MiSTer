@@ -10978,7 +10978,7 @@ static void assert_video()
 
 	// The looks whose colour the core owns must not fight it with scaler gamma.
 	{
-		const char *inis[] = { "Game Boy DMG", "Game Boy Pocket", "GBA (AGB-001)", "GBA SP (AGS-101)" };
+		const char *inis[] = { "Game Boy DMG", "Game Boy Pocket", "GBA", "GBA SP Brighter" };
 		for (int k = 0; k < 4; k++)
 		{
 			char p[1024];
@@ -11098,7 +11098,19 @@ static void assert_video()
 	check(strstr(vp_name(vp_default_for(VC_CONSOLE)), "PVM") != 0, "consoles default to a PVM look");
 	check(strstr(vp_name(vp_default_for(VC_VGA)), "VGA") != 0, "VGA machines default to no scanlines");
 	check(strstr(vp_name(vp_default_for(VC_GB)), "DMG") != 0, "Game Boy defaults to the DMG look");
-	check(strstr(vp_name(vp_default_for(VC_GBA)), "AGB-001") != 0, "GBA defaults to the original unlit screen");
+	/*
+	  The names carry no model numbers now - Dinofly asked for "GBA", "GBA SP" and
+	  "GBA SP Brighter", because AGB-001 and AGS-101 are catalogue numbers rather
+	  than anything a player recognises. The default is still the unlit original,
+	  which is the FIRST option of the class, so ask that rather than matching a
+	  name that is now a prefix of two others.
+	*/
+	{
+		int gopts[VP_MAX_OPTIONS];
+		vp_options_for(VC_GBA, gopts);
+		check(vp_default_for(VC_GBA) == gopts[0] && !strcmp(vp_name(gopts[0]), "GBA"),
+			"GBA defaults to the original unlit screen");
+	}
 	check(vp_default_for(VC_GBC) != vp_default_for(VC_GBA), "GBC and GBA differ");
 
 	// The looks offered must be constrained to the hardware in question.
@@ -11164,11 +11176,11 @@ static void assert_video()
 		int have001 = 0, haveS001 = 0, haveS101 = 0;
 		for (int i = 0; i < n_gba; i++)
 		{
-			if (strstr(vp_name(opts[i]), "AGB-001")) have001 = 1;
-			if (strstr(vp_name(opts[i]), "AGS-001")) haveS001 = 1;
-			if (strstr(vp_name(opts[i]), "AGS-101")) haveS101 = 1;
+			if (!strcmp(vp_name(opts[i]), "GBA")) have001 = 1;
+			if (!strcmp(vp_name(opts[i]), "GBA SP")) haveS001 = 1;
+			if (!strcmp(vp_name(opts[i]), "GBA SP Brighter")) haveS101 = 1;
 		}
-		check(have001 && haveS001 && haveS101, "AGB-001, AGS-001 and AGS-101 all present");
+		check(have001 && haveS001 && haveS101, "the three GBA screens are all present");
 	}
 
 	// A GBC cart in the Game Boy core must resolve to the GBC class, not DMG.
@@ -11453,7 +11465,7 @@ static void assert_video()
 		struct { const char *name; int gamma; } tw[] =
 		{
 			{ "Game Boy DMG", 0 }, { "Game Boy Pocket", 0 }, { "Game Boy Color", 0 },
-			{ "GBA (AGB-001)", 0 }, { "Game Gear", 1 }, { "WonderSwan", 1 },
+			{ "GBA", 0 }, { "Game Gear", 1 }, { "WonderSwan", 1 },
 		};
 
 		for (int k = 0; k < (int)(sizeof(tw) / sizeof(tw[0])); k++)
@@ -12319,6 +12331,48 @@ static int sel_bar_y()
 	return -1;
 }
 
+/*
+  Open a menu-bar screen by which screen it is, wherever it sits on the bar.
+
+  Written as a walk that asks each slot what it opened, because the positional
+  version - six presses right, then A, with the comment "the last bar entry" -
+  was correct until the bar was reordered and then silently opened Power while
+  five sections went on testing the core's options through it. Every check after
+  it still passed: they read the option table rather than the screen.
+
+  Assumes the bar is already open. Leaves the core screen up and returns 1, or
+  returns 0 having walked the whole bar.
+*/
+static int open_bar_screen(int want)
+{
+	/*
+	  Each attempt starts from the shelf, opens the bar, and walks right to the slot
+	  under test. That looks long-winded next to "press escape and try the next one",
+	  and it is not: escape from some screens (the core's options among them) backs
+	  out to the SHELF rather than to the bar, so the tidy version pressed A on a
+	  game card and launched it - the walk here first reported screen 9, SCR_LAUNCH,
+	  which is a test quietly starting a core rather than opening a menu.
+	*/
+	for (int i = 0; i < 6; i++)
+	{
+		for (int k = 0; k < 4 && chome_screen_id() != 0; k++) press(KEY_ESC, 10);
+		if (chome_screen_id() != 0) return 0;
+
+		press(KEY_UP, 12);
+		for (int k = 0; k < i; k++) press(KEY_RIGHT, 8);
+		press(KEY_ENTER, 18);
+		frame(8);
+
+		if (chome_screen_id() == want) return 1;
+	}
+	return 0;
+}
+
+// The two the sections below reach for. The ids are SCR_CORE and SCR_OPTIONS;
+// the named enum lives further down this file.
+static int open_core_options()  { return open_bar_screen(16); }
+static int open_options_panel() { return open_bar_screen(5); }
+
 static void assert_core_options_screen()
 {
 	printf("\n== the core's own options ==\n");
@@ -12366,11 +12420,16 @@ static void assert_core_options_screen()
 	*/
 	press(KEY_UP, 14);
 	unsigned long bar = harness_fb_hash(0, 60);
-	for (int i = 0; i < 6; i++) press(KEY_RIGHT, 8);   // walk to the last bar entry
-	frame(8);
-	check(harness_fb_hash(0, 60) != bar, "the bar has an entry for the running core");
-
-	press(KEY_ENTER, 18);
+	/*
+	  Walked to by identity, not by position. This said "walk to the last bar entry"
+	  and was right until the bar was reordered - the running core leads it now - at
+	  which point six presses right landed on Power and every check below tested the
+	  wrong screen. bar_slot_opens() opens a slot and says which screen it got, so
+	  the walk stops when it is on the core's own options whatever slot they occupy.
+	*/
+	int on_core = open_core_options();
+	check(on_core, "the bar has an entry for the running core");
+	check(harness_fb_hash(0, 60) != bar, "and opening it changed the screen");
 	frame(10);
 	/*
 	  Named for what it is. The fixture is a synthetic core carrying options borrowed from
@@ -13137,8 +13196,7 @@ static void assert_per_game_core_options()
 	check(chome_ingame_active(), "the menu is up over the running game");
 
 	press(KEY_UP, 14);
-	for (int i = 0; i < 6; i++) press(KEY_RIGHT, 8);
-	press(KEY_ENTER, 18);
+	open_core_options();
 	frame(10);
 
 	/*
@@ -13285,8 +13343,7 @@ static void assert_per_game_core_options()
 	check(core_opts_bound_game() == 0, "with no game to keep settings for");
 
 	press(KEY_UP, 14);
-	for (int i = 0; i < 6; i++) press(KEY_RIGHT, 8);
-	press(KEY_ENTER, 18);
+	open_core_options();
 	frame(10);
 
 	saves = harness_cfg_saves();
@@ -13433,8 +13490,7 @@ static void assert_core_option_for_all_games()
 	check(chome_ingame_active(), "the menu is up over the running game");
 
 	press(KEY_UP, 14);
-	for (int i = 0; i < 6; i++) press(KEY_RIGHT, 8);
-	press(KEY_ENTER, 18);
+	open_core_options();
 	frame(10);
 
 	const core_opt *pal = core_opt_tier_at(CO_TIER_PICTURE, 0);
@@ -13610,8 +13666,7 @@ static void assert_core_options_are_reachable()
 	check(chome_ingame_active(), "the menu is up over the running game");
 
 	press(KEY_UP, 14);                     // menu bar
-	press(KEY_RIGHT, 12);                  // Options
-	press(KEY_ENTER, 18);
+	check(open_options_panel(), "Options opens from the bar");
 	frame(8);
 
 	/*
@@ -13820,11 +13875,16 @@ static int opt_foot_ink_rows(uint32_t want)
 
 // Walks into Options from the shelf or from a running game. Display drops out of the menu
 // bar at 240p, so Options is the first entry there and the second everywhere else.
+/*
+  Open Options, wherever the bar keeps it. The count of rights used to be one -
+  Display led the bar and Options sat beside it - and both facts changed when the
+  running core took the front and Power the back, so it is asked for by screen id
+  now. The low profile is the exception it always was: its bar has fewer entries,
+  and open_bar_screen() walks whatever is there.
+*/
 static void opt_open()
 {
-	press(KEY_UP, 14);
-	if (theme_get()->id != PROF_LO) press(KEY_RIGHT, 10);
-	press(KEY_ENTER, 16);
+	open_options_panel();
 	frame(8);
 }
 
@@ -14275,9 +14335,16 @@ static void assert_close_game_on_the_bar()
 		printf("  in-game bar opens: %d %d %d %d %d %d\n",
 			ids[0], ids[1], ids[2], ids[3], ids[4], ids[5]);
 
-		check(ids[0] == S_DISPLAY_T && ids[1] == S_OPTIONS_T && ids[2] == S_POWER_T
-			&& ids[3] == S_CLOSE_T,
-			"in a game the bar is Display, Options, Power, Close Game");
+		/*
+		  The running core leads and Power ends it, on Dinofly's call: the entry named
+		  after what you are playing is the one opened on purpose, and the one that
+		  turns the machine off is the one to keep at arm's length. This fixture core
+		  declares no options, so its entry is not on the bar - which is itself the
+		  rule that entry follows, and is asserted where the core has some.
+		*/
+		check(ids[0] == S_CORE_T && ids[1] == S_DISPLAY_T && ids[2] == S_OPTIONS_T
+			&& ids[3] == S_CLOSE_T && ids[4] == S_POWER_T,
+			"in a game the bar is the core, Display, Options, Close Game, Power");
 
 		check(seen_close, "so Close Game is one press from the game, not eleven rows down");
 		check(!seen_about, "and About is still not on the bar");
@@ -14449,9 +14516,9 @@ static void assert_look_applies_to_the_running_core()
 	*/
 	harness_reset_preset();
 
-	press(KEY_UP, 14);                    // the menu bar, Display first
-	press(KEY_ENTER, 18);
-	press(KEY_DOWN, 12);                  // some other look than the current one
+	press(KEY_UP, 14);                    // the menu bar
+	check(open_bar_screen(4), "Display opens from the bar");   // SCR_DISPLAY
+	press(KEY_RIGHT, 12);                 // some other look than the current one
 	press(KEY_ENTER, 18);
 	frame(10);
 
@@ -16201,7 +16268,20 @@ static void assert_ingame()
 	press(KEY_MENU, 20);
 	press(KEY_UP, 18);
 	dump("ingame-3-menubar");
-	press(KEY_ENTER, 20);
+	/*
+	  Asked for by name rather than by pressing A on whatever sits first. The bar's
+	  order is a product decision that has already changed once - the running core
+	  leads it now and Power ends it - and a test that opens "slot 0" quietly starts
+	  testing a different screen the day it moves, which is how this section came to
+	  be dumping the core's options under a file called display-live.
+	*/
+	int on_display = 0;
+	for (int slot = 0; slot < 6 && !on_display; slot++)
+	{
+		if (bar_slot_opens(slot) == S_DISPLAY_T) on_display = 1;
+		else bar_walk_home();
+	}
+	check(on_display, "Display opens from the in-game bar");
 	dump("ingame-4-display-live");
 	press(KEY_ESC, 10);
 	press(KEY_ESC, 10);
@@ -19525,6 +19605,15 @@ static void assert_half_canvas()
 	{
 		FILE *f = fopen("/tmp/classicui_current", "wt");
 		if (f) { fprintf(f, "gb\nTetris (World).gb\n"); fclose(f); }
+
+		/*
+		  Counted by exact colour, so the look has to be off: a look with a scaler half
+		  changes every pixel of a flat frame (the grid boosts the cell body to hold its
+		  average), and this section is about the still being REBUILT when the canvas
+		  changes size, not about what it is drawn through. The look over a still has
+		  its own section.
+		*/
+		looks_all_off();
 
 		harness_set_grab_flat(0xff204060);        // dims to 0xff0c1824, counted below
 		harness_set_menu_core(0);
