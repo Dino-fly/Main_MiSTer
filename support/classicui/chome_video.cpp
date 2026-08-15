@@ -201,9 +201,18 @@ static const preset_def presets[] =
 	  F_GRIDSH, F_GRIDSH, "off", "off", "off", "off",
 	  CO_GB_DMG_COLOUR, CO_GB_DMG_PANEL, PAL_POCKET },
 
+	/*
+	  Super Game Boy on a colour cartridge takes two options, not one: the core
+	  keeps "Super Game Boy + GBC" separate precisely because a GBC game on an SGB
+	  is a combination the hardware never shipped, and it will not infer one from
+	  the other. Both are asked for by name, so a core too old to have the second
+	  simply skips it and the first still lands - Dinofly asked for the border on
+	  Game Boy first and on Color after seeing it.
+	*/
 	{ "gbc", "Game Boy Color", "Reflective colour LCD with its pixel grid.",
 	  F_GRID, F_GRID, "off", "off", "off", "off",
-	  "GBC Colors=Corrected", "Screen Shadow=No;Frame blend=Off;" CO_INTEGER, 0 },
+	  "Super Game Boy=On;Super Game Boy + GBC=On;GBC Colors=Corrected",
+	  "Screen Shadow=No;Frame blend=Off;" CO_INTEGER, 0 },
 
 	/*
 	  The three GBA screens map to the core's own "Modify Colors" profiles - the
