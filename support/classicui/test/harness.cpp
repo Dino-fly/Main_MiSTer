@@ -7872,6 +7872,38 @@ static void assert_ingame_look_background()
 	check(polls > 0,
 		"and the core was told we are still alive while the pass ran");
 
+	/*
+	  And the look is the RUNNING game's, not whatever the shelf's cursor is on.
+
+	  This is the shape of a bug Dinofly met on hardware and this suite did not:
+	  the background is built from ig_open() BEFORE ig_active is set, so a lookup
+	  that asked "are we in a game?" answered no and fell back to the shelf - which
+	  after a launch is usually parked on a folder or on another system's card. The
+	  menu then drew an unfiltered still on the first open and a filtered one on the
+	  second, once the flag was up. It passed here because the fixture's cursor
+	  happened to be on the running game itself.
+
+	  So the two are deliberately made to disagree: the Game Boy keeps the DMG look
+	  while every other system is on its off switch, and the shelf is sent home to a
+	  view whose cursor is not the running game. A background built from the cursor
+	  is then unfiltered and the check reddens.
+	*/
+	press(KEY_MENU, 16);
+	frame(8);
+	vp_set(gb, VC_GB, opts[0]);
+	shelf_root();
+	press(KEY_RIGHT, 10);                  // off the running game's card
+	frame(6);
+
+	harness_reset_alive_polls();
+	press(KEY_MENU, 20);
+	frame(14);
+
+	int elsewhere = still_on_screen();
+	printf("  %d flat pixels with the shelf parked elsewhere\n", elsewhere);
+	check(elsewhere < plain,
+		"the background wears the RUNNING game's look, not the shelf cursor's");
+
 	// Put the shelf's own state back, and the look with it.
 	vp_set(gb, VC_GB, opts[n - 1]);
 	press(KEY_MENU, 16);

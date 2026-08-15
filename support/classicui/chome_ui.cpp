@@ -13705,19 +13705,29 @@ static void ig_build_background(const chome_profile *p)
 	int shot_w = ig_shot_w, shot_h = ig_shot_h;
 	uint32_t *filtered = 0;
 	{
-		chome_item *it = disp_target();
+		/*
+		  The running game, worked out WITHOUT asking disp_target().
+
+		  disp_target() gates on ig_active, and this runs from ig_open() before that
+		  flag is set - so it answered with the shelf's cursor, which after a launch
+		  is usually a folder, and the whole filtering below was skipped. The menu
+		  then looked unfiltered on the first open and correct on the second, because
+		  by then ig_active was up and the resize path had rebuilt the still. That is
+		  the "only works on the second try" Dinofly reported, and it is a plain
+		  ordering trap rather than anything about looks.
+		*/
+		chome_item *it = ig_running_disc();
+		if (!it && ig_have_item) it = &ig_item;
+		if (!it) it = cur_game();
+
 		if (it)
 		{
-			/*
-			  The grid is rebuilt for the magnification in force BEFORE the still is
-			  filtered, not after. Without this the first menu open of a session drew
-			  the still through whatever grid the last core left on the card and the
-			  second one - by which time the poll had rebuilt it - drew it correctly,
-			  which is exactly the "only works on the second try" Dinofly reported.
-			*/
+			// And the grid is rebuilt for the magnification in force BEFORE the still
+			// is filtered: a still drawn through the previous core's grid is the same
+			// bug one layer down.
 			vp_grid_for_now();
 
-			int look = vp_effective(it->sysidx, disp_class());
+			int look = vp_effective(it->sysidx, class_of(it->sysidx, it->path));
 			filtered = (uint32_t*)malloc((size_t)fw * fh * 4);
 			unsigned long t0 = GetTimer(0);
 			if (filtered && vp_render_exact(look, ig_shot, ig_shot_w, ig_shot_h,
