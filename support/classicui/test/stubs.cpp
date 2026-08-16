@@ -275,6 +275,15 @@ void video_fb_size_request(int div)
 
 int video_menu_fb_div() { return fb_div; }
 
+/*
+  Tracked honestly rather than pinned to 32, because the packing the front-end does for
+  it is arithmetic that can be wrong. Nothing in this suite draws above a megapixel and a
+  half except the section that tests this, so every fingerprinted screen stays 32-bit.
+*/
+static int fb_16 = 0;
+void video_menu_fb_16bpp(int on) { fb_16 = on ? 1 : 0; }
+int video_menu_fb_bpp() { return fb_16 ? 16 : 32; }
+
 void harness_set_fb(int w, int h)
 {
 	fb_native_w = w;

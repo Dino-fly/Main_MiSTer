@@ -123,6 +123,22 @@ int gfx_begin()
 	if (w <= 0 || h <= 0) return 0;
 	if (!video_menu_fb(1) || !video_menu_fb(2)) return 0;
 
+	/*
+	  How the fabric should scan this canvas out.
+
+	  Sixteen bits above a megapixel and a half, which on the shipped modes means the
+	  full-resolution 1080p canvas and nothing else. That canvas is 8.1MB read sixty
+	  times a second by the fabric whether anything redrew it or not - half a gigabyte a
+	  second of DDR3 that the running core is also using - and it is the only cost of
+	  this UI that does not go away when it stands still. Which is exactly the fault:
+	  the picture wobbles with a core running behind the menu even when nothing is
+	  moving, and stops when the game is closed.
+
+	  Below that size the bandwidth is not worth any colour at all: the half-resolution
+	  canvas is a quarter of the traffic already, and 240p is nothing.
+	*/
+	video_menu_fb_16bpp(((long)w * h) > 1500000);
+
 	if (w != cw || h != ch || !cb)
 	{
 		free(cb);
@@ -403,10 +419,38 @@ void gfx_end()
 		{
 			unsigned long t_copy = cfg.debug ? gfx_us() : 0;
 			int x = u.x0;
-			int bytes = (u.x1 - u.x0 + 1) * sizeof(uint32_t);
-			for (int y = u.y0; y <= u.y1; y++)
+			int n = u.x1 - u.x0 + 1;
+
+			if (video_menu_fb_bpp() == 16)
 			{
-				memcpy(fb + (size_t)y * cw + x, cb + (size_t)y * cw + x, bytes);
+				/*
+				  Packed on the way out. The fabric is told RGB565 with the same RxB flag
+				  the 32-bit path uses, so the two components that swap there swap here:
+				  what goes in the top five bits is the byte the 32-bit path puts where
+				  the fabric looks for blue.
+
+				  Costs a shift and two masks a pixel and saves half the bytes, and those
+				  bytes are the expensive kind - see the note on gfx_stat_bench().
+				*/
+				uint16_t *d16 = (uint16_t *)fb;
+				for (int y = u.y0; y <= u.y1; y++)
+				{
+					const uint32_t *src = cb + (size_t)y * cw + x;
+					uint16_t *dst = d16 + (size_t)y * cw + x;
+					for (int i = 0; i < n; i++)
+					{
+						uint32_t p = src[i];
+						dst[i] = (uint16_t)(((p >> 8) & 0xF800) | ((p >> 5) & 0x07E0) | ((p >> 3) & 0x001F));
+					}
+				}
+			}
+			else
+			{
+				int bytes = n * (int)sizeof(uint32_t);
+				for (int y = u.y0; y <= u.y1; y++)
+				{
+					memcpy(fb + (size_t)y * cw + x, cb + (size_t)y * cw + x, bytes);
+				}
 			}
 			video_menu_fb_present(fbn);
 			fbn = (fbn == 1) ? 2 : 1;
@@ -440,6 +484,13 @@ void gfx_end()
 
 void gfx_shutdown()
 {
+	/*
+	  And hand the format back with the canvas. Everything else that draws into these
+	  buffers - the classic menu's wallpaper, the fb terminal - writes 32-bit pixels, and
+	  a fabric still told 565 would read two of theirs as one of ours.
+	*/
+	video_menu_fb_16bpp(0);
+
 	free(cb);
 	cb = 0;
 	cw = ch = 0;
