@@ -88,6 +88,17 @@ int video_menu_fb_height();
 void video_fb_size_request(int div);
 // The divisor actually in force between the display mode and the framebuffer, >= 1.
 int video_menu_fb_div();
+
+/*
+  Ask for the menu framebuffer to be scanned out as RGB565 rather than 32-bit.
+
+  Halves what the fabric has to read every frame - 8.1MB down to 4.1MB at 1080p, which
+  is half a gigabyte a second of DDR3 the running core is also using - and halves what
+  the front-end has to write. The caller is responsible for putting 565 pixels there;
+  see gfx_end() in support/classicui/chome_gfx.cpp.
+*/
+void video_menu_fb_16bpp(int on);
+int video_menu_fb_bpp();
 // Returns 1 when the core accepted the framebuffer, 0 when it has no support for
 // it (in which case a front-end must fall back to the OSD).
 int video_menu_fb_present(int n);

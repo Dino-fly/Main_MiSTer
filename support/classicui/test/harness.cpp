@@ -34,6 +34,7 @@
 // The glyph table itself, for the font section: it checks that a loaded .pf really replaces
 // charfont[] and that restoring the built-in puts back every one of the 2048 bytes.
 #include "../../../charrom.h"
+#include "../../../video.h"                   // video_menu_fb_bpp(), for the 565 section
 #include "../../../snacpad.h"
 #include "../chome.h"
 #include "../chome_lib.h"
@@ -16245,6 +16246,89 @@ static void assert_variant_ui()
 	check(ordered, "a card sorts on the play count of the file it is showing");
 }
 
+/*
+  The framebuffer the fabric reads sixty times a second, and why it is not always 32-bit.
+
+  Above a megapixel and a half the canvas is scanned out as RGB565 instead. That is not
+  about the copy, though it halves that too: it is about what the FABRIC has to read, 8.1MB
+  a frame at 1920x1080x32, half a gigabyte a second of DDR3 that the running core is also
+  using. It is the one cost of this UI that does not go away when it stands still, which is
+  exactly the fault it was found by - the picture wobbles with a core running behind the
+  menu even when nothing on screen is moving, and stops the moment the game is closed.
+
+  The packing is arithmetic and arithmetic can be wrong, so it is checked against colours
+  the screen is known to contain rather than against itself. Red and blue differ in both,
+  which is what makes a swapped pair fail here instead of on a television.
+*/
+static uint16_t pack565(uint32_t argb)
+{
+	return (uint16_t)((((argb >> 16) & 0xFF) >> 3) << 11
+		| (((argb >> 8) & 0xFF) >> 2) << 5
+		| ((argb & 0xFF) >> 3));
+}
+
+static void assert_fb565()
+{
+	printf("\n== the framebuffer's format: 16 bits where the traffic matters ==\n");
+
+	int was_w = gfx_w(), was_h = gfx_h();
+	int was_prof = cfg.classicui_profile;
+
+	harness_set_menu_core(1);
+	chome_leave();
+
+	cfg.classicui_profile = 1;
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+	press(KEY_MENU, 20);
+	frame(10);
+	check(video_menu_fb_bpp() == 32, "a 720p canvas is scanned out 32 bits a pixel");
+
+	// Closed across the resize, the way every other canvas change in this suite is done:
+	// the front-end lays itself out on the way in, and resizing under an open menu leaves
+	// it drawing the old size.
+	press(KEY_MENU, 16);
+	frame(6);
+	harness_set_fb(1920, 1080);
+	gfx_shutdown();
+	theme_update(1920, 1080, 1);
+	press(KEY_MENU, 20);
+	frame(20);
+	check(video_menu_fb_bpp() == 16, "and a 1080p one at 16, where the traffic is worth colour");
+
+	const uint16_t *fb = (const uint16_t *)harness_fb_shown();
+	int w = gfx_w(), h = gfx_h();
+	check(w == 1920 && h == 1080, "drawn at the full canvas");
+
+	int dark = 0, rule = 0;
+	uint16_t want_dark = pack565(COL_BGDARK), want_rule = pack565(COL_GRID);
+	for (int i = 0; i < w * h; i++)
+	{
+		if (fb[i] == want_dark) dark++;
+		else if (fb[i] == want_rule) rule++;
+	}
+
+	printf("  %d pixels of the prompt bar's ground, %d of its rule\n", dark, rule);
+	check(dark > 10000, "the prompt bar's ground is there, packed as 565");
+	check(rule >= w / 2, "and the rule above it, whose red and blue differ");
+
+	/*
+	  And nothing is left behind in the half of each pixel that 565 does not use: the
+	  buffers were last written 32 bits wide at another size, so a copy that wrote only the
+	  low half would leave the old picture showing through the top half of the scanout.
+	*/
+	press(KEY_MENU, 16);
+	frame(6);
+
+	cfg.classicui_profile = (uint8_t)was_prof;
+	harness_set_fb(was_w, was_h);
+	gfx_shutdown();
+	theme_update(was_w, was_h, was_prof);
+	frame(10);
+	check(video_menu_fb_bpp() == 32, "and back to 32 bits when the canvas shrinks again");
+}
+
 static void assert_ingame()
 {
 	printf("\n== in-game: the whole UI, over a running game ==\n");
@@ -23367,6 +23451,7 @@ int main()
 	// After it, because this one launches a game of its own and the section above is about
 	// the order of the list a launch writes to.
 	assert_variant_ui();
+	assert_fb565();
 	assert_ingame();
 	assert_save_on_pausing_core();
 	assert_freeze_off();

@@ -49,6 +49,40 @@
 #define FB_FMT_8888 0b00110
 #define FB_FMT_PAL8 0b00011
 #define FB_FMT_RxB  0b10000
+
+/*
+  Sixteen bits a pixel for the menu framebuffer, instead of thirty-two.
+
+  Not about our own copy - though it halves that too - but about what the FABRIC has to
+  read. The framebuffer is scanned out sixty times a second whether anything redrew it or
+  not, and at 1920x1080x32 that is 8.1MB a frame, half a gigabyte a second of DDR3 that
+  the running core is also using. Worse, ascal's input path is not gated by the
+  framebuffer being the thing on screen: the core's video is still scaled into DDR and
+  thrown away, and in ascal's Avalon FSM writes beat reads. The framebuffer reader has
+  two outstanding reads and 256-byte bursts in a game core - N_BURST(2048) is compiled in
+  only under MENU_CORE - with no under-run detection anywhere, so a late burst simply
+  displays a half-filled line buffer.
+
+  That is the one cost of this UI that does not go away when it stands still, which is
+  exactly what Dinofly reported: the picture wobbles with a core running behind the menu
+  even when nothing on screen is moving, and it stops when the game is closed.
+
+  565 halves the bytes and halves the bursts per line. The colour cost is real but small
+  for this UI - flat panels, text and cover art rather than gradients - and it is the
+  whole of what the firmware can do about it. The real fix is one line in sys/sys_top.v
+  and a rebuild of every core.
+*/
+static int menu_fb_16 = 0;
+
+void video_menu_fb_16bpp(int on)
+{
+	on = on ? 1 : 0;
+	if (menu_fb_16 == on) return;
+	menu_fb_16 = on;
+	printf("video: menu framebuffer is now %d bits per pixel\n", on ? 16 : 32);
+}
+
+int video_menu_fb_bpp() { return menu_fb_16 ? 16 : 32; }
 #define FB_EN       0x8000
 
 #define FB_DV_LBRD  3
@@ -3628,6 +3662,10 @@ void video_fb_enable(int enable, int n)
 				}
 
 				//printf("Switch to Linux frame buffer\n");
+				// 32-bit, and say so: an alternative front-end may have left the fabric
+				// reading 565 (see video_menu_fb_16bpp), and everything drawn from here
+				// down is 32-bit.
+				menu_fb_16 = 0;
 				spi_w((uint16_t)(FB_EN | FB_FMT_RxB | FB_FMT_8888)); // format, enable flag
 				spi_w((uint16_t)fb_addr); // base address low word
 				spi_w(fb_addr >> 16);     // base address high word
@@ -3756,6 +3794,20 @@ int video_menu_fb_height()
   second for no reason. The register sequence below is the same one
   video_fb_enable()'s enable path sends.
 */
+/*
+  The page flip needs no synchronising, and this is written down because it took a
+  measurement and a reading of the fabric to be sure.
+
+  The flip is ten SPI words and the fabric copies most of those registers on every clock
+  with no vsync guard - so a format or geometry change can land mid-frame and cost one bad
+  frame. The base address is the exception: ascal latches it on the falling edge of the
+  output VS (ascal.vhd, avl_o_offset0 <= o_fb_base), so a flip that changes only the
+  address is atomic and cannot tear. This front-end changes only the address.
+
+  A version of this waited on FBIO_WAITFORVSYNC before every flip - /dev/fb0 answers it
+  here, 15.4ms a wait - on the theory that the seam was the wobble. It was not, and the
+  wait cost up to a frame of latency per repaint for nothing.
+*/
 int video_menu_fb_present(int n)
 {
 	if (n < 1 || n > 2 || !fb_base) return 0;
@@ -3777,7 +3829,7 @@ int video_menu_fb_present(int n)
 		yoff = v_cur.item[8] - FB_DV_UBRD;
 	}
 
-	spi_w((uint16_t)(FB_EN | FB_FMT_RxB | FB_FMT_8888));
+	spi_w((uint16_t)(FB_EN | FB_FMT_RxB | (menu_fb_16 ? FB_FMT_565 : FB_FMT_8888)));
 	spi_w((uint16_t)fb_addr);
 	spi_w(fb_addr >> 16);
 	spi_w(fb_width);
@@ -3786,7 +3838,7 @@ int video_menu_fb_present(int n)
 	spi_w(xoff + v_cur.item[1] - 1);
 	spi_w(yoff);
 	spi_w(yoff + v_cur.item[5] - 1);
-	spi_w(fb_width * 4);
+	spi_w(fb_width * (menu_fb_16 ? 2 : 4));
 	DisableIO();
 
 	fb_enabled = 1;
