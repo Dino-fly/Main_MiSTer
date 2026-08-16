@@ -10986,6 +10986,7 @@ static int count_lines(const char *rel, int *bad_sum, int *maxlen)
 }
 
 #define P_TEST_DMG 6      // index of the DMG look in the preset table
+#define P_TEST_SHARP 0    // ...and of Sharp, which is the first row of the table
 
 static void assert_video()
 {
@@ -11743,6 +11744,67 @@ static void assert_video()
 		printf("  flat blue through the DMG look: %06X\n", over ? (over[n2 / 2] & 0xffffff) : 0);
 
 		free(ref);
+	}
+
+	/*
+	  A core whose pixels are not square, which is most of them at some point.
+
+	  The Super Nintendo emits 512x224 for A Link to the Past and the television draws it
+	  in 1170x896 - so the two axes magnify by 2.29 and 4. The preview used to build its
+	  virtual picture as native x one integer scale, which made it 2048 wide instead of
+	  1170 and stretched the game sideways by three quarters. Dinofly reported that as the
+	  screenshot in the Display dialog being vertically compressed.
+
+	  Pinned by where the crop lands rather than by eye: the reference is a horizontal ramp,
+	  one value per native column, so the colour at the window's left edge names the native
+	  column it came from. Get the proportions wrong and it names a different one.
+	*/
+	{
+		/*
+		  Latched, not just set: the scaler's geometry is read once a second by
+		  vp_output_watch() and remembered, so the clock has to move for the front-end to
+		  have seen it. See the note on vp_output_watch().
+		*/
+		harness_set_fb_state(0);
+		harness_set_scale(224, 896);            // the stub's output is 4:3 of the height
+		for (int i = 0; i < 3; i++) { harness_advance(1100); chome_handle(0); }
+
+		int rw = 512, rh = 224;
+		uint32_t *ramp = (uint32_t*)malloc((size_t)rw * rh * 4);
+		for (int y = 0; y < rh; y++)
+			for (int x = 0; x < rw; x++)
+				ramp[(size_t)y * rw + x] = 0xff000000u | (uint32_t)((x * 255) / (rw - 1));
+
+		int pw = 400, ph = 300;
+		const uint32_t *pv2 = vp_preview(P_TEST_SHARP, pw, ph, ramp, rw, rh);
+		check(pv2 != 0, "a 512x224 frame previews");
+
+		/*
+		  What the television is drawing, straight from the same place the code asks:
+		  the window is that picture cropped to the tile, centred, so its left edge is
+		  at (vw - pw)/2 and the native column under it is that times 512 over vw.
+		*/
+		int vw = 0, vh = 0;
+		check(vp_output_rect(&vw, &vh) && vw > 0, "and the scaler says how large it is drawn");
+		if (vw < 1) vw = rw * 4;                // so a failure above reports rather than divides by zero
+		int x0 = (vw - pw) / 2;
+		int want = (int)((long)x0 * rw / vw);
+		int wrong = (int)((long)((rw * 4 - pw) / 2) * rw / (rw * 4));   // the old arithmetic
+
+		// Read back in the ramp's own units - the value stored in a column, not its index.
+		int want_v = (want * 255) / (rw - 1);
+		int wrong_v = (wrong * 255) / (rw - 1);
+
+		int got = pv2 ? (int)(pv2[(size_t)(ph / 2) * pw] & 0xff) : -1;
+		printf("  the window's left edge holds %d; %d if the picture is 1170-wide, %d if 2048\n",
+			got, want_v, wrong_v);
+		check(want_v != wrong_v, "the two answers differ, so this can tell them apart");
+		check(got >= want_v - 2 && got <= want_v + 2,
+			"the preview crops the picture the television draws, not a square-pixel one");
+
+		free(ramp);
+		harness_set_scale(0, 0);
+		for (int i = 0; i < 3; i++) { harness_advance(1100); chome_handle(0); }
 	}
 }
 
