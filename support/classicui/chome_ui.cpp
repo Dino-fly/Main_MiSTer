@@ -767,6 +767,13 @@ static int slide_due = 0;
 static int marq_due = 0;
 static unsigned long marq_epoch = 0;
 
+/*
+  The cursor moved to another card: the block above the cards and the cards themselves
+  need repainting, and nothing else does unless the prompts changed with them. Cleared by
+  any full repaint, which has already drawn everything this would have.
+*/
+static int sel_due = 0;
+
 static uint32_t last_key = 0;
 static int key_run = 0;
 
@@ -842,6 +849,18 @@ static char browse_rel[CH_PATH_LEN] = {};
 
 static void mark_dirty() { dirty = 1; marq_epoch = GetTimer(0); }
 static void mark_slide() { slide_due = 1; }
+
+/*
+  The cursor came to rest on another card: everything a moved cursor rewrites, which is
+  the block above the cards and the cards themselves - see sel_note_rows().
+
+  It moves marq_epoch, exactly as mark_dirty() does, and for the documented reason rather
+  than by imitation: a marquee is measured from the moment the thing it is on became the
+  thing it is on, and a change of selection IS that moment. Leaving it out was the first
+  version of this, and the title on a 240p shelf then arrived already halfway through its
+  scroll instead of holding at its first character.
+*/
+static void mark_sel() { sel_due = 1; marq_epoch = GetTimer(0); }
 
 /*
   A full repaint that is not a change of state: an ease still easing, a timer that has run
@@ -998,10 +1017,15 @@ static void sel_commit()
 {
 	if (sel_shown == sel) return;
 	sel_shown = sel;
-	// The title, the meta line, the file line and the prompts all change with it, and all
-	// of them are outside the band - so this is the one thing in the slide path that has
-	// to ask for the whole frame.
-	mark_dirty();
+	/*
+	  The title, the meta line and the file line change with it, and they are outside the
+	  card band - so this used to be the one thing in the slide path that asked for the
+	  whole frame. It now asks for the two bands together (sel_band), which is 58% of the
+	  rows rather than all of them, and the dispatch falls back to the whole frame when
+	  the prompts change too - they are the only other thing a moved cursor rewrites, and
+	  they are at the bottom of the screen where no band reaches.
+	*/
+	mark_sel();
 }
 
 /*
@@ -1614,6 +1638,45 @@ static int slide_band(int *y0, int *y1)
 	if (!slide_rc.on) return 0;
 	*y0 = slide_rc.y0;
 	*y1 = slide_rc.y1;
+	return 1;
+}
+
+/*
+  The block above the cards - the title, the meta line, the file line - recorded the same
+  way and for the reason the whole partial path exists.
+
+  A card-to-card move changes this block as well as the cards, which is why sel_commit()
+  asked for a whole frame. On this machine a whole frame is 8.1MB pushed into an
+  uncacheable framebuffer at about 100 MB/s: 78ms of copy on top of 49ms of compose, per
+  tap, measured with `gfxbench`. Dinofly saw the DDR traffic as the picture wobbling while
+  he moved along the shelf.
+
+  Measured in the harness, a one-card move changes 223 of 720 rows and their bounding band
+  is 420 - so clipping to the band the block and the cards share is most of the frame's
+  cost saved for nothing given up.
+
+  Recorded as the block's whole ALLOTMENT rather than the extent of the text drawn in it:
+  the third line is only there for some cards, the title's marquee may be one row taller
+  than its neighbour's, and a band that is right for the frame it was recorded from and
+  short for the next one is the smear this path cannot repair. The allotment runs to the
+  top of the card row, so the two bands meet.
+*/
+static struct { int y0, y1, on; } sel_rc;
+
+static void sel_note_rows(int y0, int y1)
+{
+	if (!sel_rc.on) { sel_rc.y0 = y0; sel_rc.y1 = y1; sel_rc.on = 1; return; }
+	if (y0 < sel_rc.y0) sel_rc.y0 = y0;
+	if (y1 > sel_rc.y1) sel_rc.y1 = y1;
+}
+
+// The block and the cards together: everything a moved cursor redraws, except the prompts,
+// which the caller checks separately because they are the one part that is somewhere else.
+static int sel_band(int *y0, int *y1)
+{
+	if (!sel_rc.on || !slide_rc.on) return 0;
+	*y0 = (sel_rc.y0 < slide_rc.y0) ? sel_rc.y0 : slide_rc.y0;
+	*y1 = (sel_rc.y1 > slide_rc.y1) ? sel_rc.y1 : slide_rc.y1;
 	return 1;
 }
 
@@ -2402,6 +2465,10 @@ static void draw_title_block(const chome_profile *p)
 {
 	const chome_entry *e = shown_entry();
 	int avail = p->w - p->inset * 2;
+
+	// The whole allotment, not the text - see sel_note_rows(). It reaches the top of the
+	// card row, so the block's band and the cards' band meet with no row between them.
+	sel_note_rows(p->y_title, p->y_shelf - p->sel_h);
 
 	if (!e)
 	{
@@ -3456,6 +3523,40 @@ static int build_legend(legend_pair *out, int max)
 	}
 	return n;
 }
+
+/*
+  What the prompt row would say right now, as one number.
+
+  Not a comparison of the drawn pixels: build_legend() is a switch over the screen and the
+  committed selection and costs nothing to run twice, and the labels ARE the content of
+  that row. The keys go in as well as the labels, because "Start" on a game and "Start" on
+  a folder reached by different buttons is a different row.
+
+  Read at the moment a frame is composed, and again before a banded repaint is allowed:
+  the prompts are the one thing a moved cursor rewrites that no band covers, and a band
+  drawn while they had changed would leave the old ones standing under the new card.
+*/
+static unsigned legend_sig()
+{
+	legend_pair pairs[8];
+	int n = build_legend(pairs, 8);
+
+	unsigned h = 2166136261u;
+	for (int i = 0; i < n; i++)
+	{
+		const char *parts[2] = { pairs[i].key, pairs[i].label };
+		for (int k = 0; k < 2; k++)
+			for (const char *c = parts[k] ? parts[k] : ""; *c; c++)
+			{
+				h ^= (unsigned char)*c;
+				h *= 16777619u;
+			}
+		h ^= 0x9E3779B9u;
+	}
+	return h;
+}
+
+static unsigned legend_drawn_sig = 0;
 
 static void draw_legend(const chome_profile *p)
 {
@@ -10483,6 +10584,17 @@ static void compose()
 	// would be asked for on behalf of text that is no longer drawn.
 	marq_rc.on = 0;
 
+	// And by the title block; see sel_note_rows().
+	sel_rc.on = 0;
+
+	/*
+	  What the prompt row said when this frame was composed. The cursor moving rewrites it
+	  as well as the block above the cards - a folder offers different prompts from a game -
+	  and it sits at the bottom of the screen where the band does not reach. So it is
+	  remembered here and compared before a banded repaint is allowed.
+	*/
+	legend_drawn_sig = legend_sig();
+
 	if (screen == SCR_BROWSE)
 	{
 		draw_browse(p);
@@ -15947,7 +16059,38 @@ int chome_handle(uint32_t key)
 		slide_due = 0;                 // a full repaint repaints the cards too
 		disc_spin_due = 0;             // a full repaint repaints the disc too
 		marq_due = 0;                  // and the scrolling text with them
+		sel_due = 0;                   // and the block above the cards
 		render();
+	}
+	/*
+	  The cursor came to rest on another card. Before the slide, because it is the larger
+	  band of the two and it contains the slide's: repainting it satisfies both.
+
+	  The same escapes as the slide below, plus the prompts. Those are the one part of a
+	  moved cursor's repaint that lives outside any band - a folder offers Open where a
+	  game offers Start - so when they have changed there is nothing to clip to and the
+	  whole frame is what is honest. Card-to-card inside one shelf, which is what a player
+	  spends their time doing, leaves them alone.
+	*/
+	else if (sel_due)
+	{
+		sel_due = 0;
+
+		int y0, y1;
+		if (ui_busy() || screen != SCR_HOME || legend_sig() != legend_drawn_sig
+			|| !sel_band(&y0, &y1))
+		{
+			render();
+		}
+		else
+		{
+			slide_due = 0;             // its band is inside this one
+			marq_due = 0;              // and so is the title's marquee
+			render_region(0, y0, gfx_w(), y1 - y0 + 1);
+
+			// The badge's signature describes pixels this clip excluded; see the slide arm.
+			disc_drawn_sig = -1;
+		}
 	}
 	/*
 	  Before the disc, because a sliding shelf is the more urgent of the two and because the
