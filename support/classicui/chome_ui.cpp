@@ -14847,6 +14847,17 @@ int chome_test_bg_rect(int *w, int *h, int *x, int *y)
 	return 1;
 }
 
+void chome_test_gfxstat()
+{
+	gfx_stat_report("asked");
+}
+
+void chome_test_gfxbench()
+{
+	gfx_stat_bench();
+	mark_dirty();          // the buffer it scribbled in is composed again next frame
+}
+
 int chome_test_key(uint32_t code)
 {
 	test_key_code = code;
