@@ -14826,14 +14826,15 @@ static void animate()
 static int eat_menu_release = 0;
 
 /*
-  Test access to the menu button itself: 2 = send the press, 1 = its release.
+  Test access to the keyboard: 2 = send the press, 1 = its release.
 
-  Two shots rather than one because the front-end claims both halves of that button
-  (see eat_menu_release above), and a press with no release behind it would leave the
-  next real press eaten. Synthesising the key rather than calling ig_open() directly
-  is the point: what needs proving is the path the player takes, and every bug this
-  has been used to find lived somewhere on that path rather than inside ig_open().
+  Two shots rather than one because the front-end claims both halves of a key (see
+  eat_menu_release above for the menu button, where a press with no release behind it
+  would leave the next real press eaten). Synthesising the key rather than calling the
+  action directly is the point: what needs proving is the path the player takes, and
+  every bug this has been used to find lived somewhere on that path.
 */
+static uint32_t test_key_code = 0;
 static int test_menu_req = 0;
 
 int chome_test_bg_rect(int *w, int *h, int *x, int *y)
@@ -14846,17 +14847,23 @@ int chome_test_bg_rect(int *w, int *h, int *x, int *y)
 	return 1;
 }
 
-int chome_test_menu()
+int chome_test_key(uint32_t code)
 {
+	test_key_code = code;
 	test_menu_req = 2;
 	return 1;
+}
+
+int chome_test_menu()
+{
+	return chome_test_key(KEY_MENU);
 }
 
 int chome_handle(uint32_t key)
 {
 	if (!key && test_menu_req)
 	{
-		key = (test_menu_req == 2) ? KEY_MENU : (KEY_MENU | UPSTROKE);
+		key = (test_menu_req == 2) ? test_key_code : (test_key_code | UPSTROKE);
 		test_menu_req--;
 	}
 

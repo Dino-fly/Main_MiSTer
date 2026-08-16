@@ -6612,6 +6612,30 @@ int input_test(int getchar)
 					{
 						chome_test_menu();
 					}
+					/*
+					  ...or any other key the front-end reads - `echo "key right"`.
+
+					  Same reason as the three above: what a screen COSTS is only
+					  visible while it is being driven, and a repaint too slow to
+					  hold 60fps shows on the television rather than in any log.
+					  Driving that by hand is a person sitting at the machine with
+					  a stopwatch.
+					*/
+					else if (!strncmp(cmd, "key ", 4))
+					{
+						static const struct { const char *name; uint32_t code; } keys[] = {
+							{ "up", KEY_UP }, { "down", KEY_DOWN },
+							{ "left", KEY_LEFT }, { "right", KEY_RIGHT },
+							{ "enter", KEY_ENTER }, { "esc", KEY_ESC },
+							{ "tab", KEY_TAB }, { "menu", KEY_MENU },
+						};
+						const char *want = cmd + 4;
+						size_t i = 0;
+						for (; i < sizeof(keys) / sizeof(keys[0]); i++)
+							if (!strcmp(want, keys[i].name)) { chome_test_key(keys[i].code); break; }
+						if (i == sizeof(keys) / sizeof(keys[0]))
+							printf("MiSTer_cmd: no key called \"%s\"\n", want);
+					}
 				}
 			}
 

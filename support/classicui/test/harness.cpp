@@ -1733,6 +1733,42 @@ static void assert_index()
 		if (s && !strcmp(s->id, "amiga")) has_amiga = 1;
 	}
 
+	/*
+	  Where a system's games live is asked once and then remembered.
+
+	  On the device that question is findGamesDir(), which walks a list of candidate
+	  roots with a stat each - two of them network paths, where a stale mount costs a
+	  timeout - and prints a line to a log on the SD card when it hits. It is asked
+	  several times per shelf move (item_on_card() for the cards in view, and the art
+	  ladder for each one it draws), which Dinofly saw as the picture wobbling while
+	  he moved along the shelf and only then.
+	*/
+	{
+		char d[1024];
+		int snes = -1;
+		for (int i = 0; i < lib_sys_count(); i++)
+		{
+			const chome_sys *sy = lib_sys(i);
+			if (sy && !strcmp(sy->id, "snes")) snes = i;
+		}
+		check(snes >= 0, "the fixture has a system to ask about");
+
+		lib_forget_dirs();
+		int before = harness_games_dir_asks();
+		check(lib_sys_games_dir(snes, d, sizeof(d)), "the first ask finds a system's games");
+		int one = harness_games_dir_asks() - before;
+		check(one >= 1, "and it walked the candidate roots to do it");
+
+		for (int i = 0; i < 50; i++) lib_sys_games_dir(snes, d, sizeof(d));
+		check(harness_games_dir_asks() - before == one,
+			"fifty more asks walk nothing: the answer is remembered");
+
+		lib_forget_dirs();
+		lib_sys_games_dir(snes, d, sizeof(d));
+		check(harness_games_dir_asks() - before > one,
+			"and forgetting it makes the next ask look again, for a card that changed");
+	}
+
 	check(has_clean, "region tags stripped from titles (\"Super Metroid\")");
 	check(!has_txt, "non-matching extensions ignored (notes.txt)");
 	check(has_recursed, "subdirectories scanned (SNES/Hacks)");
