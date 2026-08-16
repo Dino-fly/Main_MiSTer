@@ -6621,6 +6621,16 @@ int input_test(int getchar)
 					  Driving that by hand is a person sitting at the machine with
 					  a stopwatch.
 					*/
+					// What the repaints since the last ask cost.
+					else if (!strcmp(cmd, "gfxstat"))
+					{
+						chome_test_gfxstat();
+					}
+					// ...and how fast this machine can fill the framebuffer at all.
+					else if (!strcmp(cmd, "gfxbench"))
+					{
+						chome_test_gfxbench();
+					}
 					else if (!strncmp(cmd, "key ", 4))
 					{
 						static const struct { const char *name; uint32_t code; } keys[] = {

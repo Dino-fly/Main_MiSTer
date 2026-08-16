@@ -68,6 +68,20 @@ void gfx_stat_compose_begin();
   it and fills whichever of the averages' numerators are asked for. Collection is
   still behind cfg.debug, exactly as the log is - reading is free either way.
 */
+/*
+  Print the counters now and start again - `echo gfxstat > /dev/MiSTer_cmd`. The
+  periodic summary lands every couple of hundred copies, which is far too late when
+  the question is what twenty key presses just cost.
+*/
+void gfx_stat_report(const char *why);
+
+/*
+  Time three ways of filling the framebuffer, plus a cached copy of the same size, so
+  "the copy is slow" can be attributed to the mapping or to the loop. Writes into the
+  buffer about to be composed; the caller must repaint after it.
+*/
+void gfx_stat_bench();
+
 void gfx_stat_reset();
 unsigned long gfx_stat_get(int partial,
 	unsigned long *compose_us, unsigned long *copy_us, unsigned long *rows);

@@ -3,6 +3,9 @@
 #include <string.h>
 #include <time.h>
 #include <ctype.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/mman.h>
 
 #include "chome_gfx.h"
 #include "../../cfg.h"
@@ -195,6 +198,158 @@ static void stat_fmt(char *buf, size_t len, const char *tag, const gfx_stat_t *s
 void gfx_stat_compose_begin()
 {
 	compose_t0 = cfg.debug ? gfx_us() : 0;
+}
+
+/*
+  Print what has been measured so far and start again.
+
+  The periodic summary only lands every GFX_STAT_EVERY copies, which is a long time on
+  a screen nobody is touching - and the cost of a repaint is exactly the question that
+  comes up while somebody IS touching it, twenty key presses at a time. This answers it
+  on demand: `echo gfxstat > /dev/MiSTer_cmd`.
+*/
+void gfx_stat_report(const char *why)
+{
+	char fs[160], ps[160];
+	stat_fmt(fs, sizeof(fs), "full", &stat_full);
+	stat_fmt(ps, sizeof(ps), "partial", &stat_part);
+
+	printf("ClassicUI: repaint %dx%d (%s) over %lu frames: %s; %s\n",
+		cw, ch, why ? why : "asked", stat_full.n + stat_part.n, fs, ps);
+
+	memset(&stat_full, 0, sizeof(stat_full));
+	memset(&stat_part, 0, sizeof(stat_part));
+}
+
+/*
+  How fast this machine can actually fill the framebuffer, three ways.
+
+  The copy is the larger half of a repaint - 78ms of a 127ms full frame at 1920x1080,
+  measured - and 8.3MB in 78ms is 107 MB/s, which is nothing like what the DDR3 can
+  do. The question this answers is whether that is the mapping (shmem_map() opens
+  /dev/mem with O_SYNC, so the framebuffer is uncacheable and every store goes to
+  memory on its own) or the loop. A cached copy of the same size is timed alongside as
+  the machine's own answer to "how fast could this possibly be".
+
+  Written into the buffer we are about to compose into, so nothing on screen is
+  disturbed beyond the frame the caller repaints afterwards. The fbdev leg is the one
+  exception: /dev/fb0 is the Linux console's own buffer, which this front-end never
+  shows, and it is left holding a copy of the UI until the console is next drawn.
+
+  What it found, on a 1920x1080 canvas: 107 MB/s through /dev/mem, the same either way
+  round the loop is written, and 628 MB/s through fbdev. The width of the stores is not
+  the problem; the mapping is. /dev/mem hands back an uncacheable, non-gathering
+  mapping for this region because the framebuffer sits in memory the kernel does not
+  know about (pfn_valid() is false there, and arch/arm's phys_mem_access_prot() answers
+  pgprot_noncached for exactly that case), while fbdev maps its own buffer
+  write-combining. There is no way to ask for the better mapping from user space, so
+  8.1MB per full repaint is a floor of ~78ms and the only lever is copying less of it.
+*/
+void gfx_stat_bench()
+{
+	if (!cb) return;
+
+	uint32_t *fb = video_menu_fb(fbn);
+	if (!fb) return;
+
+	size_t n = (size_t)cw * ch;
+	size_t bytes = n * 4;
+
+	uint32_t *ram = (uint32_t *)malloc(bytes);
+	unsigned long t_ram = 0;
+	if (ram)
+	{
+		memset(ram, 0, bytes);                    // fault the pages in first
+		unsigned long t0 = gfx_us();
+		memcpy(ram, cb, bytes);
+		t_ram = gfx_us() - t0;
+		// Read one byte back so the copy cannot be dead-stored away: without this the
+		// compiler removed it entirely and the timing came out as 2us for 8MB.
+		volatile uint32_t sink = ram[n / 2];
+		(void)sink;
+		free(ram);
+	}
+
+	/*
+	  The same memory through the framebuffer device rather than /dev/mem.
+
+	  fbdev maps write-combining - Normal Non-cacheable, where the CPU may merge and
+	  burst stores - while shmem_map()'s O_SYNC gives Device memory, where it may not.
+	  If that is where the 100 MB/s comes from then this leg is several times faster,
+	  and the copy stops being the floor under every repaint.
+	*/
+	unsigned long t_wc = 0;
+	{
+		/*
+		  Mapped over ALL of it, so the same test can answer the second question: is
+		  this the same memory the front-end already writes through /dev/mem? The two
+		  menu buffers sit one behind the other, so their pointer difference is the
+		  size of one, and buffer 2 through fbdev should be buffer 2 through /dev/mem.
+		*/
+		uint32_t *b1 = video_menu_fb(1), *b2 = video_menu_fb(2);
+		size_t span = (b1 && b2) ? (size_t)(b2 - b1) : 0;         // in pixels
+		size_t all = span ? (span * 4 * 3) : bytes;
+
+		int fd = open("/dev/fb0", O_RDWR);
+		if (fd >= 0)
+		{
+			void *wc = mmap(0, all, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+			if (wc == MAP_FAILED && all != bytes)
+			{
+				all = bytes;
+				wc = mmap(0, all, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+			}
+			if (wc != MAP_FAILED)
+			{
+				if (span && all >= span * 4 * 3)
+				{
+					uint32_t *at2 = (uint32_t *)wc + span * 2;
+					uint32_t keep = b2[0];
+					at2[0] = 0xA5A5F00D;
+					__sync_synchronize();
+					printf("ClassicUI: fbdev is %s memory as /dev/mem (%08X vs %08X)\n",
+						(b2[0] == 0xA5A5F00D) ? "the SAME" : "DIFFERENT", b2[0], 0xA5A5F00D);
+					at2[0] = keep;
+					__sync_synchronize();
+				}
+
+				unsigned long t0 = gfx_us();
+				memcpy(wc, cb, bytes);
+				t_wc = gfx_us() - t0;
+				munmap(wc, all);
+			}
+			close(fd);
+		}
+	}
+
+	unsigned long t0 = gfx_us();
+	memcpy(fb, cb, bytes);
+	unsigned long t_memcpy = gfx_us() - t0;
+
+	t0 = gfx_us();
+	{
+		uint64_t *d = (uint64_t *)fb;
+		const uint64_t *s = (const uint64_t *)cb;
+		for (size_t i = 0; i < bytes / 8; i++) d[i] = s[i];
+	}
+	unsigned long t_u64 = gfx_us() - t0;
+
+	t0 = gfx_us();
+	{
+		uint32_t *d = fb;
+		const uint32_t *s = cb;
+		for (size_t i = 0; i < n; i++) d[i] = s[i];
+	}
+	unsigned long t_u32 = gfx_us() - t0;
+
+	#define MBPS(us) ((us) ? (unsigned long)(bytes / (us)) : 0UL)
+	printf("ClassicUI: %ux%u fill, %u KB: to RAM %lu us (%lu MB/s), "
+		"memcpy %lu us (%lu MB/s), 64-bit %lu us (%lu MB/s), 32-bit %lu us (%lu MB/s), "
+		"fbdev %lu us (%lu MB/s)\n",
+		(unsigned)cw, (unsigned)ch, (unsigned)(bytes / 1024),
+		t_ram, MBPS(t_ram), t_memcpy, MBPS(t_memcpy),
+		t_u64, MBPS(t_u64), t_u32, MBPS(t_u32), t_wc, MBPS(t_wc));
+	#undef MBPS
 }
 
 void gfx_stat_reset()

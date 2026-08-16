@@ -112,6 +112,12 @@ int chome_test_menu();
 // ...and any other key, the same way. Press and release, on the two frames after it.
 int chome_test_key(uint32_t code);
 
+// Print what the repaints since the last call cost, and start counting again.
+void chome_test_gfxstat();
+
+// Time the framebuffer fill three ways against a cached copy of the same size.
+void chome_test_gfxbench();
+
 // The rectangle the in-game background's picture was drawn in, as drawn.
 int chome_test_bg_rect(int *w, int *h, int *x, int *y);
 
