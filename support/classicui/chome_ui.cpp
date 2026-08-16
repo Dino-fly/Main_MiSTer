@@ -13838,7 +13838,27 @@ static void ig_build_background(const chome_profile *p)
 	  scaler that will not answer.
 	*/
 	int fw = 0, fh = 0;
-	if (!vp_output_rect(&fw, &fh) || fw > p->w || fh > p->h || fw < 16 || fh < 16)
+	if (vp_output_rect(&fw, &fh))
+	{
+		/*
+		  ...in canvas pixels, not the television's.
+
+		  vp_output_rect() answers about the panel, because that is what the scaler knows:
+		  1170x896 of a 1920x1080 mode. The canvas may be a fraction of that mode - it is
+		  half of it with classicui_halfres on - and the fabric scales it back up on the
+		  way out, so a rectangle in panel pixels is twice the size it should be drawn at.
+
+		  Missed the first time, and the symptom was exactly the one this whole path
+		  exists to fix: at half resolution 1170 is wider than the 960-wide canvas, the
+		  guard below rejected it as nonsense, and the background went back to being fitted
+		  to the canvas - "the background image is scaled differently than the gameplay",
+		  reported twice, the second time by a change that was meant to be about speed.
+		*/
+		int div = video_menu_fb_div();
+		if (div > 1) { fw /= div; fh /= div; }
+	}
+
+	if (fw < 16 || fh < 16 || fw > p->w || fh > p->h)
 		shot_fit(p->w, p->h, p->px, &fw, &fh, 0, 0);
 
 	int ox = (p->w - fw) / 2, oy = (p->h - fh) / 2;

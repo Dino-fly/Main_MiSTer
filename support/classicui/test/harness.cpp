@@ -16408,42 +16408,6 @@ static void assert_ingame()
 	for (int i = 0; i < 4; i++) { harness_advance(16); chome_handle(0); }
 	check(!chome_ingame_active(), "and closes it again");
 	/*
-	  The background is the game's own rectangle, at the game's own size.
-
-	  The scaler puts a 224-line core in 448 lines on this canvas; fitting the frame
-	  to the canvas instead gives the full 720, which is a visibly bigger picture
-	  with every scanline at a spacing the game never had - "the background image of
-	  mario is bigger than what the nes core rendered". Asking the scaler for that
-	  rectangle is only half of it: by the time the background is built, the menu's
-	  own framebuffer owns the output and the scaler answers 1080 for OUR canvas. So
-	  what is drawn has to be what the scaler said while the game still had the
-	  screen, and that is what this pins.
-	*/
-	{
-		harness_set_scale(224, 448);        // 2x on this 1280x720 canvas
-		harness_set_fb_state(0);
-		for (int i = 0; i < 3; i++) { harness_advance(1100); chome_handle(0); }
-
-		harness_set_fb_state(1);            // the takeover, as it happens on the way in
-		harness_set_scale(720, 720);        // and the scaler now describing the menu
-
-		chome_test_menu();
-		for (int i = 0; i < 4; i++) { harness_advance(16); chome_handle(0); }
-		check(chome_ingame_active(), "the menu is up over the game");
-
-		int bw = 0, bh = 0;
-		check(chome_test_bg_rect(&bw, &bh, 0, 0), "and it built a background");
-		check(bh == 448, "drawn at the height the game really has, not the canvas's");
-		check(bw == 448 * 4 / 3, "and at that width");
-
-		chome_test_menu();
-		for (int i = 0; i < 4; i++) { harness_advance(16); chome_handle(0); }
-		harness_set_fb_state(0);
-		harness_set_scale(0, 0);
-		for (int i = 0; i < 3; i++) { harness_advance(1100); chome_handle(0); }
-	}
-
-	/*
 	  And with that menu up, the background cover sweep stands down.
 
 	  It forks a curl per cover it wants, and a fork of the firmware is not cheap - so
@@ -16468,18 +16432,118 @@ static void assert_ingame()
 		fill_passes(200);
 		check(art_fill_cursor() == 0 && art_fill_last() == -1,
 			"and the cover sweep does not look at a single game while it is up");
+		check(art_fill_asks() == 0, "so it has fetched nothing");
 
 		chome_test_menu();
 		for (int i = 0; i < 4; i++) { harness_advance(16); chome_handle(0); }
 		check(!chome_ingame_active(), "back in the game");
 
-		art_fresh_slots();
-		fill_passes(200);
-		check(art_fill_cursor() > 0, "and the sweep carries on the moment the menu is gone");
+		/*
+		  Only the negative claim belongs here, and this took three tries to get right.
+
+		  "...and it carries on once the menu is gone" reads like the natural other half,
+		  but it cannot be asserted honestly at this point in the run: by now the shelf has
+		  queued covers of its own, a fetch may be in flight, and a pack request that failed
+		  against the dead URL this suite uses leaves a retry standing - each of which stops
+		  the sweep for reasons that have nothing to do with the menu. Two versions of that
+		  check passed with the guard removed, which is worse than no check.
+
+		  The sweep working at all is assert_art_fill()'s subject and is pinned there, on a
+		  shelf with no menu over it and no fetch in flight. This section only has to show
+		  that the menu stops it, and with the guard taken out it does not.
+		*/
 
 		cfg.classicui_artfill = fill0;
 		cfg.classicui_artfetch = fetch0;
 		snprintf(cfg.classicui_arturl, sizeof(cfg.classicui_arturl), "%s", arturl0);
+	}
+
+	/*
+	  The background is the game's own rectangle, at the game's own size.
+
+	  The scaler puts a 224-line core in 448 lines on this canvas; fitting the frame
+	  to the canvas instead gives the full 720, which is a visibly bigger picture
+	  with every scanline at a spacing the game never had - "the background image of
+	  mario is bigger than what the nes core rendered". Asking the scaler for that
+	  rectangle is only half of it: by the time the background is built, the menu's
+	  own framebuffer owns the output and the scaler answers 1080 for OUR canvas. So
+	  what is drawn has to be what the scaler said while the game still had the
+	  screen, and that is what this pins.
+	*/
+	{
+		/*
+		  With downloads off for the whole of it. This section opens and closes the menu
+		  several times and the shelf asks for the covers of whatever is under the cursor
+		  each time; one of those forked a curl at the real artwork host, which was still
+		  in flight when the sweep test below started and held the sweep down - a failure
+		  in a section about geometry, caused by a section about geometry, with nothing in
+		  either to say so.
+		*/
+		int fetch_was = cfg.classicui_artfetch;
+		cfg.classicui_artfetch = 0;
+
+		harness_set_scale(224, 448);        // 2x on this 1280x720 canvas
+		harness_set_fb_state(0);
+		for (int i = 0; i < 3; i++) { harness_advance(1100); chome_handle(0); }
+
+		harness_set_fb_state(1);            // the takeover, as it happens on the way in
+		harness_set_scale(720, 720);        // and the scaler now describing the menu
+
+		/*
+		  Past the watch's own once-a-second limit before the menu opens, so that a watch
+		  which did NOT stand down for the framebuffer would certainly have re-read and
+		  latched the menu's geometry. Without this wait the stale-but-correct value
+		  survived either way and the check proved nothing.
+		*/
+		for (int i = 0; i < 2; i++) { harness_advance(1100); chome_handle(0); }
+
+		chome_test_menu();
+		for (int i = 0; i < 4; i++) { harness_advance(16); chome_handle(0); }
+		check(chome_ingame_active(), "the menu is up over the game");
+
+		int bw = 0, bh = 0;
+		check(chome_test_bg_rect(&bw, &bh, 0, 0), "and it built a background");
+		check(bh == 448, "drawn at the height the game really has, not the canvas's");
+		check(bw == 448 * 4 / 3, "and at that width");
+
+		chome_test_menu();
+		for (int i = 0; i < 4; i++) { harness_advance(16); chome_handle(0); }
+		check(!chome_ingame_active(), "back in the game");
+
+		/*
+		  And the same on a canvas that is a fraction of the display mode.
+
+		  The scaler answers about the PANEL - it knows nothing about our framebuffer - so
+		  with the half-resolution canvas its rectangle is twice the size the background
+		  should be drawn at, and wider than the canvas it has to fit in. The first version
+		  of this rejected that as nonsense and fell back to fitting the frame to the
+		  canvas, which is the whole fault this path exists to fix. It shipped, because half
+		  resolution had no test here and full resolution passes either way.
+		*/
+		int half0 = cfg.classicui_halfres;
+		cfg.classicui_halfres = 1;
+
+		chome_test_menu();
+		for (int i = 0; i < 6; i++) { harness_advance(16); chome_handle(0); }
+		check(chome_ingame_active(), "the menu is up again");
+		// Asked for on the way in - see fb_size_sync() - so the canvas is half by now.
+		check(video_menu_fb_div() == 2, "and the canvas is half the display mode");
+
+		bw = bh = 0;
+		check(chome_test_bg_rect(&bw, &bh, 0, 0), "and it built a background there too");
+		check(bh == 448 / 2, "the game's rectangle in canvas pixels, half of the panel's");
+		check(bw == (448 * 4 / 3) / 2, "and its width halved with it");
+
+		chome_test_menu();
+		for (int i = 0; i < 4; i++) { harness_advance(16); chome_handle(0); }
+		cfg.classicui_halfres = half0;
+		for (int i = 0; i < 4; i++) { harness_advance(16); chome_handle(0); }
+
+		harness_set_fb_state(0);
+		harness_set_scale(0, 0);
+		for (int i = 0; i < 3; i++) { harness_advance(1100); chome_handle(0); }
+
+		cfg.classicui_artfetch = fetch_was;
 	}
 
 	// And leaves nothing behind: a press with no release would eat the next real one.
