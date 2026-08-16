@@ -11802,6 +11802,23 @@ static void assert_video()
 		check(got >= want_v - 2 && got <= want_v + 2,
 			"the preview crops the picture the television draws, not a square-pixel one");
 
+		/*
+		  And at the size the Display screen actually asks for on a 1080p canvas, which is
+		  larger than the picture in one axis and smaller in the other - the case the
+		  device found black.
+		*/
+		for (int t = 0; t < 3; t++)
+		{
+			int bw = t ? 976 : 400, bh = t ? 732 : 300;
+			int look = (t == 0) ? P_TEST_DMG : (t == 1 ? P_TEST_SHARP : 1 /* PVM RGB */);
+			const uint32_t *big = vp_preview(look, bw, bh, ramp, rw, rh);
+			int lit = 0;
+			if (big) for (int i = 0; i < bw * bh; i++) if ((big[i] & 0xffffff) != 0) { lit++; }
+			printf("  a %dx%d preview of look %d: %d of %d pixels are not black\n",
+				bw, bh, look, lit, bw * bh);
+			check(lit > bw * bh / 4, "the preview is a picture, not a black box");
+		}
+
 		free(ramp);
 		harness_set_scale(0, 0);
 		for (int i = 0; i < 3; i++) { harness_advance(1100); chome_handle(0); }
