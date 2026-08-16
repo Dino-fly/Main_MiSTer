@@ -277,6 +277,14 @@ void lib_state_save();
 // Full path of a game's containing games dir, and of the game itself.
 int  lib_sys_games_dir(int sysidx, char *out, int len);
 
+/*
+  Forget where the games directories were. The answer is cached for the session
+  because it is asked several times per shelf move and costs a walk of candidate
+  roots - including network ones - each time; call this whenever the card underneath
+  might have changed. Already called from lib_rescan() and lib_load_systems().
+*/
+void lib_forget_dirs();
+
 // Fix a core path ("_Console/MegaCD") for this card's regional naming, in place.
 // Returns 1 when it was rewritten. For cores that are not a shelf system's own.
 int  lib_resolve_rbf(char *rbf, int size);

@@ -105,6 +105,9 @@ void harness_set_scale(int src_h, int out_h);
 // Whether our own framebuffer owns the output, i.e. the menu has taken the screen.
 void harness_set_fb_state(int v);
 
+// Times findGamesDir() has been walked - the question the games-dir cache answers.
+int harness_games_dir_asks();
+
 int harness_alive_polls();
 void harness_reset_alive_polls();
 

@@ -109,6 +109,9 @@ int chome_test_core_opt(const char *spec);
 */
 int chome_test_menu();
 
+// ...and any other key, the same way. Press and release, on the two frames after it.
+int chome_test_key(uint32_t code);
+
 // The rectangle the in-game background's picture was drawn in, as drawn.
 int chome_test_bg_rect(int *w, int *h, int *x, int *y);
 

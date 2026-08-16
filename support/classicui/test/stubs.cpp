@@ -92,8 +92,18 @@ int FileExists(const char *name, int)
   paths the harness could not see that the front-end was handing a root-relative path to
   opendir(), which made every ROM system empty on a real boot.
 */
+/*
+  Counted, because on the device this walk is several stats - two of them at network
+  paths - plus a line to the log on the SD card, and it was being run several times per
+  shelf move. "How often is it asked" is the whole claim the cache makes.
+*/
+static int games_dir_asks = 0;
+int harness_games_dir_asks() { return games_dir_asks; }
+
 int findGamesDir(char *dir, size_t dir_len)
 {
+	games_dir_asks++;
+
 	char probe[1024];
 	struct stat st;
 

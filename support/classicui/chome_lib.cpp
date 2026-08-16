@@ -285,7 +285,53 @@ static int load_systems_file()
 int lib_sys_count() { return nsys; }
 const chome_sys *lib_sys(int i) { return (i >= 0 && i < nsys) ? &systems[i] : 0; }
 
+/*
+  Where each system's games are, remembered once.
+
+  Not tidiness: this is asked several times per shelf move - item_on_card() checks the
+  twenty cards the view can show, the art ladder asks for every card it draws - and
+  answering it means findGamesDir(), which walks a list of candidate roots with a stat
+  each. Two of those candidates are `../network/...` and `/media/fat/cifs/...`, so a
+  card with a stale mount pays a network timeout per question, and every hit prints
+  "Found dir:" to a log that is on the SD card. Dinofly saw the sum of it as the picture
+  wobbling while he moved along the shelf, and only while he moved.
+
+  The answer cannot change without the library being told: a stick appearing or a
+  systems file being reloaded both come through the two invalidation points below.
+*/
+static char gd_cache[CH_MAX_SYS][1024];
+static char gd_state[CH_MAX_SYS];        // 0 unknown, 1 found, 2 no such directory
+
+static int lib_sys_games_dir_uncached(int sysidx, char *out, int len);
+
+void lib_forget_dirs()
+{
+	memset(gd_state, 0, sizeof(gd_state));
+}
+
 int lib_sys_games_dir(int sysidx, char *out, int len)
+{
+	const chome_sys *s = lib_sys(sysidx);
+	if (!s) return 0;
+
+	if (sysidx >= 0 && sysidx < CH_MAX_SYS && gd_state[sysidx])
+	{
+		if (gd_state[sysidx] == 2) return 0;
+		snprintf(out, len, "%s", gd_cache[sysidx]);
+		return 1;
+	}
+
+	int found = lib_sys_games_dir_uncached(sysidx, out, len);
+
+	if (sysidx >= 0 && sysidx < CH_MAX_SYS)
+	{
+		gd_state[sysidx] = found ? 1 : 2;
+		if (found) snprintf(gd_cache[sysidx], sizeof(gd_cache[sysidx]), "%s", out);
+	}
+	return found;
+}
+
+static int lib_sys_games_dir_uncached(int sysidx, char *out, int len)
 {
 	const chome_sys *s = lib_sys(sysidx);
 	if (!s) return 0;
@@ -1726,6 +1772,7 @@ static void resolve_names()
 void lib_load_systems()
 {
 	nsys = 0;
+	lib_forget_dirs();
 
 	if (!load_systems_file())
 	{
@@ -1780,6 +1827,7 @@ void lib_init()
 void lib_rescan()
 {
 	printf("ClassicUI: rescanning the library\n");
+	lib_forget_dirs();
 	unlink(idx_path());
 	lib_init_common(0);
 }
