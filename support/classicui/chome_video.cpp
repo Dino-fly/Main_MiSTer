@@ -2511,13 +2511,33 @@ const uint32_t *vp_preview(int i, int w, int h, const uint32_t *ref, int sw_nati
 	*/
 	if (ref)
 	{
-		int n = vp_output_scale();
-		if (n < 2) n = 4;                       // nothing running to ask: a 1080p-ish guess
+		/*
+		  The picture the television is really drawing, in its real proportions, and the
+		  window of it this tile shows - centred.
 
-		// The virtual picture the television would be drawing, and the window of it
-		// this tile shows, centred.
-		int vw = sw_native * n, vh = sh_native * n;
-		while ((vw < w || vh < h) && n < 16) { n++; vw = sw_native * n; vh = sh_native * n; }
+		  Asked of the scaler rather than worked out as native x an integer scale, because
+		  that arithmetic silently assumes square pixels. The Super Nintendo emits 512x224
+		  for A Link to the Past; the television draws that in 1170x896, while native x 4
+		  is 2048 wide. The preview was therefore stretched sideways by three quarters -
+		  which is what Dinofly saw, and reported as the screenshot being vertically
+		  compressed. Every core with a doubled or halved axis had the same fault: the
+		  Mega Drive's 320 and 256 modes, the PlayStation's 640, hi-res Super Nintendo.
+
+		  The fallback is the old arithmetic, for when there is nothing running to ask -
+		  which is also the only case where nothing better is knowable.
+		*/
+		int vw = 0, vh = 0;
+		if (!vp_output_rect(&vw, &vh) || vw < 16 || vh < 16)
+		{
+			int n = vp_output_scale();
+			if (n < 2) n = 4;                   // nothing running to ask: a 1080p-ish guess
+			vw = sw_native * n;
+			vh = sh_native * n;
+		}
+
+		// And never smaller than the tile, or the crop below would have nothing to take.
+		// Doubled rather than stretched, so the proportions survive the growth.
+		while ((vw < w || vh < h) && vw < 8192) { vw *= 2; vh *= 2; }
 
 		int cw = (w < vw) ? w : vw;
 		int ch2 = (h < vh) ? h : vh;
@@ -2555,11 +2575,22 @@ const uint32_t *vp_preview(int i, int w, int h, const uint32_t *ref, int sw_nati
 					  Nothing of this look lives in the scaler - Sharp, None - so the
 					  window IS the native pixels repeated, which is the picture a
 					  scaler with no filter puts on the screen.
+
+					  Mapped through the real picture size rather than an integer scale,
+					  for the same reason it is asked for above: the two axes do not
+					  always magnify by the same amount.
 					*/
 					for (int y = 0; y < ch2; y++)
+					{
+						int sy = (int)((long)(y0 + y) * sh_native / vh);
+						if (sy >= sh_native) sy = sh_native - 1;
 						for (int x = 0; x < cw; x++)
-							win[(size_t)y * cw + x] =
-								coloured[(size_t)((y0 + y) / n) * sw_native + ((x0 + x) / n)];
+						{
+							int sx = (int)((long)(x0 + x) * sw_native / vw);
+							if (sx >= sw_native) sx = sw_native - 1;
+							win[(size_t)y * cw + x] = coloured[(size_t)sy * sw_native + sx];
+						}
+					}
 				}
 
 				// Centre the window in the tile; a tile larger than the render (a
