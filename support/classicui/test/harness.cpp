@@ -1769,6 +1769,34 @@ static void assert_index()
 			"and forgetting it makes the next ask look again, for a card that changed");
 	}
 
+	/* PROBE: how many rows actually change when the shelf moves one card. */
+	{
+		int w = gfx_w(), h = gfx_h();
+		const uint32_t *fb = harness_fb_shown();
+		if (fb && w > 0)
+		{
+			uint32_t *before = (uint32_t*)malloc((size_t)w * h * 4);
+			memcpy(before, fb, (size_t)w * h * 4);
+			press(KEY_RIGHT, 30);
+			frame(30);
+			const uint32_t *after = harness_fb_shown();
+			int rows = 0, first = -1, last = -1;
+			for (int y = 0; y < h; y++)
+			{
+				if (memcmp(before + (size_t)y * w, after + (size_t)y * w, (size_t)w * 4))
+				{
+					rows++;
+					if (first < 0) first = y;
+					last = y;
+				}
+			}
+			printf("  PROBE canvas %dx%d: %d rows changed (%d%%), band %d..%d (%d rows, %d%%)\n",
+				w, h, rows, rows * 100 / h, first, last, last - first + 1,
+				(last - first + 1) * 100 / h);
+			free(before);
+		}
+	}
+
 	check(has_clean, "region tags stripped from titles (\"Super Metroid\")");
 	check(!has_txt, "non-matching extensions ignored (notes.txt)");
 	check(has_recursed, "subdirectories scanned (SNES/Hacks)");
@@ -5140,6 +5168,17 @@ static void slide_band_expect(const chome_profile *p, int *y0, int *y1)
 }
 
 /*
+  The band a settled move repaints: the card band above, plus the block the title, the meta
+  line and the file line share. The block's allotment runs from y_title to the top of the
+  card row, so the two meet - see sel_note_rows() in chome_ui.cpp.
+*/
+static void sel_band_expect(const chome_profile *p, int *y0, int *y1)
+{
+	slide_band_expect(p, y0, y1);
+	if (p->y_title < *y0) *y0 = p->y_title;
+}
+
+/*
   A full repaint of the instant already on screen, with the clock held still.
 
   The comparison the section below is built on needs two repaints of one moment: the
@@ -5618,10 +5657,32 @@ static void assert_carousel_slide()
 	  The release is what commits the chrome, so that frame - and only that frame - has the
 	  new title in it and repaints the world for it. Everything after it is cards.
 	*/
+	int sy0, sy1;
+	sel_band_expect(p, &sy0, &sy1);
+	int sel_rows = sy1 - sy0 + 1;
+	printf("  the settled-move band is rows %d..%d - %d of %d\n", sy0, sy1, sel_rows, h);
+	check(sel_rows < h, "the block and the cards together are still less than the screen");
+
+	/*
+	  The release commits the chrome, so that frame - and only that frame - has the new
+	  title in it. It used to repaint the world for it. It now repaints the block and the
+	  cards, which is what changed: on the device a whole 1080p frame is 8.1MB pushed into
+	  an uncacheable framebuffer, 78ms of copy, and a player taps along a shelf.
+	*/
 	chome_handle(KEY_RIGHT);
 	harness_advance(16);
 	chome_handle(KEY_RIGHT | UPSTROKE);
-	check(gfx_damage_rows() == h, "the release of a tap repaints the world once, for the title");
+	check(gfx_damage_rows() <= sel_rows,
+		"the release of a tap repaints the block and the cards, not the world");
+	check(gfx_damage_rows() < h, "which is less than the whole screen");
+
+	// ...and honestly: the same instant drawn whole is the same picture.
+	{
+		unsigned long banded = harness_fb_hash_box(0, 0, w, h);
+		check(force_full_repaint(), "a full repaint of that instant can be forced");
+		check(harness_fb_hash_box(0, 0, w, h) == banded,
+			"and the settled move's banded frame is byte-identical to it");
+	}
 
 	unsigned long above = harness_fb_hash_box(0, 0, w, by0);
 	unsigned long below = harness_fb_hash_box(0, by1 + 1, w, h);
@@ -5738,7 +5799,8 @@ static void assert_carousel_slide()
 		"a partial frame mid-hold is byte-identical to a full repaint of the same instant");
 
 	chome_handle(KEY_RIGHT | UPSTROKE);
-	check(gfx_damage_rows() == h, "releasing the arrow repaints the world");
+	check(gfx_damage_rows() <= sel_rows,
+		"releasing the arrow repaints the block and the cards, not the world");
 	check(harness_fb_hash_box(0, 0, w, by0) != title_was,
 		"and the title is the one under the cursor again");
 	frame(10);
@@ -5780,6 +5842,42 @@ static void assert_carousel_slide()
 	press(KEY_ESC);
 	frame(10);
 	check(lib_view_count() == was_n, "back out of it");
+
+	/*
+	  And the other escape, which is subtler because nothing about it is structural: moving
+	  from a folder to a game changes the prompt row - Open becomes Start - and the prompts
+	  sit at the bottom of the screen where the band does not reach. A banded frame there
+	  would leave the old prompts standing under the new card, so the dispatch checks what
+	  the row would say and takes the full path when it has changed.
+	*/
+	shelf_rewind();
+	frame(10);
+	check(lib_view_entry(0) && lib_view_entry(0)->kind == ENT_FOLDER,
+		"parked on a folder, whose prompts say Open");
+
+	int steps = 0;
+	while (steps < 40)
+	{
+		const chome_entry *e = lib_view_entry(chome_sel_index());
+		if (e && e->kind == ENT_GAME) break;
+		press(KEY_RIGHT, 30);
+		frame(30);
+		steps++;
+	}
+	// The move that crossed from the last folder to the first game is the one above; its
+	// commit frame is what mattered, so walk back onto the folder and forward again with
+	// the damage watched.
+	press(KEY_LEFT, 30);
+	frame(30);
+	check(lib_view_entry(chome_sel_index())->kind == ENT_FOLDER, "back on the folder");
+
+	chome_handle(KEY_RIGHT);
+	harness_advance(16);
+	chome_handle(KEY_RIGHT | UPSTROKE);
+	check(gfx_damage_rows() == h,
+		"crossing from a folder to a game repaints every row, because the prompts changed");
+	frame(30);
+	check(lib_view_entry(chome_sel_index())->kind == ENT_GAME, "and it did cross");
 }
 
 /*
