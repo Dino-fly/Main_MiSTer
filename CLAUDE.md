@@ -3,6 +3,15 @@
 Notes that are true of this repository whoever is working in it. Machine-specific paths are
 kept out on purpose - only the shape of the rule is here.
 
+## The process rules live in one place
+
+`support/classicui/DEVELOPMENT.md` is the development, testing and release process for the
+front-end: what must be true before a commit, how a test earns trust (the red-proof
+discipline), the honest list of what a green harness says nothing about, the device
+protocol, and the release gate. Read it before writing a test or planning a device
+session. This file stays what it is - repository-level traps, each with its scar - and
+that one owns the process built on top of them.
+
 ## The release build silently drops the ScreenScraper credentials
 
 `chome_ss.cpp` gets the application's ScreenScraper devid and devpassword from
