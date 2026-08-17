@@ -169,8 +169,13 @@ int gfx_begin()
   That means repaint work cannot be seen in CPU time at all. It can only be seen by
   timing it.
 
-  Reported as a summary every GFX_STAT_EVERY copies so the log stays readable; at a 50ms
-  repaint that is roughly every ten seconds.
+  Reported when asked - `echo gfxstat > /dev/MiSTer_cmd` - and at no other time.
+
+  It used to print a summary every GFX_STAT_EVERY copies, which on a busy shelf is every
+  few seconds. That was written before we knew what a line in that log costs: with
+  debug=2 it is a write, and a write while a game runs behind the menu is DDR3 the
+  framebuffer reader is competing for. Nothing in this front-end now writes to the log on
+  a timer; every line it prints is one event happening once.
 
   Full and partial repaints are accounted separately - averaging them together would
   bury the number the partial path exists to produce under the occasional full frame,
@@ -180,8 +185,6 @@ int gfx_begin()
   but the clock_gettime() pairs ran on every composed frame to feed it - work nobody asked
   for on the drawing path of a build that is not being debugged.
 */
-#define GFX_STAT_EVERY 200
-
 static unsigned long gfx_us()
 {
 	struct timespec ts;
@@ -217,12 +220,8 @@ void gfx_stat_compose_begin()
 }
 
 /*
-  Print what has been measured so far and start again.
-
-  The periodic summary only lands every GFX_STAT_EVERY copies, which is a long time on
-  a screen nobody is touching - and the cost of a repaint is exactly the question that
-  comes up while somebody IS touching it, twenty key presses at a time. This answers it
-  on demand: `echo gfxstat > /dev/MiSTer_cmd`.
+  Print what has been measured so far and start again: the only way these numbers ever
+  reach the log. `echo gfxstat > /dev/MiSTer_cmd`.
 */
 void gfx_stat_report(const char *why)
 {
@@ -462,18 +461,6 @@ void gfx_end()
 				if (cp > st->copy_max) st->copy_max = cp;
 				st->rows += (unsigned long)(u.y1 - u.y0 + 1);
 				st->n++;
-
-				if (stat_full.n + stat_part.n >= GFX_STAT_EVERY)
-				{
-					char fs[160], ps[160];
-					stat_fmt(fs, sizeof(fs), "full", &stat_full);
-					stat_fmt(ps, sizeof(ps), "partial", &stat_part);
-
-					printf("ClassicUI: repaint %dx%d over %lu frames: %s; %s\n",
-						cw, ch, stat_full.n + stat_part.n, fs, ps);
-					memset(&stat_full, 0, sizeof(stat_full));
-					memset(&stat_part, 0, sizeof(stat_part));
-				}
 			}
 		}
 	}

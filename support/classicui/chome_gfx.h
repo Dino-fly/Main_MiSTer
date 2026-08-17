@@ -53,7 +53,7 @@ void gfx_clip_clear();
 
 /*
   Repaint cost instrumentation. Call at the start of composing a frame; gfx_end() closes
-  the measurement and logs a summary every couple of hundred frames.
+  the measurement. Nothing is printed until gfx_stat_report() is asked for it.
 
   This exists because repaint work is invisible in CPU time on this board: the firmware
   busy-polls and sits at 100% of one core whether it draws or not, measured both ways on
@@ -69,9 +69,10 @@ void gfx_stat_compose_begin();
   still behind cfg.debug, exactly as the log is - reading is free either way.
 */
 /*
-  Print the counters now and start again - `echo gfxstat > /dev/MiSTer_cmd`. The
-  periodic summary lands every couple of hundred copies, which is far too late when
-  the question is what twenty key presses just cost.
+  Print the counters now and start again - `echo gfxstat > /dev/MiSTer_cmd`. Nothing
+  prints them otherwise: this front-end writes no line to the log on a timer, because a
+  line in that log is a write, and a write while a game runs behind the menu is DDR3 the
+  framebuffer reader is competing for.
 */
 void gfx_stat_report(const char *why);
 
