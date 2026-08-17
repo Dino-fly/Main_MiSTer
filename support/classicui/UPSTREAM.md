@@ -14,6 +14,7 @@ Lines changed against `master`, excluding the new module and its docs:
  MiSTer.ini      50        cfg.cpp/h      28        user_io.cpp/h  131
  input.cpp/h    357        video.cpp/h   298        menu.cpp        48
  scaler.cpp/h    81        audio.cpp/h    20        joymapping.cpp   6
+ cheats.cpp/h    72
 ```
 
 Everything below is guarded by `cfg.classicui`, by `chome_active()`, or by a request
@@ -210,6 +211,44 @@ The keys in `cfg.h`/`cfg.cpp`/`MiSTer.ini`. Adding one means all three in step.
 
 `classicui_freeze` and `classicui_gamelist` default to **1**, both set explicitly in
 `cfg_parse()` — a zeroed struct would mean off.
+
+---
+
+## 8. Reading the cheat store
+
+**What was added.** Five functions in `cheats.cpp`/`cheats.h`: `cheats_name(idx)`,
+`cheats_is_enabled(idx)`, `cheats_set_enabled(idx, on)`, `cheats_active()`,
+`cheats_max_lines()`. Nothing was changed or removed.
+
+**Why.** The firmware already loads a game's cheats — `user_io.cpp` calls `cheats_init()`
+on every ROM load behind `user_io_use_cheats()` — and by the time an in-game menu can be
+opened the store is full. What it had no way to do is *read* it. Everything upstream
+exposes is written around the OSD's own cursor and its 32-column buffer: `cheats_print()`
+draws into the OSD, `cheats_scan()` moves that cursor, and `cheats_toggle()` acts on
+wherever it happens to be. A front-end with its own layout can use none of it.
+
+**How it stays additive.** `cheats_set_enabled()` does not reimplement the enable path —
+it borrows `iSelectedEntry`, calls the existing `cheats_toggle()`, and puts the cursor
+back. The lazy load from the zip, the length check, the `cheat_max_active` budget and the
+resend to the core are therefore upstream's code on upstream's terms, and there is no
+second copy of them to keep in step. It returns what the store says *afterwards* rather
+than what was asked for, because enabling can be refused when the budget is spent — see
+below.
+
+**One thing worth knowing before using any of it.** `cheats_loaded()` is not "how many
+cheats are loaded". It is `pos / cheat_unit_size` from `cheats_send()`: the number of cheat
+*lines currently handed to the core*, and therefore zero until the player switches one on.
+The count of records is `cheats_available()`, which is what `menu.cpp:2598` keys the classic
+OSD's own entry on and what the front-end keys its row on. A feature gated on
+`cheats_loaded()` can never be the thing that enables the first cheat.
+
+**And the refusal.** A core takes `cheat_max_active` code lines (128 unless an MRA says
+otherwise) and a cheat is a whole number of them, so `cheats_toggle()` can decline. Upstream
+prints that to the log, which on a television is nowhere. The front-end's Cheats screen says
+it under the list instead; the accessors are what let it tell a refusal from a success.
+
+There is no version to check and none is needed: this is firmware-side only, so unlike the
+SNAC reader (§4 of the hacks below) no core has to be rebuilt for it.
 
 ---
 

@@ -56,6 +56,8 @@
 #include "../chome_ini.h"
 #include "../chome_cfgrec.h"
 #include "../chome_opt.h"
+#include "../chome_cheats.h"
+#include "../../../cheats.h"
 #include "../chome_icons32.h"
 #include "../chome_btn12.h"
 #include "../../../lib/imlib2/Imlib2.h"
@@ -13988,7 +13990,9 @@ enum {
 	S_ABOUT_T   = 6,
 	S_POWER_T   = 12,
 	S_CORE_T    = 16,
-	S_CLOSE_T   = 20
+	S_CLOSE_T   = 20,
+	S_CHEATS_T  = 21,
+	S_CHEATV_T  = 22
 };
 
 /*
@@ -14696,6 +14700,765 @@ static void assert_close_game_on_the_bar()
 	harness_set_fb(1280, 720);
 	gfx_shutdown();
 	theme_update(1280, 720, cfg.classicui_profile);
+	chome_leave();
+	chome_handle(0);
+	frame(6);
+}
+
+/* ------------------------------------------------------------------ cheats --- */
+
+/*
+  The Options panel's rows as a list, so a test can say which ones are there.
+
+  Two arrays of strings and a pair of #defines were what this used to be, and the row that
+  broke it is Cheats: it is on the list only in a game whose pack has any, so the count is
+  not a constant and the position of every row below it is not either. chome_test_opt_rows()
+  asks the front-end's own opt_ids(), which the draw, the row count and the press all ask
+  too - so a row this finds is a row all three agree on, and a row it does not find cannot
+  be pressed.
+*/
+static int opt_row_index(const char *want)
+{
+	char list[512];
+	chome_test_opt_rows(list, sizeof(list));
+
+	int idx = 0;
+	const char *p = list;
+	while (*p)
+	{
+		const char *e = strchr(p, '|');
+		int n = e ? (int)(e - p) : (int)strlen(p);
+		if ((int)strlen(want) == n && !strncmp(p, want, n)) return idx;
+		idx++;
+		if (!e) break;
+		p = e + 1;
+	}
+	return -1;
+}
+
+static int opt_row_count()
+{
+	char list[512];
+	chome_test_opt_rows(list, sizeof(list));
+	if (!list[0]) return 0;
+
+	int n = 1;
+	for (const char *p = list; *p; p++) if (*p == '|') n++;
+	return n;
+}
+
+/*
+  A fixture with every shape the fold has to answer for, taken off a real card rather than
+  invented - see chome_cheats.h for where the measurements came from.
+
+  Written here in a readable order and sorted by the stub into the order cheats_init()
+  would really have produced (stubs.cpp copies CheatComp), because the fold works on
+  adjacency and a fixture left in insertion order would agree with the front-end while
+  proving nothing about the device.
+*/
+static void cheat_fixture()
+{
+	harness_clear_cheats();
+	harness_set_cheat_budget(128);
+
+	// A lone cheat: no group, an ordinary row that toggles.
+	harness_add_cheat("Infinite Zennys.gg");
+
+	// A stem with variants, plus a longer name sharing its prefix that must NOT be
+	// folded into it. Sorted, these come out (1), (2), then the bare name, then SwordMan -
+	// a space is 0x20 and a full stop is 0x2E.
+	harness_add_cheat("Sword.gg");
+	harness_add_cheat("Sword (2).gg");
+	harness_add_cheat("Sword (1).gg");
+	harness_add_cheat("SwordMan.gg");
+
+	// A parenthesis holding words rather than a number. Both of these are real names from
+	// the GBA pack and they sit in the same zip, which is why the stem rule is narrow.
+	harness_add_cheat("Infinite Battery Power (Power Plant Network).gg");
+
+	// A number with no space before it, which is part of a name and not a variant.
+	harness_add_cheat("Thunder(3).gg");
+
+	/*
+	  And the measured oddity: "Have Dex Add" sorts between "Have Dex (1)" and "Have Dex",
+	  so the stem "Have Dex" comes out as two runs with another group between them. Three
+	  of the 249 stems in the real pack do this. Pinned here so it stays a known shape
+	  rather than becoming a surprise later.
+	*/
+	harness_add_cheat("Have Dex.gg");
+	harness_add_cheat("Have Dex (1).gg");
+	harness_add_cheat("Have Dex Add.gg");
+}
+
+// Which group a stem is in, by name, so the checks below read as statements about cheats
+// rather than about indices.
+static int cheat_group_of(const char *stem)
+{
+	char buf[CH_NAME_LEN];
+	for (int g = 0; g < ch_groups(); g++)
+		if (!strcmp(ch_group_name(g, buf, sizeof(buf)), stem)) return g;
+	return -1;
+}
+
+// Open Options and walk to the Cheats row. Returns the screen it landed on.
+static int cheats_open()
+{
+	opt_open();
+
+	int at = opt_row_index("Cheats");
+	if (at < 0) return -1;
+
+	for (int i = 0; i < at; i++) press(KEY_DOWN, 6);
+	press(KEY_ENTER, 14);
+	frame(8);
+	return chome_screen_id();
+}
+
+/*
+  Walk the cursor to a row, by pressing the key a player would and watching where it lands.
+
+  Both cheats lists wrap, so "press up forty times" does not mean "the top" - it means
+  forty rows back from wherever it started, and on a forty-eight row list that is a
+  different row every time the fixture changes. This steps and reads instead, and gives up
+  when a press stops moving anything rather than looping for ever.
+*/
+static int cheats_goto(int target)
+{
+	for (int i = 0; i < 600; i++)
+	{
+		int cur = chome_list_cursor(0, 0);
+		if (cur == target) return 1;
+		press(KEY_DOWN, 3);
+		if (chome_list_cursor(0, 0) == cur) return 0;
+	}
+	return 0;
+}
+
+// Put a game on screen with the in-game menu open, which is the only state any of this
+// exists in.
+static void cheats_ingame()
+{
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "gb\nTetris (World).gb\n"); fclose(f); }
+	}
+
+	harness_set_menu_core(0);
+	harness_set_fb_supported(1);
+	harness_set_confstr(1);
+	harness_set_osd_visible(0);
+	chome_handle(0);
+
+	if (chome_ingame_active()) press(KEY_MENU, 14);
+	frame(6);
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 40 && lib_scanning(); i++) frame(2);
+	frame(12);
+}
+
+/*
+  Cheats.
+
+  A beta tester's request, and the half of it that can be settled without hardware. What
+  cannot: that a code switched on here actually changes the game. Nothing in this harness
+  reaches the core - cheats.cpp is not even compiled, cheats_send() is a stub, and the
+  fabric is modelled - so every check below is about the screen, the fold, the refusal and
+  the file, and the one about a game is on the device (see TEST-PLAN.md).
+*/
+static void assert_cheats()
+{
+	printf("\n== cheats ==\n");
+
+	uint8_t was_profile = cfg.classicui_profile;
+
+	cheats_ingame();
+
+	/* ---------------------------------------------------- the row's presence --- */
+
+	/*
+	  Absent, not greyed, when the pack has nothing - and this direction is asserted first
+	  and against an empty store, because it is the state every other section in this file
+	  runs in and the one a wrong opt_ids() would break everywhere at once.
+	*/
+	harness_clear_cheats();
+	frame(4);
+
+	check(opt_row_index("Cheats") < 0, "with no cheats loaded there is no Cheats row");
+	check(opt_row_count() == 11, "and the in-game Options panel is its usual eleven rows");
+
+	cheat_fixture();
+	frame(4);
+
+	check(opt_row_index("Cheats") >= 0, "a pack with cheats in it puts the row on the panel");
+	check(opt_row_count() == 12, "which makes the in-game panel twelve rows");
+
+	/*
+	  And where it is. Immediately before Advanced, which is the row that hands the player
+	  to the classic OSD - the place the OSD's own Cheats page was the only route to them
+	  until now. Asserted by neighbour rather than by index so inserting anything above it
+	  does not have to be a test change.
+	*/
+	check(opt_row_index("Cheats") == opt_row_index("Advanced") - 1,
+		"and puts it directly above Advanced, where the classic OSD's own cheats live");
+	check(opt_row_index("About") == opt_row_count() - 1,
+		"with About still the last row, as it is on both lists");
+
+	/*
+	  Never on the shelf, whatever is loaded. The store belongs to a running game; a Cheats
+	  row on the menu core would open a screen about a core that is not there.
+	*/
+	harness_set_menu_core(1);
+	chome_leave();
+	press(KEY_MENU, 20);
+	frame(8);
+	check(opt_row_index("Cheats") < 0, "the shelf never offers the row, even with a pack loaded");
+	check(opt_row_count() == 11, "so its panel is eleven rows as it has always been");
+
+	harness_set_menu_core(0);
+	cheats_ingame();
+
+	/* ----------------------------------------------------------------- the fold --- */
+
+	int at = cheats_open();
+	check(at == S_CHEATS_T, "the row opens the Cheats screen");
+
+	printf("  fixture: %d cheats folded into %d rows\n", cheats_available(), ch_groups());
+
+	check(cheats_available() == 10, "the fixture holds ten cheats");
+	/*
+	  Eight, not seven, and the extra one is the measured split: "Have Dex" is two runs with
+	  "Have Dex Add" between them. Written out so the number is a claim about the fixture
+	  rather than a figure somebody adjusted until the test went green.
+	*/
+	check(ch_groups() == 8, "folded into eight rows - seven names, one of them in two runs");
+
+	int g_sword = cheat_group_of("Sword");
+	int g_swordman = cheat_group_of("SwordMan");
+	int g_zennys = cheat_group_of("Infinite Zennys");
+	int g_thunder = cheat_group_of("Thunder(3)");
+	int g_battery = cheat_group_of("Infinite Battery Power (Power Plant Network)");
+
+	check(g_sword >= 0 && ch_group_count(g_sword) == 3,
+		"Sword, Sword (1) and Sword (2) fold into one row of three");
+	check(g_swordman >= 0 && ch_group_count(g_swordman) == 1,
+		"and SwordMan stays its own row - a longer name is not a variant");
+	check(g_zennys >= 0 && ch_group_count(g_zennys) == 1,
+		"a cheat that occurs once is an ordinary row, not a group of one");
+	check(g_thunder >= 0 && ch_group_count(g_thunder) == 1,
+		"Thunder(3) keeps its number: no space before it, so it is a name");
+	check(g_battery >= 0 && ch_group_count(g_battery) == 1,
+		"and a parenthesis holding words is not a variant marker either");
+
+	/*
+	  The split stem, which is a measurement and not a preference - see chome_cheats.h. Two
+	  runs called "Have Dex" with "Have Dex Add" between them, because "Have Dex Add.gg"
+	  sorts between "Have Dex (1).gg" and "Have Dex.gg".
+	*/
+	{
+		char buf[CH_NAME_LEN];
+		int runs = 0, add = -1;
+		for (int g = 0; g < ch_groups(); g++)
+		{
+			const char *nm = ch_group_name(g, buf, sizeof(buf));
+			if (!strcmp(nm, "Have Dex")) runs++;
+			if (!strcmp(nm, "Have Dex Add")) add = g;
+		}
+		check(runs == 2, "a stem interrupted in the sort comes out as two rows, as measured");
+		check(add >= 0, "with the name that interrupted it between them");
+	}
+
+	/*
+	  And the order inside a group, which the label depends on. Sorted with the extension
+	  on, "Sword (1).gg" and "Sword (2).gg" come before "Sword.gg" - so the unnumbered
+	  entry is the LAST row and a label built from the row's position would be wrong for
+	  every row but one.
+	*/
+	{
+		char tag[16];
+		check(!strcmp(ch_entry_tag(ch_group_index(g_sword, 0), tag, sizeof(tag)), "1"),
+			"the first row of a group is the pack's (1), not its unnumbered entry");
+		check(!strcmp(ch_entry_tag(ch_group_index(g_sword, 2), tag, sizeof(tag)), ""),
+			"and the unnumbered one is last, which is what the sort really does");
+	}
+
+	/* ------------------------------------------------------------- toggling --- */
+
+	// Onto the lone Zennys row, and both directions of it. Two fixes in one day have
+	// shipped having exercised only the direction the bug was reported on.
+	{
+		check(cheats_goto(g_zennys), "the cursor walks to a lone cheat's row");
+
+		int idx = ch_group_index(g_zennys, 0);
+		check(!cheats_is_enabled(idx), "which starts off");
+
+		press(KEY_ENTER, 10);
+		frame(4);
+		check(cheats_is_enabled(idx), "A switches it on");
+		check(cheats_active() == 1, "and it is the only one on");
+
+		press(KEY_ENTER, 10);
+		frame(4);
+		check(!cheats_is_enabled(idx), "and A again switches it off, which is the direction that goes untested");
+		check(cheats_active() == 0, "leaving nothing on");
+	}
+
+	/* ------------------------------------------------- a group and its codes --- */
+
+	{
+		check(cheats_goto(g_sword), "the cursor reaches the folded row");
+
+		press(KEY_ENTER, 14);
+		frame(6);
+		check(chome_screen_id() == S_CHEATV_T, "A on a folded row opens its codes rather than switching it");
+		check(chome_list_cursor(0, 0) == 0, "on the first of them");
+
+		press(KEY_DOWN, 6);
+		press(KEY_ENTER, 10);
+		frame(4);
+		check(cheats_is_enabled(ch_group_index(g_sword, 1)), "A on a code switches that code on");
+		check(!cheats_is_enabled(ch_group_index(g_sword, 0)), "and only that one");
+		check(ch_group_on(g_sword) == 1, "so the group reads one of three on");
+
+		press(KEY_ESC, 12);
+		frame(6);
+		check(chome_screen_id() == S_CHEATS_T, "B comes back to the list");
+		check(chome_list_cursor(0, 0) == g_sword, "with the cursor still on the row it was opened from");
+
+		/*
+		  And re-opening it starts at the first code again, which is deliberate and matches
+		  what the core-options screen does with co_row: the list a player came back to is
+		  the group list, and a codes list that reopened halfway down would be a screen
+		  whose starting point depended on a visit they have already forgotten. The group
+		  list's own cursor is the one that has to persist, and it does - above.
+		*/
+		press(KEY_ENTER, 14);
+		frame(6);
+		check(chome_list_cursor(0, 0) == 0, "and re-opening the group starts at its first code");
+		press(KEY_ESC, 12);
+		frame(6);
+	}
+
+	/* --------------------------------------------------------- the refusal --- */
+
+	/*
+	  The core takes a fixed number of code lines and refuses beyond it, silently, into a
+	  log nobody on a television can read. This is that branch, and the check that the
+	  screen says so - red-proofed by making the budget too small to hold the second cheat
+	  rather than by asserting a message that would appear anyway.
+	*/
+	{
+		harness_clear_cheats();
+		harness_set_cheat_budget(2);
+		harness_add_cheat("First.gg", 1);
+		harness_add_cheat("Second.gg", 1);
+		harness_add_cheat("Third.gg", 1);
+		frame(4);
+
+		cheats_open();
+		frame(4);
+
+		press(KEY_ENTER, 10);
+		press(KEY_DOWN, 6);
+		press(KEY_ENTER, 10);
+		frame(4);
+		check(cheats_active() == 2, "two codes fit inside the core's budget");
+
+		press(KEY_DOWN, 6);
+		press(KEY_ENTER, 10);
+		frame(4);
+		check(cheats_active() == 2, "and the third is refused rather than quietly dropped later");
+		check(!cheats_is_enabled(2), "the store did not move");
+
+		char foot[128];
+		chome_test_cheat_footer(foot, sizeof(foot));
+		printf("  footer after the refusal: %s\n", foot);
+		check(!strcmp(foot, "The core has no room for it"),
+			"and the screen says so, where upstream's OSD only says it to the log");
+
+		dump("cheats-budget-full");
+	}
+
+	/* ------------------------------------------------------ what is remembered --- */
+
+	cheat_fixture();
+	ch_forget_all();
+
+	/*
+	  Re-opened after ch_forget_all(), and this is not tidiness: that call is the harness-only
+	  "a new process starts clean", and starting clean includes forgetting which game is
+	  bound. Without the re-open the screen below is the one a core nobody launched from here
+	  would show, and every Keep check would pass for the wrong reason - by there being
+	  nothing to keep against.
+	*/
+	cheats_ingame();
+	cheats_open();
+	frame(4);
+
+	{
+		char leg[256], foot[128];
+		chome_test_legend(leg, sizeof(leg));
+		chome_test_cheat_footer(foot, sizeof(foot));
+		printf("  legend with nothing kept: %s\n  footer: %s\n", leg, foot);
+
+		check(!!strstr(leg, "Keep"), "with a game bound, X offers to keep the set");
+		check(!strstr(leg, "Forget"), "and does not offer to forget one that is not there");
+		check(!strstr(foot, "cannot be kept"),
+			"and the footer does not claim the set cannot be kept");
+
+		// Switch one on and keep it.
+		check(cheats_goto(cheat_group_of("Infinite Zennys")), "the cursor is on a cheat to keep");
+		press(KEY_ENTER, 10);
+		frame(4);
+		check(cheats_active() == 1, "one cheat is on");
+		check(ch_kept_count() == 0, "and nothing is remembered yet - toggling is not keeping");
+
+		press(KEY_TAB, 12);
+		frame(6);
+		check(ch_kept_count() == 1, "X remembers it against this game");
+		check(ch_kept_matches_live(), "and what is stored is what is switched on");
+
+		dump("cheats-kept");
+
+		chome_test_legend(leg, sizeof(leg));
+		check(!!strstr(leg, "Forget"), "and X becomes the way to take it back");
+
+		/*
+		  The note first, because it is what the screen really says for four seconds after a
+		  press and it outranks the state line - which is the ranking, not an accident, and
+		  reading the state line here would have been reading past the thing the player sees.
+		*/
+		chome_test_cheat_footer(foot, sizeof(foot));
+		printf("  footer just after keeping: %s\n", foot);
+		check(!strcmp(foot, "1 kept for this game"),
+			"and the footer reports the write, in the number of cheats it wrote");
+
+		// ...and once it has expired, the state underneath it.
+		harness_advance(5000);
+		frame(4);
+		chome_test_cheat_footer(foot, sizeof(foot));
+		printf("  footer once the note expires: %s\n", foot);
+		check(!strcmp(foot, "Kept for this game - X to forget"),
+			"and underneath it the screen says the set is kept, in the words the legend follows");
+
+		/*
+		  And the state that only a comparison can produce: something IS kept, and it is not
+		  what is switched on.
+
+		  Deliberately a row that toggles rather than one that opens - the row below Zennys
+		  may be a folded group, and A there opens its codes instead of switching anything,
+		  which is what made the first version of this check pass while changing nothing.
+		*/
+		check(cheats_goto(cheat_group_of("SwordMan")), "onto a second lone cheat");
+		press(KEY_ENTER, 10);
+		frame(4);
+		check(cheats_active() == 2, "which switches on, so the live set is no longer the kept one");
+
+		harness_advance(5000);
+		frame(4);
+		chome_test_cheat_footer(foot, sizeof(foot));
+		printf("  footer with a different set live: %s\n", foot);
+		check(!strcmp(foot, "This game remembers a different set"),
+			"switching another cheat on makes the screen say the kept set is out of date");
+		check(!ch_kept_matches_live(), "because the stored set really is not the live one");
+
+		chome_test_legend(leg, sizeof(leg));
+		check(!!strstr(leg, "Keep") && !strstr(leg, "Forget"),
+			"and X goes back to offering Keep, so it cannot forget what was not re-kept");
+
+		/*
+		  Switching it off again matches once more. This is the check that would survive a
+		  broken comparison and the one above is not, so both are here: a ch_kept_matches_live()
+		  that only counted would say "different" here too.
+		*/
+		press(KEY_ENTER, 10);
+		frame(4);
+		check(cheats_active() == 1, "switching it back off leaves one on");
+		check(ch_kept_matches_live(), "and the live set is the kept one again");
+
+		/*
+		  And the shape a comparison that only counted would get wrong: ONE kept, ONE live,
+		  different cheats.
+
+		  This is DEVELOPMENT.md's third failure mode - a fixture where the two sides of a
+		  distinction happen to agree - applied to the one predicate that decides what X
+		  does. The check above it, with two live against one kept, passes whether the sets
+		  are compared or merely counted; this one does not, and it is the pair of them that
+		  makes the claim.
+		*/
+		check(cheats_goto(cheat_group_of("Infinite Zennys")), "onto the cheat that is kept");
+		press(KEY_ENTER, 10);          // off
+		frame(4);
+		check(cheats_goto(cheat_group_of("SwordMan")), "and onto one that is not");
+		press(KEY_ENTER, 10);          // on
+		frame(4);
+
+		check(cheats_active() == 1 && ch_kept_count() == 1,
+			"one cheat kept and one switched on - the same count, a different cheat");
+		check(!ch_kept_matches_live(),
+			"which the screen still calls a different set, because it compares them rather than counting");
+
+		harness_advance(5000);
+		frame(4);
+		chome_test_cheat_footer(foot, sizeof(foot));
+		check(!strcmp(foot, "This game remembers a different set"), "and says so under the list");
+
+		// ...and back, so what follows starts where it thinks it does.
+		press(KEY_ENTER, 10);
+		frame(4);
+		check(cheats_goto(cheat_group_of("Infinite Zennys")), "back to the kept one");
+		press(KEY_ENTER, 10);
+		frame(4);
+		check(ch_kept_matches_live(), "restored");
+	}
+
+	/* --------------------------------------------- and it comes back on launch --- */
+
+	/*
+	  The point of the whole feature, and the check the file format exists for: names are
+	  stored, not indices, so a pack that gains an entry must still switch the same cheat
+	  on. Here the fixture is rebuilt from scratch - a fresh store with nothing enabled,
+	  plus one extra name inserted before the remembered one, which shifts every index
+	  after it.
+	*/
+	{
+		uint32_t key = ch_bound_game();
+		check(key != 0, "the running game has a key to hang the memory on");
+
+		harness_clear_cheats();
+		harness_add_cheat("AAA New Cheat In A Later Pack.gg");    // sorts first, shifting everything
+		harness_add_cheat("Infinite Zennys.gg");
+		harness_add_cheat("Sword.gg");
+		harness_add_cheat("Sword (1).gg");
+		frame(4);
+
+		check(cheats_active() == 0, "a freshly loaded pack has nothing switched on");
+
+		int n = ch_apply_for_game(key);
+		frame(4);
+
+		check(n == 1, "the launch path switches the remembered cheat back on");
+		check(cheats_active() == 1, "and only that one");
+
+		char nm[CH_NAME_LEN];
+		int on = -1;
+		for (int i = 0; i < cheats_available(); i++) if (cheats_is_enabled(i)) on = i;
+		check(on >= 0 && !strcmp(ch_entry_name(on, nm, sizeof(nm)), "Infinite Zennys"),
+			"and it is the cheat by name, not whatever now sits at the old index");
+	}
+
+	/* ----------------------------------------------- a name that is gone, and forget --- */
+
+	{
+		uint32_t key = ch_bound_game();
+
+		harness_clear_cheats();
+		harness_add_cheat("Something Else Entirely.gg");
+		frame(4);
+
+		int n = ch_apply_for_game(key);
+		check(n == 0, "a remembered cheat the pack no longer has is dropped, not guessed at");
+		check(cheats_active() == 0, "and nothing else is switched on in its place");
+
+		// Put the fixture back and forget the game, both presses of it.
+		cheat_fixture();
+		frame(4);
+		ch_apply_for_game(key);
+		cheats_open();
+		frame(4);
+
+		check(ch_kept_count() == 1, "the memory survived all of that");
+
+		press(KEY_TAB, 12);
+		frame(4);
+		check(ch_kept_count() == 1, "one X only arms the forget - it does not do it");
+
+		dump("cheats-forget-armed");
+
+		press(KEY_TAB, 12);
+		frame(4);
+		check(ch_kept_count() == 0, "and the second X forgets it");
+		check(cheats_active() == 1, "without switching anything off: this session is still the player's");
+	}
+
+	/* --------------------------------------------- a core nobody launched from here --- */
+
+	/*
+	  With no game bound the cheats still work and nothing can be remembered, and the screen
+	  has to say that rather than offer a press that writes nothing. Red-proofed by the pair:
+	  the same legend is read with a key and without one.
+	*/
+	{
+		ch_bind_game(0);
+		frame(4);
+
+		char leg[256];
+		chome_test_legend(leg, sizeof(leg));
+		printf("  legend with no game bound: %s\n", leg);
+
+		check(!strstr(leg, "Keep") && !strstr(leg, "Forget"),
+			"a core nobody launched from here offers neither Keep nor Forget");
+
+		// Past the note the forget left standing, which outranks the state line for four
+		// seconds - see the ranking in ch_footer().
+		harness_advance(5000);
+		frame(4);
+
+		char foot[128];
+		chome_test_cheat_footer(foot, sizeof(foot));
+		printf("  footer with no game bound: %s\n", foot);
+		check(!strcmp(foot, "Cheats work now, but cannot be kept"),
+			"and says why in words, rather than by a prompt that is simply missing");
+
+		int before = cheats_active();
+		press(KEY_TAB, 12);
+		frame(4);
+		check(ch_kept_count() == 0, "and X writes nothing");
+		check(cheats_active() == before, "and changes nothing");
+
+		dump("cheats-not-keepable");
+	}
+
+	/* ---------------------------------------------------------- every canvas --- */
+
+	/*
+	  Including the shipped default. classicui_halfres=1 is what users boot into, and the
+	  identical in-game fault was reported twice because only full resolution was ever
+	  tested - see DEVELOPMENT.md. The clip log is cleared first and read after, so what is
+	  asserted is what the screens really drew rather than a width recomputed here.
+	*/
+	{
+		ch_bind_game(1234);
+		cheat_fixture();
+
+		// A pack big enough that the list cannot fit any panel, so the window and the
+		// scrollbar are exercised rather than merely present.
+		for (int i = 0; i < 40; i++)
+		{
+			char nm[64];
+			snprintf(nm, sizeof(nm), "Filler Cheat %02d.gg", i);
+			harness_add_cheat(nm);
+		}
+
+		struct { int w, h, force, half; const char *name; } canv[] = {
+			{ 1280, 720, 1, 0, "hd" },
+			{  640, 480, 2, 0, "sd" },
+			{  320, 240, 3, 0, "lo" },
+			{ 1280, 720, 0, 1, "halfres-default" },
+		};
+
+		/*
+		  Where the clip log stands now, so the check below reads only what these four
+		  canvases add. NOT cleared: everything recorded before this belongs to the
+		  run-wide guard at the end of the file, and a section that wipes it erases exactly
+		  the evidence that guard exists to report - which assert_long_core_list_scrolls()
+		  has a comment about, having done it once.
+		*/
+		int clip_from = gfx_clip_log_n();
+
+		for (int c = 0; c < 4; c++)
+		{
+			cfg.classicui_halfres = (uint8_t)canv[c].half;
+			cfg.classicui_profile = (uint8_t)canv[c].force;
+			harness_set_fb(canv[c].w, canv[c].h);
+			gfx_shutdown();
+			theme_update(gfx_w(), gfx_h(), cfg.classicui_profile);
+
+			cheats_ingame();
+			int landed = cheats_open();
+
+			char what[160];
+			snprintf(what, sizeof(what), "%s: the Cheats screen opens", canv[c].name);
+			check(landed == S_CHEATS_T, what);
+
+			/*
+			  The selected row is drawn, and no row of the list was drawn past the panel
+			  edge. Read the same two ways assert_long_core_list_scrolls() reads them,
+			  which is the section that had the same question about the other screen built
+			  on draw_panel_ex(): the cursor's own plate found in the framebuffer, and
+			  draw_rows_c()'s own count of what it stopped short of drawing. Neither
+			  recomputes the panel arithmetic that is the thing under test.
+			*/
+			snprintf(what, sizeof(what), "%s: with the cursor's row drawn on the screen", canv[c].name);
+			check(sel_bar_y() >= 0, what);
+
+			// To the last row of a list far longer than any panel here, which is the row a
+			// window that did not track the cursor would lose.
+			int last = ch_groups() - 1;
+			snprintf(what, sizeof(what), "%s: the cursor reaches the last of %d rows", canv[c].name, ch_groups());
+			check(cheats_goto(last), what);
+
+			snprintf(what, sizeof(what), "%s: and it is drawn there rather than below the panel", canv[c].name);
+			check(sel_bar_y() >= 0, what);
+
+			snprintf(what, sizeof(what), "%s: with no row of the list drawn past the panel edge", canv[c].name);
+			check(chome_rowdrop_n() == 0, what);
+
+			snprintf(what, sizeof(what), "cheats-%s", canv[c].name);
+			dump(what);
+
+			// Into a group and back, at this canvas too - the second screen has its own
+			// panel arithmetic and has to survive 240p as well.
+			snprintf(what, sizeof(what), "%s: the cursor walks to a folded row", canv[c].name);
+			check(cheats_goto(cheat_group_of("Sword")), what);
+
+			press(KEY_ENTER, 12);
+			frame(6);
+			snprintf(what, sizeof(what), "%s: and a group's codes open", canv[c].name);
+			check(chome_screen_id() == S_CHEATV_T, what);
+
+			snprintf(what, sizeof(what), "%s: with the codes list drawn inside its own panel too", canv[c].name);
+			check(sel_bar_y() >= 0 && chome_rowdrop_n() == 0, what);
+
+			snprintf(what, sizeof(what), "cheats-codes-%s", canv[c].name);
+			dump(what);
+
+			press(KEY_ESC, 10);
+			frame(4);
+		}
+
+		/*
+		  Nothing of ours was cut on either screen, at any of those canvases.
+
+		  draw_cheats() and draw_cheat_variants() each call gfx_clip() exactly once, on the
+		  footer, so a record from either site IS a sentence of ours that did not fit - the
+		  panel title goes through draw_panel_ex() and the row labels through marq_fit().
+		  That is why this can assert on the site alone rather than re-listing the copy
+		  here, which would go stale the first time a wording changed.
+		*/
+		int cut = 0;
+		for (int i = clip_from; i < gfx_clip_log_n(); i++)
+		{
+			const gfx_clip_rec *r = gfx_clip_log(i);
+			if (strcmp(r->site, "draw_cheats") && strcmp(r->site, "draw_cheat_variants")) continue;
+			cut++;
+			printf("  CUT   %-20s s%d %3dpx (-%d) \"%s\"\n",
+				r->site, r->scale, r->maxpx, r->lost, r->text);
+		}
+		check(cut == 0, "no line the cheats screens write is cut off at any profile");
+	}
+
+	/* ------------------------------------------------------------- put it back --- */
+
+	/*
+	  The store emptied, because every section after this is entitled to the eleven-row
+	  panel it has always had - and the check that emptying it really does put the row away
+	  is the other direction of the first check in this section.
+	*/
+	harness_clear_cheats();
+	ch_forget_all();
+
+	cfg.classicui_halfres = 0;
+	cfg.classicui_profile = was_profile;
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, cfg.classicui_profile);
+
+	cheats_ingame();
+	opt_open();
+	check(opt_row_index("Cheats") < 0, "emptying the pack takes the row away again");
+	check(opt_row_count() == 11, "and the panel is eleven rows once more");
+
+	harness_set_menu_core(1);
 	chome_leave();
 	chome_handle(0);
 	frame(6);
@@ -22592,6 +23355,19 @@ static const clip_allowed_t clip_allowed[] = {
 	{ "draw_card_face",     0,                  "every other card label is a system's name or a game's" },
 	{ "draw_fallback_card", 0,                  "a game's name on a card with no artwork" },
 	{ "draw_title_block",   0,                  "the hero's title and the file it came from" },
+	/*
+	  A cheat's name off the pack, on a row of the Cheats list. It is data in exactly the
+	  sense every card label above is - "Infinite Battery Power (Power Plant Network)" is
+	  what GameHacking.org called it, and it is the longest name on a card of 14,766 packs -
+	  and it reads as ours only because it is spelled out in this file as a fixture, which
+	  is where text_is_ours() looks.
+
+	  Named rather than allowed wholesale, because draw_rows_c_at() is the shared row
+	  drawer: every other list in the front-end writes OUR words through it, and a blanket
+	  allowance here would stop the guard seeing a cut label on any screen at all.
+	*/
+	{ "draw_rows_c_at",     "INFINITE BATTERY POWER (POWER PLANT NETWORK)",
+		"a cheat's name from the pack, which is data - it is in our source only as a fixture" },
 	{ 0, 0, 0 }
 };
 
@@ -23550,6 +24326,13 @@ int main()
 	// And directly after that, because it is the other end of the same move: that section
 	// walks the panel Close Game left, this one walks the bar it arrived on.
 	assert_close_game_on_the_bar();
+	/*
+	  And after both of them, because it is the third question about the same panel and the
+	  only one that changes how many rows it has. It runs against the empty cheat store the
+	  sections above assume, proves the row appears and disappears with the pack, and empties
+	  the store again on the way out - so everything below still meets the eleven-row panel.
+	*/
+	assert_cheats();
 	assert_look_applies_to_the_running_core();
 	assert_forget_beats_the_stat_check();
 	assert_slot_count_follows_core();

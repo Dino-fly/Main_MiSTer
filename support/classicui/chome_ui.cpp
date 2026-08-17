@@ -35,6 +35,7 @@
 #include "chome_ini.h"
 #include "chome_opt.h"
 #include "chome_cfgrec.h"
+#include "chome_cheats.h"
 
 #include "../../cfg.h"
 #include "../../user_io.h"
@@ -47,6 +48,7 @@
 #include "../../hardware.h"
 #include "../../file_io.h"
 #include "../../charrom.h"
+#include "../../cheats.h"
 #include "../../menu.h"
 #include "../arcade/mra_loader.h"
 #include "../physical_disc/physical_disc.h"
@@ -227,6 +229,25 @@ static int pads_forget_arm = -1;             // ...and whether forgetting it is 
 static unsigned long pads_forget_until = 0;
 
 /*
+  The Cheats screens. Declared up here rather than beside the panels because the legend is
+  built further up the file and has to ask what the cursor is on - the same reason the
+  controller rows are declared here.
+
+  Two cursors, not one: leaving a group's variants and coming back to the list has to put
+  the player where they were, and a single cursor would drop them at the top of a list they
+  have just walked two hundred rows into.
+*/
+static int  ch_row = 0;                      // the group list
+static int  ch_top = 0;
+static int  ch_grp = -1;                     // the group whose variants are open
+static int  ch_vrow = 0;                     // ...and where in them
+static int  ch_vtop = 0;
+static int  ch_forget_arm = 0;               // one press from forgetting what is kept
+static unsigned long ch_forget_until = 0;
+static char ch_note[96];                     // what the last press did, for a few seconds
+static unsigned long ch_note_until = 0;
+
+/*
   One row of the Controllers screen, wireless or not. Declared here rather than beside
   the screen because the legend is built further up the file and asks what is selected.
 */
@@ -332,23 +353,145 @@ static void ref_shot_path(const char *sysid, const char *rompath, char *out, int
 */
 #define SCR_CLOSE   20
 
-// Rows on the Options panel. Several places step over them.
 /*
-  Eleven rows either way, and only the tenth differs: in a game it is Core Settings, the
-  only route to the options belonging to the core itself rather than to this front-end,
-  and on the shelf it is Advanced, which hands the shelf to the classic menu. A
-  player reported the core's own options as the one thing the front-end had taken away
-  from them, and they were right: widescreen on PSX, or a core's own video and audio
-  settings, live in the classic OSD and nowhere else, and the OSD is only reachable while
-  that core is running.
+  The running game's cheats, and the variants of one of them.
+
+  Two screens rather than one with a mode, because back is then the ordinary back this
+  front-end has everywhere: B on the variants returns to the list they were opened from,
+  B on the list returns to Options. See chome_cheats.h for what a variant is and for the
+  measurements off a real card that decided there had to be two levels at all.
+*/
+#define SCR_CHEATS  21
+#define SCR_CHEATV  22
+
+/*
+  Rows on the Options panel, by identity rather than by position.
+
+  They used to be two arrays of strings and a switch over 0..10, and three separate places
+  stepped over them by number - the draw, the left/right handler and the press - with a
+  comment on each saying that inserting a row moves the indices. Cheats is a row that is
+  present on some games and absent on others, so "the index of Advanced" stopped being a
+  constant at all and the comment stopped being enough. One function now answers for the
+  list, the count and the identity of a row, which is the same three-way agreement
+  co_tier_next() exists to keep on the core options screen - and the failure of that
+  agreement is this file's oldest class of bug.
+*/
+#define OR_ART      0
+#define OR_COVERS   1
+#define OR_RESCAN   2
+#define OR_LOOKS    3
+#define OR_LAYOUT   4
+#define OR_PADS     5
+#define OR_WIFI     6
+#define OR_BEST     7
+#define OR_MORE     8
+#define OR_CHEATS   9
+#define OR_CLASSIC  10
+#define OR_ABOUT    11
+#define OR_COUNT    12
+
+/*
+  The list in force. Eleven rows on the shelf and in most games; twelve in a game whose
+  pack has cheats.
+
+  OR_CLASSIC is the classic OSD in *both* lists, and used to be called "Core Settings" in
+  a game.
+
+  That was a lie with a witness: this front-end has its own core-options screen, the
+  running core's entry on the menu bar opens it (MB_CORE -> SCR_CORE), and the panel it
+  opens is titled with the core's name. So a row promising "Core Options >" and handing
+  the player to MiSTer's own OSD gave two doors the same name and different destinations,
+  and the curated one was the one nobody found. Reported from a television.
+
+  The row stays, and the OSD stays reachable, because it has to be: the pages we hide
+  are hidden on purpose (debug groups), and a core can mask a row out of our list
+  entirely - the SMS hides Z80 Speed, Mapper and both BIOS rows behind H8 - so the OSD
+  is the only way to those, and a controller-first front-end cannot make the answer
+  "use a keyboard". It is now named for where it goes, which is what the shelf's row has
+  always done.
 
   Both lists end in About. It used to have a permanent slot on the menu bar - one of five,
   next to the things a player reaches for every session - for a panel that is read once and
   never again. Close Game took that slot and About came down here, which is the same trade
   in both directions: prominence for how often the thing is actually wanted.
+
+  Cheats sits immediately before OR_CLASSIC, which is where it means something: it is the
+  last thing this front-end offers before the row that hands the player over to the
+  classic OSD, and the OSD's own Cheats page was the only route to them until now.
+  Appending it after About instead would have put it below the row every other list here
+  ends with, and putting it first would have moved Cover Art off the top row in a game and
+  nowhere else.
+
+  Absent and not greyed when the pack has nothing. A greyed row is a promise the screen
+  cannot keep, and the player would still have to wonder what it had been about to offer -
+  the same ruling mb_visible() already makes for Close Game on the shelf.
+
+  Keyed on cheats_available(), which is how many cheat records are loaded. NOT
+  cheats_loaded(), which upstream sets to the number of cheat *lines currently handed to
+  the core* - zero until the player switches one on, so a row gated on it could never be
+  the row that switches the first one on. menu.cpp:2598 keys the classic OSD's own entry
+  the same way this does.
 */
-#define OPT_ROWS_MENU 11
-#define OPT_ROWS_GAME 11
+static int opt_ids(int *out)
+{
+	static const int base[] = {
+		OR_ART, OR_COVERS, OR_RESCAN, OR_LOOKS, OR_LAYOUT, OR_PADS,
+		OR_WIFI, OR_BEST, OR_MORE, OR_CLASSIC, OR_ABOUT
+	};
+
+	int n = 0;
+	for (int i = 0; i < (int)(sizeof(base) / sizeof(base[0])); i++)
+	{
+		if (base[i] == OR_CLASSIC && ig_active && cheats_available()) out[n++] = OR_CHEATS;
+		out[n++] = base[i];
+	}
+	return n;
+}
+
+static int opt_nrows()
+{
+	int ids[OR_COUNT];
+	return opt_ids(ids);
+}
+
+// Which row the cursor is on, as an identity. -1 when it is on nothing, which the
+// callers treat as "this press does nothing" rather than as a row of their own.
+static int opt_id_at(int row)
+{
+	int ids[OR_COUNT];
+	int n = opt_ids(ids);
+	return (row >= 0 && row < n) ? ids[row] : -1;
+}
+
+/*
+  What a row is called. Here rather than inside the draw, because the harness reads this
+  list too (chome_test_opt_rows) and a second copy of the words is a second copy that can
+  go stale - which is the whole failure this identity scheme exists to stop, one level up.
+
+  "Advanced" and not "Advanced Settings": seventeen characters beside a value reading
+  "Classic Menu >" is the one pair in this list that cannot share a row, and it came out
+  "ADVANCED SETTING>" at 240p and "ADVANCED SETT>" on a halved 1080p canvas. The value
+  names where the row goes, so the label only has to say what kind of thing is behind it -
+  and this is the row nobody should be looking for by name anyway.
+*/
+static const char *opt_label(int id)
+{
+	switch (id)
+	{
+	case OR_ART:     return "Cover Art";
+	case OR_COVERS:  return "Online Covers";
+	case OR_RESCAN:  return "Rescan Library";
+	case OR_LOOKS:   return "Reinstall Looks";
+	case OR_LAYOUT:  return "Menu Layout";
+	case OR_PADS:    return "Controllers";
+	case OR_WIFI:    return "Wi-Fi";
+	case OR_BEST:    return "Best Settings";
+	case OR_MORE:    return "More Settings";
+	case OR_CHEATS:  return "Cheats";
+	case OR_CLASSIC: return "Advanced";
+	default:         return "About";
+	}
+}
 
 /*
   Savestate slots.
@@ -1733,7 +1876,8 @@ static int overlay_up()
 		screen == SCR_ABOUT || screen == SCR_WIFI || screen == SCR_PADS ||
 		screen == SCR_POWER || screen == SCR_INI || screen == SCR_PADTEST ||
 		screen == SCR_SET || screen == SCR_CORE || screen == SCR_DISC ||
-		screen == SCR_COVERS || screen == SCR_CLOSE);
+		screen == SCR_COVERS || screen == SCR_CLOSE ||
+		screen == SCR_CHEATS || screen == SCR_CHEATV);
 }
 
 static int marq_band(int *y0, int *y1)
@@ -3181,6 +3325,15 @@ static void btn_hint_c(int cx, int y, int s, uint32_t col, const char *pre, int 
 static int disc_dlg_legend(legend_pair *out, int max);
 
 /*
+  Same reason again, for the cheats list: what A does there depends on the row under the
+  cursor and whether X does anything at all depends on how the core was started, and both
+  answers live with the screen further down the file. The legend must not hold a second
+  opinion about either.
+*/
+static int ch_can_keep();
+static int ch_x_forgets();
+
+/*
   Same reason, smaller scale: the Online Covers legend only offers Save while there is
   something to save, and the answer to that is the staging buffers, which live with the
   screen. Asking rather than keeping a flag up here is what stops the prompt and the
@@ -3349,6 +3502,40 @@ static int build_legend(legend_pair *out, int max)
 	case SCR_OPTIONS:
 		if (n < max) { out[n++] = { CH_LEFT CH_RIGHT, "dpad_lr", "Change", "Chg", 0, COL_WHITE }; }
 		if (n < max) { out[n++] = lp(LBL_A, "Select", "OK"); }
+		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
+		break;
+
+	/*
+	  The cheats list. A says which of the two things it does on the row under the cursor,
+	  because on this screen it does two: a lone cheat is switched and a folded group is
+	  opened. The row's own value column says the same thing with a chevron - see
+	  ch_row_value() - and this is the sentence version of it.
+
+	  X only where it acts, which is the rule this file states twice already: on a core
+	  nobody launched from here there is nothing to key a memory to, and a prompt offering
+	  "Keep" would promise a press that writes nothing. Its wording follows the footer,
+	  because a legend reading "Keep" under a footer reading "X to forget" would be the two
+	  of them arguing about the same button.
+	*/
+	case SCR_CHEATS:
+	{
+		int one = (ch_row >= 0 && ch_row < ch_groups() && ch_group_count(ch_row) <= 1);
+		if (n < max) { out[n++] = lp(LBL_A, one ? "Switch" : "Open", one ? "Set" : "Open"); }
+
+		if (ch_can_keep() && n < max)
+		{
+			int f = ch_x_forgets();
+			out[n++] = lp(LBL_X, f ? "Forget" : "Keep", f ? "Forget" : "Keep");
+		}
+
+		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
+		break;
+	}
+
+	// The variants of one cheat: switching is all there is. Keeping belongs to the set as
+	// a whole and is offered on the list this was opened from, one press away.
+	case SCR_CHEATV:
+		if (n < max) { out[n++] = lp(LBL_A, "Switch", "Set"); }
 		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
 		break;
 	case SCR_CORE:
@@ -5061,26 +5248,11 @@ static void draw_options_panel(const chome_profile *p)
 	  value names where the row goes, so the label only has to say what kind of thing is
 	  behind it - and this is the row nobody should be looking for by name anyway.
 	*/
-	/*
-	  The tenth row is the classic OSD in *both* lists, and used to be called "Core
-	  Settings" in a game.
+	// The rows themselves, their order and which of them exist are opt_ids()' - see the
+	// note on it for why this list is no longer two arrays and a switch over 0..10.
+	int ids[OR_COUNT];
+	int nrows = opt_ids(ids);
 
-	  That was a lie with a witness: this front-end has its own core-options screen, the
-	  running core's entry on the menu bar opens it (MB_CORE -> SCR_CORE), and the panel it
-	  opens is titled with the core's name. So a row promising "Core Options >" and handing
-	  the player to MiSTer's own OSD gave two doors the same name and different destinations,
-	  and the curated one was the one nobody found. Reported from a television.
-
-	  The row stays, and the OSD stays reachable, because it has to be: the pages we hide
-	  are hidden on purpose (debug groups), and a core can mask a row out of our list
-	  entirely - the SMS hides Z80 Speed, Mapper and both BIOS rows behind H8 - so the OSD
-	  is the only way to those, and a controller-first front-end cannot make the answer
-	  "use a keyboard". It is now named for where it goes, which is what the shelf's row has
-	  always done.
-	*/
-	static const char *rows_menu[] = { "Cover Art", "Online Covers", "Rescan Library", "Reinstall Looks", "Menu Layout", "Controllers", "Wi-Fi", "Best Settings", "More Settings", "Advanced", "About" };
-	static const char *rows_game[] = { "Cover Art", "Online Covers", "Rescan Library", "Reinstall Looks", "Menu Layout", "Controllers", "Wi-Fi", "Best Settings", "More Settings", "Advanced", "About" };
-	const char *const *rows = ig_active ? rows_game : rows_menu;
 	char v1[32];
 	/*
 	  "FULL" and not the count on its own, because the count is the one thing that does not
@@ -5134,19 +5306,49 @@ static void draw_options_panel(const chome_profile *p)
 	const char *v6 = cov_state_of(ss_available(), cfg.classicui_screenscraper,
 		cfg.classicui_ss_user, cfg.classicui_ss_pass[0] != 0);
 
-	const char *vals[] = {
-		cfg.classicui_artfetch ? "Fetch Missing" : "Local Only",
-		v6,
-		v1,
-		"Write Files",
-		cfg.classicui_profile == 0 ? "Auto" : theme_get()->name,
-		v3,
-		v2,
-		v4,
-		v5,
-		"Classic Menu >",                 // both lists: see the note on rows_game above
-		"This Menu >"
-	};
+	/*
+	  And what the Cheats row says: how many are switched on, not how many exist.
+
+	  The count of cheats in the pack is the number a player cannot act on from here and
+	  is sometimes 31,128, which in a thirteen-character value column is a number that
+	  says only "a lot". How many are *running* is the thing this row is checked for in
+	  passing - the same question the Wi-Fi row's network name and the Controllers row's
+	  count answer for their screens.
+	*/
+	char v7[32];
+	int chn = cheats_active();
+	if (chn) snprintf(v7, sizeof(v7), "%d On >", chn);
+	else snprintf(v7, sizeof(v7), "None On >");
+
+	/*
+	  Label and value together, by identity. Two parallel arrays indexed by position were
+	  what let a row be inserted in one of them and not the other; a switch cannot be half
+	  updated the same way, because a missing case is a row with no label at all and shows
+	  up on the first screen that draws it.
+	*/
+	const char *rows[OR_COUNT];
+	const char *vals[OR_COUNT];
+
+	for (int i = 0; i < nrows; i++)
+	{
+		rows[i] = opt_label(ids[i]);
+
+		switch (ids[i])
+		{
+		case OR_ART:     vals[i] = cfg.classicui_artfetch ? "Fetch Missing" : "Local Only"; break;
+		case OR_COVERS:  vals[i] = v6; break;
+		case OR_RESCAN:  vals[i] = v1; break;
+		case OR_LOOKS:   vals[i] = "Write Files"; break;
+		case OR_LAYOUT:  vals[i] = cfg.classicui_profile == 0 ? "Auto" : theme_get()->name; break;
+		case OR_PADS:    vals[i] = v3; break;
+		case OR_WIFI:    vals[i] = v2; break;
+		case OR_BEST:    vals[i] = v4; break;
+		case OR_MORE:    vals[i] = v5; break;
+		case OR_CHEATS:  vals[i] = v7; break;
+		case OR_CLASSIC: vals[i] = "Classic Menu >"; break;
+		default:         vals[i] = "This Menu >"; break;
+		}
+	}
 
 	/*
 	  The list, windowed - because eleven rows are more than the panel at 240p can hold, and
@@ -5181,7 +5383,6 @@ static void draw_options_panel(const chome_profile *p)
 	int cc_n = ig_active ? 0 : cfgrec_problems();
 
 	int s2 = p->ts_tiny;
-	int nrows = ig_active ? OPT_ROWS_GAME : OPT_ROWS_MENU;
 	/*
 	  Room under the list only for the configuration notice now. The in-game help line went
 	  with the row it was about: "THE GAME STAYS LOADED UNTIL YOU CLOSE IT" explained Close
@@ -9386,6 +9587,403 @@ static void draw_core_opts(const chome_profile *p)
 		(co_tier == CO_TIER_RISKY) ? COL_YELLOW : COL_PANELLO, 0);
 }
 
+/* ------------------------------------------------------------------ cheats ----- */
+
+/*
+  What the last press did, for a few seconds, at the foot of whichever cheats screen it
+  happened on.
+
+  A line rather than a change the player can see, because on this screen most of them are
+  not visible: a cheat that will not fit in the core, a set written to the card, a set
+  forgotten - none of those move a row. The one press that *is* visible, switching a cheat
+  on, says nothing here at all; its row changes and that is the whole report.
+*/
+static void ch_say(const char *msg)
+{
+	snprintf(ch_note, sizeof(ch_note), "%s", msg);
+	ch_note_until = GetTimer(4000);
+	mark_dirty();
+}
+
+// Anything the player does disarms a forget they had lined up, the way moving off a row
+// disarms every other armed press in this front-end.
+static void ch_disarm()
+{
+	ch_forget_arm = 0;
+}
+
+/*
+  Keeping is only offered on a game this front-end launched.
+
+  ch_bound_game() is 0 for a core somebody else started - the classic menu, a script, a
+  bootcore - and then there is nothing to hang the choice on. The cheats still work for
+  the session; what cannot happen is remembering them, and the screen says so in the
+  footer rather than offering a press that would write nothing.
+*/
+static int ch_can_keep()
+{
+	return ch_bound_game() ? 1 : 0;
+}
+
+/*
+  Which of its two meanings X has right now: 1 forget, 0 keep.
+
+  One predicate, asked by the footer, by the legend and by the press. It was three copies
+  of "ch_kept_count() && ch_kept_matches_live()", and three copies of the condition that
+  decides what a button does is how a legend comes to promise one thing while the press
+  does another - which is the lie this file has already fixed twice on other screens.
+*/
+static int ch_x_forgets()
+{
+	return (ch_can_keep() && ch_kept_count() && ch_kept_matches_live()) ? 1 : 0;
+}
+
+// The fold has to describe the store the screen is about to draw. cheats_init() replaces
+// the whole store on a ROM load, so a fold built for the last game is a fold over names
+// this one has never heard of.
+static void ch_sync()
+{
+	if (!ch_built_for(cheats_available())) ch_build();
+}
+
+static void ch_open()
+{
+	ch_sync();
+	ch_row = 0;
+	ch_top = 0;
+	ch_grp = -1;
+	ch_disarm();
+	ch_note[0] = 0;
+	go_screen(SCR_CHEATS);
+}
+
+/*
+  One row's value on the group list.
+
+  A group of one is an ordinary switch and says On or Off. A group of many says how many of
+  its codes are on out of how many there are, and ends in the chevron every row in this
+  front-end that opens something ends in - "0/176 >" is a row you press, "Off" is a row you
+  toggle, and the player should not have to press one to find out which it was.
+*/
+static const char *ch_row_value(int g, char *out, int len)
+{
+	int n = ch_group_count(g);
+	int on = ch_group_on(g);
+
+	if (n <= 1) snprintf(out, len, "%s", on ? "On" : "Off");
+	else snprintf(out, len, "%d/%d >", on, n);
+	return out;
+}
+
+/*
+  How the budget reads in a footer, when it is worth reading at all.
+
+  A core takes a fixed number of cheat lines and a cheat is a whole number of them, so a
+  player switching on their tenth code can simply be refused - and on the packs this
+  screen exists for they will be. Shown from three quarters full, because a number that is
+  always on screen is a number nobody reads by the time it matters.
+*/
+static int ch_budget_text(char *out, int len)
+{
+	int used = ch_lines_used();
+	int max = ch_lines_max();
+
+	if (max <= 0 || used * 4 < max * 3) return 0;
+
+	snprintf(out, len, "%d of %d code lines used", used, max);
+	return 1;
+}
+
+/*
+  A cheats panel: as tall as its list wants, and never over the button legend.
+
+  Every other panel in this front-end is centred, which is right while a panel is smaller
+  than the screen and wrong here - these two lists are the only ones whose length comes
+  from a file on the player's card, and the folded GBA pack is 249 rows. Centred and
+  clamped to the canvas, a list that long produced a panel from the top of the screen to
+  the bottom of it, with "A SWITCH / X KEEP / B BACK" underneath and invisible. On the one
+  screen in the front-end whose X binding nobody has seen before.
+
+  So it is bounded rather than centred, which is what draw_panel_at() exists for and what
+  the disc dialog already does: a margin at the top, a stop clear of the prompts at the
+  bottom, and what is left centred inside that.
+
+  draw_core_opts() has the same clamp and can reach the same length on the PSX's 27-row
+  page. Left alone deliberately - it is not what this change is about, and every pinned
+  frame in the suite was captured with the panel where it is.
+*/
+static panel_box ch_panel(const chome_profile *p, int pw, int ph, const char *title)
+{
+	int top = p->safe_y;
+	int bot = p->y_legend - 6 * p->ts_ui;
+
+	int room = bot - top;
+	if (room < 40) room = p->h - 2 * p->safe_y;      // a canvas with no legend band to spare
+	if (ph > room) ph = room;
+
+	return draw_panel_at(p, (p->w - pw) / 2, top + (room - ph) / 2, pw, ph, title);
+}
+
+/*
+  The line under the list, and its colour.
+
+  Its own function because the screen is not the only thing that has to know what it says:
+  the legend's X follows it (a prompt reading "Keep" under a footer reading "X to forget"
+  would be the two of them arguing about one button), and the harness reads it back
+  (chome_test_cheat_footer). Three copies of this ranking would be three chances for them
+  to disagree about what the screen is telling the player.
+
+  In priority order: what just happened, then what is about to happen if the player presses
+  again, then the state of the screen. The same ranking draw_core_opts() uses and for the
+  same reason - a line reporting a press outranks a line describing a page.
+
+  `room` is a column count and the two wordings are chosen by it the way the core options
+  screen chooses its own: 240p is 33 columns and does not fit the long ones. Returns a
+  pointer into a static, so a caller uses it before calling again.
+*/
+static const char *ch_footer(int room, uint32_t *col)
+{
+	static char budget[48];
+
+	*col = COL_PANELLO;
+
+	const char *msg = 0;
+
+	if (!ch_can_keep())
+	{
+		// Said plainly rather than by a missing prompt: a player whose cheats stop working
+		// after a relaunch deserves to know why before it happens, not after.
+		msg = (room >= 36) ? "Cheats work now, but cannot be kept"
+			: "Cheats work, cannot be kept";
+	}
+	else if (ch_x_forgets())
+	{
+		msg = (room >= 36) ? "Kept for this game - X to forget" : "Kept - X forgets";
+		*col = COL_GREEN;
+	}
+	else if (ch_kept_count())
+	{
+		msg = (room >= 36) ? "This game remembers a different set" : "Kept set differs";
+		*col = COL_YELLOW;
+	}
+	else if (ch_budget_text(budget, sizeof(budget)))
+	{
+		msg = budget;
+		*col = COL_YELLOW;
+	}
+
+	if (ch_forget_arm && !CheckTimer(ch_forget_until))
+	{
+		msg = (room >= 36) ? "X again to forget this game's cheats" : "X again to forget";
+		*col = COL_YELLOW;
+	}
+
+	if (ch_note[0] && !CheckTimer(ch_note_until))
+	{
+		msg = ch_note;
+		*col = COL_GREEN;
+	}
+
+	return msg;
+}
+
+/*
+  The running game's cheats, folded.
+
+  Flat within the fold, which is the choice draw_settings() and draw_core_opts() both made
+  and for the same reason: one list to scroll beats picking a category first. What is
+  different here is that the second level is not a category anybody chose - it is the shape
+  of the pack, and on almost every game there is no second level at all. See
+  chome_cheats.h for the measurements that decided this.
+*/
+static void draw_cheats(const chome_profile *p)
+{
+	int s = p->ts_ui;
+	ch_sync();
+
+	int n = ch_groups();
+
+	int pw = p->w - p->inset * 2;
+	if (pw > 46 * gfx_adv(s)) pw = 46 * gfx_adv(s);
+	int ph = (10 * s + 6) + (n + 1) * 12 * s + 22 * s;
+
+	/*
+	  Titled with the count, because the count is the one thing the list cannot show: 249
+	  rows and 31,128 codes are the same screen until it is said, and a player who has been
+	  told a pack has 249 cheats when it has 31,128 has been told the wrong thing about
+	  what they are choosing from.
+	*/
+	char title[64];
+	int all = cheats_available();
+	if (all != n) snprintf(title, sizeof(title), "Cheats - %d in %d groups", all, n);
+	else snprintf(title, sizeof(title), "Cheats - %d", all);
+
+	panel_box b = ch_panel(p, pw, ph, title);
+
+	/*
+	  Only the window is built, not the list.
+
+	  Every other list in this file builds an array of every row and hands draw_rows_c() a
+	  slice of it. That is fine for eleven options and it is not fine here: the fold is 249
+	  rows on one real pack and could be 31,128 on a pack that does not fold, and an array
+	  of that many pointers - plus a value string each - is hundreds of kilobytes built
+	  every frame to draw fifteen rows. So the window is built and nothing else, which also
+	  means the buffers below are sized by what fits on a screen rather than by what a pack
+	  might hold.
+	*/
+	#define CH_FIT_MAX 32
+	const char *rows[CH_FIT_MAX];
+	const char *vals[CH_FIT_MAX];
+	uint32_t vcol[CH_FIT_MAX];
+	static char lbuf[CH_FIT_MAX][CH_NAME_LEN];
+	static char vbuf[CH_FIT_MAX][24];
+
+	int foot = 22 * s;
+	int fit = list_fit(&b, 12 * b.s, foot, n);
+	if (fit > CH_FIT_MAX) fit = CH_FIT_MAX;
+	list_track(&ch_top, ch_row, n, fit);
+
+	for (int i = 0; i < fit && ch_top + i < n; i++)
+	{
+		int g = ch_top + i;
+
+		rows[i] = ch_group_name(g, lbuf[i], sizeof(lbuf[i]));
+		vals[i] = ch_row_value(g, vbuf[i], sizeof(vbuf[i]));
+
+		/*
+		  Green for a cheat that is on, which is what this front-end already uses for a
+		  value that is the player's own rather than the machine's - the star on the core
+		  options screen is the same colour for the same reason. A group only partly on
+		  gets it too: something in there is running, and that is the fact the colour is
+		  carrying.
+		*/
+		vcol[i] = ch_group_on(g) ? COL_GREEN : COL_PANELLO;
+	}
+
+	int shown = fit;
+	if (ch_top + shown > n) shown = n - ch_top;
+	if (shown < 0) shown = 0;
+
+	draw_rows_c(&b, rows, vals, vcol, shown, ch_row - ch_top);
+	list_scrollbar(&b, 12 * b.s, ch_top, fit, n);
+
+	int fy = b.y + b.h - 12 * s;
+	int room = gfx_text_cols(b.w - 12 * s, p->ts_tiny);
+
+	uint32_t col = COL_PANELLO;
+	const char *msg = ch_footer(room, &col);
+
+	if (msg) gfx_text(gfx_clip(msg, p->ts_tiny, b.w - 12 * s), b.x + 6 * s, fy, p->ts_tiny, col, 0);
+}
+
+/*
+  The codes inside one folded group.
+
+  Named for the group and numbered from one, because the pack's own numbering is a
+  parenthesis that the fold has just taken off - and "Sword 1 of 176" is what the player is
+  looking at, where "Sword" and "Sword (1)" side by side would be two rows with the same
+  name and no way to tell which is which.
+*/
+static void draw_cheat_variants(const chome_profile *p)
+{
+	int s = p->ts_ui;
+	ch_sync();
+
+	int n = ch_group_count(ch_grp);
+
+	int pw = p->w - p->inset * 2;
+	if (pw > 46 * gfx_adv(s)) pw = 46 * gfx_adv(s);
+	int ph = (10 * s + 6) + (n + 1) * 12 * s + 22 * s;
+
+	char stem[CH_NAME_LEN];
+	ch_group_name(ch_grp, stem, sizeof(stem));
+
+	char title[96];
+	snprintf(title, sizeof(title), "%s - %d", stem, n);
+
+	panel_box b = ch_panel(p, pw, ph, title);
+
+	const char *rows[CH_FIT_MAX];
+	const char *vals[CH_FIT_MAX];
+	uint32_t vcol[CH_FIT_MAX];
+	static char lbuf[CH_FIT_MAX][CH_NAME_LEN];
+
+	int foot = 22 * s;
+	int fit = list_fit(&b, 12 * b.s, foot, n);
+	if (fit > CH_FIT_MAX) fit = CH_FIT_MAX;
+	list_track(&ch_vtop, ch_vrow, n, fit);
+
+	for (int i = 0; i < fit && ch_vtop + i < n; i++)
+	{
+		int v = ch_vtop + i;
+		int idx = ch_group_index(ch_grp, v);
+
+		/*
+		  Numbered rather than named. Every row here has the same name by construction -
+		  that is what put them in a group - so printing it 176 times would be 176 rows of
+		  the word the title already carries, and the number is the only thing that tells
+		  one from another.
+
+		  The pack's number, not the row's position, and the difference is not cosmetic:
+		  the store is sorted as text with the ".gg" still on, so the group runs (1), (10),
+		  (100) ... (2), (20) ... and ends with the entry that has no number at all. Row
+		  three of "Sword" is the pack's "Sword (100)", and a label reading "Code 3" would
+		  be a number the player could not look up anywhere. See ch_entry_tag().
+		*/
+		char tag[16];
+		ch_entry_tag(idx, tag, sizeof(tag));
+		if (tag[0]) snprintf(lbuf[i], sizeof(lbuf[i]), "Code %s", tag);
+		else snprintf(lbuf[i], sizeof(lbuf[i]), "Code");
+		rows[i] = lbuf[i];
+		vals[i] = cheats_is_enabled(idx) ? "On" : "Off";
+		vcol[i] = cheats_is_enabled(idx) ? COL_GREEN : COL_PANELLO;
+	}
+
+	int shown = fit;
+	if (ch_vtop + shown > n) shown = n - ch_vtop;
+	if (shown < 0) shown = 0;
+
+	draw_rows_c(&b, rows, vals, vcol, shown, ch_vrow - ch_vtop);
+	list_scrollbar(&b, 12 * b.s, ch_vtop, fit, n);
+
+	int fy = b.y + b.h - 12 * s;
+
+	char budget[48];
+	const char *msg = 0;
+	uint32_t col = COL_YELLOW;
+
+	if (ch_note[0] && !CheckTimer(ch_note_until)) { msg = ch_note; col = COL_GREEN; }
+	else if (ch_budget_text(budget, sizeof(budget))) msg = budget;
+
+	if (msg) gfx_text(gfx_clip(msg, p->ts_tiny, b.w - 12 * s), b.x + 6 * s, fy, p->ts_tiny, col, 0);
+}
+
+/*
+  Switch one cheat, and say what happened when what happened is not visible.
+
+  cheats_toggle() can refuse: the core takes a fixed number of code lines and a cheat is a
+  whole number of them, so the last one asked for simply does not go on. Upstream's OSD
+  prints that refusal to the log, which on a television is nowhere. Here the row does not
+  move and the footer says why - the same rule the suspend strip's prompts follow, that a
+  press which does nothing must not look like a press that worked.
+*/
+static void ch_toggle(int idx)
+{
+	int want = cheats_is_enabled(idx) ? 0 : 1;
+	int got = ch_set(idx, want);
+
+	if (got == want)
+	{
+		// The row itself is the report. Anything said here would be said about a change
+		// the player is already looking at.
+		ch_note[0] = 0;
+		mark_dirty();
+		return;
+	}
+
+	ch_say("The core has no room for it");
+}
+
 static void draw_settings(const chome_profile *p)
 {
 	int s = p->ts_ui;
@@ -10665,6 +11263,8 @@ static void compose()
 	case SCR_SET:     draw_settings(p); break;
 	case SCR_COVERS:  draw_covers(p); break;
 	case SCR_CORE:    draw_core_opts(p); break;
+	case SCR_CHEATS:  draw_cheats(p); break;
+	case SCR_CHEATV:  draw_cheat_variants(p); break;
 	case SCR_PADS:    draw_pads(p); break;
 	case SCR_PADTEST: draw_padtest(p); break;
 	case SCR_LAUNCH:  draw_launch(p); break;
@@ -10918,11 +11518,11 @@ static void move_h(int dir)
 		look_row = next;
 		break;
 	}
+	// By identity, not by number: Cheats appears in this list only on a game whose pack has
+	// any, so "row 4 is Menu Layout" stopped being true. See opt_ids().
 	case SCR_OPTIONS:
-		if (opt_row == 0) cfg.classicui_artfetch = cfg.classicui_artfetch ? 0 : 1;
-		// Menu Layout, which is row 4 now that Online Covers sits under Cover Art. The
-		// row indices in this file are the panel's, so inserting a row moves them.
-		else if (opt_row == 4)
+		if (opt_id_at(opt_row) == OR_ART) cfg.classicui_artfetch = cfg.classicui_artfetch ? 0 : 1;
+		else if (opt_id_at(opt_row) == OR_LAYOUT)
 		{
 			int v = cfg.classicui_profile + dir;
 			if (v < 0) v = 3;
@@ -11257,10 +11857,45 @@ static void move_v(int dir)
 		nudge();               // one row of tiles: nothing above or below
 		break;
 
+	/*
+	  Both cheats lists. Moving disarms the forget, the way it does on every other screen
+	  here that arms something - reaching for another row means the player has stopped
+	  meaning to throw this game's cheats away.
+
+	  It also clears the note, which is not the same decision: the note reports a press,
+	  and a player who has moved on is no longer reading about the last one. Left standing,
+	  "no room left in the core" would sit under a row the message was never about.
+	*/
+	case SCR_CHEATS:
+	{
+		int n = ch_groups();
+		if (!n) { nudge(); return; }
+
+		int next = wrap_step(ch_row, n, dir);
+		ch_disarm();
+		ch_note[0] = 0;
+		if (next == ch_row) return;
+		ch_row = next;
+		mark_dirty();
+		break;
+	}
+
+	case SCR_CHEATV:
+	{
+		int n = ch_group_count(ch_grp);
+		if (!n) { nudge(); return; }
+
+		int next = wrap_step(ch_vrow, n, dir);
+		ch_note[0] = 0;
+		if (next == ch_vrow) return;
+		ch_vrow = next;
+		mark_dirty();
+		break;
+	}
+
 	case SCR_OPTIONS:
 		{
-			int n = ig_active ? OPT_ROWS_GAME : OPT_ROWS_MENU;
-			int next = wrap_step(opt_row, n, dir);
+			int next = wrap_step(opt_row, opt_nrows(), dir);
 
 			/*
 			  Moving off disarms, as it does on More Settings and Online Covers:
@@ -11414,13 +12049,15 @@ int chome_list_cursor(int axis, int *count)
 	{
 		switch (screen)
 		{
-		case SCR_OPTIONS: cur = opt_row;    n = ig_active ? OPT_ROWS_GAME : OPT_ROWS_MENU; break;
+		case SCR_OPTIONS: cur = opt_row;    n = opt_nrows();     break;
 		case SCR_SET:     cur = set_row;    n = set_nrows();     break;
 		case SCR_COVERS:  cur = cov_row;    n = COV_ROWS;        break;
 		case SCR_SORT:    cur = sort_idx;   n = SORT_COUNT;      break;
 		case SCR_POWER:   cur = pwr_row;    n = PWR_ROWS;        break;
 		case SCR_CLOSE:   cur = cls_row;    n = CLS_ROWS;        break;
 		case SCR_CORE:    cur = co_row;     n = co_rows();       break;
+		case SCR_CHEATS:  cur = ch_row;     n = ch_groups();     break;
+		case SCR_CHEATV:  cur = ch_vrow;    n = ch_group_count(ch_grp); break;
 		case SCR_PADS:    cur = pads_row;   n = pads_count();    break;
 		case SCR_WIFI:    cur = wifi_row;   n = net_count();     break;
 		case SCR_BROWSE:  cur = browse_sel; n = nbent;           break;
@@ -11518,6 +12155,43 @@ static void accept()
 		break;
 	}
 
+	/*
+	  A on the group list: switch it, or open it.
+
+	  Which of the two depends on the group and not on a mode, and that is the whole reason
+	  the value column ends in a chevron on one and reads On or Off on the other - see
+	  ch_row_value(). One function answers for the row's look and this press asks the same
+	  question it did, so a row that says "0/176 >" cannot be a row that toggles.
+	*/
+	case SCR_CHEATS:
+	{
+		int g = ch_row;
+		if (g < 0 || g >= ch_groups()) { nudge(); break; }
+
+		ch_disarm();
+
+		if (ch_group_count(g) <= 1)
+		{
+			ch_toggle(ch_group_index(g, 0));
+			break;
+		}
+
+		ch_grp = g;
+		ch_vrow = 0;
+		ch_vtop = 0;
+		ch_note[0] = 0;
+		go_screen(SCR_CHEATV);
+		break;
+	}
+
+	case SCR_CHEATV:
+	{
+		int idx = ch_group_index(ch_grp, ch_vrow);
+		if (idx < 0) { nudge(); break; }
+		ch_toggle(idx);
+		break;
+	}
+
 	case SCR_SORT:
 		sort_mode = sort_idx;
 		view_rebuild(0);
@@ -11549,9 +12223,9 @@ static void accept()
 	}
 
 	case SCR_OPTIONS:
-		switch (opt_row)
+		switch (opt_id_at(opt_row))
 		{
-		case 0: cfg.classicui_artfetch = cfg.classicui_artfetch ? 0 : 1; mark_dirty(); break;
+		case OR_ART: cfg.classicui_artfetch = cfg.classicui_artfetch ? 0 : 1; mark_dirty(); break;
 
 		/*
 		  Online Covers, directly under Cover Art because it is where the row above gets
@@ -11559,17 +12233,17 @@ static void accept()
 		  the screen is what explains that state, and a row that refused to open would
 		  leave the player nothing to read.
 		*/
-		case 1:
+		case OR_COVERS:
 			cov_refresh();
 			go_screen(SCR_COVERS);
 			break;
 
 		// gl_forget() as well: a rescan is also how a player says "I have re-scraped",
 		// and the parsed gamelists would otherwise still be the ones from before.
-		case 2: lib_rescan(); gl_forget(); art_shutdown(); art_init(theme_get()->sel_w, theme_get()->sel_h); view_rebuild(0); break;
-		case 3: vp_install(); mark_dirty(); break;
-		case 4: nudge(); break;                       // Layout changes with left/right
-		case 5:
+		case OR_RESCAN: lib_rescan(); gl_forget(); art_shutdown(); art_init(theme_get()->sel_w, theme_get()->sel_h); view_rebuild(0); break;
+		case OR_LOOKS: vp_install(); mark_dirty(); break;
+		case OR_LAYOUT: nudge(); break;               // Layout changes with left/right
+		case OR_PADS:
 			/*
 			  This used to hand the player to MiSTer's own joystick setup, which meant
 			  leaving the front-end for a classic-OSD panel that names buttons by
@@ -11581,24 +12255,30 @@ static void accept()
 			go_screen(SCR_PADS);
 			break;
 
-		case 6:
+		case OR_WIFI:
 			wifi_row = 0;
 			wifi_top = 0;
 			go_screen(SCR_WIFI);
 			if (net_present() && !net_count()) net_scan_start();
 			break;
 
-		case 7:
+		case OR_BEST:
 			ini_refresh();
 			go_screen(SCR_INI);
 			break;
 
-		case 8:
+		case OR_MORE:
 			set_refresh();
 			go_screen(SCR_SET);
 			break;
 
-		case 9:
+		// The running game's cheats. Only ever on the list while a pack is loaded, so
+		// nothing here has to answer for an empty one - opt_ids() has already decided.
+		case OR_CHEATS:
+			ch_open();
+			break;
+
+		case OR_CLASSIC:
 			if (!ig_active) { chome_leave(); break; }
 
 			/*
@@ -11639,9 +12319,10 @@ static void accept()
 		  whether anything is loaded.
 
 		  This row used to be Close Game, in a game only, and the shelf's list stopped at
-		  nine. Both are eleven now and this is the eleventh of each.
+		  nine. Both are eleven now - twelve in a game with cheats - and this is the last
+		  of each.
 		*/
-		case 10:
+		case OR_ABOUT:
 			go_screen(SCR_ABOUT);
 			break;
 		}
@@ -12183,6 +12864,25 @@ static void back()
 	// back to the list it was chosen from - the same way Best Settings and More Settings go.
 	case SCR_ABOUT:
 		go_screen(SCR_OPTIONS);
+		break;
+
+	case SCR_CHEATS:
+		// First B cancels an armed forget, as on Power, Close Game and More Settings:
+		// backing out of it must not also be the press that leaves the screen, or a
+		// player stopping themselves overshoots.
+		if (ch_forget_arm && !CheckTimer(ch_forget_until)) { ch_disarm(); mark_dirty(); break; }
+		go_screen(SCR_OPTIONS);
+		break;
+
+	/*
+	  Back to the list the group was opened from, with the cursor where it was left.
+	  Nothing is thrown away on the way out: every toggle on this screen went to the core
+	  as it was made, so there is no unsaved edit here for B to ask about.
+	*/
+	case SCR_CHEATV:
+		ch_grp = -1;
+		ch_note[0] = 0;
+		go_screen(SCR_CHEATS);
 		break;
 
 	case SCR_POWER:
@@ -14217,6 +14917,10 @@ static int ig_open()
 	*/
 	core_opts_bind_game(ig_have_item ? core_opts_game_key(ig_item.sysidx, ig_item.path) : 0);
 
+	// The same test and the same key for the cheats screen: one definition of "which
+	// game", shared, cannot drift into two that disagree. See chome_cheats.h.
+	ch_bind_game(ig_have_item ? core_opts_game_key(ig_item.sysidx, ig_item.path) : 0);
+
 	ig_build_background(p);
 
 	/*
@@ -14431,7 +15135,21 @@ void chome_core_poll()
 				  the player's own word on top.
 				*/
 				if (ig_load_item())
+				{
 					core_opts_apply_for_game(ig_item.sysidx, ig_item.path);
+
+					/*
+					  And the cheats this game remembers, here for the same reason
+					  the block exists at all: cheats_init() runs when the ROM
+					  lands, and an MGL delivers that after the core has booted.
+					  Switching them on from chome_core_boot() would be switching
+					  on entries in the *previous* game's store - or in an empty
+					  one - and either way the player's set would silently not be
+					  there. Everything else in this block is already waiting for
+					  the same moment.
+					*/
+					ch_apply_for_game(core_opts_game_key(ig_item.sysidx, ig_item.path));
+				}
 			}
 		}
 		/*
@@ -14613,6 +15331,42 @@ void chome_test_legend(char *out, int len)
 		const char *l = pairs[i].label ? pairs[i].label : "";
 		at += snprintf(out + at, (size_t)(len - at), "%s%s", at ? "|" : "", l);
 	}
+}
+
+/*
+  The line the Cheats screen has under its list, in its roomy wording.
+
+  Test-only, and for the same reason chome_test_legend() is: this screen's four states -
+  cannot be kept, kept, kept-but-different, budget nearly spent - differ by a sentence and
+  by nothing else on the framebuffer, and counting ink cannot tell them apart. It calls the
+  same ch_footer() the drawing does, so it cannot hold a second opinion.
+
+  A wide room, deliberately: the short wordings are the same statements shortened for 240p,
+  and a test that read them would be checking a font metric rather than a state.
+*/
+void chome_test_cheat_footer(char *out, int len)
+{
+	if (!out || len < 1) return;
+	out[0] = 0;
+
+	uint32_t col = 0;
+	const char *m = ch_footer(64, &col);
+	snprintf(out, len, "%s", m ? m : "");
+}
+
+// See chome.h. Named the way the panel names them, which is the only form a test can be
+// read in - "OR_CHEATS is at index 9" would be true of a panel that never drew it.
+void chome_test_opt_rows(char *out, int len)
+{
+	if (!out || len < 1) return;
+	out[0] = 0;
+
+	int ids[OR_COUNT];
+	int n = opt_ids(ids);
+
+	int at = 0;
+	for (int i = 0; i < n && at < len - 1; i++)
+		at += snprintf(out + at, (size_t)(len - at), "%s%s", at ? "|" : "", opt_label(ids[i]));
 }
 #endif
 int chome_sel_index() { return sel; }
@@ -15396,6 +16150,59 @@ int chome_handle(uint32_t key)
 				core_opts_scan();
 				if (co_row >= co_rows()) co_row = co_rows() - 1;
 				mark_dirty();
+				break;
+			}
+
+			/*
+			  X is where a cheat set stops being this session's and starts being this
+			  game's - and, once it is, where it stops again.
+
+			  One button and two meanings, decided by what is already stored rather than by
+			  a mode: with nothing kept, or with something kept that is no longer what is
+			  switched on, X writes; with the stored set exactly matching, X forgets. The
+			  footer names which of the two it is before the press, so the flip is never a
+			  surprise, and the legend follows the footer.
+
+			  Writing is immediate and forgetting takes two presses, which is the same
+			  asymmetry the rest of this front-end applies: a write can be undone by the
+			  press that is already under the player's thumb, and a discard cannot.
+
+			  Explicit rather than automatic, and that is the whole design of the memory -
+			  see chome_cheats.h. A cheat switched on to look at something must not follow
+			  the game around for ever because the player forgot to switch it off.
+			*/
+			if (screen == SCR_CHEATS)
+			{
+				if (!ch_can_keep()) { nudge(); break; }
+
+				if (ch_x_forgets())
+				{
+					if (ch_forget_arm && !CheckTimer(ch_forget_until))
+					{
+						ch_disarm();
+						if (ch_forget_for_game()) ch_say("Forgotten for this game");
+						else nudge();
+						break;
+					}
+
+					ch_forget_arm = 1;
+					ch_forget_until = GetTimer(3000);
+					mark_dirty();
+					break;
+				}
+
+				ch_disarm();
+
+				int n = ch_keep_for_game();
+				if (n < 0) { ch_say("No room for another game"); break; }
+
+				char msg[64];
+				// Nought is a real answer and is said as one: a player who switched
+				// everything off and kept that has asked for this game to start clean,
+				// and "0 cheats kept" reads as a failure where it is the point.
+				if (!n) snprintf(msg, sizeof(msg), "This game will start clean");
+				else snprintf(msg, sizeof(msg), "%d kept for this game", n);
+				ch_say(msg);
 				break;
 			}
 

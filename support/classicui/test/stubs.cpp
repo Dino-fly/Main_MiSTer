@@ -1664,3 +1664,136 @@ fileTYPE::fileTYPE()
 fileTYPE::~fileTYPE() {}
 
 int fileTYPE::opened() { return filp || zip; }
+
+/* ---------------------------------------------------------------- cheats -- */
+
+/*
+  cheats.cpp is not in this build - it reaches the zip reader, the SPI download path and
+  the OSD - so the store the front-end enumerates is modelled here.
+
+  Two things about this fake are load-bearing, and both are §4's fourth failure mode
+  ("a stub keyed more loosely than the real identity") applied to this store:
+
+  1. **It sorts the way cheats_init() sorts.** The identity of a cheat here is its index
+     into a sorted vector, and the fold in chome_cheats.cpp works on *adjacency* - a run
+     of entries sharing a stem. A stub that preserved the order a test wrote its fixture
+     in would agree with the front-end about every group while proving nothing about the
+     device, where std::sort with CheatComp decided the order instead. So CheatComp is
+     copied here, comment and all, from cheats.cpp:72: compare over the shorter length,
+     and where that ties put the shorter name first. That is what makes "Sword" <
+     "Sword (1)" < "SwordMan" true in both places.
+
+  2. **It refuses when the budget is spent.** cheats_toggle() enables a cheat only while
+     (its lines + cheats_loaded()) <= cheat_max_active, and silently declines otherwise -
+     the screen's "No room left in the core" footer is about exactly that branch. A stub
+     that always said yes would make that footer untestable and the refusal unprovable.
+
+  What it deliberately does not model: the lazy load from the zip, and the file-length
+  check. Both fail in ways that reach the log and nothing else.
+*/
+
+#define STUB_CHEAT_MAX 512
+
+static char cheat_names[STUB_CHEAT_MAX][256];
+static int cheat_lines[STUB_CHEAT_MAX];
+static int cheat_on[STUB_CHEAT_MAX];
+static int cheat_n = 0;
+static int cheat_max = 128;
+
+// cheats.cpp:72, copied. See the note above for why this could not be left out.
+static int stub_cheat_less(const char *a, const char *b)
+{
+	int la = (int)strlen(a);
+	int lb = (int)strlen(b);
+	int l = (la < lb) ? la : lb;
+
+	int r = strncasecmp(a, b, l);
+	if (!r) return la < lb;
+	return r < 0;
+}
+
+void harness_clear_cheats()
+{
+	cheat_n = 0;
+	cheat_max = 128;
+	memset(cheat_names, 0, sizeof(cheat_names));
+	memset(cheat_lines, 0, sizeof(cheat_lines));
+	memset(cheat_on, 0, sizeof(cheat_on));
+}
+
+void harness_add_cheat(const char *name, int lines)
+{
+	if (cheat_n >= STUB_CHEAT_MAX) return;
+	snprintf(cheat_names[cheat_n], sizeof(cheat_names[0]), "%s", name);
+	cheat_lines[cheat_n] = lines > 0 ? lines : 1;
+	cheat_on[cheat_n] = 0;
+	cheat_n++;
+
+	// Insertion sort into CheatComp order, carrying the three parallel arrays. A test
+	// writes its fixture in whatever order reads well; the front-end sees the device's.
+	for (int i = cheat_n - 1; i > 0; i--)
+	{
+		if (!stub_cheat_less(cheat_names[i], cheat_names[i - 1])) break;
+
+		char tn[256];
+		memcpy(tn, cheat_names[i], sizeof(tn));
+		memcpy(cheat_names[i], cheat_names[i - 1], sizeof(tn));
+		memcpy(cheat_names[i - 1], tn, sizeof(tn));
+
+		int t = cheat_lines[i]; cheat_lines[i] = cheat_lines[i - 1]; cheat_lines[i - 1] = t;
+		t = cheat_on[i]; cheat_on[i] = cheat_on[i - 1]; cheat_on[i - 1] = t;
+	}
+}
+
+void harness_set_cheat_budget(int max_lines) { cheat_max = max_lines; }
+
+int harness_cheat_on(int idx)
+{
+	return (idx >= 0 && idx < cheat_n) ? cheat_on[idx] : 0;
+}
+
+int cheats_available() { return cheat_n; }
+
+const char *cheats_name(int idx)
+{
+	return (idx >= 0 && idx < cheat_n) ? cheat_names[idx] : "";
+}
+
+int cheats_is_enabled(int idx)
+{
+	return (idx >= 0 && idx < cheat_n) ? cheat_on[idx] : 0;
+}
+
+int cheats_loaded()
+{
+	int n = 0;
+	for (int i = 0; i < cheat_n; i++) if (cheat_on[i]) n += cheat_lines[i];
+	return n;
+}
+
+int cheats_active()
+{
+	int n = 0;
+	for (int i = 0; i < cheat_n; i++) if (cheat_on[i]) n++;
+	return n;
+}
+
+int cheats_max_lines() { return cheat_max; }
+
+int cheats_set_enabled(int idx, int on)
+{
+	if (idx < 0 || idx >= cheat_n) return 0;
+	if (cheat_on[idx] == !!on) return cheat_on[idx];
+
+	if (!on)
+	{
+		cheat_on[idx] = 0;
+		return 0;
+	}
+
+	// The budget, as cheats_toggle() applies it.
+	if (cheat_lines[idx] + cheats_loaded() > cheat_max) return 0;
+
+	cheat_on[idx] = 1;
+	return 1;
+}
