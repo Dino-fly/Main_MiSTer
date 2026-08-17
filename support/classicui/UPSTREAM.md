@@ -396,7 +396,8 @@ in particular has had far less hands-on time than the analog one.
 
 `support/classicui/test/` compiles the `chome_*.cpp` files **unmodified** against the
 real project headers, linked against stubs for the FPGA, SD card and clock. It renders
-every screen to PNG and asserts on the result — 491 checks at the time of writing.
+every screen to PNG and asserts on the result. The count is printed at the end of the run;
+quoting it here only produces a number that is wrong a week later.
 
 What it cannot prove: framebuffer timing, the uncached-memory cost, SPI behaviour, or
 whether a core accepts an MGL. Those need the hardware, and several bugs in this

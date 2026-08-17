@@ -1307,7 +1307,7 @@ approximation `vp_preview()` draws.
 `support/classicui/test/run.sh` builds a host binary in Docker from the real
 `chome_*.cpp` files plus fakes for the framebuffer, SD card, clock, `xml_load()`
 and `video_loadPreset()`. It creates a fake SD card, walks every screen at four
-canvas sizes, writes a PNG of each to `test/out/`, and runs 635 assertions over the
+canvas sizes, writes a PNG of each to `test/out/`, and runs its assertions over the
 index, sorting, views, title groups, savestate slots, art decode, the generated
 video files and the exact MGL emitted at launch.
 
