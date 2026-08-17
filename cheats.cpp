@@ -463,3 +463,54 @@ int cheats_loaded()
 {
 	return loaded;
 }
+
+/* ------------------------------------------------ enumeration, by index ---- */
+
+// See cheats.h. Nothing below moves iSelectedEntry or iFirstEntry as far as any
+// other caller can tell.
+
+const char *cheats_name(int idx)
+{
+	if (idx < 0 || idx >= cheats_available()) return "";
+	return cheats[idx].name;
+}
+
+int cheats_is_enabled(int idx)
+{
+	if (idx < 0 || idx >= cheats_available()) return 0;
+	return cheats[idx].enabled ? 1 : 0;
+}
+
+/*
+  Set one cheat's state through cheats_toggle() rather than beside it.
+
+  The lazy load, the length check, the budget check and the resend are all in that
+  function and all of them matter; a second copy here would be a second thing to keep
+  in step with a file we do not own. So the cursor is borrowed for the call and put
+  back, which is the whole of the trick - and the early return means a cheat already
+  in the wanted state costs nothing and does not resend the buffer to the core.
+*/
+int cheats_set_enabled(int idx, int on)
+{
+	if (idx < 0 || idx >= cheats_available()) return 0;
+	if (cheats[idx].enabled == (on != 0)) return cheats[idx].enabled ? 1 : 0;
+
+	int saved = iSelectedEntry;
+	iSelectedEntry = idx;
+	cheats_toggle();
+	iSelectedEntry = saved;
+
+	return cheats[idx].enabled ? 1 : 0;
+}
+
+int cheats_active()
+{
+	int n = 0;
+	for (int i = 0; i < cheats_available(); i++) if (cheats[i].enabled) n++;
+	return n;
+}
+
+int cheats_max_lines()
+{
+	return cheat_max_active;
+}

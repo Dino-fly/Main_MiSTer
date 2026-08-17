@@ -34,6 +34,25 @@ int chome_screen_id();
 void chome_test_legend(char *out, int len);
 // The sentence the sort screen shows for the row its cursor is on.
 const char *chome_test_sort_help();
+
+/*
+  The Options panel's rows as text, '|'-separated, in the order they are drawn.
+
+  Test-only, and for one row in particular: Cheats is on that list only in a game whose
+  pack has any, so "which rows are there" stopped being a constant the harness could
+  write down - it was two #defines, and a test comparing against a stale pair would
+  agree with a wrong panel. This asks opt_ids(), which is what the draw, the row count
+  and the press all ask, so a row that appears here is a row all three agree on.
+*/
+void chome_test_opt_rows(char *out, int len);
+
+/*
+  The line under the Cheats list, in its roomy wording. Test-only: that screen's four
+  states differ by a sentence and by nothing else on the framebuffer, so counting ink
+  cannot tell "nothing is kept" from "something else is kept" - and those two are the
+  pair a wrong comparison would swap.
+*/
+void chome_test_cheat_footer(char *out, int len);
 #endif
 
 /*

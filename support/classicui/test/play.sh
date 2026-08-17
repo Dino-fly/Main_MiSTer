@@ -42,6 +42,7 @@ g++ -std=gnu++14 -O2 -Wall -Wextra -Wno-unused-parameter -Wno-format-truncation 
     support/classicui/chome_proc.cpp \
     support/classicui/chome_ini.cpp \
     support/classicui/chome_opt.cpp \
+    support/classicui/chome_cheats.cpp \
     support/classicui/chome_ui.cpp \
     support/classicui/chome_video.cpp \
     support/classicui/test/stubs.cpp \

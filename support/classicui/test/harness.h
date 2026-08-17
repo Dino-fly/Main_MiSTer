@@ -129,4 +129,15 @@ const char *harness_last_preset();
 void harness_reset_preset();
 void harness_clear_launch();
 
+/*
+  The modelled cheat store - see the long note above harness_clear_cheats() in stubs.cpp.
+  A fixture is written in whatever order reads well and is sorted into the order
+  cheats_init() would really have produced, because the fold under test works on
+  adjacency. `lines` is what the entry costs against harness_set_cheat_budget().
+*/
+void harness_clear_cheats();
+void harness_add_cheat(const char *name, int lines = 1);
+void harness_set_cheat_budget(int max_lines);
+int  harness_cheat_on(int idx);
+
 #endif
