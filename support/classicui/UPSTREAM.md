@@ -252,6 +252,79 @@ SNAC reader (§4 of the hacks below) no core has to be rebuilt for it.
 
 ---
 
+## 9. Setting the video mode at runtime
+
+**What changed.** `video_mode_cmd()` in `video.cpp` now accepts everything MiSTer.ini's
+`video_mode=` accepts, where it took custom modelines only. **What was added.**
+`video_mode_restore()` beside it.
+
+**The widening.** `video_mode_cmd()` parsed its argument and refused anything that was not
+a modeline:
+
+```
+video_mode_cmd: only custom modelines are supported, got "2"
+```
+
+So the one form of the setting that MiSTer.ini documents — the predefined numbers, with the
+table of them in a comment above the key — was the one form it could not apply. A
+predefined number now fills `v` from `vmodes[]` exactly as `store_custom_video_mode()`
+does for the same input: same timings, same VIC, same pixel-repeat flag.
+
+That identity is the reason for the change rather than a nicety. The front-end previews a
+mode and then writes the setting, and those two have to be the same thing or the preview
+is answering a different question from the save — a modeline sets VIC to 0 where the
+predefined form sets the CEA id, which over HDMI is the difference between a television
+recognising 480p and treating it as an unknown PC mode.
+
+`store_custom_video_mode()` is not called directly because it cannot refuse: a value it
+fails to parse falls back to mode 8 or 0 and returns 0, which is right for a config file
+being read at boot and wrong for a command that should say no. Nothing that worked before
+behaves differently; the change is strictly a widening of what is accepted.
+
+**`video_mode_restore()`** re-runs `video_mode_load()` and `video_set_mode(&v_def, 0)` —
+"put back whatever the configuration says", by the path `video_init()` already uses. It
+re-derives rather than restoring a snapshot, so there is no saved copy that can go stale.
+
+**Why either exists.** The front-end offers a per-core video mode, which is a setting
+`chome_opt.h` names by name as too dangerous to hand to a player. What makes the per-core
+one different is in `chome_video.h`; what makes it *safe* is these two calls. Choosing a
+mode applies it and starts a fifteen-second countdown, and `video_mode_restore()` is what
+runs when nobody confirms. Nothing is written to MiSTer.ini until a second press, so a
+display that cannot lock to the mode — which on a board with an empty EDID cannot be
+predicted — costs fifteen seconds of black and changes no file.
+
+---
+
+## 10. Configuration, per core
+
+The front-end writes one key into a section of MiSTer.ini that is not `[MiSTer]`:
+`video_mode` under `[<core name>]`. It is the only per-core key it writes, and it is
+written with a section-aware rewriter of its own (`ini_rewrite_core()` in
+`chome_ini.cpp`) rather than through the one everything else uses.
+
+The distinction matters enough to state. `ini_rewrite_set()` sets a key **wherever it
+appears**, deliberately — a setting this front-end has an opinion about is an opinion
+about the machine, and one fixed in `[MiSTer]` and left wrong in a core section would be
+silently overridden. A per-core setting is the opposite question: `video_mode` under
+`[GBA]` must not touch the `video_mode` under `[MiSTer]`, because that one is the mode
+every other core on the machine runs at.
+
+Everything else is unchanged: the file is copied through byte for byte, `MiSTer.ini.bak`
+is written first, and the new file is written beside the old one and renamed over it.
+Two behaviours worth knowing:
+
+- A `[<core>]` section the player already wrote gets the line **inside** it, not a second
+  section underneath.
+- "Automatic" **removes** the assignment rather than emptying it. An empty `video_mode=`
+  is not "unset" to `cfg.cpp` — it is a parse failure, and `store_custom_video_mode()`
+  answers a parse failure with mode 8 or 0. Written that way, "back to automatic" would
+  mean "1080p for ever on this core".
+
+The trap this cannot do anything about is the one `CLAUDE.md` describes: a `[video=WxH]`
+section further down the file still outranks a `[<core>]` section above it.
+
+---
+
 ## Workarounds and hacks, in one list
 
 Ordered by how much they would surprise someone reading the code cold.

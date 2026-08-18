@@ -175,6 +175,51 @@ const char *ini_loggable(const char *key, const char *value);
 */
 int ini_apply_set(const char *path, const ini_set *set, int n, const char *note);
 
+/* ----------------------------------------------------- one core's own section --- */
+
+/*
+  Everything above this line is section-blind on purpose: ini_rewrite_set() sets a key
+  wherever it appears - including inside a core or video section, which would otherwise
+  override the one we fixed - and appends what is missing into a [MiSTer] of its own.
+  That is right for the settings this front-end has an opinion about, which are opinions
+  about the machine.
+
+  A per-core setting is the opposite question, and needs the opposite rule. `video_mode`
+  under `[GBA]` must not touch the `video_mode` under `[MiSTer]`, because that one is the
+  mode every other core on the machine runs at, and rewriting it is precisely the black
+  screen a per-core setting exists to avoid.
+
+  So these three work inside exactly one section, `[<core>]`, and leave every other byte
+  of the file alone - the same copy-through rule as the rewriter above.
+
+  A note on why the section goes at the END of the file when it has to be created.
+  cfg.cpp parses top to bottom and a later matching section wins, so a `[GBA]` appended
+  after an existing `[MiSTer]` is the one that takes effect. The one thing that can still
+  outrank it is a `[video=...]` section further down - see the trap written up in
+  CLAUDE.md - and there is nothing to be done about that from here beyond not being the
+  cause of it.
+*/
+
+// What `[<core>]` sets this key to, from the file. 1 when the key is there, in that
+// section, and not commented out. Values elsewhere in the file are not this question.
+int ini_core_value(const char *path, const char *core, const char *key, char *out, int max);
+
+/*
+  Rewrite an image with one key set inside `[<core>]`. A null `value` REMOVES the
+  assignment, which is the only honest way to spell "no per-core setting": an empty
+  `video_mode=` is not "unset" to cfg.cpp, it is a parse failure that falls back to
+  1080p. Returns the length written, or -1 if it would not fit.
+*/
+int ini_rewrite_core(const char *src, int srclen, char *dst, int dstmax,
+	const char *core, const char *key, const char *value, const char *note);
+
+/*
+  Back up and write it. Returns 1 when the file changed, 0 when it already said this,
+  or -1 with ini_last_error() set.
+*/
+int ini_apply_core(const char *path, const char *core, const char *key,
+	const char *value, const char *note);
+
 /*
   Back up, rewrite, and tell the running firmware. Returns the number of settings
   written, 0 when there was nothing to do, or -1 if nothing was written - in which

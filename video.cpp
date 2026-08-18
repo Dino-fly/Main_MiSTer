@@ -4695,13 +4695,50 @@ void video_cmd(char *cmd)
 	}
 }
 
+/*
+  Set the video mode at runtime, from anything MiSTer.ini's video_mode= accepts.
+
+  It used to take custom modelines only and print a refusal for the predefined numbers,
+  which meant the one form of the setting that is documented in MiSTer.ini - and the only
+  one a person can reasonably be offered a list of - was the one form this could not
+  apply. Filling v from vmodes[] here is exactly what store_custom_video_mode() does for
+  the same input, so a mode applied through this hook is bit-identical to the same
+  video_mode= read at boot: same timings, same VIC, same pixel-repeat flag. That identity
+  is the point. A front-end that previews a mode and then writes the setting must be
+  previewing the thing it is about to write, or the preview is a different question.
+
+  store_custom_video_mode() itself is not called because it cannot refuse: a value it
+  fails to parse falls back to 1080p or 720p and returns 0, which is right for a config
+  file being read at boot and wrong for a command that should say no.
+*/
 void video_mode_cmd(char *cmd)
 {
 	vmode_custom_t v = {};
 	int ret = parse_custom_video_mode(cmd, &v);
-	if (ret != -2)
+
+	if (ret >= 0)
 	{
-		printf("video_mode_cmd: only custom modelines are supported, got \"%s\"\n", cmd);
+		if ((uint32_t)ret >= VMODES_NUM)
+		{
+			printf("video_mode_cmd: no predefined mode %d\n", ret);
+			return;
+		}
+
+		if (vmodes[ret].pr == 1 && !supports_pr())
+		{
+			printf("video_mode_cmd: mode %d needs pixel repeat, which this core has not got\n", ret);
+			return;
+		}
+
+		for (int i = 0; i < 8; i++) v.item[i + 1] = vmodes[ret].vpar[i];
+		v.param.vic = vmodes[ret].vic_mode;
+		v.param.pr = vmodes[ret].pr;
+		v.param.rb = 1;
+		setPLL(vmodes[ret].Fpix, &v);
+	}
+	else if (ret != -2)
+	{
+		printf("video_mode_cmd: cannot parse \"%s\"\n", cmd);
 		return;
 	}
 
@@ -4710,6 +4747,29 @@ void video_mode_cmd(char *cmd)
 	video_set_mode(&v, v.Fpix);
 	user_io_send_buttons(1);
 	printf("video_mode_cmd: applied mode \"%s\"\n", cmd);
+}
+
+/*
+  Put the configured mode back, whatever it is.
+
+  The undo for the call above, and the whole of what makes offering a video mode to
+  somebody on a television safe: a mode the display cannot lock to leaves them with no
+  picture and no way to read a menu, and this board's EDID is empty so nothing can ask
+  the display what it takes beforehand. So the front-end applies a mode, starts a
+  countdown, and calls this when the countdown runs out - a wrong mode costs fifteen
+  seconds of black and changes nothing.
+
+  It re-derives rather than restoring a snapshot, which is what makes it honest: v_def
+  comes back from cfg (MiSTer.ini as parsed for the core that is loaded) or from the
+  EDID, by the same path video_init() used. There is no saved copy that could be stale,
+  and nothing that has to be remembered across the call.
+*/
+void video_mode_restore()
+{
+	video_mode_load();
+	video_set_mode(&v_def, 0);
+	user_io_send_buttons(1);
+	printf("video_mode_restore: back to the configured mode\n");
 }
 
 static constexpr int CELL_GRAN_RND = 4;

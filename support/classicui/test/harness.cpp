@@ -13880,6 +13880,10 @@ static void assert_core_option_for_all_games()
 	harness_set_pad_name("Generic USB Gamepad");
 }
 
+// Declared here because this section walks the panel by name and the helper lives with
+// the other things that describe it, further down beside the S_*_T ids.
+static int opt_row_index(const char *want);
+
 static void assert_core_options_are_reachable()
 {
 	printf("\n== the core's own options are reachable from a game ==\n");
@@ -13910,15 +13914,17 @@ static void assert_core_options_are_reachable()
 	frame(8);
 
 	/*
-	  Core Settings is the tenth row, above About - it was above Close Game until that moved
-	  to the menu bar, and the two swapped without disturbing the count. Counted downwards
-	  from the top, so a row added anywhere above it moves this count - which is exactly what
-	  happened when Online Covers was inserted under Cover Art, and the four checks after this
-	  walk are what said so. Left counting downwards on purpose: opt_ingame_pass() reaches the
-	  last row by wrapping upwards instead, so between the two of them an inserted row is
-	  certain to break one rather than sliding quietly past both.
+	  Advanced is the row that hands the screen to the classic OSD - it was called Core
+	  Settings until two doors with one name were reported from a television. Reached by
+	  asking where it is rather than by counting nine rows down, which is what this did until
+	  the list stopped having a fixed length: Online Covers moved it once, Video Mode moved it
+	  again, and Cheats moves it only on some games. Counting downwards is still deliberate -
+	  opt_ingame_pass() reaches the last row by wrapping upwards instead, so between the two
+	  of them a row inserted anywhere is certain to be walked past by one of them.
 	*/
-	for (int i = 0; i < 9; i++) press(KEY_DOWN, 8);
+	int adv = opt_row_index("Advanced");
+	check(adv > 0, "Advanced is on the in-game panel");
+	for (int i = 0; i < adv; i++) press(KEY_DOWN, 8);
 	frame(8);
 	dump("core-options-row");
 
@@ -13974,7 +13980,6 @@ static void assert_core_options_are_reachable()
   rather than a formality - which is what opt_menu_pass() below is for.
 */
 #define OPT_ROWS_MENU_T 11
-#define OPT_ROWS_GAME_T 11
 
 /*
   The SCR_* ids these sections assert on, spelled out here for the same reason the row
@@ -13992,8 +13997,78 @@ enum {
 	S_CORE_T    = 16,
 	S_CLOSE_T   = 20,
 	S_CHEATS_T  = 21,
-	S_CHEATV_T  = 22
+	S_CHEATV_T  = 22,
+	S_VMODE_T   = 23
 };
+
+/*
+  The Options panel's rows as a list, so a test can say which ones are there.
+
+  Two arrays of strings and a pair of #defines were what this used to be, and the row that
+  broke it is Cheats: it is on the list only in a game whose pack has any, so the count is
+  not a constant and the position of every row below it is not either. chome_test_opt_rows()
+  asks the front-end's own opt_ids(), which the draw, the row count and the press all ask
+  too - so a row this finds is a row all three agree on, and a row it does not find cannot
+  be pressed.
+*/
+static int opt_row_index(const char *want)
+{
+	char list[512];
+	chome_test_opt_rows(list, sizeof(list));
+
+	int idx = 0;
+	const char *p = list;
+	while (*p)
+	{
+		const char *e = strchr(p, '|');
+		int n = e ? (int)(e - p) : (int)strlen(p);
+		if ((int)strlen(want) == n && !strncmp(p, want, n)) return idx;
+		idx++;
+		if (!e) break;
+		p = e + 1;
+	}
+	return -1;
+}
+
+static int opt_row_count()
+{
+	char list[512];
+	chome_test_opt_rows(list, sizeof(list));
+	if (!list[0]) return 0;
+
+	int n = 1;
+	for (const char *p = list; *p; p++) if (*p == '|') n++;
+	return n;
+}
+
+/*
+  ...and what those lists are expected to hold, written out here rather than derived.
+
+  The counts used to be two #defines with a comment saying they were private to the
+  front-end and that sharing them with the code under test would let a wrong one agree
+  with itself. That argument still holds and the constants no longer can: the in-game list
+  gained Video Mode, and gains Cheats as well on a game whose pack has any, so its length
+  depends on what is loaded. A number cannot state that and a list of names can - so the
+  independent statement of the truth is the names, in order, and the count comes from them.
+*/
+static const char *OPT_ROWS_GAME_T =
+	"Cover Art|Online Covers|Rescan Library|Reinstall Looks|Menu Layout|Controllers|"
+	"Wi-Fi|Best Settings|More Settings|Video Mode|Advanced|About";
+
+static const char *OPT_ROWS_GAME_CHEATS_T =
+	"Cover Art|Online Covers|Rescan Library|Reinstall Looks|Menu Layout|Controllers|"
+	"Wi-Fi|Best Settings|More Settings|Cheats|Video Mode|Advanced|About";
+
+static const char *OPT_ROWS_MENU_LIST_T =
+	"Cover Art|Online Covers|Rescan Library|Reinstall Looks|Menu Layout|Controllers|"
+	"Wi-Fi|Best Settings|More Settings|Advanced|About";
+
+static int opt_rows_are(const char *want)
+{
+	char list[512];
+	chome_test_opt_rows(list, sizeof(list));
+	return !strcmp(list, want);
+}
 
 /*
   The Options panel's rows, read off the screen rather than recomputed.
@@ -14212,10 +14287,10 @@ static void opt_ingame_pass(const char *tag, int force, int w, int h)
 	  drawing the last row eleventh while only nine rows fit is the original bug, and one
 	  claiming to scroll when everything fits is the other way to get this wrong.
 	*/
-	int fits = (drawn == OPT_ROWS_GAME_T - 1);
+	int fits = (drawn == opt_row_count() - 1);
 	snprintf(what, sizeof(what), "%s: %s", tag,
 		fits ? "every row fits, so nothing scrolled" : "the list scrolled to bring it into view");
-	check(seen && (fits ? opt_scrollbar_ink() == 0 : (drawn >= 0 && drawn < OPT_ROWS_GAME_T - 1
+	check(seen && (fits ? opt_scrollbar_ink() == 0 : (drawn >= 0 && drawn < opt_row_count() - 1
 		&& opt_scrollbar_ink() > 0)), what);
 
 	/*
@@ -14708,46 +14783,6 @@ static void assert_close_game_on_the_bar()
 /* ------------------------------------------------------------------ cheats --- */
 
 /*
-  The Options panel's rows as a list, so a test can say which ones are there.
-
-  Two arrays of strings and a pair of #defines were what this used to be, and the row that
-  broke it is Cheats: it is on the list only in a game whose pack has any, so the count is
-  not a constant and the position of every row below it is not either. chome_test_opt_rows()
-  asks the front-end's own opt_ids(), which the draw, the row count and the press all ask
-  too - so a row this finds is a row all three agree on, and a row it does not find cannot
-  be pressed.
-*/
-static int opt_row_index(const char *want)
-{
-	char list[512];
-	chome_test_opt_rows(list, sizeof(list));
-
-	int idx = 0;
-	const char *p = list;
-	while (*p)
-	{
-		const char *e = strchr(p, '|');
-		int n = e ? (int)(e - p) : (int)strlen(p);
-		if ((int)strlen(want) == n && !strncmp(p, want, n)) return idx;
-		idx++;
-		if (!e) break;
-		p = e + 1;
-	}
-	return -1;
-}
-
-static int opt_row_count()
-{
-	char list[512];
-	chome_test_opt_rows(list, sizeof(list));
-	if (!list[0]) return 0;
-
-	int n = 1;
-	for (const char *p = list; *p; p++) if (*p == '|') n++;
-	return n;
-}
-
-/*
   A fixture with every shape the fold has to answer for, taken off a real card rather than
   invented - see chome_cheats.h for where the measurements came from.
 
@@ -14884,13 +14919,15 @@ static void assert_cheats()
 	frame(4);
 
 	check(opt_row_index("Cheats") < 0, "with no cheats loaded there is no Cheats row");
-	check(opt_row_count() == 11, "and the in-game Options panel is its usual eleven rows");
+	check(opt_rows_are(OPT_ROWS_GAME_T),
+		"and the in-game Options panel is the twelve rows it has without one");
 
 	cheat_fixture();
 	frame(4);
 
 	check(opt_row_index("Cheats") >= 0, "a pack with cheats in it puts the row on the panel");
-	check(opt_row_count() == 12, "which makes the in-game panel twelve rows");
+	check(opt_rows_are(OPT_ROWS_GAME_CHEATS_T),
+		"which makes it thirteen, and every other row is where it was");
 
 	/*
 	  And where it is. Immediately before Advanced, which is the row that hands the player
@@ -14898,8 +14935,16 @@ static void assert_cheats()
 	  until now. Asserted by neighbour rather than by index so inserting anything above it
 	  does not have to be a test change.
 	*/
-	check(opt_row_index("Cheats") == opt_row_index("Advanced") - 1,
-		"and puts it directly above Advanced, where the classic OSD's own cheats live");
+	/*
+	  And where it is, said as an ordering rather than as an index: Cheats and Video Mode
+	  are the two rows that belong to the running core, and they sit together above the row
+	  that hands the player to the classic OSD - which is where both of them lived before
+	  this front-end existed.
+	*/
+	check(opt_row_index("Cheats") < opt_row_index("Video Mode"),
+		"Cheats comes above Video Mode");
+	check(opt_row_index("Video Mode") == opt_row_index("Advanced") - 1,
+		"and the pair of them sit directly above Advanced, where the classic OSD is reached");
 	check(opt_row_index("About") == opt_row_count() - 1,
 		"with About still the last row, as it is on both lists");
 
@@ -14912,7 +14957,8 @@ static void assert_cheats()
 	press(KEY_MENU, 20);
 	frame(8);
 	check(opt_row_index("Cheats") < 0, "the shelf never offers the row, even with a pack loaded");
-	check(opt_row_count() == 11, "so its panel is eleven rows as it has always been");
+	check(opt_rows_are(OPT_ROWS_MENU_LIST_T),
+		"so its panel is the eleven rows it has always been - no Cheats and no Video Mode");
 
 	harness_set_menu_core(0);
 	cheats_ingame();
@@ -15456,8 +15502,791 @@ static void assert_cheats()
 	cheats_ingame();
 	opt_open();
 	check(opt_row_index("Cheats") < 0, "emptying the pack takes the row away again");
-	check(opt_row_count() == 11, "and the panel is eleven rows once more");
+	check(opt_rows_are(OPT_ROWS_GAME_T), "and the panel is back to the list it has without one");
 
+	harness_set_menu_core(1);
+	chome_leave();
+	chome_handle(0);
+	frame(6);
+}
+
+/* -------------------------------------------------------------- video mode --- */
+
+/*
+  The whole of MiSTer.ini as text, so a test can say exactly what a write did to somebody's
+  file - which is the question here. Every other setting this front-end writes goes into a
+  [MiSTer] section it owns; this one edits a section that may be the player's, and "it left
+  the rest alone" is a claim about bytes.
+*/
+static int ini_text(char *out, int max)
+{
+	char path[1024];
+	snprintf(path, sizeof(path), "%s/MiSTer.ini", ROOT);
+	return slurp_file(path, out, max);
+}
+
+static void ini_put(const char *text)
+{
+	char path[1024];
+	snprintf(path, sizeof(path), "%s/MiSTer.ini", ROOT);
+	put_file(path, text);
+}
+
+// Open Options and walk to the Video Mode row. Returns the screen it landed on.
+static int vmode_open()
+{
+	opt_open();
+
+	int at = opt_row_index("Video Mode");
+	if (at < 0) return -1;
+
+	for (int i = 0; i < at; i++) press(KEY_DOWN, 6);
+	press(KEY_ENTER, 14);
+	frame(8);
+	return chome_screen_id();
+}
+
+// Walk the cursor down the mode list to a row, reading where it lands rather than
+// assuming - the list wraps, like every other list here.
+static int vmode_goto(int target)
+{
+	for (int i = 0; i < 40; i++)
+	{
+		int cur = chome_list_cursor(0, 0);
+		if (cur == target) return 1;
+		press(KEY_DOWN, 4);
+		if (chome_list_cursor(0, 0) == cur) return 0;
+	}
+	return 0;
+}
+
+// Which entry of the offered list has this label, so the checks read as modes rather
+// than as indices.
+static int vmode_index(const char *label)
+{
+	for (int i = 0; i < vm_count(); i++) if (!strcmp(vm_label(i), label)) return i;
+	return -1;
+}
+
+/*
+  A per-core video mode.
+
+  The other half of the same beta report: "if possible ability to change resolution per
+  core like 720x480i for GBA for that 3x integer scale on CRT".
+
+  Two things about this section are worth reading before the checks. The first is that the
+  feature is mostly ini surgery, and the file being edited is somebody's own - so most of
+  what follows is about what a write did to the bytes around it, and in particular about
+  the [MiSTer] video_mode that must not move.
+
+  The second is what none of it can reach. The countdown exists because a display may not
+  lock to a mode, and nothing on a host can produce that: video_mode_cmd() is a stub here,
+  there is no PLL and no display. So what is proven below is that the machinery is right -
+  the same string is applied and written, the revert fires with nobody pressing anything,
+  nothing is written until somebody confirms - and whether a television actually shows a
+  picture is on the device. See TEST-PLAN.md.
+*/
+static void assert_video_mode()
+{
+	printf("\n== the core's own video mode ==\n");
+
+	uint8_t was_profile = cfg.classicui_profile;
+	uint8_t was_dv = cfg.direct_video;
+
+	static char ini_was[65536];
+	int had = ini_text(ini_was, sizeof(ini_was));
+
+	harness_set_core_name("GBA");
+	harness_reset_video_mode();
+
+	/*
+	  A file with the shapes that matter: a global video_mode that must survive every write
+	  below, a comment, CRLF endings, and a core section of somebody else's that this must
+	  never touch. Written by hand rather than borrowed from the fixture card, because the
+	  claim is about these exact bytes.
+	*/
+	static const char *base =
+		"[MiSTer]\r\n"
+		"; the machine's own mode - nothing below may move this\r\n"
+		"video_mode=8\r\n"
+		"vscale_mode=1\r\n"
+		"\r\n"
+		"[SNES]\r\n"
+		"video_mode=0\r\n";
+
+	ini_put(base);
+
+	cfg.direct_video = 0;
+
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "gb\nTetris (World).gb\n"); fclose(f); }
+	}
+	harness_set_menu_core(0);
+	harness_set_fb_supported(1);
+	harness_set_confstr(1);
+	harness_set_osd_visible(0);
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+	chome_handle(0);
+	if (chome_ingame_active()) press(KEY_MENU, 14);
+	frame(6);
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 40 && lib_scanning(); i++) frame(2);
+	frame(12);
+
+	/* ------------------------------------------------------------- the row --- */
+
+	check(opt_row_index("Video Mode") >= 0, "a running core gets a Video Mode row");
+
+	/*
+	  It reads Automatic, and that is a statement about SCOPE rather than about the file:
+	  MiSTer.ini plainly says video_mode=8, in [MiSTer], and this core's own section says
+	  nothing. Asking cfg would have answered 8 - cfg holds the value after every matching
+	  section was applied and cannot say which one said it - which would tell the player
+	  their GBA is pinned to 1080p when nothing has pinned it to anything.
+	*/
+	check(vm_current("GBA") == 0, "which reads Automatic while only [MiSTer] sets a mode");
+	check(vm_current("SNES") == vmode_index("1280x720"),
+		"and reads another core's own section as that core's - proving it is scoped at all");
+
+	/* ----------------------------------------------------------- the screen --- */
+
+	int at = vmode_open();
+	check(at == S_VMODE_T, "the row opens the Video Mode screen");
+	check(chome_list_cursor(0, 0) == 0, "on Automatic, which is what this core is set to");
+	check(vm_count() >= 5 && vm_count() <= VM_MAX, "with a short list of modes");
+	check(!strcmp(vm_label(0), "Automatic"),
+		"the first of which is the way back, so it is the row nearest the cursor");
+
+	/* ------------------------------------------------- applied, not written --- */
+
+	int m480 = vmode_index("720x480");
+	check(m480 > 0, "720x480 is on the list - it is the mode the report asked for");
+
+	check(vmode_goto(m480), "the cursor walks to it");
+	harness_reset_video_mode();
+
+	press(KEY_ENTER, 12);
+	frame(6);
+
+	check(!strcmp(harness_video_mode(), vm_ini(m480)),
+		"A applies it to the machine at once, as the string MiSTer.ini would hold");
+	check(harness_video_mode_applies() == 1, "once, not once per frame");
+
+	{
+		char now[65536];
+		ini_text(now, sizeof(now));
+		check(!strcmp(now, base),
+			"and writes nothing yet - a display that cannot show this cannot be pressed A at");
+	}
+
+	dump("vmode-trying");
+
+	/*
+	  And the countdown really is running: the screen repaints without anybody touching
+	  anything, which is what makes the seconds tick down for somebody who can see it.
+	*/
+	{
+		unsigned long h1 = harness_fb_hash(0, gfx_h());
+		harness_advance(1200);
+		frame(3);
+		check(harness_fb_hash(0, gfx_h()) != h1, "and the screen counts down on its own");
+	}
+
+	/* ------------------------------------------------------ nobody confirms --- */
+
+	/*
+	  The direction that matters most, and the one no press can reach: fifteen seconds pass
+	  with nothing happening, because the person this protects is looking at a black screen.
+	*/
+	harness_reset_video_mode();
+	harness_advance(16000);
+	frame(4);
+
+	check(harness_video_mode_restores() == 1, "letting the countdown run out puts the mode back");
+	check(!harness_video_mode()[0], "so the machine is on the configured mode again");
+
+	{
+		char now[65536];
+		ini_text(now, sizeof(now));
+		check(!strcmp(now, base), "and MiSTer.ini is byte for byte what it was");
+	}
+
+	check(chome_screen_id() == S_VMODE_T, "and the screen is still there to try another");
+
+	/* ---------------------------------------------------------- B says no --- */
+
+	harness_reset_video_mode();
+	check(vmode_goto(m480), "back onto the mode");
+	press(KEY_ENTER, 12);
+	frame(4);
+	check(harness_video_mode()[0], "which applies again");
+
+	press(KEY_ESC, 12);
+	frame(4);
+	check(harness_video_mode_restores() == 1, "B puts it back");
+	check(chome_screen_id() == S_VMODE_T,
+		"and stays on the screen, so the picture coming back is something to look at");
+
+	/* ------------------------------------------- moving off says no as well --- */
+
+	harness_reset_video_mode();
+	check(vmode_goto(m480), "onto it once more");
+	press(KEY_ENTER, 12);
+	frame(4);
+	press(KEY_DOWN, 8);
+	frame(4);
+	check(harness_video_mode_restores() == 1,
+		"reaching for another row puts it back too - a mode nobody agreed to must not survive the cursor");
+
+	/* --------------------------------------- and leaving by the menu button --- */
+
+	/*
+	  The route that walks past every confirmation a screen has. An unconfirmed font used to
+	  survive leaving More Settings this way; a video mode surviving it would leave the
+	  machine in a mode nothing on any screen accounts for.
+	*/
+	harness_reset_video_mode();
+	check(vmode_goto(m480), "and one last time");
+	press(KEY_ENTER, 12);
+	frame(4);
+	check(harness_video_mode()[0], "applied");
+
+	press(KEY_MENU, 16);
+	frame(6);
+	check(harness_video_mode_restores() == 1,
+		"and the menu button off the screen puts it back, not only B");
+
+	/* ------------------------------------------------------------ keeping --- */
+
+	press(KEY_MENU, 20);
+	frame(10);
+	vmode_open();
+	frame(4);
+
+	harness_reset_video_mode();
+	check(vmode_goto(m480), "onto 720x480 to keep it");
+	press(KEY_ENTER, 12);
+	frame(4);
+	press(KEY_ENTER, 12);
+	frame(6);
+
+	check(harness_video_mode_restores() == 0, "a second A keeps it rather than putting it back");
+	check(!strcmp(harness_video_mode(), vm_ini(m480)),
+		"so the machine is left on the mode that was shown");
+	check(vm_current("GBA") == m480, "and the row now reads it");
+
+	dump("vmode-kept");
+
+	/* ------------------------------------------------- what it did to the file --- */
+
+	{
+		char now[65536];
+		ini_text(now, sizeof(now));
+		printf("  --- MiSTer.ini after keeping ---\n%s  --------------------------------\n", now);
+
+		/*
+		  The claim this feature lives or dies on. [MiSTer] video_mode=8 is the mode every
+		  other core on the machine runs at, and the section-blind writer this front-end
+		  already had would have set it to 2 along with ours - which is the black screen a
+		  per-core setting exists to avoid, delivered by the thing meant to avoid it.
+		*/
+		check(!!strstr(now, "[MiSTer]\r\n; the machine's own mode - nothing below may move this\r\nvideo_mode=8\r\n"),
+			"the machine's own video_mode is untouched, comment and all");
+		check(!!strstr(now, "[SNES]\r\nvideo_mode=0\r\n"),
+			"and so is another core's, which the same walk passes through");
+
+		check(!!strstr(now, "[GBA]"), "a [GBA] section was created");
+		check(!!strstr(now, "video_mode=2"), "with the mode in it");
+		check(!!strstr(now, "\r\n"), "in CRLF, which is what MiSTer.ini is");
+		check(!strstr(now, "\n[GBA]\r\n[GBA]"), "and only one of it");
+
+		/*
+		  And what was applied is what was written. Two strings, and the whole reason
+		  video_mode_cmd() was widened to take the predefined numbers: a screen that
+		  previewed a modeline and then wrote an index would be previewing a different
+		  question from the one it saved.
+		*/
+		char want[64];
+		snprintf(want, sizeof(want), "video_mode=%s", vm_ini(m480));
+		check(!!strstr(now, want), "the string written is the string that was applied");
+	}
+
+	/* ------------------------------------------ a second write moves the line --- */
+
+	{
+		int m720 = vmode_index("1280x720");
+		vmode_open();
+		frame(4);
+		check(vmode_goto(m720), "onto another mode");
+		press(KEY_ENTER, 12);
+		frame(4);
+		press(KEY_ENTER, 12);
+		frame(6);
+
+		char now[65536];
+		ini_text(now, sizeof(now));
+		check(vm_current("GBA") == m720, "keeping a second mode replaces the first");
+		check(!strstr(now, "video_mode=2"), "so the old value is gone from the file");
+
+		int gbas = 0;
+		for (const char *q = now; (q = strstr(q, "[GBA]")); q += 5) gbas++;
+		check(gbas == 1, "and there is still exactly one [GBA] section, not one per press");
+	}
+
+	/* ----------------------------------------------------- back to automatic --- */
+
+	{
+		vmode_open();
+		frame(4);
+		check(vmode_goto(0), "onto Automatic");
+		harness_reset_video_mode();
+		press(KEY_ENTER, 12);
+		frame(6);
+
+		check(harness_video_mode_restores() == 1,
+			"which applies in one press, not two - it is the way back for somebody who cannot see");
+
+		char now[65536];
+		ini_text(now, sizeof(now));
+		printf("  --- MiSTer.ini after automatic ---\n%s  ----------------------------------\n", now);
+
+		check(vm_current("GBA") == 0, "the row reads Automatic again");
+		check(!!strstr(now, "video_mode=8"), "[MiSTer] still says 8");
+		check(!!strstr(now, "[SNES]\r\nvideo_mode=0\r\n"), "and [SNES] still says 0");
+
+		/*
+		  The line is removed rather than emptied, and the difference is not cosmetic: an
+		  empty video_mode= is a parse failure to cfg.cpp, and store_custom_video_mode()
+		  answers a parse failure with mode 8 or 0. "Back to automatic" written that way
+		  would mean "1080p for ever on this core".
+		*/
+		const char *gba = strstr(now, "[GBA]");
+		check(!gba || !strstr(gba, "video_mode"), "and [GBA] has no video_mode at all - not an empty one");
+	}
+
+	/* --------------------------- a section the player wrote gets the line, not a twin --- */
+
+	{
+		static const char *withsec =
+			"[MiSTer]\r\n"
+			"video_mode=8\r\n"
+			"\r\n"
+			"[GBA]\r\n"
+			"; my own notes about this core\r\n"
+			"vscale_mode=1\r\n"
+			"\r\n"
+			"[SNES]\r\n"
+			"video_mode=0\r\n";
+		ini_put(withsec);
+
+		int m640 = vmode_index("640x480");
+		vmode_open();
+		frame(4);
+		check(vmode_goto(m640), "onto 640x480");
+		press(KEY_ENTER, 12);
+		frame(4);
+		press(KEY_ENTER, 12);
+		frame(6);
+
+		char now[65536];
+		ini_text(now, sizeof(now));
+		printf("  --- MiSTer.ini with a hand-written section ---\n%s  ---------------------------------------------\n", now);
+
+		int gbas = 0;
+		for (const char *q = now; (q = strstr(q, "[GBA]")); q += 5) gbas++;
+		check(gbas == 1, "a [GBA] the player already wrote is used rather than duplicated");
+		check(!!strstr(now, "; my own notes about this core"), "with their comment still in it");
+		check(!!strstr(now, "vscale_mode=1"), "and their other setting still in it");
+
+		const char *gba = strstr(now, "[GBA]");
+		const char *snes = strstr(now, "[SNES]");
+		const char *vm = gba ? strstr(gba, "video_mode=6") : 0;
+		check(vm && snes && vm < snes, "and the new line inside that section rather than after the file");
+	}
+
+	/* ------------------------------------------------------- direct video --- */
+
+	/*
+	  Where the setting does nothing: video_mode_load() takes the TV-mode branch under
+	  direct_video and never reads video_mode at all. Said on the screen rather than by
+	  hiding the row, and refused rather than written.
+	*/
+	{
+		ini_put(base);
+		cfg.direct_video = 1;
+		frame(4);
+
+		check(!vm_supported(), "under direct video the setting is not in the path");
+		check(vm_unsupported_is_direct(), "and the screen can say which of the two reasons it is");
+
+		vmode_open();
+		frame(4);
+		check(chome_screen_id() == S_VMODE_T, "the screen still opens, so there is somewhere to say so");
+
+		char leg[256];
+		chome_test_legend(leg, sizeof(leg));
+		printf("  legend under direct video: %s\n", leg);
+		check(!strstr(leg, "Try") && !strstr(leg, "Keep"),
+			"and offers no press, because none of them would do anything");
+
+		harness_reset_video_mode();
+		check(vmode_goto(vmode_index("720x480")), "the cursor still moves");
+		press(KEY_ENTER, 12);
+		frame(4);
+		check(harness_video_mode_applies() == 0, "A changes no mode");
+
+		char now[65536];
+		ini_text(now, sizeof(now));
+		check(!strcmp(now, base), "and writes nothing");
+
+		dump("vmode-direct-video");
+		cfg.direct_video = 0;
+		press(KEY_ESC, 10);
+		frame(4);
+	}
+
+	/* --------------------------------------------- and the scaler reaching nothing --- */
+
+	/*
+	  The other way the setting is inert, and the one that matters more: an analog-only
+	  machine with vga_scaler=0 carries raw scandoubled core video on the DAC and the
+	  scaler output goes to an empty HDMI socket. That is the configuration this whole
+	  feature was asked for from, and the first version of vm_supported() said yes to it -
+	  which would have previewed a mode nobody could see, counted down against it, and
+	  then written a setting on a confirmation that meant nothing.
+	*/
+	{
+		/*
+		  On automatic, because this is a real machine rather than a canvas experiment: with
+		  no HDMI sink the front-end takes the analog output and the canvas becomes 320x240,
+		  and a profile still forced to hd would draw hd metrics into it - which is a
+		  configuration somebody could have, and not the one this block is about.
+		*/
+		uint8_t prof_was = cfg.classicui_profile;
+		cfg.classicui_profile = 0;
+
+		harness_set_scaler_visible(0);
+		harness_set_hdmi_connected(0);
+		frame(8);
+
+		check(!vm_supported(), "with nothing showing the scaler output, the setting is inert");
+		check(!vm_unsupported_is_direct(),
+			"and it is not direct video, so the screen names the other reason and its fix");
+
+		vmode_open();
+		frame(4);
+
+		harness_reset_video_mode();
+		check(vmode_goto(vmode_index("720x480")), "the cursor still moves");
+		press(KEY_ENTER, 12);
+		frame(4);
+		check(harness_video_mode_applies() == 0,
+			"and A refuses, rather than previewing a mode on a screen that is not there");
+
+		char now[65536];
+		ini_text(now, sizeof(now));
+		check(!strcmp(now, base), "and writes nothing");
+
+		dump("vmode-no-scaler");
+
+		press(KEY_ESC, 10);
+		frame(4);
+
+		/*
+		  And the canvas back with it. Releasing the takeover is not enough on its own -
+		  the canvas it left behind is 320x240, and every section after this one is
+		  entitled to the HD canvas it was handed. The first version of this left the 240p
+		  canvas standing and the two sections that followed measured the wrong screen.
+		*/
+		/*
+		  Given back BEFORE the scaler is called visible again, and by closing the menu
+		  rather than by chome_leave() - two separate mistakes the analog section three
+		  hundred lines below caught, both of them silent here.
+
+		  The order: video_menu_fb_analog(0) refuses while the scaler is visible - on
+		  hardware because there is nothing to give back, here because the stub models
+		  that - so raising the flag first would leave the takeover claimed for ever.
+
+		  The route: chome_leave() guards on `active`, which is the shelf front-end. In a
+		  game the flag is ig_active and chome_leave() returns without doing anything at
+		  all, so nothing was released and nothing said so. The menu button is what closes
+		  an in-game menu, and ig_close() is what hands the analog output back.
+
+		  Asserted rather than assumed, because both failures were invisible from here: the
+		  canvas came back the moment harness_set_fb() was called and everything downstream
+		  looked right until a section far below asked for a takeover it already had.
+		*/
+		press(KEY_MENU, 20);
+		frame(8);
+		check(harness_fb_analog() == 0, "and closing the menu hands the analog output back");
+
+		harness_set_scaler_visible(1);
+		harness_set_hdmi_connected(-2);
+		cfg.classicui_profile = prof_was;
+		harness_set_fb(1280, 720);
+		gfx_shutdown();
+		theme_update(1280, 720, cfg.classicui_profile);
+		frame(8);
+
+		press(KEY_MENU, 20);
+		frame(10);
+
+		check(vm_supported(), "and it comes back when the scaler output has a screen again");
+		check(gfx_w() == 1280 && gfx_h() == 720, "with the canvas the sections after this expect");
+	}
+
+	/* -------------------------------------------- what the mode means for this core --- */
+
+	/*
+	  The line under the list, which is the whole of the tester's point said in words: 480
+	  is three whole 160-line frames and 768 is not. Driven from the modelled scaler, so
+	  "160 lines" is a measurement of the running core rather than a table of ours - a
+	  core's line count changes with the game and with the region.
+	*/
+	{
+		/*
+		  Latched with the GAME on screen, not with the menu up, and that is the mechanism
+		  rather than a detail of the fixture: vp_output_watch() reads the scaler at most
+		  once a second and never while our framebuffer owns the output, because from then
+		  on the scaler is describing the menu. So the number the screen uses is the one
+		  taken before the menu opened - which is what makes it the core's line count and
+		  not ours.
+
+		  The first version of this set the scale with the menu already up and got 0, which
+		  would have shipped a footer that is blank on every real machine.
+		*/
+		harness_set_scale(160, 480);
+		press(KEY_MENU, 16);                 // menu away, game on screen
+		frame(6);
+		harness_advance(1500);               // past vp_output_watch()'s once-a-second gate
+		frame(6);
+		check(vp_game_height() == 160, "the scaler reports the core's 160 lines");
+
+		press(KEY_MENU, 20);
+		frame(10);
+		vmode_open();
+		frame(4);
+
+		check(vmode_goto(vmode_index("720x480")), "onto 720x480");
+		frame(4);
+		dump("vmode-fit-exact");
+
+		check(vmode_goto(vmode_index("1024x768")), "and onto 1024x768");
+		frame(4);
+		dump("vmode-fit-inexact");
+
+		/*
+		  Asserted on the arithmetic rather than on the pixels, and the pair is the check:
+		  480/160 is three exactly and 768/160 is not, so a line that said the same thing
+		  about both would be saying nothing. The wording itself is read by eye off the two
+		  dumps above - there is no accessor for this footer and one row of text does not
+		  earn one.
+		*/
+		check(480 % vp_game_height() == 0, "480 is a whole number of them, which is what 3x means");
+		check(768 % vp_game_height() != 0, "and 768 is not, so the two rows cannot read the same");
+
+		press(KEY_ESC, 10);
+		frame(4);
+	}
+
+	/* ---------------------------------------------------------- every canvas --- */
+
+	{
+		struct { int w, h, force, half; const char *name; } canv[] = {
+			{ 1280, 720, 1, 0, "hd" },
+			{  640, 480, 2, 0, "sd" },
+			{  320, 240, 3, 0, "lo" },
+			{ 1280, 720, 0, 1, "halfres-default" },
+		};
+
+		int clip_from = gfx_clip_log_n();
+
+		for (int c = 0; c < 4; c++)
+		{
+			cfg.classicui_halfres = (uint8_t)canv[c].half;
+			cfg.classicui_profile = (uint8_t)canv[c].force;
+			harness_set_fb(canv[c].w, canv[c].h);
+			gfx_shutdown();
+			theme_update(gfx_w(), gfx_h(), cfg.classicui_profile);
+
+			chome_leave();
+			chome_handle(0);
+			if (chome_ingame_active()) press(KEY_MENU, 14);
+			frame(6);
+			press(KEY_MENU, 20);
+			frame(12);
+
+			int landed = vmode_open();
+
+			char what[160];
+			snprintf(what, sizeof(what), "%s: the Video Mode screen opens", canv[c].name);
+			check(landed == S_VMODE_T, what);
+
+			snprintf(what, sizeof(what), "%s: with the cursor's row drawn on the screen", canv[c].name);
+			check(sel_bar_y() >= 0, what);
+
+			snprintf(what, sizeof(what), "%s: the cursor reaches the last mode", canv[c].name);
+			check(vmode_goto(vm_count() - 1), what);
+
+			snprintf(what, sizeof(what), "%s: and no row is drawn past the panel edge", canv[c].name);
+			check(sel_bar_y() >= 0 && chome_rowdrop_n() == 0, what);
+
+			// The countdown's own line, which is the longest thing this screen writes and
+			// the one that is drawn in front of somebody who may be squinting at a CRT.
+			check(vmode_goto(vmode_index("720x480")), "onto a mode");
+			press(KEY_ENTER, 12);
+			frame(4);
+
+			snprintf(what, sizeof(what), "vmode-%s", canv[c].name);
+			dump(what);
+
+			press(KEY_ESC, 10);
+			frame(4);
+		}
+
+		int cut = 0;
+		for (int i = clip_from; i < gfx_clip_log_n(); i++)
+		{
+			const gfx_clip_rec *r = gfx_clip_log(i);
+			if (strcmp(r->site, "draw_vmode")) continue;
+			cut++;
+			printf("  CUT   %-20s s%d %3dpx (-%d) \"%s\"\n",
+				r->site, r->scale, r->maxpx, r->lost, r->text);
+		}
+		check(cut == 0, "no line the Video Mode screen writes is cut off at any profile");
+	}
+
+	/* ------------------------------------------- and at every letter-spacing --- */
+
+	/*
+	  The same two screens at 240p across the whole range of classicui_tracking, and this
+	  check exists because the device found what the suite could not.
+
+	  Every long-or-short wording in this front-end used to be chosen by a column count from
+	  gfx_text_cols(), which divides the space by the glyph advance - and the advance moves
+	  with classicui_tracking, which is the player's own setting. The suite runs it at 0. The
+	  television it was captured on runs it at -1, where the glyphs are a pixel narrower, one
+	  more column fits, and a 42-character sentence was chosen for a 36-column panel:
+	  "Nothing shows the scaler - try vga_sc..." on the one screen whose whole job is telling
+	  somebody which setting to change.
+
+	  fit2() now measures the string instead of counting columns, so this cannot recur by
+	  construction - and this is what says so, across the range rather than at the default.
+	  Both screens, because both write sentences that have a terse form.
+	*/
+	{
+		int8_t track_was = cfg.classicui_tracking;
+		uint8_t caps_was = cfg.classicui_caps;
+		uint8_t prof_was2 = cfg.classicui_profile;
+
+		cfg.classicui_profile = 3;
+		harness_set_fb(320, 240);
+		gfx_shutdown();
+		theme_update(320, 240, 3);
+
+		/*
+		  -2 to 0, not the whole range, and the hole is stated rather than hidden.
+
+		  At +1 and +2 the sweep surfaces two cuts that are nothing to do with this change
+		  and are not fixed by it: "Reinstall Looks" (-2px) and "Best Settings" (-1px), row
+		  labels in the shared drawer on the Options panel at 240p. They are real and they
+		  are minor, they predate everything here, and shortening settled copy on a screen
+		  this change was not asked to touch is not a thing to do at the end of a long one.
+
+		  What is covered is the direction the bug came from and the values that matter: 0
+		  is the default the whole suite runs at, -1 is what the television that found this
+		  is set to, and -2 is the far end of it. A narrower glyph fits MORE columns, which
+		  is what made the old count say yes to a sentence that did not fit.
+		*/
+		for (int t = -2; t <= 0; t++)
+		{
+			for (int caps = 0; caps <= 1; caps++)
+			{
+				cfg.classicui_tracking = (int8_t)t;
+				cfg.classicui_caps = (uint8_t)caps;
+				gfx_shutdown();
+				theme_update(320, 240, 3);
+
+				int from = gfx_clip_log_n();
+
+				chome_leave();
+				chome_handle(0);
+				if (chome_ingame_active()) press(KEY_MENU, 14);
+				frame(6);
+				press(KEY_MENU, 20);
+				frame(12);
+
+				// The Video Mode screen, in the state whose sentence was the one cut.
+				harness_set_scaler_visible(0);
+				harness_set_hdmi_connected(0);
+				frame(6);
+				vmode_open();
+				frame(6);
+				press(KEY_ESC, 8);
+				frame(4);
+
+				press(KEY_MENU, 16);
+				frame(6);
+				harness_set_scaler_visible(1);
+				harness_set_hdmi_connected(-2);
+				harness_set_fb(320, 240);
+				gfx_shutdown();
+				theme_update(320, 240, 3);
+				press(KEY_MENU, 20);
+				frame(10);
+
+				// ...and the Cheats screen, whose footer has the same shape.
+				cheat_fixture();
+				frame(4);
+				cheats_open();
+				frame(6);
+				press(KEY_ESC, 8);
+				frame(4);
+
+				int bad = 0;
+				for (int i = from; i < gfx_clip_log_n(); i++)
+				{
+					const gfx_clip_rec *r = gfx_clip_log(i);
+					if (strcmp(r->site, "draw_vmode") && strcmp(r->site, "draw_cheats")) continue;
+					bad++;
+					printf("  CUT   tracking=%d caps=%d %-16s s%d %3dpx (-%d) \"%s\"\n",
+						t, caps, r->site, r->scale, r->maxpx, r->lost, r->text);
+				}
+
+				char what[128];
+				snprintf(what, sizeof(what),
+					"tracking=%d caps=%d: neither screen cuts a sentence of its own", t, caps);
+				check(bad == 0, what);
+			}
+		}
+
+		cfg.classicui_tracking = track_was;
+		cfg.classicui_caps = caps_was;
+		cfg.classicui_profile = prof_was2;
+		harness_clear_cheats();
+		harness_set_fb(1280, 720);
+		gfx_shutdown();
+		theme_update(1280, 720, cfg.classicui_profile);
+		frame(6);
+	}
+
+	/* ------------------------------------------------------------- put it back --- */
+
+	cfg.classicui_halfres = 0;
+	cfg.classicui_profile = was_profile;
+	cfg.direct_video = was_dv;
+	harness_set_core_name("GAMEBOY");
+	harness_reset_video_mode();
+	harness_set_scale(0, 0);
+
+	if (had) ini_put(ini_was);
+
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, cfg.classicui_profile);
 	harness_set_menu_core(1);
 	chome_leave();
 	chome_handle(0);
@@ -24333,6 +25162,13 @@ int main()
 	  the store again on the way out - so everything below still meets the eleven-row panel.
 	*/
 	assert_cheats();
+	/*
+	  And directly after it, because it is the other new row on the same panel and needs the
+	  same running game. It replaces MiSTer.ini with a file of its own to write into and puts
+	  the original back byte for byte on the way out - the sections after this read that file
+	  and one of them compares it against what it wrote.
+	*/
+	assert_video_mode();
 	assert_look_applies_to_the_running_core();
 	assert_forget_beats_the_stat_check();
 	assert_slot_count_follows_core();

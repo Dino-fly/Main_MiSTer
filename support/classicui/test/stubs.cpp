@@ -418,7 +418,19 @@ static int hdmi_connected = HDMI_FOLLOW;
 void harness_set_hdmi_connected(int v) { hdmi_connected = v; }
 
 int video_hdmi_connected() { return (hdmi_connected == HDMI_FOLLOW) ? scaler_visible : hdmi_connected; }
-int video_scaler_is_visible() { return scaler_visible; }
+
+/*
+  direct_video is honoured here rather than left to the flag, and the reason is §4's
+  fourth failure mode - a stub keyed more loosely than the real identity.
+
+  The real video_scaler_is_visible() is three lines and the first is unconditional:
+  `if (cfg.direct_video) return 0;` - the scaler is bypassed entirely, whatever anything
+  else says. A stub that answered only the flag let a test set cfg.direct_video=1, model a
+  machine that cannot exist, and report that a refusal keyed on this predicate had not
+  fired. The flag still carries the other two cases (vga_scaler, and whether an HDMI sink
+  is attached), which is what the analog section drives directly.
+*/
+int video_scaler_is_visible() { return cfg.direct_video ? 0 : scaler_visible; }
 void video_menu_bg(int, int) {}
 
 /*
@@ -1797,3 +1809,45 @@ int cheats_set_enabled(int idx, int on)
 	cheat_on[idx] = 1;
 	return 1;
 }
+
+/* ------------------------------------------------------------ video mode -- */
+
+/*
+  The two video.cpp entry points the per-core mode uses.
+
+  Modelled rather than counted, and the model is one string: the mode that is in force
+  *right now*, as the argument video_mode_cmd() was handed. That is what makes the
+  identity worth testing at all - the front-end applies a mode live and then writes the
+  same string into MiSTer.ini, and "the mode you were shown is the mode that was written"
+  is a claim about those two strings being equal. A stub that only counted calls could
+  not tell a screen that previews one mode and saves another from one that does not.
+
+  video_mode_restore() puts it back to "whatever MiSTer.ini says", which on the device
+  re-derives v_def from cfg. Here that is the empty string, meaning "not us" - and the
+  restore count is exposed because the countdown expiring is a thing that happens with
+  nobody pressing anything, so a test cannot infer it from a key.
+
+  What this cannot model, and what the device is therefore still needed for: whether a
+  display locks to the mode. That is the entire reason the countdown exists, and no host
+  check can reach it. See TEST-PLAN.md.
+*/
+static char vmode_now[64] = {};
+static int vmode_restores = 0;
+static int vmode_applies = 0;
+
+void video_mode_cmd(char *cmd)
+{
+	snprintf(vmode_now, sizeof(vmode_now), "%s", cmd ? cmd : "");
+	vmode_applies++;
+}
+
+void video_mode_restore()
+{
+	vmode_now[0] = 0;
+	vmode_restores++;
+}
+
+const char *harness_video_mode() { return vmode_now; }
+int harness_video_mode_restores() { return vmode_restores; }
+int harness_video_mode_applies() { return vmode_applies; }
+void harness_reset_video_mode() { vmode_now[0] = 0; vmode_restores = 0; vmode_applies = 0; }

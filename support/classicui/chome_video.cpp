@@ -10,6 +10,7 @@
 #include "chome_video.h"
 #include "chome_lib.h"
 #include "chome_core.h"
+#include "chome_ini.h"
 #include "../../cfg.h"
 #include "../../file_io.h"
 #include "../../user_io.h"
@@ -1246,6 +1247,11 @@ int vp_output_rect(int *w, int *h)
 	if (w) *w = vp_out_w;
 	if (h) *h = vp_out_h;
 	return 1;
+}
+
+int vp_game_height()
+{
+	return (vp_src_h > 0) ? vp_src_h : 0;
 }
 
 static int vp_output_scale()
@@ -2686,4 +2692,145 @@ const uint32_t *vp_preview(int i, int w, int h, const uint32_t *ref, int sw_nati
 	}
 
 	return pv_buf;
+}
+
+/* ------------------------------------------------ the per-core video mode ----- */
+
+/*
+  The list. See chome_video.h for what this is and why it is this short.
+
+  Every entry is a number from MiSTer.ini's own predefined table - the same numbers the
+  comment block above `video_mode=` in that file lists - rather than a modeline of our
+  own. Three things follow from that and all three matter:
+
+  the line written into somebody's ini is the line the documentation describes, so a
+  person reading their own file afterwards finds a setting they can look up; the timings
+  are upstream's, not ours, so a mode that goes wrong is upstream's mode going wrong on
+  that display rather than our arithmetic; and video_mode_cmd() now takes the identical
+  string, so what the countdown shows IS what the file will say.
+
+  60 Hz only, no pixel repeat. The 50 Hz entries (3, 7, 9) are missing on purpose: this
+  board's EDID is empty, nothing can ask the display whether it takes 50 Hz, and a set
+  that does not is a black screen with no warning. Somebody who needs one can still write
+  it by hand - the row will read Automatic and leave their line alone.
+
+  1366x768 (10) is missing for the other reason: it is the mode panels most often report
+  and least often display correctly, and there is nothing an integer scale wants from it.
+*/
+struct vm_entry
+{
+	const char *ini;
+	const char *label;
+	int h;
+};
+
+static const vm_entry vm_list[] = {
+	/*
+	  Automatic first, so the way back is the first thing the cursor is on when the screen
+	  opens on a core that has no setting - and the way back from a mode somebody cannot
+	  see is one press up from wherever they are.
+	*/
+	{ "",  "Automatic",  0 },
+	{ "6", "640x480",  480 },
+	{ "2", "720x480",  480 },     // 3x of 160 lines, which is what was asked for
+	{ "5", "800x600",  600 },
+	{ "1", "1024x768", 768 },
+	{ "0", "1280x720", 720 },
+	{ "8", "1920x1080", 1080 },
+};
+
+#define VM_N ((int)(sizeof(vm_list) / sizeof(vm_list[0])))
+
+int vm_count() { return VM_N; }
+
+const char *vm_ini(int i)   { return (i > 0 && i < VM_N) ? vm_list[i].ini : ""; }
+const char *vm_label(int i) { return (i >= 0 && i < VM_N) ? vm_list[i].label : "Automatic"; }
+int vm_height(int i)        { return (i > 0 && i < VM_N) ? vm_list[i].h : 0; }
+
+int vm_current(const char *core)
+{
+	if (!core || !core[0]) return 0;
+
+	char had[INI_VAL_MAX];
+	if (!ini_core_value(ini_path(), core, "video_mode", had, sizeof(had))) return 0;
+
+	for (int i = 1; i < VM_N; i++) if (!strcmp(had, vm_list[i].ini)) return i;
+
+	/*
+	  A value this list does not offer - a modeline somebody wrote by hand, or a 50 Hz
+	  number. Reported as Automatic, which is a lie about the file and the right answer
+	  for the screen: the alternative is a row showing a value the player cannot select,
+	  cannot get back to once they move off it, and did not put there through this menu.
+	  Their line is left alone unless they choose something, which is the only part that
+	  actually matters.
+	*/
+	printf("ClassicUI: [%s] video_mode=%s is not one this menu offers - showing Automatic\n",
+		core, had);
+	return 0;
+}
+
+/*
+  Does a video mode change anything this machine is showing?
+
+  video_mode shapes the SCALER's output and nothing else, so the question is whether that
+  output reaches a screen - which is exactly what video_scaler_is_visible() answers, and
+  the same test mb_visible() uses to decide whether the Display screen is worth having.
+  Three configurations answer no, for three different reasons:
+
+  - `direct_video=1`: video_mode_load() takes the TV-mode branch and never reads
+    cfg.video_conf. The core's own timing goes straight out of the DAC.
+  - analog only with `vga_scaler=0` (the default): the analog port carries raw,
+    scandoubled core video, bypassing the scaler entirely. The scaler output goes to an
+    HDMI socket with nothing in it.
+  - and on such a machine the front-end is also holding the analog takeover while its menu
+    is up, which is a video mode of its own that it puts back on the way out.
+
+  It started as `cfg.direct_video ? 0 : 1` and that was wrong in the case that matters
+  most: an analog-only machine is precisely the one this feature was asked for, and there
+  the preview would have applied a mode nobody could see, run a countdown against it, and
+  then written a setting on the strength of a confirmation that meant nothing. A preview
+  that cannot be seen is worse than no preview - it is the confirmation step lying.
+
+  Analog with `vga_scaler=1` is the case that says yes: the scaler output goes down the
+  VGA cable, there is no takeover, and video_mode is exactly the knob. That is also the
+  configuration to be in for the thing the report asked for.
+
+  Said on the screen rather than by leaving the row out, which is this file's own ruling
+  about the analog report applied again: naming what is happening costs nothing, and a
+  player who cannot find the setting has been told less than one who is told why it would
+  not work - especially when the fix is a one-word ini change.
+*/
+int vm_supported()
+{
+	return video_scaler_is_visible() ? 1 : 0;
+}
+
+// Which of the two reasons, so the screen can name the one that applies. 1 direct video,
+// 0 the scaler output reaching no screen.
+int vm_unsupported_is_direct()
+{
+	return cfg.direct_video ? 1 : 0;
+}
+
+void vm_apply_now(int i)
+{
+	if (i <= 0 || i >= VM_N) { vm_restore_now(); return; }
+
+	char cmd[32];
+	snprintf(cmd, sizeof(cmd), "%s", vm_list[i].ini);
+	video_mode_cmd(cmd);
+}
+
+void vm_restore_now()
+{
+	video_mode_restore();
+}
+
+int vm_write(const char *core, int i)
+{
+	if (i < 0 || i >= VM_N) return -1;
+
+	return ini_apply_core(ini_path(), core, "video_mode",
+		i ? vm_list[i].ini : 0,
+		"; Written by Classic Home - Options > Video Mode.");
 }

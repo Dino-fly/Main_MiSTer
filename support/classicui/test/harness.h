@@ -130,6 +130,16 @@ void harness_reset_preset();
 void harness_clear_launch();
 
 /*
+  The modelled video mode - see the note above video_mode_cmd() in stubs.cpp. The string
+  is what was last handed to video_mode_cmd(), empty after a restore, which is what lets a
+  test ask whether the mode shown is the mode written.
+*/
+const char *harness_video_mode();
+int  harness_video_mode_restores();
+int  harness_video_mode_applies();
+void harness_reset_video_mode();
+
+/*
   The modelled cheat store - see the long note above harness_clear_cheats() in stubs.cpp.
   A fixture is written in whatever order reads well and is sorted into the order
   cheats_init() would really have produced, because the fold under test works on
