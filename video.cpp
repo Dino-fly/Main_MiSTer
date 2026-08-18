@@ -232,6 +232,23 @@ static void video_calculate_cvt(int horiz_pixels, int vert_pixels, float refresh
 static vmode_custom_t v_cur = {}, v_def = {}, v_pal = {}, v_ntsc = {};
 static int vmode_def = 0, vmode_pal = 0, vmode_ntsc = 0;
 
+/*
+  The mode a runtime command put up, if one is still standing.
+
+  Held because an HDMI re-init would otherwise throw it away, which is not a theoretical
+  worry - it is what happens. Changing the mode reprograms the transmitter, the sink
+  re-asserts HPD, the interrupt fires, and video_reinit() re-derives v_def from cfg and
+  puts the configured mode back. Measured on the device: a mode applied at 800x600 was
+  gone inside two seconds, with the front-end's fifteen-second confirmation still running
+  and nothing on screen to show for it.
+
+  A runtime mode is a deliberate instruction rather than a configuration, so it outranks
+  the ini until something takes it down. The front-end's trial always does, one way or the
+  other - confirmed and written, or reverted by video_mode_restore() when the countdown
+  expires - so this cannot stand for longer than that countdown allows.
+*/
+static char mode_cmd_cur[128] = {};
+
 // FB_TERMINAL_VGA: fb terminal temporarily owns the analog output via vga_fb
 static int vga_fb_takeover = 0;
 static vmode_custom_t v_takeover_saved = {};
@@ -2754,6 +2771,46 @@ void video_reinit()
 	support_FHD = 0;
 	video_mode_load(true);
 
+	/*
+	  ...and then put a runtime mode back over it, because video_mode_load() has just
+	  overwritten v_def with what the ini says.
+
+	  Re-initialising is the right response to a display appearing or changing; deciding
+	  the machine's mode is not, when something has explicitly set one since boot. This is
+	  the path that quietly undid the front-end's video-mode trial about a second after it
+	  started, on the display whose hotplug the mode change itself provoked.
+
+	  Bounded by the caller rather than here: a trial takes itself down after fifteen
+	  seconds, and video_mode_restore() clears this on the way past - so a mode that makes
+	  the sink bounce every time it is applied cannot do so for longer than that.
+	*/
+	if (mode_cmd_cur[0])
+	{
+		vmode_custom_t v = {};
+		char tmp[128];
+		snprintf(tmp, sizeof(tmp), "%s", mode_cmd_cur);
+
+		int ret = parse_custom_video_mode(tmp, &v);
+		int ok = (ret == -2);
+
+		if (ret >= 0 && (uint32_t)ret < VMODES_NUM && !(vmodes[ret].pr == 1 && !supports_pr()))
+		{
+			for (int i = 0; i < 8; i++) v.item[i + 1] = vmodes[ret].vpar[i];
+			v.param.vic = vmodes[ret].vic_mode;
+			v.param.pr = vmodes[ret].pr;
+			v.param.rb = 1;
+			setPLL(vmodes[ret].Fpix, &v);
+			ok = 1;
+		}
+
+		if (ok)
+		{
+			printf("video: keeping the mode set at runtime (\"%s\") across the re-init\n",
+				mode_cmd_cur);
+			v_def = v;
+		}
+	}
+
 	video_cfg_init();
 	video_set_mode(&v_def, 0);
 	user_io_send_buttons(1);
@@ -4711,6 +4768,7 @@ void video_cmd(char *cmd)
   fails to parse falls back to 1080p or 720p and returns 0, which is right for a config
   file being read at boot and wrong for a command that should say no.
 */
+
 void video_mode_cmd(char *cmd)
 {
 	vmode_custom_t v = {};
@@ -4744,6 +4802,7 @@ void video_mode_cmd(char *cmd)
 
 	v_def = v;
 	v_cur = v;
+	snprintf(mode_cmd_cur, sizeof(mode_cmd_cur), "%s", cmd);
 	video_set_mode(&v, v.Fpix);
 	user_io_send_buttons(1);
 	printf("video_mode_cmd: applied mode \"%s\"\n", cmd);
@@ -4766,6 +4825,7 @@ void video_mode_cmd(char *cmd)
 */
 void video_mode_restore()
 {
+	mode_cmd_cur[0] = 0;
 	video_mode_load();
 	video_set_mode(&v_def, 0);
 	user_io_send_buttons(1);
