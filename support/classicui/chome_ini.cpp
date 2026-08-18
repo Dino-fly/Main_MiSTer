@@ -544,6 +544,307 @@ static int ini_write_set(const char *path, const ini_set *set, int n, const char
 	return 1;
 }
 
+/* ------------------------------------------------ one core's own section --- */
+
+/*
+  Is this line the header of the section we are looking for?
+
+  Deliberately an exact match on the name between the brackets, where cfg.cpp's
+  ini_get_section() matches a good deal more - a leading '+' include, a '*' wildcard, an
+  `arcade` alias, both spellings of the core's name, and `video=WxH`. All of that is right
+  for a parser deciding whether a setting applies; none of it is right for a writer
+  deciding which line to edit. Writing into `[Genesis*]` because we were asked about
+  `Genesis` would put a value into a section the player wrote to cover several cores, and
+  we would have no way to know we had.
+
+  So this recognises only what it would itself have written, and anything else is left
+  alone - a section of ours is appended instead. The cost is a second `[GBA]` in a file
+  that already had one with other keys in it; the benefit is that a hand-written section
+  is never edited by a machine that only half understands it.
+*/
+static int line_is_section(const char *src, int ls, int be, const char *name)
+{
+	int p = ls;
+	while (p < be && IS_BLANK(src[p])) p++;
+	if (p >= be || src[p] != '[') return 0;
+	p++;
+
+	int e = p;
+	while (e < be && src[e] != ']') e++;
+	if (e >= be) return 0;
+
+	int n = (int)strlen(name);
+	if (e - p != n) return 0;
+	return !strncasecmp(src + p, name, (size_t)n);
+}
+
+// Any section header at all, which is what ends the one we are inside.
+static int line_is_any_section(const char *src, int ls, int be)
+{
+	int p = ls;
+	while (p < be && IS_BLANK(src[p])) p++;
+	return (p < be && (src[p] == '[' || src[p] == '+')) ? 1 : 0;
+}
+
+int ini_core_value(const char *path, const char *core, const char *key, char *out, int max)
+{
+	if (max) out[0] = 0;
+	if (!core || !core[0]) return 0;
+
+	char *src = 0;
+	int srclen = 0;
+	if (!slurp(path, &src, &srclen)) return 0;
+
+	int present = 0;
+	int inside = 0;
+	int i = 0;
+
+	while (i < srclen)
+	{
+		int ls = i, crlf = 0;
+		int be = next_line(src, srclen, &i, &crlf);
+
+		if (line_is_any_section(src, ls, be))
+		{
+			inside = line_is_section(src, ls, be, core);
+			continue;
+		}
+		if (!inside) continue;
+
+		int vs, ve;
+		if (!line_assign(src, ls, be, key, &vs, &ve)) continue;
+
+		// Last one wins, as everywhere else here: cfg.cpp reads the file top to bottom
+		// and keeps the last assignment it saw.
+		int n = ve - vs;
+		if (n > max - 1) n = max - 1;
+		if (n < 0) n = 0;
+		memcpy(out, src + vs, (size_t)n);
+		out[n] = 0;
+		present = 1;
+	}
+
+	free(src);
+	return present;
+}
+
+int ini_rewrite_core(const char *src, int srclen, char *dst, int dstmax,
+	const char *core, const char *key, const char *value, const char *note)
+{
+	if (!core || !core[0] || !key || !key[0]) return -1;
+
+	/*
+	  Two passes, because where a missing key goes depends on something the copy has not
+	  reached yet: whether the file has a `[<core>]` section at all.
+
+	  With one, the choice would have to be made at the moment the section ends - and by
+	  then the key might still turn up in a second `[<core>]` further down, which some
+	  people's inis really do have. Reading first and copying second is what lets this put
+	  the line inside a section the player already wrote instead of appending a second one
+	  underneath it.
+	*/
+	int have_key = 0;
+	int insert_at = -1;                    // end of the first [core] section, if there is one
+	{
+		int inside = 0;
+		int i = 0;
+		while (i < srclen)
+		{
+			int ls = i, crlf = 0;
+			int be = next_line(src, srclen, &i, &crlf);
+
+			if (line_is_any_section(src, ls, be))
+			{
+				if (inside && insert_at < 0) insert_at = ls;
+				inside = line_is_section(src, ls, be, core);
+				continue;
+			}
+
+			int vs, ve;
+			if (inside && line_assign(src, ls, be, key, &vs, &ve)) have_key = 1;
+		}
+		if (inside && insert_at < 0) insert_at = srclen;
+	}
+
+	int o = 0;
+	int ncrlf = 0, nlf = 0;
+	int inside = 0;
+	int seen = 0;
+
+#define PUT(p, n) do { \
+		if (o + (n) > dstmax) return -1; \
+		memcpy(dst + o, (p), (n)); \
+		o += (n); \
+	} while (0)
+#define PUTS(p) PUT((p), (int)strlen(p))
+
+	/*
+	  The file's own line ending, decided before a byte is written because the inserted
+	  line needs it and the count is only complete at the end. MiSTer.ini is CRLF and
+	  hand-edited; a line appended with the wrong terminator is the sort of thing that
+	  turns one edit into a whole-file diff. Counted the same way ini_rewrite_set() counts
+	  it, on the way past rather than by inspecting the first line, because a file with
+	  mixed endings should follow its majority.
+	*/
+	for (int i = 0, c = 0; i < srclen; )
+	{
+		int be = next_line(src, srclen, &i, &c);
+		if (c) ncrlf++; else if (i > be) nlf++;
+	}
+	const char *eol = (ncrlf >= nlf) ? "\r\n" : "\n";
+
+	int i = 0;
+	while (i < srclen)
+	{
+		int ls = i, crlf = 0;
+		int be = next_line(src, srclen, &i, &crlf);
+
+		// Into the section the player already has, just before whatever ends it.
+		if (value && !have_key && ls == insert_at)
+		{
+			PUTS(key);
+			PUTS("=");
+			PUTS(value);
+			PUTS(eol);
+			seen = 1;
+		}
+
+		if (line_is_any_section(src, ls, be))
+		{
+			inside = line_is_section(src, ls, be, core);
+			PUT(src + ls, i - ls);
+			continue;
+		}
+
+		int vs, ve;
+		if (!inside || !line_assign(src, ls, be, key, &vs, &ve))
+		{
+			PUT(src + ls, i - ls);
+			continue;
+		}
+
+		/*
+		  A null value drops the whole line rather than emptying it. An empty
+		  `video_mode=` is not "no setting" to cfg.cpp - parse_custom_video_mode()
+		  refuses it and store_custom_video_mode() then forces mode 8 or 0 - so writing
+		  one would turn "back to automatic" into "1080p, for ever, on this core".
+
+		  This is also the one place in this file that removes something a player may
+		  have typed. It removes only an assignment of one key inside one section, and
+		  the whole file is in MiSTer.ini.bak either way.
+		*/
+		if (!value)
+		{
+			seen = 1;
+			continue;
+		}
+
+		// The player's spacing, the spelling of their key and any trailing comment are
+		// theirs; only the value between vs and ve is ours. Same rule as the set writer.
+		PUT(src + ls, vs - ls);
+		PUTS(value);
+		PUT(src + ve, i - ve);
+		seen = 1;
+	}
+
+	// The section ran to the end of the file, so the insert point is the end of it.
+	if (value && !have_key && insert_at == srclen)
+	{
+		if (o && dst[o - 1] != '\n') PUTS(eol);
+		PUTS(key);
+		PUTS("=");
+		PUTS(value);
+		PUTS(eol);
+		seen = 1;
+	}
+
+	if (seen || !value) return o;
+
+	if (o && dst[o - 1] != '\n') PUTS(eol);
+	PUTS(eol);
+	PUTS(note);
+	PUTS(eol);
+	PUTS("[");
+	PUTS(core);
+	PUTS("]");
+	PUTS(eol);
+	PUTS(key);
+	PUTS("=");
+	PUTS(value);
+	PUTS(eol);
+
+#undef PUTS
+#undef PUT
+	return o;
+}
+
+int ini_apply_core(const char *path, const char *core, const char *key,
+	const char *value, const char *note)
+{
+	last_error[0] = 0;
+
+	if (!core || !core[0])
+	{
+		snprintf(last_error, sizeof(last_error), "No core to write this against");
+		return -1;
+	}
+
+	// Already says it, including "already says nothing". Writing the same bytes back
+	// would still take a backup and still touch the card, for no change.
+	char had[INI_VAL_MAX];
+	int present = ini_core_value(path, core, key, had, sizeof(had));
+	if (!value && !present) return 0;
+	if (value && present && !strcmp(had, value)) return 0;
+
+	char *src = 0;
+	int srclen = 0;
+	if (!slurp(path, &src, &srclen))
+	{
+		snprintf(last_error, sizeof(last_error), "Could not read %s", cfg_get_name(altcfg()));
+		return -1;
+	}
+
+	// The backup first, and a failure to write it stops everything - the same rule
+	// ini_write_set() states, for the same reason.
+	if (srclen && !spill(ini_backup_path(), src, srclen))
+	{
+		snprintf(last_error, sizeof(last_error), "Could not save a backup - nothing was changed");
+		free(src);
+		return -1;
+	}
+
+	int dstmax = srclen * 2 + 1024;
+	char *dst = (char*)malloc((size_t)dstmax);
+	int dstlen = dst ? ini_rewrite_core(src, srclen, dst, dstmax, core, key, value, note) : -1;
+	free(src);
+
+	if (dstlen < 0)
+	{
+		free(dst);
+		snprintf(last_error, sizeof(last_error), "Could not prepare the new settings");
+		return -1;
+	}
+
+	char tmp[1024];
+	snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+
+	int ok = spill(tmp, dst, dstlen);
+	free(dst);
+
+	if (!ok || rename(tmp, path))
+	{
+		unlink(tmp);
+		snprintf(last_error, sizeof(last_error), "Could not write %s - the old one is unchanged",
+			cfg_get_name(altcfg()));
+		return -1;
+	}
+	sync();
+
+	printf("ClassicUI: [%s] %s = %s, old file kept as %s\n", core, key,
+		value ? value : "(removed)", ini_backup_path());
+	return 1;
+}
+
 /*
   What a written setting may say about itself in the log.
 

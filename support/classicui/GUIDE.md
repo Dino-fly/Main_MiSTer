@@ -250,6 +250,71 @@ go straight back.
 
 The classic MiSTer OSD never appears on its own.
 
+Two rows appear in **Options** only while a game is running, because both belong to
+the core rather than to the machine: **Cheats** and **Video Mode**.
+
+### Cheats
+
+![The Cheats row](img/device/cheats-row.png)
+
+If you have MiSTer's cheat packs on your card — the `Cheats` folder, from the
+Downloader — the games they cover get a **Cheats** row. Games they do not cover
+have no row at all, rather than a row that cannot be pressed.
+
+![The cheats list](img/device/cheats-list.png)
+
+**A** switches a cheat on. The row goes green, and the game changes while you are
+looking at it.
+
+Some cheat packs are enormous — Fire Emblem's is twenty-five thousand entries — and
+almost all of that is the same handful of cheats numbered over and over. Where a name
+repeats, it becomes one row that says how many are on out of how many there are:
+
+![A folded group](img/device/cheats-group-row.png)
+
+**A** opens it, and inside are that name's codes, numbered as the pack numbers them:
+
+![The codes inside a group](img/device/cheats-codes.png)
+
+Most games are nothing like that. A pack of twelve is a list of twelve.
+
+**Switching cheats on is temporary.** Close the game and they are gone, which is how
+MiSTer has always behaved. If you want a set to come back every time you play that
+game, press **X** — the footer says "Kept for this game", and pressing **X** twice more
+takes it back. Nothing is written until you ask for it, and a cheat you switched on to
+look at something does not follow the game around for ever.
+
+Two things worth knowing. A core takes a fixed number of codes at once, and when
+that is full the screen says so rather than doing nothing. And keeping a set only
+works for a game you started from this shelf — start a core some other way and the
+cheats still work, but the screen will tell you they cannot be remembered.
+
+### Video Mode
+
+![Video Mode](img/device/video-mode.png)
+
+What resolution this one core comes up in, kept separately from every other core.
+
+The reason to want it is integer scaling. A Game Boy Advance draws 160 lines. At 720p
+MiSTer's integer scaler fits four of them into 720 and leaves black bars; at 480p it
+fits three into 480 exactly and fills the screen. The footer tells you which you are
+choosing — "3x of this core's 160 lines", or that the mode is not a whole multiple of
+them.
+
+**A** applies the mode and starts a fifteen-second countdown reading "Can you see
+this?". If you can, press **A** again and it is written into `MiSTer.ini` under a
+section for this core. If you cannot — the mode is one your television will not
+show — do nothing, and after fifteen seconds the old mode comes back and nothing has
+been written. **Automatic** is the way out, and it takes the line back out of the file.
+
+Your shelf is never affected: the menu core keeps its own mode, so whatever a game
+looks like, you can always get back to a screen you can read and change it.
+
+It is only offered where it would do something. `video_mode` shapes the scaler's
+output, so on `direct_video` — where the core's own timing goes straight out of the
+DAC — and on an analog-only machine without `vga_scaler=1`, the screen says so
+instead of offering you a choice that changes nothing.
+
 ---
 
 ## Buttons look like your controller

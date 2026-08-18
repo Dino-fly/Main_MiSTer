@@ -248,6 +248,21 @@ static char ch_note[96];                     // what the last press did, for a f
 static unsigned long ch_note_until = 0;
 
 /*
+  The video mode screen. Declared here with the others because the legend asks it what A
+  would do, and because vmode_poll() below runs from chome_handle() rather than from a
+  press - the countdown has to expire whether or not anybody touches a button, which is
+  the entire point of it.
+*/
+static int  vm_row = 0;
+static int  vm_top = 0;
+static int  vm_was = 0;                      // what the core was set to on the way in
+static int  vm_try = -1;                     // the mode being tried, -1 when none is
+static unsigned long vm_until = 0;           // ...and when it gets put back
+static unsigned long vm_tick = 0;            // next repaint of the countdown
+static char vm_note[96];
+static unsigned long vm_note_until = 0;
+
+/*
   One row of the Controllers screen, wireless or not. Declared here rather than beside
   the screen because the legend is built further up the file and asks what is selected.
 */
@@ -293,6 +308,18 @@ static int osk_dest = OSKD_NONE;
 
 static int ig_muted = 0;                     // game silenced while the menu is up
 static int ig_mute_was = 0;                  // ...and what it was before, so his own mute survives
+
+/*
+  How long a video mode gets to prove itself before it is put back.
+
+  Fifteen seconds, and the number is chosen from the failure rather than from taste: the
+  player it protects is looking at a black screen, has to notice that, has to decide it is
+  not going to come good, and has to do nothing at all - which is the one action available
+  to somebody who cannot see the menu. Five would expire while a slow television is still
+  hunting for a lock, and thirty is a long time to sit in the dark wondering whether the
+  machine has crashed.
+*/
+#define VM_CONFIRM_MS 15000
 
 #define REF_DELAY_MS 20000
 // Long enough for the core to have the ROM in before a state lands on top of it.
@@ -365,6 +392,12 @@ static void ref_shot_path(const char *sysid, const char *rompath, char *out, int
 #define SCR_CHEATV  22
 
 /*
+  The core's own output mode. See chome_video.h for the whole of the reasoning, including
+  why an option chome_opt.h refuses by name is offered here.
+*/
+#define SCR_VMODE   23
+
+/*
   Rows on the Options panel, by identity rather than by position.
 
   They used to be two arrays of strings and a switch over 0..10, and three separate places
@@ -386,9 +419,10 @@ static void ref_shot_path(const char *sysid, const char *rompath, char *out, int
 #define OR_BEST     7
 #define OR_MORE     8
 #define OR_CHEATS   9
-#define OR_CLASSIC  10
-#define OR_ABOUT    11
-#define OR_COUNT    12
+#define OR_VMODE    10
+#define OR_CLASSIC  11
+#define OR_ABOUT    12
+#define OR_COUNT    13
 
 /*
   The list in force. Eleven rows on the shelf and in most games; twelve in a game whose
@@ -443,6 +477,17 @@ static int opt_ids(int *out)
 	for (int i = 0; i < (int)(sizeof(base) / sizeof(base[0])); i++)
 	{
 		if (base[i] == OR_CLASSIC && ig_active && cheats_available()) out[n++] = OR_CHEATS;
+		/*
+		  And the core's output mode, in a game and nowhere else - a mode is chosen for
+		  the core that is running, on the display that is attached, by looking at the
+		  result, and none of those three exist on the shelf.
+
+		  Present even where it cannot work (direct_video), unlike Cheats: an absent row
+		  is the right answer when a pack has nothing in it, because there is nothing to
+		  say. Here there is - the setting exists, the player's routing is why it would
+		  do nothing, and vm_supported() is what the screen says that with.
+		*/
+		if (base[i] == OR_CLASSIC && ig_active) out[n++] = OR_VMODE;
 		out[n++] = base[i];
 	}
 	return n;
@@ -488,6 +533,7 @@ static const char *opt_label(int id)
 	case OR_BEST:    return "Best Settings";
 	case OR_MORE:    return "More Settings";
 	case OR_CHEATS:  return "Cheats";
+	case OR_VMODE:   return "Video Mode";
 	case OR_CLASSIC: return "Advanced";
 	default:         return "About";
 	}
@@ -585,7 +631,27 @@ static const char *mb_label[MB_COUNT] = { "Core", "Display", "Options", "Close G
   and shortening it there on the strength of the canvas size alone would be giving up room
   the player actually has.
 */
-static const char *mb_short[MB_COUNT] = { 0, 0, 0, "Close", 0 };   // by slot: only Close needs one
+/*
+  The short form for a bar cell too narrow to hold the word, by slot.
+
+  Close needed one from the day it arrived on the bar. Display and Options need one on
+  exactly one machine and nothing had ever drawn it: a handheld core, on an analog-only
+  set, at 240p. mb_visible() drops Display at PROF_LO for everybody else, so the bar is
+  five cells and the words fit - but the handheld exception above it keeps Display on for
+  a Game Boy on a tube, which is six cells in 320 pixels and 48 of them for a word that
+  wants 56. "DISPLA>" and "OPTION>", on the machine this front-end was written for.
+
+  Found by the harness when the video-mode section became the first thing ever to draw
+  that combination. Left as short words rather than as a narrower font or a smaller inset,
+  because the mechanism for it was already here and this is what it is for.
+
+  Four letters and not six ("Screen", "Menu"), because the cell is 48 pixels at 240p and a
+  glyph is eight of them PLUS classicui_tracking, which a player can set to +2. Six letters
+  fit at the default and are cut two settings away - which is the same class of mistake
+  fit2() exists to stop one screen over, arriving through a hand-counted width instead of a
+  threshold. These are only ever seen when the full word does not fit at all.
+*/
+static const char *mb_short[MB_COUNT] = { 0, "Disp", "Opts", "Close", 0 };
 
 /*
   The core entry is labelled with the running system rather than the word "Core": a player
@@ -1877,7 +1943,7 @@ static int overlay_up()
 		screen == SCR_POWER || screen == SCR_INI || screen == SCR_PADTEST ||
 		screen == SCR_SET || screen == SCR_CORE || screen == SCR_DISC ||
 		screen == SCR_COVERS || screen == SCR_CLOSE ||
-		screen == SCR_CHEATS || screen == SCR_CHEATV);
+		screen == SCR_CHEATS || screen == SCR_CHEATV || screen == SCR_VMODE);
 }
 
 static int marq_band(int *y0, int *y1)
@@ -3531,6 +3597,31 @@ static int build_legend(legend_pair *out, int max)
 		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
 		break;
 	}
+
+	/*
+	  The video mode. A names what it would do, which changes with the state rather than
+	  with the row - "Try" applies and starts the countdown, "Keep" is the press that
+	  writes. B is Back with nothing being tried and Put Back while something is, for the
+	  same reason: it stays on the screen so the picture coming back is visible.
+
+	  Nothing at all offered under direct_video, where the setting does nothing: a prompt
+	  for a press the screen refuses is the lie this file fixes on every other screen.
+	*/
+	case SCR_VMODE:
+		if (!vm_supported())
+		{
+			if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
+			break;
+		}
+		if (vm_try >= 0)
+		{
+			if (n < max) { out[n++] = lp(LBL_A, "Keep This", "Keep"); }
+			if (n < max) { out[n++] = lp(LBL_B, "Put Back", "Undo"); }
+			break;
+		}
+		if (n < max) { out[n++] = lp(LBL_A, vm_row ? "Try It" : "Automatic", vm_row ? "Try" : "Auto"); }
+		if (n < max) { out[n++] = lp(LBL_B, "Back", "Back"); }
+		break;
 
 	// The variants of one cheat: switching is all there is. Keeping belongs to the set as
 	// a whole and is offered on the list this was opened from, one press away.
@@ -5321,6 +5412,16 @@ static void draw_options_panel(const chome_profile *p)
 	else snprintf(v7, sizeof(v7), "None On >");
 
 	/*
+	  And what the Video Mode row says: the mode this core is set to, or why the setting
+	  would do nothing. Read from MiSTer.ini rather than from cfg for the reason
+	  vm_current() gives - cfg holds the value after every matching section was applied,
+	  and cannot say which section said it.
+	*/
+	char v8[32];
+	if (!vm_supported()) snprintf(v8, sizeof(v8), "Not Used >");
+	else snprintf(v8, sizeof(v8), "%s >", vm_label(vm_current(user_io_get_core_name(1))));
+
+	/*
 	  Label and value together, by identity. Two parallel arrays indexed by position were
 	  what let a row be inserted in one of them and not the other; a switch cannot be half
 	  updated the same way, because a missing case is a row with no label at all and shows
@@ -5345,6 +5446,7 @@ static void draw_options_panel(const chome_profile *p)
 		case OR_BEST:    vals[i] = v4; break;
 		case OR_MORE:    vals[i] = v5; break;
 		case OR_CHEATS:  vals[i] = v7; break;
+		case OR_VMODE:   vals[i] = v8; break;
 		case OR_CLASSIC: vals[i] = "Classic Menu >"; break;
 		default:         vals[i] = "This Menu >"; break;
 		}
@@ -9695,6 +9797,33 @@ static int ch_budget_text(char *out, int len)
 }
 
 /*
+  Which of two wordings fits, measured rather than counted.
+
+  Every screen in this file that has a roomy wording and a terse one used to choose between
+  them with `room >= 36`, a column count from gfx_text_cols(). draw_core_opts() has a long
+  note on why its own thresholds are left alone - the numbers there are hand-picked and
+  moving them would move every profile onto the short wording - but for new copy there is
+  no pinned screen to preserve, and a column count is the wrong question twice over.
+
+  It drifts with the font: gfx_text_cols() divides by the glyph advance, and the advance
+  moves with classicui_tracking, which is the player's setting. And it is a proxy for the
+  real question, which is whether THIS string fits THIS space.
+
+  The device found the difference. "Nothing shows the scaler - try vga_scaler=1" is 42
+  characters; at 240p the panel measured 36 columns on the harness's font and 36 on the
+  television's, and the threshold said yes on both - so the long wording was chosen and cut
+  to "try vga_sc..." on a screen whose entire job is telling somebody what to change. The
+  harness never saw it because the string only fitted differently by a glyph.
+
+  Asking gfx_text_w() cannot drift: rewrite the copy, change the tracking, change the font,
+  and the choice stays correct.
+*/
+static const char *fit2(const char *long_s, const char *short_s, int scale, int avail)
+{
+	return (gfx_text_w(long_s, scale) <= avail) ? long_s : short_s;
+}
+
+/*
   A cheats panel: as tall as its list wants, and never over the button legend.
 
   Every other panel in this front-end is centred, which is right while a panel is smaller
@@ -9737,11 +9866,11 @@ static panel_box ch_panel(const chome_profile *p, int pw, int ph, const char *ti
   again, then the state of the screen. The same ranking draw_core_opts() uses and for the
   same reason - a line reporting a press outranks a line describing a page.
 
-  `room` is a column count and the two wordings are chosen by it the way the core options
-  screen chooses its own: 240p is 33 columns and does not fit the long ones. Returns a
-  pointer into a static, so a caller uses it before calling again.
+  The two wordings are chosen by measuring the long one against the room there really is -
+  see fit2(), and the device capture that made that necessary. Returns a pointer into a
+  static, so a caller uses it before calling again.
 */
-static const char *ch_footer(int room, uint32_t *col)
+static const char *ch_footer(int scale, int avail, uint32_t *col)
 {
 	static char budget[48];
 
@@ -9753,17 +9882,17 @@ static const char *ch_footer(int room, uint32_t *col)
 	{
 		// Said plainly rather than by a missing prompt: a player whose cheats stop working
 		// after a relaunch deserves to know why before it happens, not after.
-		msg = (room >= 36) ? "Cheats work now, but cannot be kept"
-			: "Cheats work, cannot be kept";
+		msg = fit2("Cheats work now, but cannot be kept",
+			"Cheats work, cannot be kept", scale, avail);
 	}
 	else if (ch_x_forgets())
 	{
-		msg = (room >= 36) ? "Kept for this game - X to forget" : "Kept - X forgets";
+		msg = fit2("Kept for this game - X to forget", "Kept - X forgets", scale, avail);
 		*col = COL_GREEN;
 	}
 	else if (ch_kept_count())
 	{
-		msg = (room >= 36) ? "This game remembers a different set" : "Kept set differs";
+		msg = fit2("This game remembers a different set", "Kept set differs", scale, avail);
 		*col = COL_YELLOW;
 	}
 	else if (ch_budget_text(budget, sizeof(budget)))
@@ -9774,7 +9903,7 @@ static const char *ch_footer(int room, uint32_t *col)
 
 	if (ch_forget_arm && !CheckTimer(ch_forget_until))
 	{
-		msg = (room >= 36) ? "X again to forget this game's cheats" : "X again to forget";
+		msg = fit2("X again to forget this game's cheats", "X again to forget", scale, avail);
 		*col = COL_YELLOW;
 	}
 
@@ -9871,7 +10000,7 @@ static void draw_cheats(const chome_profile *p)
 	int room = gfx_text_cols(b.w - 12 * s, p->ts_tiny);
 
 	uint32_t col = COL_PANELLO;
-	const char *msg = ch_footer(room, &col);
+	const char *msg = ch_footer(p->ts_tiny, b.w - 12 * s, &col);
 
 	if (msg) gfx_text(gfx_clip(msg, p->ts_tiny, b.w - 12 * s), b.x + 6 * s, fy, p->ts_tiny, col, 0);
 }
@@ -9982,6 +10111,237 @@ static void ch_toggle(int idx)
 	}
 
 	ch_say("The core has no room for it");
+}
+
+/* -------------------------------------------------------------- video mode ----- */
+
+static void vm_say(const char *msg)
+{
+	snprintf(vm_note, sizeof(vm_note), "%s", msg);
+	vm_note_until = GetTimer(5000);
+	mark_dirty();
+}
+
+// The section of MiSTer.ini this core's setting lives in. One expression, asked by the
+// row, the screen and the write, so they cannot come to mean three different cores.
+static const char *vm_core()
+{
+	return user_io_get_core_name(1);
+}
+
+/*
+  Put the mode back and stop waiting. Called when the countdown runs out, when the player
+  says no, and on the way off the screen by any route.
+
+  That last one is the case worth naming: the menu button jumps to the menu bar from
+  anywhere, walking past every confirmation a screen has - which is exactly how an unsaved
+  font used to survive leaving More Settings, and why go_screen() puts that back rather
+  than the B handler. A mode left applied and unconfirmed would be worse: nothing on any
+  other screen would say the machine is in a mode nobody agreed to, and the next core load
+  would silently take it away again.
+*/
+static void vm_abandon(const char *why)
+{
+	if (vm_try < 0) return;
+
+	vm_try = -1;
+	vm_until = 0;
+	vm_tick = 0;
+	vm_restore_now();
+
+	if (why) vm_say(why);
+	else mark_dirty();
+}
+
+/*
+  The countdown, from the frame loop rather than from a press.
+
+  This is the one timer in the front-end that has to run with nobody touching anything,
+  because the state it guards is "the player cannot see the screen". Everything else here
+  expires on the next press, which is fine when a press is possible.
+
+  A repaint a second while it runs, and not a log line a second - see DEVELOPMENT.md on
+  what a line in the debug log costs while a game is running behind the menu. The damage
+  is the panel, and this only happens inside a fifteen-second window the player asked for.
+*/
+static void vmode_poll()
+{
+	if (vm_try < 0) return;
+
+	if (CheckTimer(vm_until))
+	{
+		printf("ClassicUI: nobody confirmed %s, putting the configured mode back\n",
+			vm_label(vm_try));
+		vm_abandon("Put back - nothing was written");
+		return;
+	}
+
+	if (!vm_tick || CheckTimer(vm_tick))
+	{
+		vm_tick = GetTimer(1000);
+		mark_dirty();
+	}
+}
+
+static void vm_open()
+{
+	vm_was = vm_current(vm_core());
+	vm_row = vm_was;
+	vm_top = 0;
+	vm_try = -1;
+	vm_until = 0;
+	vm_note[0] = 0;
+	go_screen(SCR_VMODE);
+}
+
+/*
+  What the row under the cursor would mean for this core's picture.
+
+  The arithmetic is one division and the honesty is all in what it claims. vp_game_height()
+  is a measurement - the line count out of the scaler's own header - so "160 lines" is a
+  fact about the running core rather than a table lookup that goes stale on the next
+  region change. What follows it is a statement about the MODE and not about the scaler:
+  480 is a whole multiple of 160, three times over. Whether the picture that results is
+  three times the size is the scaler's business, and with vscale_mode at its default of
+  "integer scale only" it will be - but that is a setting a player can move, and this line
+  does not promise anything on its behalf.
+
+  Nothing at all when the core has not answered yet, which is the right answer to a
+  question with no measurement behind it.
+*/
+static const char *vm_fit_text(int i, int scale, int avail, char *out, int len)
+{
+	int src = vp_game_height();
+	int h = vm_height(i);
+
+	if (src < 16 || h < 16) return 0;
+
+	int n = h / src;
+	char roomy[64], terse[64];
+	if (n >= 1 && h % src == 0)
+	{
+		snprintf(roomy, sizeof(roomy), "%dx of this core's %d lines", n, src);
+		snprintf(terse, sizeof(terse), "%d lines: %dx", src, n);
+	}
+	else
+	{
+		snprintf(roomy, sizeof(roomy), "Not a whole multiple of %d lines", src);
+		snprintf(terse, sizeof(terse), "%d lines: not exact", src);
+	}
+
+	snprintf(out, len, "%s", fit2(roomy, terse, scale, avail));
+	return out;
+}
+
+/*
+  The core's output mode.
+
+  A list of seven and a countdown, and the countdown is the feature - see chome_video.h
+  for why an option chome_opt.h names as too dangerous to offer is offered here, and what
+  had to be true first.
+*/
+static void draw_vmode(const chome_profile *p)
+{
+	int s = p->ts_ui;
+	int n = vm_count();
+
+	int pw = p->w - p->inset * 2;
+	if (pw > 46 * gfx_adv(s)) pw = 46 * gfx_adv(s);
+	int ph = (10 * s + 6) + (n + 1) * 12 * s + 22 * s;
+
+	char title[64];
+	const char *sysn = core_short_name(ig_have_item ? ig_item.sysidx : -1);
+	snprintf(title, sizeof(title), "%s - Video Mode", (sysn && *sysn) ? sysn : "Core");
+
+	panel_box b = ch_panel(p, pw, ph, title);
+
+	const char *rows[VM_MAX];
+	const char *vals[VM_MAX];
+	uint32_t vcol[VM_MAX];
+
+	int cur = vm_current(vm_core());
+
+	for (int i = 0; i < n && i < VM_MAX; i++)
+	{
+		rows[i] = vm_label(i);
+
+		/*
+		  Three states and they are different things, so they are three different words.
+		  "Set" is what MiSTer.ini says for this core - what the next launch will do.
+		  "Trying" is what the screen is showing right now and has not written. Blank is
+		  neither. A player who cannot tell those apart cannot tell whether they have
+		  saved anything, and the whole design here rests on nothing being written until
+		  they say so.
+		*/
+		if (i == vm_try) { vals[i] = "Trying"; vcol[i] = COL_YELLOW; }
+		else if (i == cur) { vals[i] = "Set"; vcol[i] = COL_GREEN; }
+		else { vals[i] = ""; vcol[i] = COL_PANELLO; }
+	}
+
+	int foot = 22 * s;
+	int fit = list_fit(&b, 12 * b.s, foot, n);
+	list_track(&vm_top, vm_row, n, fit);
+
+	int shown = fit;
+	if (vm_top + shown > n) shown = n - vm_top;
+	if (shown < 0) shown = 0;
+
+	draw_rows_c(&b, rows + vm_top, vals + vm_top, vcol + vm_top, shown, vm_row - vm_top);
+	list_scrollbar(&b, 12 * b.s, vm_top, fit, n);
+
+	int fy = b.y + b.h - 12 * s;
+	int avail = b.w - 12 * s;
+
+	char buf[96];
+	const char *msg = 0;
+	uint32_t col = COL_PANELLO;
+
+	if (!vm_supported())
+	{
+		/*
+		  Named rather than hidden, and the two reasons get different words because they
+		  have different fixes. Under direct video there is nothing to be done - the core
+		  sets the timing and that is the point of it. With the scaler output reaching no
+		  screen there IS something: vga_scaler=1 puts it down the analog cable, which is
+		  the configuration this feature was asked for in the first place.
+		*/
+		if (vm_unsupported_is_direct())
+			msg = fit2("Direct video: the core sets the timing",
+				"Direct video ignores this", p->ts_tiny, avail);
+		else
+			msg = fit2("Nothing shows the scaler - try vga_scaler=1",
+				"Needs vga_scaler=1", p->ts_tiny, avail);
+		col = COL_YELLOW;
+	}
+	else if (vm_try >= 0)
+	{
+		/*
+		  The countdown, in whole seconds, which is what the repaint above is for. Red,
+		  because this is the one line in the front-end that is about something the player
+		  may not be able to read - and if they can read it, it is asking them to act.
+		*/
+		unsigned long now = GetTimer(0);
+		int left = (vm_until > now) ? (int)((vm_until - now + 999) / 1000) : 0;
+
+		char roomy[64], terse[32];
+		snprintf(roomy, sizeof(roomy), "Can you see this? A to keep - %ds", left);
+		snprintf(terse, sizeof(terse), "A to keep - %ds", left);
+		snprintf(buf, sizeof(buf), "%s", fit2(roomy, terse, p->ts_tiny, avail));
+		msg = buf;
+		col = COL_RED;
+	}
+	else if (vm_fit_text(vm_row, p->ts_tiny, avail, buf, sizeof(buf)))
+	{
+		msg = buf;
+	}
+
+	if (vm_note[0] && !CheckTimer(vm_note_until))
+	{
+		msg = vm_note;
+		col = COL_GREEN;
+	}
+
+	if (msg) gfx_text(gfx_clip(msg, p->ts_tiny, b.w - 12 * s), b.x + 6 * s, fy, p->ts_tiny, col, 0);
 }
 
 static void draw_settings(const chome_profile *p)
@@ -11265,6 +11625,7 @@ static void compose()
 	case SCR_CORE:    draw_core_opts(p); break;
 	case SCR_CHEATS:  draw_cheats(p); break;
 	case SCR_CHEATV:  draw_cheat_variants(p); break;
+	case SCR_VMODE:   draw_vmode(p); break;
 	case SCR_PADS:    draw_pads(p); break;
 	case SCR_PADTEST: draw_padtest(p); break;
 	case SCR_LAUNCH:  draw_launch(p); break;
@@ -11389,6 +11750,18 @@ static void go_screen(int s)
 		font_apply(font_sel);
 		font_note[0] = 0;
 	}
+
+	/*
+	  And a video mode that was being tried and never confirmed goes back, for exactly the
+	  reason the font above it does: B is not the only way off a screen. The menu button
+	  jumps to the menu bar from anywhere, walking past every confirmation - and this one
+	  guards a state no other screen would admit to, a machine sitting in a video mode
+	  nobody agreed to that the next core load would silently undo.
+
+	  Here rather than in the B handler, and here rather than in vmode_poll(), which only
+	  runs while the countdown is still going.
+	*/
+	if (screen == SCR_VMODE && s != SCR_VMODE) vm_abandon(0);
 
 	screen = s;
 	// Reading the link costs a process, so only do it while something is showing it.
@@ -11893,6 +12266,24 @@ static void move_v(int dir)
 		break;
 	}
 
+	/*
+	  Moving abandons a mode that is being tried, and that is the same ruling every armed
+	  press in this front-end gets: reaching for another row means the player has stopped
+	  meaning to keep this one. It matters more here, because the thing being abandoned is
+	  a video mode rather than a confirmation - leaving it applied while the cursor walked
+	  away would leave the machine in a state nothing on screen accounted for.
+	*/
+	case SCR_VMODE:
+	{
+		int next = wrap_step(vm_row, vm_count(), dir);
+		vm_abandon(0);
+		vm_note[0] = 0;
+		if (next == vm_row) return;
+		vm_row = next;
+		mark_dirty();
+		break;
+	}
+
 	case SCR_OPTIONS:
 		{
 			int next = wrap_step(opt_row, opt_nrows(), dir);
@@ -12058,6 +12449,7 @@ int chome_list_cursor(int axis, int *count)
 		case SCR_CORE:    cur = co_row;     n = co_rows();       break;
 		case SCR_CHEATS:  cur = ch_row;     n = ch_groups();     break;
 		case SCR_CHEATV:  cur = ch_vrow;    n = ch_group_count(ch_grp); break;
+		case SCR_VMODE:   cur = vm_row;     n = vm_count();      break;
 		case SCR_PADS:    cur = pads_row;   n = pads_count();    break;
 		case SCR_WIFI:    cur = wifi_row;   n = net_count();     break;
 		case SCR_BROWSE:  cur = browse_sel; n = nbent;           break;
@@ -12192,6 +12584,74 @@ static void accept()
 		break;
 	}
 
+	/*
+	  A means two things here and the footer says which: with nothing being tried it
+	  applies the mode under the cursor and starts the countdown; with a mode being tried
+	  it keeps that mode, which is the only press that writes anything.
+
+	  The second press is what makes this safe to offer at all. A display that cannot lock
+	  to the mode cannot be pressed A at, so nothing is written - see chome_video.h.
+	*/
+	case SCR_VMODE:
+	{
+		if (!vm_supported()) { nudge(); break; }
+
+		if (vm_try >= 0)
+		{
+			int keep = vm_try;
+			vm_try = -1;
+			vm_until = 0;
+			vm_tick = 0;
+
+			int w = vm_write(vm_core(), keep);
+			// The writer's own sentence goes to the log, not to the panel: its longest is
+			// "Could not write MiSTer.ini - the old one is unchanged", which is fifty-two
+			// characters into a panel that holds thirty-three at 240p.
+			if (w < 0) { printf("ClassicUI: %s\n", ini_last_error()); vm_say("Could not write MiSTer.ini"); }
+			else if (!w) vm_say("Already set to this");
+			else
+			{
+				char m[96];
+				// Named rather than "Saved": this row is about a core, and the whole
+				// point of a per-core mode is that it is not the machine's.
+				snprintf(m, sizeof(m), "%s kept for %s", vm_label(keep), vm_core());
+				vm_say(m);
+			}
+			break;
+		}
+
+		if (vm_row < 0 || vm_row >= vm_count()) { nudge(); break; }
+
+		/*
+		  Automatic is applied and confirmed in one press rather than two. The countdown
+		  exists to protect somebody who cannot see the screen, and this is the row that
+		  puts them back where they could - asking them to press A again to confirm the
+		  mode they already had would be the confirmation getting in the way of the escape
+		  it exists to provide.
+		*/
+		if (!vm_row)
+		{
+			vm_restore_now();
+			int w = vm_write(vm_core(), 0);
+			if (w < 0) { printf("ClassicUI: %s\n", ini_last_error()); vm_say("Could not write MiSTer.ini"); }
+			else if (!w) vm_say("Already automatic");
+			else vm_say("Back to automatic");
+			break;
+		}
+
+		vm_note[0] = 0;
+		vm_try = vm_row;
+		vm_until = GetTimer(VM_CONFIRM_MS);
+		vm_tick = 0;
+
+		printf("ClassicUI: trying video mode %s for %s, %d seconds to confirm\n",
+			vm_label(vm_row), vm_core(), VM_CONFIRM_MS / 1000);
+
+		vm_apply_now(vm_row);
+		mark_dirty();
+		break;
+	}
+
 	case SCR_SORT:
 		sort_mode = sort_idx;
 		view_rebuild(0);
@@ -12276,6 +12736,10 @@ static void accept()
 		// nothing here has to answer for an empty one - opt_ids() has already decided.
 		case OR_CHEATS:
 			ch_open();
+			break;
+
+		case OR_VMODE:
+			vm_open();
 			break;
 
 		case OR_CLASSIC:
@@ -12863,6 +13327,16 @@ static void back()
 	// About is a row of Options now rather than an entry on the bar, so back from it is
 	// back to the list it was chosen from - the same way Best Settings and More Settings go.
 	case SCR_ABOUT:
+		go_screen(SCR_OPTIONS);
+		break;
+
+	/*
+	  B says no to a mode being tried and stays, so the player can see the picture come
+	  back and pick another. A second B leaves. Same shape as the Controllers screen, where
+	  the first B out of pairing stops it and stays so the result is visible.
+	*/
+	case SCR_VMODE:
+		if (vm_try >= 0) { vm_abandon("Put back - nothing was written"); break; }
 		go_screen(SCR_OPTIONS);
 		break;
 
@@ -14656,6 +15130,19 @@ static void ig_close(int restore_video)
 	ig_active = 0;
 
 	/*
+	  A video mode being tried and never confirmed goes back here as well as in
+	  go_screen(), and the harness is what said so: the menu button does not change
+	  screens on its way out, it closes the whole menu, so the guard on the screen change
+	  never fired. That left the machine in an unconfirmed mode with the menu gone and
+	  nothing left on screen to put it back with - which is the exact failure the countdown
+	  exists to prevent, arriving by the one route that walked around it.
+
+	  Both places, not one: this catches the way out of the menu, go_screen() catches the
+	  way to another screen inside it, and neither is a subset of the other.
+	*/
+	vm_abandon(0);
+
+	/*
 	  Closing the menu FROM the Display screen is how a look is checked against the
 	  game - press Home on a tile, watch the picture, press Home again to compare
 	  the next one. Landing anywhere else makes the player walk the menu bar back
@@ -15350,7 +15837,8 @@ void chome_test_cheat_footer(char *out, int len)
 	out[0] = 0;
 
 	uint32_t col = 0;
-	const char *m = ch_footer(64, &col);
+	// A width nothing can fail to fit, so the hook reads the roomy wording every time.
+	const char *m = ch_footer(1, 100000, &col);
 	snprintf(out, len, "%s", m ? m : "");
 }
 
@@ -16821,6 +17309,13 @@ int chome_handle(uint32_t key)
 
 	sync_sel_slots();
 	request_visible_art(theme_get());
+
+	/*
+	  The video mode countdown, from the frame loop because it has to expire whether or not
+	  anybody presses anything - the state it guards is "the player cannot see the screen".
+	  It does nothing at all unless a mode is being tried.
+	*/
+	vmode_poll();
 
 	/*
 	  A cover that finished decoding this frame.

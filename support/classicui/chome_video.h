@@ -208,6 +208,18 @@ int vp_grid_for_now(int force = 0);
 int vp_output_rect(int *w, int *h);
 
 /*
+  How many lines the running core is really drawing, from the scaler's own header - 160
+  for a GBA, 224 for most of the SNES's modes. 0 when there is nothing to ask.
+
+  A measurement rather than a table, and it has to be: a core's line count changes with
+  the game and with the region, and the one question it is used for - would this video
+  mode be a whole multiple of it - is wrong the moment the number is guessed. Latched by
+  vp_output_watch() before our framebuffer takes the screen, like the output rect beside
+  it, because from then on the scaler describes the menu.
+*/
+int vp_game_height();
+
+/*
   Keep the game's own geometry current, cheaply. Called every frame; reads the
   scaler at most once a second and never while our framebuffer owns the output,
   because from then on the scaler is describing the menu rather than the game.
@@ -225,6 +237,119 @@ int vp_render_exact(int look, const uint32_t *src, int sw, int sh,
 */
 int vp_render_exact_rect(int look, const uint32_t *src, int sw, int sh,
 	int dw, int dh, int x0, int y0, int w, int h, uint32_t *dst);
+
+/* ------------------------------------------------ the per-core video mode ----- */
+
+/*
+  A short list of output modes, offered per core, written into MiSTer.ini's own per-core
+  section.
+
+  A v6 beta tester asked for it: "if possible ability to change resolution per core like
+  720x480i for GBA for that 3x integer scale on CRT". The want is exact and worth stating
+  plainly, because it is the whole design. GBA draws 160 lines. At 720p the scaler's
+  integer mode fits 4x into 720 and leaves borders; at 480p it fits 3x into 480 and fills
+  the screen. Nothing here scales anything - vscale_mode=1, "use integer scale only", is
+  already MiSTer's default and already the front-end's recommendation. All this does is
+  hand the scaler a height that is a whole multiple of the core's.
+
+  ## What a user could already do, and what is actually new
+
+  Almost nothing is new, and that is deliberate. MiSTer.ini has had per-core sections
+  since long before this front-end (cfg.cpp's ini_get_section), a core load restarts the
+  application, and user_io_init() runs cfg_parse() and then video_init() - so `[GBA]` with
+  `video_mode=2` under it already works, applied at exactly the right moment, by the
+  firmware, with no help from us. What was missing was a way to do it without a text
+  editor and a second machine, and a way to find out whether the display accepts the mode
+  before committing to it.
+
+  So this writes the same line a person would have typed, and the setting keeps working
+  with classicui=0.
+
+  ## Why this is safe to offer at all, when chome_opt.h refuses to
+
+  chome_opt.h's rule 2 names `video_mode` as one of the settings that screen will not
+  touch, because "a wrong value there is a black set and a card that has to come out and
+  go into a PC", and that rule is right about the GLOBAL setting and stands. Three things
+  make the per-core one a different question:
+
+  1. **The menu core is never affected.** A per-core mode is scoped to one core's section,
+     so the shelf always comes up at the machine's normal mode. Whatever a wrong choice
+     does to one game, the player can always get back to a screen they can read and
+     change it. The global setting has no such floor - that is what makes it the thing
+     chome_opt.h refuses.
+
+  2. **Nothing is written until somebody has seen it work.** Choosing a mode applies it
+     live and starts a countdown; the ini is written only on a second press. A display
+     that cannot lock to the mode gets fifteen seconds of black and then
+     video_mode_restore() puts the configured mode back, having changed no file.
+
+  3. **The list is short and every entry is a standard.** 60 Hz CEA and VESA modes only,
+     no pixel repeat, no 50 Hz - this board's EDID is empty, so nothing can enumerate what
+     the display takes, and a 50 Hz mode on a 60 Hz-only set is exactly the failure
+     nothing could have predicted.
+
+  Both defences are here rather than one, because they answer different failures: the
+  short list makes a lost picture unlikely, and on a machine that cannot read an EDID
+  "unlikely" is the best a list can ever be. The countdown is what makes it survivable
+  when it happens anyway.
+
+  ## Where the row is, and why not on the Display screen
+
+  Display would be the tidy home - it already stores per system and per video class. It is
+  also hidden at PROF_LO and hidden entirely when the scaler output is not what reaches
+  the screen (mb_visible in chome_ui.cpp), which is to say hidden from the 240p and
+  direct_video machines whose owners are the people asking for this. Options is reachable
+  on every profile and every output, so the row is there.
+
+  In a game only. A mode is chosen for the core that is running, on the display that is
+  attached, by looking at the result - and none of those exist on the shelf.
+*/
+
+#define VM_MAX 8
+
+int  vm_count();
+
+// What goes in MiSTer.ini, and what video_mode_cmd() is handed - the same string for
+// both, which is the point of widening that hook. "" for Automatic, which writes no line.
+const char *vm_ini(int i);
+
+// What the row says: "Automatic", "720x480", and so on.
+const char *vm_label(int i);
+
+// The mode's height, for the "would this be a whole multiple" line. 0 for Automatic.
+int  vm_height(int i);
+
+/*
+  Which entry `[<core>]` is set to, read from MiSTer.ini rather than from cfg - cfg holds
+  the value after every section that matched was applied, which cannot say whether it was
+  this core's section that said it. 0 (Automatic) when the section says nothing, and also
+  when it says something this list does not offer: the row then reads Automatic while the
+  file still says what it said, which is the honest way round. Changing it writes ours
+  over theirs; not touching it leaves theirs alone.
+*/
+int  vm_current(const char *core);
+
+/*
+  1 when a mode set here would change anything this machine is showing - which is whether
+  the scaler's output reaches a screen at all, because that is the only thing video_mode
+  shapes. See the long note on the definition for the three ways the answer is no, and for
+  the version of this that was wrong.
+*/
+int  vm_supported();
+
+// Which reason, so the screen can name the one that applies and the fix that goes with it.
+int  vm_unsupported_is_direct();
+
+// Applied now, nothing written. vm_restore_now() is the undo.
+void vm_apply_now(int i);
+void vm_restore_now();
+
+/*
+  Write it into `[<core>]`. Entry 0 removes the line rather than emptying it - an empty
+  video_mode= is a parse failure that falls back to 1080p, not "no setting". Returns 1
+  when the file changed, 0 when it already said this, -1 with ini_last_error() set.
+*/
+int  vm_write(const char *core, int i);
 
 /* --------------------------------------------------- the analog output ----- */
 

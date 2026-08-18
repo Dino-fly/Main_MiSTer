@@ -114,7 +114,15 @@ void video_menu_fb_analog(int on);
 int video_bg_has_picture();
 int video_chvt(int num);
 void video_cmd(char *cmd);
+
+/*
+  Set the mode from anything MiSTer.ini's video_mode= accepts - a predefined number, a
+  modeline, or a calculated width,height,refresh. video_mode_restore() puts back whatever
+  the configuration says, which is the undo a front-end offering a mode has to have: see
+  the notes on both in video.cpp.
+*/
 void video_mode_cmd(char *cmd);
+void video_mode_restore();
 
 void video_core_description(char *str, size_t len);
 void video_scaler_description(char *str, size_t len);
