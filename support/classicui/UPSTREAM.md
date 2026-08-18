@@ -285,6 +285,20 @@ behaves differently; the change is strictly a widening of what is accepted.
 "put back whatever the configuration says", by the path `video_init()` already uses. It
 re-derives rather than restoring a snapshot, so there is no saved copy that can go stale.
 
+**And `video_reinit()` now keeps a runtime mode across an HDMI re-initialisation**, which
+is the third change and the one the device found. Changing the video mode reprograms the
+transmitter; the sink re-asserts HPD; the interrupt fires; `video_reinit()` re-derives
+`v_def` from cfg and puts the configured mode back. Measured: a mode applied at 800x600
+was gone inside two seconds, with a fifteen-second confirmation still running and nothing
+on screen to show for it. It is not dongle-specific — reprogramming the ADV7513 and moving
+the pixel clock is exactly what makes a sink re-assert HPD, and some displays will.
+
+So `video_mode_cmd()` remembers the string it applied and `video_reinit()` re-applies it
+after `video_mode_load()` has overwritten `v_def`. Re-initialising is the right response to
+a display appearing or changing; deciding the machine's *mode* is not, when something has
+explicitly set one since boot. `video_mode_restore()` clears the memory, so a trial that
+provokes a bounce on every attempt can only do so for as long as the countdown allows.
+
 **Why either exists.** The front-end offers a per-core video mode, which is a setting
 `chome_opt.h` names by name as too dangerous to hand to a player. What makes the per-core
 one different is in `chome_video.h`; what makes it *safe* is these two calls. Choosing a
