@@ -99,6 +99,15 @@ Say these out loud in reports. Each entry has already hidden a real bug.
   Shadow are FPGA-side: `screenshot` captures core video *pre-scaler*, and the
   OSD/framebuffer are composited by the FPGA and never appear in a DDR grab.
   The harness holds a software model (§5, §7), not the silicon.
+
+  A **USB HDMI capture device breaks that last sentence**, because it sees the
+  transmitter's output - after the filter, the mask and the gamma. The model has
+  now been measured against it once (`docs/SCALER-MODEL-2026-08-19.md`): the
+  grid's geometry is exact at 3x and 6x, the gutter's depth is off by 3-12 luma
+  levels and changes sign with magnification, and `--phase-bias` turned out not
+  to have a single value. Re-running it takes about ten minutes and the recipe is
+  in that file, so a change to filter generation no longer has to be taken on
+  trust.
 - **Cost.** DDR bandwidth, frame times, SD-card write pressure. The framebuffer
   takes ~10 ms/MB through `/dev/mem` and no host figure predicts that. Numbers
   come from `gfxstat`/`gfxbench` on the device, nothing else.
