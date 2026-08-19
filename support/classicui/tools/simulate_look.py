@@ -21,7 +21,9 @@ What is exact, and where it came from:
     fixed-point multiplier per channel - bright cells {1,lut[7:4]}, dim cells
     {0,lut[3:0]} - applied as the same truncating shift-add the RTL uses
     (channel>>4 down to channel>>0, gated per multiplier bit). Our simple
-    masks (one bit per channel) become 1.0 or 0.0. 2x mode doubles the cell.
+    masks (one bit per channel) are 1.125 for a set bit and 0.625 for a clear
+    one, because video.cpp fixes the low byte at 0x2A for the v1 form - the file
+    never gets to say. 2x mode doubles the cell.
 
 Measured against real hardware on 2026-08-19 - see
 docs/SCALER-MODEL-2026-08-19.md for the rig, the numbers and the caveats. The
@@ -227,7 +229,10 @@ def load_mask(path):
             v = int(tok.strip(), 16)
             if v <= 7:
                 # simple mask: one bit per channel, full on or black
-                m = tuple(0x10 if (v>>b)&1 else 0 for b in (2,1,0))
+                # video.cpp ORs a constant 0x2A into the low byte for v1 cells, so a
+                # set bit is {1,2} = 1.125 and a clear bit is {0,A} = 0.625. NOT a
+                # switch - measured on hardware, see docs/SCALER-MODEL-2026-08-19.md.
+                m = tuple(0x12 if (v>>b)&1 else 0x0A for b in (2,1,0))
             else:
                 # v2 LUT word per shadowmask.sv: bits 10/9/8 pick bright/dim nibble
                 m = tuple((0x10 | ((v>>4)&0xF)) if (v>>bit)&1 else (v&0xF)

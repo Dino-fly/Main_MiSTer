@@ -122,6 +122,118 @@ scale; it is not the correction the docstring hoped for.
 
 ---
 
+## Every look, measured
+
+All 16 distinct *scaler* configurations, at 3x, against the same static source. (The 20
+presets collapse to 16 because several differ only in their core-side half - `agb001`,
+`ags001`, `ags101` and `gbc` load the same filter and no mask, and so do `dmg` and
+`pocket`.) Mean |luma error| against a **0.67 noise floor**; "null" is the error if the
+model did nothing at all, which is the yardstick for whether a look is being reproduced.
+
+Driven by `preset_default` in MiSTer.ini plus a core reload, which applies the scaler half
+at `video_cfg_init()` - no menu navigation, class-independent, deterministic. One trap:
+`video_cfg_init()` loads the preset **and then** the per-core `<CORE>_scaler.cfg` over it,
+so those have to be removed or the preset is silently overridden.
+
+| look | scaler half | null | model | verdict |
+|---|---|---|---|---|
+| None / Sharp | everything off | 0.67 | **0.73** | exact |
+| VGA Monitor | Soft / Soft | 1.47 | **0.73** | exact |
+| GBA, GBC | LCD Grid | 32.23 | 6.26 | geometry exact, gutter approximate |
+| DMG, Pocket | Grid + Shadow | 32.23 | 7.81 | **shadow absent on hardware - see below** |
+| Game Gear | Grid + gamma | 40.35 | 4.79 | gamma unmodelled |
+| Game Gear Mod | Grid + gamma | 34.03 | 5.69 | gamma unmodelled |
+| Atari Lynx | Grid + gamma | 37.53 | 4.75 | gamma unmodelled |
+| WonderSwan | Grid + gamma | 40.36 | 4.77 | gamma unmodelled |
+| WonderSwan Color | Grid + gamma | 37.70 | 4.67 | gamma unmodelled |
+| Neo Geo Pocket | Grid + gamma | 36.58 | 5.36 | gamma unmodelled |
+| S-Video | Soft/Sharp + scanlines + grille | 38.33 | 15.15 | scanline filter unmodelled |
+| PAL TV | Soft/Soft + scanlines + grille 2x | 38.62 | 14.82 | scanline filter unmodelled |
+| BVM RGB | Sharp/Sharp + deep scanlines + grille | 38.10 | 14.86 | scanline filter unmodelled |
+| Composite | Blurry/Soft + scanlines + PVM mask | 20.25 | 9.60 | scanline filter unmodelled |
+| PVM RGB | GS_050 + **adaptive** scanlines + mask + gamma | 25.76 | 21.90 | adaptive vfilter and gamma unmodelled |
+
+**The looks the model claims exactly, it gets exactly.** None, Sharp and VGA Monitor all
+land at 0.73 against a 0.67 floor - the Soft polyphase filter is reproduced to within the
+measurement. Everything above that has a named, already-documented reason.
+
+The gamma column is not comparable with the rest: those LUTs compress the range, so the
+absolute error shrinks whether or not the model is right about anything.
+
+---
+
+## Bug 1: the v1 shadow mask was wrong, in the shipped code
+
+Three looks - **S-Video, PAL TV and BVM RGB** - came in at **98.7**, against a null of 38.
+The model was not merely inaccurate, it was further from the hardware than doing nothing.
+All three use our own generated `ClassicHome Grille.txt`; `Composite` and `PVM RGB`, which
+use the distribution's masks, were unaffected.
+
+Our file is the **v1** form (no `v2` header) with one bit per channel:
+
+```
+3,1
+1,2,4
+```
+
+Both the model and `vp_mask_load()` in `chome_video.cpp` read that as "channel fully on or
+fully off". `video.cpp`'s own loader - the one that talks to the fabric - does this:
+
+```c
+spi_w(SM_LUT(v2 ? (p[x] & 0x7FF) : (((p[x] & 7) << 8) | 0x2A)));
+```
+
+For a v1 cell the low byte is **fixed at 0x2A**, whatever the file says. `lut[7:4]` = 2 and
+`lut[3:0]` = A, so a set bit is `{1,2}` = **1.125** and a clear bit is `{0,A}` = **0.625**.
+A v1 cell has never been able to switch a channel off.
+
+Confirmed on the flat white screen, studio luma, one cell of the repeating pattern:
+
+| | cell |
+|---|---|
+| hardware | **170** |
+| 1.125 / 0.625 predicts | **170.3** |
+| 1.0 / 0.0 predicts | 62.6 |
+
+Fixed in both places. The error on the three affected looks fell from **98.7 to ~15**, and
+`Composite` and `PVM RGB` did not move - which is what says the fix hit the right thing.
+
+**The harness could not have caught this.** `assert_scaler_matches_model()` pins
+`vp_render_exact()` to `simulate_look.py`, and both carried the same wrong reading; the
+suite is green before and after. That is the whole argument for comparing against silicon
+rather than against yourself.
+
+## Bug 2: the pixel shadow is invisible at 3x
+
+`DMG` and `Pocket` promise "pixel grid and shadow". Their hardware output at 3x is
+**byte-identical** to `GBA`/`GBC`, which have the grid alone.
+
+The two generated filter files really do differ - phases 37-45 carry the shadow. The
+problem is which phases get sampled. `write_filter_grid()` makes the **gutter**
+scale-aware, centring it on the cell fraction a sample will actually land on:
+
+```
+3x samples cell fractions: [0.6667, 0.0, 0.3333]
+gutter centred on        : 0.6667   <- scale-aware
+shadow band spans        : 0.5000 .. 0.6500   <- fixed, NOT scale-aware
+sampled phases inside it : NONE
+```
+
+The shadow band is still the hardcoded `x > 0.5 && (x - 0.5) / 0.5 < SHADOW_WIDTH`. At 3x
+the nearest sampled phase, 0.6667, misses the band by 0.0167 of a cell - so the shadow is
+in the file and never sampled.
+
+This is exactly the scar `DEVELOPMENT.md` §5 records - *"a feature narrower than 256/N does
+nothing at magnification N; the LCD grid vanished at exactly 4x while working at 5x"* - and
+it is the same fix, applied to the gutter and not to the shadow sitting beside it.
+
+**Not fixed here**, because the repair is an aesthetic decision rather than a mechanical
+one: making the band one sample wide (`1/scale`, as the gutter does) would put a full
+output pixel of shadow beside a full output pixel of gutter at 3x, which is two thirds of
+the cell. What that should look like is the front-end owner's call.
+
+---
+
 ## What this does and does not change
 
 **It does not affect anything that ships.** The real filters run in the FPGA and
@@ -140,6 +252,15 @@ silicon" is still true, but the model is no longer unfalsifiable: this compariso
 can be re-run in about ten minutes whenever the filter generation changes.
 
 ## Open, and worth someone's time
+
+- **The pixel shadow** (bug 2 above) is in the file and never sampled at 3x. Needs an
+  aesthetic decision before it can be repaired.
+- **The scanline filters.** Every CRT look uses one, none of them are modelled, and they
+  account for most of the ~15 those looks now sit at. Modelling `sfilter` is the single
+  biggest remaining gap.
+- **Different filters per axis.** `simulate_look.py` takes one `--filter` and applies it
+  to both, but S-Video is Soft/Sharp and Composite is Blurry/Soft. A `--vfilter` flag
+  would make four of the five CRT looks representable.
 
 - **The gutter depth.** Both the sign flip and the neighbour bleed point at the
   tap weighting or the truncation points rather than at alignment. The model

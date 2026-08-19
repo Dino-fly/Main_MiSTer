@@ -396,7 +396,10 @@ static inline int vp_bound(int v)
   take {1,lut[7:4]}, dim cells {0,lut[3:0]} - and the fabric applies it as a
   truncating shift-add, channel>>4 up to channel>>0, one term per set bit. The
   simple three-bit masks (one bit per channel) are the same thing with the
-  multiplier at 1.0 or 0.
+  multiplier fixed at 1.125 for a set bit and 0.625 for a clear one - video.cpp
+  ORs a constant 0x2A into the low byte for those, so the file never gets to say.
+  It is a gentle modulation and NOT an on/off switch; assuming the latter made
+  three of the CRT looks preview far darker than the hardware draws them.
 
   Only the first table in a file is read. Files that carry several under
   "Resolution=" lines are choosing a cell size for the OUTPUT height, and the
@@ -456,7 +459,20 @@ static int vp_load_mask(const char *name, vp_mask *out)
 			{
 				int bit = 10 - ch;                       // r,g,b = bits 10,9,8
 				int m;
-				if (v <= 7) m = ((v >> (2 - ch)) & 1) ? 0x10 : 0;
+				/*
+				  A v1 cell does NOT switch a channel fully on and off, which is what
+				  this assumed and what the note above still said. video.cpp's own
+				  loader builds the word as ((p & 7) << 8) | 0x2A, so the low byte is
+				  FIXED at 0x2A whatever the file says: lut[7:4] = 2 and lut[3:0] = A.
+				  A set bit is therefore {1,2} = 1.125 and a clear bit is {0,A} =
+				  0.625 - a gentle modulation, not a switch.
+
+				  Measured on hardware 2026-08-19: our generated grille on a white
+				  screen comes out 170/229/187 in studio luma. 1.125/0.625 predicts
+				  that shape; 1.0/0.0 predicts 63/173/32, which is nothing like it.
+				  See docs/SCALER-MODEL-2026-08-19.md.
+				*/
+				if (v <= 7) m = ((v >> (2 - ch)) & 1) ? 0x12 : 0x0A;
 				else m = ((v >> bit) & 1) ? (0x10 | ((v >> 4) & 0xF)) : (int)(v & 0xF);
 				out->mul[rows][c][ch] = (uint8_t)m;
 			}
