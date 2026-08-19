@@ -1290,6 +1290,24 @@ static int vp_output_scale()
 #define SHADOW_MIX   0.35  // how much of the previous pixel the band starts with
 #define SHADOW_DIM   0.10  // unconditional darkening at the band's start
 
+/*
+  With the scale known the band is snapped the way the gutter above it is, and for
+  the same reason: it has to contain a phase the hardware will actually visit. The
+  band pinned to the cell boundary does not. At 3x no sampled phase falls in it at
+  all and the shadow is simply absent - the file differs from the plain grid at no
+  phase any sample reads. At 6x one does, but it is the gutter's own phase, so what
+  ships darkens the grid line after a dark pixel instead of casting into the next
+  cell. Both were measured on hardware; see docs/SCALER-MODEL-2026-08-19.md.
+
+  Snapped, the band sits one step past the gutter - the leading sample of the next
+  cell, which is where the shadow was always meant to fall - and is flat across the
+  one phase it holds, so these are the weights that phase gets rather than a peak
+  to fade from. 0.20/0.05 is what the fading band happens to deliver at 6x, where
+  it lands at f~0.44; it was chosen by eye at 3x against that as the reference.
+*/
+#define SHADOW_SNAP_MIX 0.20
+#define SHADOW_SNAP_DIM 0.05
+
 static void write_filter_grid(const char *name, int shadow, int scale)
 {
 	genbuf g;
@@ -1308,6 +1326,7 @@ static void write_filter_grid(const char *name, int shadow, int scale)
 	*/
 	double centre = 0.5, half = GRID_GUTTER / 2;
 	double duty = GRID_GUTTER;
+	double scentre = -1;                       // snapped shadow band; -1 = no scale, use the fading one
 
 	if (scale >= 2)
 	{
@@ -1323,6 +1342,8 @@ static void write_filter_grid(const char *name, int shadow, int scale)
 		centre = best;
 		half = (step * 0.8) / 2;
 		duty = step;                       // one output pixel in every `scale`
+		scentre = centre + step;           // the sample after the gutter
+		if (scentre >= 1.0) scentre -= 1.0;
 	}
 
 	gb_addf(&g, "# %s\n", GEN_MARK);
@@ -1331,6 +1352,13 @@ static void write_filter_grid(const char *name, int shadow, int scale)
 
 	double soft = 1.0 / PHASES;                     // one-phase shoulders
 	double boost = 1.0 / (1.0 - GRID_DEPTH * duty);
+	/*
+	  The snapped band dims exactly one of the `scale` sampled phases, so it costs
+	  SHADOW_SNAP_DIM/scale of the light averaged over them. Put back here, like the
+	  gutter's, so the shadow reads as a shadow and not as a dimmer screen: without
+	  it the strongest settings simply darken the picture and cannot be compared.
+	*/
+	if (shadow && scentre >= 0) boost /= 1.0 - SHADOW_SNAP_DIM / scale;
 	if (boost > 1.30) boost = 1.30;
 
 	for (int p = 0; p < PHASES; p++)
@@ -1356,7 +1384,24 @@ static void write_filter_grid(const char *name, int shadow, int scale)
 		  band is its first SHADOW_WIDTH, fading linearly. Mixing toward tap [1]
 		  keeps the row sum constant, so only the gain dim changes brightness.
 		*/
-		if (shadow && x > 0.5)
+		if (shadow && scentre >= 0)
+		{
+			double sd = fabs(x - scentre);
+			if (sd > 0.5) sd = 1.0 - sd;
+
+			double s = 0;                           // same envelope as the gutter's
+			if (sd < half) s = 1.0;
+			else if (sd < half + soft) s = 1.0 - (sd - half) / soft;
+
+			if (s > 0)
+			{
+				int cur = (x < 0.5) ? 1 : 2;
+				w[cur - 1] += SHADOW_SNAP_MIX * s * w[cur];
+				w[cur]     -= SHADOW_SNAP_MIX * s * w[cur];
+				gain *= 1.0 - SHADOW_SNAP_DIM * s;
+			}
+		}
+		else if (shadow && x > 0.5)
 		{
 			double into = (x - 0.5) / 0.5;
 			if (into < SHADOW_WIDTH)

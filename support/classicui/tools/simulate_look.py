@@ -66,6 +66,8 @@ GRID_DEPTH = 0.42
 SHADOW_WIDTH = 0.30
 SHADOW_MIX = 0.35
 SHADOW_DIM = 0.10
+SHADOW_SNAP_MIX = 0.20
+SHADOW_SNAP_DIM = 0.05
 
 # chome_video.cpp pal_dmg / pal_pocket - keep in step. 'bgb' kept for A/B.
 DMG    = [(0xC4,0xCF,0xA1),(0x8B,0x95,0x6D),(0x4D,0x53,0x3C),(0x1F,0x1F,0x1F)]
@@ -146,27 +148,77 @@ def load_filter(path):
     if len(taps) == 32: taps = taps[:16]     # legacy 16-phase pairs
     return to_hw_phases(taps)
 
-def synth_grid(shadow):
-    """chome_video.cpp write_filter_grid, including its integer commit."""
-    half = GRID_GUTTER/2; soft = 1.0/PHASES
-    boost = min(1.0/(1.0-GRID_DEPTH*GRID_GUTTER), 1.12)
+def synth_grid(shadow, scale=0):
+    """chome_video.cpp write_filter_grid, tap for tap, including its integer commit.
+
+    `scale` is the integer output scale the file is written for, as
+    vp_output_scale() reports it; 0 is the fallback the firmware uses when no
+    core is running or the mode cannot be read, and is what the `grid` and
+    `gridshadow` shorthands ask for so that they keep describing the file the
+    harness renders through. Pass --grid-scale N to model the file a running
+    core at N would really get: the gutter and the shadow both move to phases a
+    sample lands on, and at 3x that is the difference between a shadow and
+    nothing at all.
+
+    Ported rather than approximated. An earlier version of this function drew
+    the gutter as a ramp between the two taps and clamped the boost at 1.12; it
+    differed from the firmware at 52 of the 256 phases while claiming in this
+    docstring to be it, and the probes in assert_scaler_matches_model() were
+    generated from it. See docs/SCALER-MODEL-2026-08-19.md.
+    """
+    centre, half, duty = 0.5, GRID_GUTTER/2, GRID_GUTTER
+    scentre = -1.0
+    if scale >= 2:
+        step = 1.0/scale
+        best, bestd = 0.0, 2.0
+        for x in range(scale):
+            u = (x+0.5)/scale - 0.5
+            frac = u - math.floor(u)
+            d = abs(frac-0.5)
+            if d < bestd: bestd, best = d, frac
+        centre, half, duty = best, (step*0.8)/2, step
+        scentre = centre + step
+        if scentre >= 1.0: scentre -= 1.0
+
+    soft = 1.0/PHASES
+    boost = 1.0/(1.0-GRID_DEPTH*duty)
+    if shadow and scentre >= 0: boost /= 1.0 - SHADOW_SNAP_DIM/scale
+    if boost > 1.30: boost = 1.30
+
+    def commit(v):
+        # C lround: half away from zero, clamped to a signed byte, then the
+        # doubling read_video_filter() does on a 128-scale file.
+        n = math.floor(v*128.0+0.5) if v >= 0 else -math.floor(-v*128.0+0.5)
+        return int(max(-255, min(255, n)))*2
+
     taps = []
     for p in range(PHASES):
-        x = p/PHASES; d = abs(x-0.5)
+        x = p/PHASES
+        d = abs(x-centre)
+        if d > 0.5: d = 1.0-d
         e = 1.0 if d < half else (1.0-(d-half)/soft if d < half+soft else 0.0)
-        if x < 0.5-half: w1,w2 = 1.0,0.0
-        elif x > 0.5+half: w1,w2 = 0.0,1.0
-        else:
-            t = (x-(0.5-half))/GRID_GUTTER; w1,w2 = 1.0-t,t
+
+        w = [0.0, 0.0, 0.0, 0.0]
+        cur = 1 if x < 0.5 else 2
+        w[cur] = 1.0
         gain = boost*(1.0-GRID_DEPTH*e)
-        if shadow and x > 0.5+half:
-            into = (x-(0.5+half))/(1.0-(0.5+half))
+
+        if shadow and scentre >= 0:
+            sd = abs(x-scentre)
+            if sd > 0.5: sd = 1.0-sd
+            sv = 1.0 if sd < half else (1.0-(sd-half)/soft if sd < half+soft else 0.0)
+            if sv > 0:
+                w[cur-1] += SHADOW_SNAP_MIX*sv*w[cur]
+                w[cur]   -= SHADOW_SNAP_MIX*sv*w[cur]
+                gain *= 1.0-SHADOW_SNAP_DIM*sv
+        elif shadow and x > 0.5:
+            into = (x-0.5)/0.5
             if into < SHADOW_WIDTH:
                 f = 1.0-into/SHADOW_WIDTH
-                w1 += SHADOW_MIX*f*w2
-                w2 -= SHADOW_MIX*f*w2
+                w[1] += SHADOW_MIX*f*w[2]
+                w[2] -= SHADOW_MIX*f*w[2]
                 gain *= 1.0-SHADOW_DIM*f
-        taps.append([0, round(w1*gain*128)*2, round(w2*gain*128)*2, 0])
+        taps.append([commit(v*gain) for v in w])
     return to_hw_phases(taps)
 
 def synth_sharp():
@@ -292,8 +344,8 @@ def main():
         rows = [[palette[lv[(r*299+g*587+b*114)//1000]] for (r,g,b) in row] for row in rows]
 
     if 'filter' in flags: taps = load_filter(flags['filter'])
-    elif filt == 'grid': taps = synth_grid(0)
-    elif filt == 'gridshadow': taps = synth_grid(1)
+    elif filt == 'grid': taps = synth_grid(0, int(flags.get('grid-scale', '0')))
+    elif filt == 'gridshadow': taps = synth_grid(1, int(flags.get('grid-scale', '0')))
     else: taps = synth_sharp()
 
     bias = int(flags.get('phase-bias', '0'))
