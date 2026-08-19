@@ -7903,14 +7903,14 @@ static void assert_scaler_matches_model()
 
 	static const struct { int x, y; uint32_t px; } probe[] =
 	{
-		{  0,  0, 0xff242424u },
-		{  3,  3, 0xff242424u },
-		{  7,  3, 0xffffffffu },
-		{ 15, 15, 0xff242424u },
-		{ 16, 16, 0xff242424u },
-		{ 31, 31, 0xff242424u },
-		{  5, 12, 0xff262626u },
-		{ 20,  7, 0xff242424u },
+		{  0,  0, 0xff1e1e1eu },
+		{  3,  3, 0xff202020u },
+		{  7,  3, 0xffe0e0e0u },
+		{ 15, 15, 0xff202020u },
+		{ 16, 16, 0xff1e1e1eu },
+		{ 31, 31, 0xff202020u },
+		{  5, 12, 0xff1e1e1eu },
+		{ 20,  7, 0xff1e1e1eu },
 	};
 
 	const int sw = 8, sh = 8, dw = 32, dh = 32;
@@ -7924,9 +7924,13 @@ static void assert_scaler_matches_model()
 	check(dst != 0, "room for a rendered frame");
 	if (!dst) return;
 
-	// The GBC look: the plain grid on both axes, no mask, no gamma - the one whose
-	// whole effect is the arithmetic under test. Asked for by class rather than by
-	// index, because the preset table's order is ABI and its constants are private.
+	/*
+	  The GBC look. Since 2026-08-20 that is nearest taps plus the tint gap mask
+	  synthesised at this render's 4x - so the probes now exercise the mask path as
+	  well as the polyphase arithmetic, which the old all-filter grid never did.
+	  Asked for by class rather than by index, because the preset table's order is
+	  ABI and its constants are private.
+	*/
 	int opts[VP_MAX_OPTIONS];
 	int n = vp_options_for(VC_GBC, opts);
 	check(n > 0 && strstr(vp_name(opts[0]), "Color") != 0,
@@ -7996,6 +8000,121 @@ static int phase_line(double frac)
 	if (hw < 0) hw = 0;
 	if (hw > 255) hw = 255;
 	return hw / 4;
+}
+
+/*
+  The gap mask, and the corner that used to be the square of the lines.
+
+  The grid was filter taps until 2026-08-20. A filter runs on each axis
+  separately, so the two gap lifts MULTIPLIED and every intersection came out at
+  1.18^2 - a bright dot at each cell corner, which Dinofly saw on screen before
+  anyone measured it. Drawn as a mask the corner is just another cell and is
+  written with the same multiplier as the lines, so that is what is asserted
+  here, at every scale the front-end writes a table for.
+
+  The three gaps are also checked against each other, because "which way does the
+  gap go" is the whole result of the panel research: a mono reflective gap is the
+  lit substrate and is BRIGHTER than the cell, a colour reflective panel has a
+  thin dark line, and only a backlit panel has a real black matrix. Three looks
+  wearing three masks that all did the same thing would be the old bug wearing a
+  new coat.
+*/
+static int read_mask_cells(const char *name, int cells[32][32], int *w, int *h)
+{
+	char p[1024];
+	snprintf(p, sizeof(p), "%s/shadow_masks/%s", ROOT, name);
+	FILE *f = fopen(p, "rt");
+	if (!f) return 0;
+
+	char line[512];
+	int y = 0, ok = 0;
+	*w = *h = 0;
+	while (fgets(line, sizeof(line), f))
+	{
+		if (line[0] == '#') continue;
+		if (!strncasecmp(line, "v2", 2)) { ok = 1; continue; }
+		if (!*w && sscanf(line, "%d,%d", w, h) == 2) continue;
+		if (*w && y < *h && y < 32)
+		{
+			char *t = line;
+			for (int x = 0; x < *w && x < 32; x++)
+			{
+				cells[y][x] = (int)strtol(t, &t, 16);
+				if (*t == ',') t++;
+			}
+			y++;
+		}
+	}
+	fclose(f);
+	return ok && *w > 0 && y == *h;
+}
+
+// The 1.4 multiplier a v2 word gives a channel, x16. Mirrors shadowmask.sv.
+static int mask_mul16(int word, int ch)
+{
+	int bright = (word >> (10 - ch)) & 1;
+	return bright ? (0x10 | ((word >> 4) & 0xF)) : (word & 0xF);
+}
+
+static void assert_gap_masks()
+{
+	printf("\n== the gap masks, and their corners ==\n");
+
+	static const struct { const char *name; const char *label; } masks[] =
+	{
+		{ "ClassicHome LCD Gap Lit.txt",  "lit"  },
+		{ "ClassicHome LCD Gap Tint.txt", "tint" },
+		{ "ClassicHome LCD Gap Dark.txt", "dark" },
+	};
+
+	harness_set_fb_state(0);
+	int lit_gap = 0, tint_gap = 0, dark_gap = 0, body_at = 0;
+
+	for (int n = 2; n <= 8; n++)
+	{
+		harness_set_scale(144, 144 * n);
+		harness_advance(1100);
+		vp_grid_for_now(1);
+
+		for (int m = 0; m < 3; m++)
+		{
+			int cells[32][32], w = 0, h = 0;
+			char what[160];
+
+			snprintf(what, sizeof(what), "%dx: the %s mask is %dx%d cells",
+				n, masks[m].label, n, n);
+			int got = read_mask_cells(masks[m].name, cells, &w, &h);
+			check(got && w == n && h == n, what);
+			if (!got || w != n || h != n) continue;
+
+			int gap = mask_mul16(cells[0][1], 1);      // a line cell
+			int body = mask_mul16(cells[1][1], 1);     // an interior cell
+			int corner = mask_mul16(cells[0][0], 1);
+
+			snprintf(what, sizeof(what),
+				"%dx: the %s corner matches the lines, not their square", n, masks[m].label);
+			check(corner == gap, what);
+
+			snprintf(what, sizeof(what), "%dx: the %s gap differs from the cell body", n, masks[m].label);
+			check(gap != body, what);
+
+			if (n == 4)
+			{
+				body_at = body;
+				if (m == 0) lit_gap = gap;
+				if (m == 1) tint_gap = gap;
+				if (m == 2) dark_gap = gap;
+			}
+		}
+	}
+
+	check(lit_gap > body_at, "a mono reflective gap is brighter than the cell - it is the lit substrate");
+	check(tint_gap < body_at, "a colour reflective gap is a thin dark line between subpixel triples");
+	check(dark_gap < tint_gap, "a backlit gap is darker still - a real black matrix");
+
+	harness_set_scale(0, 0);
+	harness_set_fb_state(0);
+	vp_install();
 }
 
 static void assert_grid_shadow_is_sampled()
@@ -11265,12 +11384,13 @@ static void assert_video()
 				while (fgets(line, sizeof(line), f))
 				{
 					if (!strncmp(line, "gamma=off", 9)) gamma_off = 1;
-					if (strstr(line, "LCD Grid")) grid = 1;
+					// The grid moved from the filter to the mask on 2026-08-20.
+					if (strstr(line, "LCD Gap")) grid = 1;
 				}
 				fclose(f);
 			}
 			char what[128];
-			snprintf(what, sizeof(what), "%s: scaler gamma off, grid filter on", inis[k]);
+			snprintf(what, sizeof(what), "%s: scaler gamma off, gap mask on", inis[k]);
 			check(gamma_off && grid, what);
 		}
 	}
@@ -11436,9 +11556,9 @@ static void assert_video()
 	}
 
 	int n_gb = vp_options_for(VC_GB, opts);
-	check(n_gb == 3, "Game Boy offers two screens and the off switch");
-	check(strstr(vp_name(opts[0]), "DMG") && strstr(vp_name(opts[1]), "Pocket"),
-		"Game Boy offers DMG and Pocket");
+	check(n_gb == 5, "Game Boy offers three DMG ramps, the Pocket and the off switch");
+	check(strstr(vp_name(opts[0]), "DMG") && strstr(vp_name(opts[3]), "Pocket"),
+		"Game Boy leads with DMG and still offers the Pocket");
 
 	int n_gbc = vp_options_for(VC_GBC, opts);
 	check(n_gbc == 2, "GBC offers its screen and the off switch");
@@ -11543,16 +11663,27 @@ static void assert_video()
 		vp_set(gbsys, VC_GB, o2[0]);                     // DMG
 		vp_apply_now(gbsys, VC_GB);
 
-		check(strstr(harness_last_file_tx(), "ClassicHome DMG Green.gbp") != 0,
+		check(strstr(harness_last_file_tx(), "ClassicHome DMG Olive.gbp") != 0,
 			"the DMG look sends its palette at the core");
 		check(harness_last_file_tx_idx() == 3, "the palette lands in the GB palette slot");
 		check(harness_opt_val("12") == 2, "DMG forces the custom palette on");
-		check(harness_opt_val("4", 1) == 1, "DMG turns the core's screen shadow on");
+		// Off since 2026-08-20: the filter's shadow is finer than the core's,
+		// which darkens a whole Game Boy pixel. See CO_GB_DMG_PANEL.
+		check(harness_opt_val("4", 1) == 0, "DMG leaves the core's screen shadow off");
 		check(harness_opt_val("G") == 1, "DMG turns the core's frame blend on");
 		check(harness_opt_val("LM") == 2, "DMG pins HV-integer scale, past the curation");
 
 		harness_reset_file_tx();
-		vp_set(gbsys, VC_GB, o2[2]);                     // None
+		// By name, not by index: the Game Boy class gained two DMG ramps in 2026-08
+		// and o2[2] silently became one of them, which made three checks below pass
+		// against the wrong look.
+		int i_none = -1;
+		{
+			int nn = vp_options_for(VC_GB, o2);
+			for (int i = 0; i < nn; i++) if (!strcmp(vp_name(o2[i]), "None")) i_none = i;
+		}
+		check(i_none >= 0, "the Game Boy class still offers None");
+		vp_set(gbsys, VC_GB, o2[i_none]);
 		vp_apply_now(gbsys, VC_GB);
 
 		check(!harness_last_file_tx()[0], "None pushes no palette");
@@ -11628,7 +11759,7 @@ static void assert_video()
 		vp_options_for(VC_GB, o2);
 		vp_set(gbsys, VC_GB, o2[0]);                     // DMG
 		vp_apply_now(gbsys, VC_GB);
-		check(harness_opt_val("4", 1) == 1 && harness_opt_val("G") == 1 && harness_opt_val("LM") == 2,
+		check(harness_opt_val("4", 1) == 0 && harness_opt_val("G") == 1 && harness_opt_val("LM") == 2,
 			"on HDMI the DMG look sets the panel half");
 		check(strstr(harness_last_preset(), "Game Boy DMG.ini") != 0,
 			"and the scaler is given the grid preset");
@@ -11649,7 +11780,9 @@ static void assert_video()
 		// ...and goes back in.
 		harness_set_scaler_visible(1);
 		vp_output_poll();
-		check(harness_opt_val("4", 1) == 1 && harness_opt_val("LM") == 2,
+		// Frame blend rather than Screen Shadow: the shadow is the filter's now,
+		// so the core's flag is No in every state and cannot witness this.
+		check(harness_opt_val("G") == 1 && harness_opt_val("LM") == 2,
 			"back on HDMI the panel half comes back");
 		check(!strstr(harness_last_preset(), "(CRT)"), "with the grid preset again");
 
@@ -11670,7 +11803,7 @@ static void assert_video()
 		check(harness_opt_val("4", 1) == 0 && harness_opt_val("G") == 0 && harness_opt_val("LM") == 1,
 			"a look applied on a CRT leaves every panel option alone");
 		check(harness_opt_val("12") == 2, "the palette is still forced on there");
-		check(strstr(harness_last_file_tx(), "ClassicHome DMG Green.gbp") != 0,
+		check(strstr(harness_last_file_tx(), "ClassicHome DMG Olive.gbp") != 0,
 			"and the palette file still goes to the core");
 
 		harness_set_scaler_visible(1);
@@ -11793,11 +11926,20 @@ static void assert_video()
 
 	// The handheld curves must actually differ from one another.
 	{
+		/*
+		  Whole tiles, not corner pixels. The corner is a cell BODY, and a body is
+		  unity under every panel's mask now - so two looks that differ only in
+		  which way their gap goes agreed on pixel zero and the check passed for a
+		  reason that had nothing to do with the looks differing.
+		*/
+		int n3 = 160 * 120;
+		uint32_t *keep = (uint32_t*)malloc((size_t)n3 * 4);
 		const uint32_t *a = vp_preview(vp_default_for(VC_GB), 160, 120, 0, 0, 0);
-		uint32_t first_gb = a ? a[0] : 0;
+		if (a && keep) memcpy(keep, a, (size_t)n3 * 4);
 		const uint32_t *b2 = vp_preview(vp_default_for(VC_GBA), 160, 120, 0, 0, 0);
-		uint32_t first_gba = b2 ? b2[0] : 0;
-		check(first_gb != first_gba, "DMG and AGB previews are not identical");
+		int same = (a && b2 && keep) ? !memcmp(keep, b2, (size_t)n3 * 4) : 1;
+		free(keep);
+		check(!same, "DMG and AGB previews are not identical");
 	}
 
 	// Per-system class assignment from the built-in table.
@@ -11858,10 +12000,20 @@ static void assert_video()
 		if (over) for (int i = 0; i < n2; i++) if (over[i] != s0) { differs = 1; break; }
 		check(differs, "a reference frame changes the preview");
 
-		// The DMG look must recolour the blue frame, not pass it through.
-		int passthrough = 0;
-		if (over) for (int i = 0; i < n2; i++) if (over[i] == 0xff4080c0) { passthrough = 1; break; }
-		check(!passthrough, "the look is applied over the reference, not bypassed");
+		/*
+		  The look must be applied over the frame rather than the frame being
+		  blitted through it. "No pixel may survive" was the old way to say that
+		  and stopped being true on 2026-08-20: the grid moved to a mask whose
+		  BODY cell is exactly unity, so the inside of every cell is meant to come
+		  through untouched and only the gap is lifted. Counting is what still
+		  distinguishes a look from a bypass.
+		*/
+		int kept = 0;
+		if (over) for (int i = 0; i < n2; i++) if (over[i] == 0xff4080c0) kept++;
+		int touched = n2 - kept;
+		check(touched > n2 / 5 && kept > 0,
+			"the look is applied over the reference, not bypassed");
+		printf("  the grid touches %d of %d preview pixels\n", touched, n2);
 		printf("  flat blue through the DMG look: %06X\n", over ? (over[n2 / 2] & 0xffffff) : 0);
 
 		free(ref);
@@ -25246,6 +25398,7 @@ int main()
 	// Straight after it, as the other half of the same question: that section proves the
 	// arithmetic, this one proves the coefficients reach a phase the arithmetic will read.
 	assert_grid_shadow_is_sampled();
+	assert_gap_masks();
 	// And after that one, for the third time for the same reason: this section opens the
 	// in-game menu too, to reach the one state where "a core owns the drive" can be seen
 	// from a host test. Everything else in it would run anywhere.
