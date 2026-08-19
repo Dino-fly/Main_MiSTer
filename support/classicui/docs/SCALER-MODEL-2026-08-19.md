@@ -203,7 +203,7 @@ Fixed in both places. The error on the three affected looks fell from **98.7 to 
 suite is green before and after. That is the whole argument for comparing against silicon
 rather than against yourself.
 
-## Bug 2: the pixel shadow is invisible at 3x
+## Bug 2: the pixel shadow never landed in the cell
 
 `DMG` and `Pocket` promise "pixel grid and shadow". Their hardware output at 3x is
 **byte-identical** to `GBA`/`GBC`, which have the grid alone.
@@ -231,6 +231,82 @@ it is the same fix, applied to the gutter and not to the shadow sitting beside i
 one: making the band one sample wide (`1/scale`, as the gutter does) would put a full
 output pixel of shadow beside a full output pixel of gutter at 3x, which is two thirds of
 the cell. What that should look like is the front-end owner's call.
+
+### Fixed, 2026-08-19, and it was worse than "invisible at 3x"
+
+Walking the same arithmetic across every scale the front-end writes a file for showed the
+band is mispachieved everywhere, not only at 3x:
+
+| scale | sampled phase inside the band | what the shadow actually did |
+|-------|-------------------------------|------------------------------|
+| 2x, 3x | none | nothing at all |
+| 4x - 8x | one, and it is the **gutter's own phase** | darkened the grid line |
+
+So the shadow had never once cast into the next cell, at any scale. At 6x - where it does
+something, and where it was being used as the reference for what the effect should look
+like - what it does is make the grid line after a dark pixel darker. That is a different
+effect from the one `DMG` and `Pocket` promise.
+
+The band is now snapped exactly as the gutter is: centred one step past it, on the leading
+sample of the next cell, with the same width, so it holds precisely one sampled phase.
+Weights are `SHADOW_SNAP_MIX` 0.20 and `SHADOW_SNAP_DIM` 0.05 - flat across the one phase
+rather than a peak to fade from, and chosen by eye at 3x from four rendered candidates.
+0.20/0.05 is close to what the old fading band happened to deliver where it landed at 6x
+(`f` ~ 0.44, so ~0.156/0.044), which is why the fix barely moves the 6x picture's weight
+while moving where it falls.
+
+The four candidates, measured as how much darker the shadowed band is than the same
+sample on flat colour: 0 (as shipped), **11.4% (0.20/0.05, chosen)**, 20.8% (0.35/0.10),
+28.6% (0.50/0.18). For reference the old band delivers 10.9% at 6x, on the gutter. To
+re-render any of them, edit the two constants and run
+`simulate_look.py src.png out.png 3 none gridshadow --grid-scale 3`.
+
+The dim is compensated in `boost`, `/(1 - SHADOW_SNAP_DIM/scale)`, the same way the
+gutter's is. Without it the candidates differed in mean luma by up to 14% (93.7 to 80.9
+over a Dr. Mario frame) and the choice between them was a choice about brightness rather
+than about the shadow. With it they sit within 0.6% of each other and of the plain grid.
+
+The unknown-scale fallback keeps the old fading band and the old `SHADOW_MIX`/`SHADOW_DIM`:
+it has no sample grid to snap to, and it is what `assert_scaler_matches_model()` renders
+through.
+
+**Hardware-verified:** the two symptoms above (3x identical to the plain grid; 6x acting on
+the gutter) were measured through the capture rig described here. The fix itself has been
+verified in the model and in the harness only - no capture of the new files exists yet.
+
+### The model claimed to be the firmware and was not
+
+`simulate_look.py`'s `synth_grid()` carried the docstring *"chome_video.cpp
+write_filter_grid, including its integer commit"*. Compared tap for tap it differed from
+the firmware at **52 of the 256 phases**: it drew the gutter as a ramp between the two taps
+where the firmware hard-switches, clamped `boost` at 1.12 where the firmware clamps at
+1.30, and had no notion of scale at all - so it could not have modelled either bug above.
+
+It is now a port rather than a paraphrase, scale-aware, and agrees with the firmware at
+every phase at every scale, shadow and plain. `--grid-scale N` models the file a running
+core at N really gets; the `grid`/`gridshadow` shorthands still default to the no-scale
+fallback, because that is the file the harness renders through.
+
+The eight probes in `assert_scaler_matches_model()` were generated from the *old* function.
+Regenerating them from the corrected one reproduces all eight exactly, so that pin was
+sound - but only because it exercises the no-scale fallback, the one shape where the old
+approximation and the firmware agree. It never touched a scaled file, which is why neither
+bug on this page could have been caught by it.
+
+### The check that would have caught it
+
+`assert_grid_shadow_is_sampled()` walks 2x to 8x, has the front-end write the pair of grid
+files for each, and asserts of the shadow file that it differs from the plain one **at a
+phase the hardware samples**, and that that phase **is not the gutter's**. Red-proved by
+restoring the pinned band: 9 failures, matching the table above exactly - 2x and 3x fail
+both checks, 4x through 8x fail only "inside the cell".
+
+Driving it needs two firmware gates opened, both correct in the firmware and both in the
+way of a test: `vp_output_watch()` reads the scaler at most once a second, and not at all
+while our framebuffer owns the output. The section advances the clock past the first and
+sets `harness_set_fb_state(0)` for the second. An earlier draft did neither, and its
+failures were the files never being rewritten at all - the same shape of wrong-reason red
+that `DEVELOPMENT.md` §4 exists to catch.
 
 ---
 

@@ -7950,6 +7950,125 @@ static void assert_scaler_matches_model()
 	free(dst);
 }
 
+/*
+  The pixel shadow has to fall where a sample lands.
+
+  The LCD grid puts its gutter on a phase the hardware will actually visit, because at
+  an integer scale only `scale` of the 256 phases are ever read and a feature between
+  them is a feature nobody sees. The shadow beside it was not given the same treatment:
+  it stayed pinned to the cell boundary while the gutter moved. At 3x - the GBA on a
+  480-line CRT, which is what asked for it - no sampled phase fell inside the band at
+  all, and the shadow file was identical, at every phase any sample reads, to the plain
+  grid. At 6x one did fall inside, but it was the gutter's own phase, so the effect
+  darkened the grid line instead of casting into the next cell.
+
+  Neither showed up here, because nothing in this harness had ever asked for a filter
+  written for a scale: assert_scaler_matches_model() renders through the no-scale
+  fallback, which is the one shape where the old placement was right. This asks the
+  question the pictures answer - is there a shadow, and is it in the cell - as an
+  assertion about the file, at every scale vp_grid_for_now() will write one for.
+
+  Measured on hardware first; see docs/SCALER-MODEL-2026-08-19.md.
+*/
+static int read_taps64(const char *rel, int t[64][4])
+{
+	char p[1024];
+	snprintf(p, sizeof(p), "%s/%s", ROOT, rel);
+	FILE *f = fopen(p, "rt");
+	if (!f) return 0;
+
+	char line[256];
+	int n = 0;
+	while (n < 64 && fgets(line, sizeof(line), f))
+	{
+		if (line[0] == '#') continue;
+		if (sscanf(line, "%d,%d,%d,%d", &t[n][0], &t[n][1], &t[n][2], &t[n][3]) == 4) n++;
+	}
+	fclose(f);
+	return n;
+}
+
+// The 64-phase file line ascal reads for a fraction of a source pixel: 256 hardware
+// phases, four to a line (scale_phases duplicates, never interpolates).
+static int phase_line(double frac)
+{
+	int hw = (int)(frac * 256.0);
+	if (hw < 0) hw = 0;
+	if (hw > 255) hw = 255;
+	return hw / 4;
+}
+
+static void assert_grid_shadow_is_sampled()
+{
+	printf("\n== the pixel shadow, at the scales cores really run at ==\n");
+
+	/*
+	  vp_output_watch() reads the scaler at most once a second and not at all while our
+	  own framebuffer owns the output - both right in the firmware, both in the way here.
+	  So the screen goes back to the game's picture and the clock moves between scales.
+	*/
+	harness_set_fb_state(0);
+
+	for (int n = 2; n <= 8; n++)
+	{
+		// One source line per n output lines is what vp_output_scale() reports.
+		harness_set_scale(144, 144 * n);
+		harness_advance(1100);
+		vp_grid_for_now(1);
+
+		int plain[64][4], shad[64][4];
+		int a = read_taps64("filters/ClassicHome LCD Grid.txt", plain);
+		int b = read_taps64("filters/ClassicHome LCD Grid Shadow.txt", shad);
+
+		char what[160];
+		snprintf(what, sizeof(what), "%dx: both grid files are there, 64 phases each", n);
+		check(a == 64 && b == 64, what);
+		if (a != 64 || b != 64) continue;
+
+		// Where the gutter went, by the same search write_filter_grid does.
+		double best = 0, bestd = 2;
+		for (int x = 0; x < n; x++)
+		{
+			double u = ((double)x + 0.5) / n - 0.5;   // always in [-0.5, 0.5)
+			double frac = (u < 0) ? u + 1.0 : u;
+			double d = frac - 0.5;
+			if (d < 0) d = -d;
+			if (d < bestd) { bestd = d; best = frac; }
+		}
+		int gutter = phase_line(best);
+
+		int seen = 0, in_cell = 0;
+		for (int x = 0; x < n; x++)
+		{
+			double u = ((double)x + 0.5) / n - 0.5;
+			int L = phase_line((u < 0) ? u + 1.0 : u);
+
+			int differs = 0;
+			for (int t = 0; t < 4; t++) if (plain[L][t] != shad[L][t]) differs = 1;
+			if (!differs) continue;
+
+			seen++;
+			if (L != gutter) in_cell++;
+		}
+
+		snprintf(what, sizeof(what),
+			"%dx: the shadow reaches a phase the hardware samples", n);
+		check(seen > 0, what);
+
+		snprintf(what, sizeof(what),
+			"%dx: and it falls inside the cell, not on the grid line", n);
+		check(in_cell > 0, what);
+	}
+
+	// Put the files back the way every section after this one expects them.
+	harness_set_scale(0, 0);
+	harness_set_fb_state(0);                   // the stub's default, which is where this found it
+	vp_install();
+	int back[64][4];
+	check(read_taps64("filters/ClassicHome LCD Grid.txt", back) == 64,
+		"and the unscaled files are restored for the sections that follow");
+}
+
 static void assert_ingame_look_background()
 {
 	printf("\n== the look, over the still ==\n");
@@ -25124,6 +25243,9 @@ int main()
 	assert_ingame_dim();
 	assert_ingame_look_background();
 	assert_scaler_matches_model();
+	// Straight after it, as the other half of the same question: that section proves the
+	// arithmetic, this one proves the coefficients reach a phase the arithmetic will read.
+	assert_grid_shadow_is_sampled();
 	// And after that one, for the third time for the same reason: this section opens the
 	// in-game menu too, to reach the one state where "a core owns the drive" can be seen
 	// from a host test. Everything else in it would run anywhere.
