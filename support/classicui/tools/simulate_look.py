@@ -23,12 +23,26 @@ What is exact, and where it came from:
     (channel>>4 down to channel>>0, gated per multiplier bit). Our simple
     masks (one bit per channel) become 1.0 or 0.0. 2x mode doubles the cell.
 
-What is NOT yet certified (calibrate against a real capture when the HDMI
-grabber arrives; the knobs exist so calibration is a flag, not a rewrite):
+Measured against real hardware on 2026-08-19 - see
+docs/SCALER-MODEL-2026-08-19.md for the rig, the numbers and the caveats. The
+short version: the GEOMETRY is exact (the gutter lands on the same sub-pixel the
+hardware puts it on, both axes, at 3x and 6x, and the model is 4.8x closer than
+"no filter at all"), and the PHOTOMETRY is approximate - the gutter is about 3
+luma levels too light at 3x and about 12 too dark at 6x, and the hardware's
+gutter bleeds into its neighbours where this draws a hard notch.
+
+What is NOT certified:
 
   * The source-position accumulator's initial phase (--phase-bias, in 1/256
     of a source pixel). The grid is symmetric, so being off by a phase moves
     the gutter a fraction of an output pixel - visible only side by side.
+
+    CALIBRATION FAILED TO GENERALISE, which is itself the finding: the optimum
+    is 222-224 at 3x and 0 at 6x, both sharp minima, and 223 is not congruent
+    to 0 under the 256/N phase period. So this is not one hardware constant the
+    model is missing - the initial phase varies with the ratio. Use the flag to
+    author a lookshot at a known scale; do not treat any one value as "the"
+    calibration.
   * Axis order: CONFIRMED H then V - ascal's horizontal stage consumes the
     input line (o_hpix0 <= hpix_v) and the vertical stage reads the H-scaled
     line buffers (o_vpixq), so this script's order is the RTL's.
