@@ -119,19 +119,78 @@ Verified:
   block: body 127.9, vertical gap lines **1.123×**, against a designed 1.125
   (nibble 2 → 1 + 2/16). That is the reflective panel behaviour, and the number is
   the design's.
-- **The corner is not the square.** 1.21× measured, against 1.266 for a separable
-  filter. The bright-corner artefact is gone.
+- **The corner is NOT fixed.** See below - this is the one claim that failed.
 - **The look's core half applies too**: the Olive palette is live, its lightest
   shade landing at luma 135 exactly as authored.
 
-Open, and honestly unresolved: the corner measures 1.21 where the mask should make
-it identical to the lines at 1.125. It is clearly not the separable 1.266, so the
-mechanism is right, but the residual is unexplained. The likeliest cause is the
-sampling phase — the scale is 6.993 rather than a clean 7, so a fixed 7-pixel
-category assignment drifts, and the two gap lines inside one measured block were
-not equal (row 7 read brighter than row 0). Settling it wants a flat synthetic
-field rather than a game frame, and device control to put one up.
+## The corner is still separable, and that is the point of the mask
 
-Not verified: the colour-reflective and backlit gaps, and the shadow, all of which
-have only been rendered through `simulate_pipeline.py`. The device dropped off the
-network before those could be shot.
+First reading of the corner was 1.21× against 1.266 for a separable filter, and
+that got written down as "the artefact is gone". It is not. Measured across **14
+disjoint uniform blocks**, linearised out of studio range:
+
+| | measured |
+|---|---|
+| gap line (row / col) | 1.112 / 1.122 |
+| corner | **1.207** |
+| what a 2D mask predicts (= the lines) | 1.118 |
+| what a separable filter predicts (row × col) | 1.247 |
+
+Mean distance from the separable product is **0.039**; from the line value it is
+**0.089**. The corner sits more than twice as close to the product as to the
+lines. Whatever is drawing this grid on hardware is still behaving separably.
+
+Two candidates have been eliminated locally:
+
+- **Not the shadow filter.** Every one of its 64 phase rows sums to 128, so it is
+  unity in a flat region and cannot draw a line at all. And a transcription of
+  `write_shadow_filter()` into Python is **bit-identical** to what
+  `simulate_pipeline.py` emits, at all 64 phases - so tool and firmware agree.
+- **Not the old grid filter sneaking back.** That one darkened its gutter; the
+  measured gap is *lighter* than the body.
+
+So the open question is whether the 11-bit mask table is being applied as a table
+at all. The decisive experiment is cheap and needs the device: write a mask whose
+corner cell is deliberately unlike its line cells - say lines at 1.5 and corner at
+1.0 - and read one cell off a flat field. If hardware honours it, the mask is fine
+and something upstream is separable; if it does not, the 2D assumption behind the
+whole rework is wrong and the grid has to be built another way.
+
+Also unchecked because the device went off the network mid-session: whether the
+preset on the card actually references the gap mask. It could not be fetched.
+
+## How good the local simulator is
+
+The reason for asking: iterating against `simulate_pipeline.py` is far faster than
+against the device, so it matters exactly how far it can be trusted. Measured over
+**121,808 sampled pixels** of the whole 1120×1008 picture, model luma fitted to
+hardware luma:
+
+| | |
+|---|---|
+| best-fit transfer | `hw = 0.755 × model + 22.0` |
+| R² | **0.932** |
+| residual RMS | **7.1** luma levels (range 49..159) |
+| mean absolute error | **5.0** levels |
+| bias on body / gap row / gap col | **+0.16 / +0.41 / +0.01** |
+| bias on corner | **−7.0** |
+
+Read that as: **structure yes, photometry approximately, corners no.** The gap
+multiplier - the number every structural decision turns on - is reproduced to
+0.03% on the vertical axis and 0.7% on the horizontal. Body and line pixels are
+unbiased to well under half a luma level. The whole residual of consequence is the
+corner, plus a tone-response mismatch that shows as a per-shade bias swinging
++4.4 / −5.9 / −5.0 / +1.8 across the four palette entries - the same
+"photometry is approximate and the error changes sign" finding as
+SCALER-MODEL-2026-08-19.md, at the same magnitude.
+
+Fitted gain 0.755 against BT.709 studio range's expected 0.859 is part of that
+tone mismatch: the model's contrast is slightly wider than the transmitter's.
+
+Practical consequence: gap direction, period, alignment, shadow width and cell
+geometry can all be decided locally and confirmed on the device at the end. Exact
+brightness cannot - anything resting on a few luma levels needs a capture. And the
+corner cannot, until the experiment above is run.
+
+Not verified at all: the colour-reflective and backlit gaps, and the shadow, all
+of which have only been rendered through the model.
