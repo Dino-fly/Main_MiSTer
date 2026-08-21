@@ -119,45 +119,48 @@ Verified:
   block: body 127.9, vertical gap lines **1.123×**, against a designed 1.125
   (nibble 2 → 1 + 2/16). That is the reflective panel behaviour, and the number is
   the design's.
-- **The corner is NOT fixed.** See below - this is the one claim that failed.
+- **The corner is correct**, and separately verified - see the corner test below.
 - **The look's core half applies too**: the Olive palette is live, its lightest
   shade landing at luma 135 exactly as authored.
 
-## The corner is still separable, and that is the point of the mask
+## The corner test, 2026-08-21: the mask is a real 2D table
 
-First reading of the corner was 1.21× against 1.266 for a separable filter, and
-that got written down as "the artefact is gone". It is not. Measured across **14
-disjoint uniform blocks**, linearised out of studio range:
+The corner was withdrawn as a failure and should not have been. Three tests on
+hardware, all on a flat field from the Game Boy core with no cartridge, so there
+is no content for a filter to act on:
 
-| | measured |
-|---|---|
-| gap line (row / col) | 1.112 / 1.122 |
-| corner | **1.207** |
-| what a 2D mask predicts (= the lines) | 1.118 |
-| what a separable filter predicts (row × col) | 1.247 |
+**1. A deliberately impossible corner.** A mask with lines at 1.50× and the corner
+at **0.50×** — darker than the body — with every filter off, so only the mask can
+touch the picture. Measured over 12,000 cells: body 1.000, lines 1.553 / 1.561,
+corner **0.375**. The corner came out *darker than the body*, which no separable
+mechanism can produce. The 11-bit table is addressed as a table. That also matches
+the RTL: `mask_idx <= {vindex, hindex}`, a 256-entry lookup at stride 16, with
+`setShadowMask` uploading 16 words per row and `SM_HMAX(w-1)` bounding `hindex`.
 
-Mean distance from the separable product is **0.039**; from the line value it is
-**0.089**. The corner sits more than twice as close to the product as to the
-lines. Whatever is drawing this grid on hardware is still behaving separably.
+**2. The filter contributes nothing.** The real DMG look and the gap mask *alone*
+with filters off produced **byte-identical means** — body 130.20, row 145.57, col
+146.36, corner 158.70 in both. So the elevated corner was never the shadow filter.
+Independently, the device's `Pixel Shadow.txt` is byte-identical to what
+`simulate_pipeline.py` emits, at all 64 phases, and every phase row sums to 128.
 
-Two candidates have been eliminated locally:
+**3. The excess is the capture, not the fabric.** Same mask file, same LUT words,
+only the feature width changed via `maskmode=2x`:
 
-- **Not the shadow filter.** Every one of its 64 phase rows sums to 128, so it is
-  unity in a flat region and cannot draw a line at all. And a transcription of
-  `write_shadow_filter()` into Python is **bit-identical** to what
-  `simulate_pipeline.py` emits, at all 64 phases - so tool and firmware agree.
-- **Not the old grid filter sneaking back.** That one darkened its gutter; the
-  measured gap is *lighter* than the body.
+| | 1× cells (1px lines) | 2× cells (2px lines) | designed |
+|---|---|---|---|
+| gap lines | 1.118 / 1.124 | 1.122 / 1.118 | 1.125 |
+| corner | **1.219** | **1.138** | 1.125 |
 
-So the open question is whether the 11-bit mask table is being applied as a table
-at all. The decisive experiment is cheap and needs the device: write a mask whose
-corner cell is deliberately unlike its line cells - say lines at 1.5 and corner at
-1.0 - and read one cell off a flat field. If hardware honours it, the mask is fine
-and something upstream is separable; if it does not, the 2D assumption behind the
-whole rework is wrong and the grid has to be built another way.
+The lines are unmoved and the corner excess collapses from +8.3% to +1.1%. A 1×1
+bright crossing has bright neighbours on two sides where a 1-pixel line has body
+on both sides perpendicular to it, so the dongle's spatial response treats them
+differently; thicken both and the difference nearly goes. Nothing in the FPGA
+changed between those two rows.
 
-Also unchecked because the device went off the network mid-session: whether the
-preset on the card actually references the gap mask. It could not be fetched.
+**So the corner is correct in the fabric, and the model was right about it all
+along.** The −7.0 corner bias measured against hardware is the capture's error,
+not the model's. Which inverts the usual assumption in a way worth remembering:
+**for one-pixel structure the model is more trustworthy than the dongle.**
 
 ## How good the local simulator is
 
@@ -173,13 +176,12 @@ hardware luma:
 | residual RMS | **7.1** luma levels (range 49..159) |
 | mean absolute error | **5.0** levels |
 | bias on body / gap row / gap col | **+0.16 / +0.41 / +0.01** |
-| bias on corner | **−7.0** |
+| bias on corner | **−7.0** (the capture's error, not the model's - see the corner test) |
 
 Read that as: **structure yes, photometry approximately, corners no.** The gap
 multiplier - the number every structural decision turns on - is reproduced to
 0.03% on the vertical axis and 0.7% on the horizontal. Body and line pixels are
-unbiased to well under half a luma level. The whole residual of consequence is the
-corner, plus a tone-response mismatch that shows as a per-shade bias swinging
+unbiased to well under half a luma level. The whole residual of consequence is a tone-response mismatch that shows as a per-shade bias swinging
 +4.4 / −5.9 / −5.0 / +1.8 across the four palette entries - the same
 "photometry is approximate and the error changes sign" finding as
 SCALER-MODEL-2026-08-19.md, at the same magnitude.
@@ -187,10 +189,11 @@ SCALER-MODEL-2026-08-19.md, at the same magnitude.
 Fitted gain 0.755 against BT.709 studio range's expected 0.859 is part of that
 tone mismatch: the model's contrast is slightly wider than the transmitter's.
 
-Practical consequence: gap direction, period, alignment, shadow width and cell
-geometry can all be decided locally and confirmed on the device at the end. Exact
-brightness cannot - anything resting on a few luma levels needs a capture. And the
-corner cannot, until the experiment above is run.
+Practical consequence: gap direction, period, alignment, shadow width, cell
+geometry and corner behaviour can all be decided locally and confirmed on the
+device at the end. Exact brightness cannot - anything resting on a few luma levels
+needs a capture, and even then the capture is the weaker instrument for features
+one output pixel wide.
 
 Not verified at all: the colour-reflective and backlit gaps, and the shadow, all
 of which have only been rendered through the model.
