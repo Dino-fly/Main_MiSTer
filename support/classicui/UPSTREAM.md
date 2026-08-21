@@ -529,3 +529,21 @@ What it cannot prove: framebuffer timing, the uncached-memory cost, SPI behaviou
 whether a core accepts an MGL. Those need the hardware, and several bugs in this
 project were only ever found there — the still-playing banner overflowing a 240p line,
 and two Bluetooth pads getting the wrong button glyphs, among them.
+
+## video.cpp: shadow-mask substrate cells
+
+`setShadowMask()` gained three things: a `substrate=RRGGBB` line in a mask file, two
+uploads on shadowmask opcodes 4 and 5 (previously unused) carrying that colour, and
+the LUT word widened from 11 to 12 bits so bit 11 survives the trip.
+
+**Why it diverges.** A reflective panel's inter-pixel gap is the lit substrate
+showing through - a fixed colour, not an attenuation of the pixel beside it.
+`shadowmask.sv` only multiplies, so it can dim a gap but never replace one, which
+put our LCD grid on bright areas where the real panel has none and removed it from
+dark areas where the panel shows it most. The core-side half is
+`rtl/shadowmask-substrate.patch`.
+
+**Degradation.** A core without the patch truncates bit 11 and ignores opcodes 4/5,
+so it renders the multiplicative gap left in bits 10:0 - today's approximation.
+Measured on hardware: a substrate-flagged mask and a plain one differ by a mean of
+0.171 luma on a stock core. Nothing needs to detect support.

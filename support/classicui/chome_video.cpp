@@ -103,6 +103,23 @@ struct preset_def
   leaking. Measured sources are in docs/HANDHELD-PANELS.md.
 */
 #define M_GAP_LIT  PREFIX " LCD Gap Lit.txt"
+/*
+  A reflective panel's gap is the lit SUBSTRATE, so it is a fixed colour - the
+  same colour as the panel's brightest shade - and not an attenuation of whatever
+  pixel sits beside it. shadowmask.sv can only multiply, so this needs the
+  substrate cell added by rtl/shadowmask-substrate.patch: bit 11 of a cell word
+  makes it emit a loaded colour outright.
+
+  One mask per look rather than one shared file, because the substrate differs
+  with the palette - and the whole point is that it matches the core's brightest
+  output exactly. A core without the patch truncates bit 11 and renders the
+  multiplicative gap left in bits 10:0, i.e. today's approximation.
+*/
+#define M_GAP_DMG    PREFIX " LCD Gap DMG.txt"
+#define M_GAP_BRIGHT PREFIX " LCD Gap DMG Bright.txt"
+#define M_GAP_FADED  PREFIX " LCD Gap DMG Faded.txt"
+#define M_GAP_POCKET PREFIX " LCD Gap Pocket.txt"
+#define M_GAP_WS     PREFIX " LCD Gap WonderSwan.txt"
 #define M_GAP_TINT PREFIX " LCD Gap Tint.txt"
 #define M_GAP_DARK PREFIX " LCD Gap Dark.txt"
 #define F_SHADOW   PREFIX " Pixel Shadow.txt"
@@ -123,6 +140,14 @@ struct preset_def
 #define SHADOW_MIX_MONO   0.45      // Dinofly's pick of light/medium/strong
 #define SHADOW_MIX_COLOUR 0.30
 #define SHADOW_SPAN       0.85      // of a cell; one cell is the 4-tap ceiling
+
+// Each look's substrate: the lightest entry of the palette it wears. Keep these
+// in step with pal_* below and with the .gbp files they name.
+#define SUB_DMG    0x8B9814          // pal_olive  (139,152,20)
+#define SUB_BRIGHT 0xC4CFA1          // pal_dmg    (196,207,161)
+#define SUB_FADED  0x6D833D          // pal_weak   (109,131,61)
+#define SUB_POCKET 0xE0DBCD          // pal_pocket (224,219,205)
+#define SUB_WS     0xD0CABA          // the WonderSwan panel's warm grey top
 #define F_GRIDSH  PREFIX " LCD Grid Shadow.txt"
 #define M_GRILLE  PREFIX " Grille.txt"
 #define M_MATRIX  PREFIX " Dot Matrix.txt"
@@ -243,11 +268,11 @@ static const preset_def presets[] =
 	  survives as Bright, for players who want the legibility.
 	*/
 	{ "dmg", "Game Boy DMG", "Muted olive-green reflective LCD, pixel grid and shadow.",
-	  F_SHADOW, F_SHADOW, "off", M_GAP_LIT, "1x", "off",
+	  F_SHADOW, F_SHADOW, "off", M_GAP_DMG, "1x", "off",
 	  CO_GB_DMG_COLOUR, CO_GB_DMG_PANEL, PAL_OLIVE },
 
 	{ "pocket", "Game Boy Pocket", "Neutral grey reflective LCD, finer grid, pixel shadow.",
-	  F_SHADOW, F_SHADOW, "off", M_GAP_LIT, "1x", "off",
+	  F_SHADOW, F_SHADOW, "off", M_GAP_POCKET, "1x", "off",
 	  CO_GB_DMG_COLOUR, CO_GB_DMG_PANEL, PAL_POCKET },
 
 	/*
@@ -308,7 +333,7 @@ static const preset_def presets[] =
 	  0, "Flickerblend=2 Frames;" CO_INTEGER, 0 },
 
 	{ "ws", "WonderSwan", "Reflective mono FSTN: warm grey, low contrast.",
-	  F_SHADOW, F_SHADOW, "off", M_GAP_LIT, "1x", G_WS,
+	  F_SHADOW, F_SHADOW, "off", M_GAP_WS, "1x", G_WS,
 	  0, "Flickerblend=2 Frames;" CO_INTEGER, 0 },
 
 	{ "wsc", "WonderSwan Color", "Reflective colour panel: muted and slightly warm.",
@@ -340,11 +365,11 @@ static const preset_def presets[] =
 	  and inserting one here would silently move every player's saved look.
 	*/
 	{ "dmg-bright", "Game Boy DMG (Bright)", "The high-contrast ramp: easier to read, further from the panel.",
-	  F_SHADOW, F_SHADOW, "off", M_GAP_LIT, "1x", "off",
+	  F_SHADOW, F_SHADOW, "off", M_GAP_BRIGHT, "1x", "off",
 	  CO_GB_DMG_COLOUR, CO_GB_DMG_PANEL, PAL_DMG },
 
 	{ "dmg-faded", "Game Boy DMG (Faded)", "A tired panel in poor light: the light shades nearly merge.",
-	  F_SHADOW, F_SHADOW, "off", M_GAP_LIT, "1x", "off",
+	  F_SHADOW, F_SHADOW, "off", M_GAP_FADED, "1x", "off",
 	  CO_GB_DMG_COLOUR, CO_GB_DMG_PANEL, PAL_WEAK },
 };
 
@@ -492,7 +517,9 @@ struct vp_mask
 static int vp_synth_gap_mask(const char *name, int scale, vp_mask *out)
 {
 	double gap;
-	if (!strcasecmp(name, M_GAP_LIT)) gap = GAP_LIT;
+	if (!strcasecmp(name, M_GAP_LIT) || !strcasecmp(name, M_GAP_DMG) ||
+	    !strcasecmp(name, M_GAP_BRIGHT) || !strcasecmp(name, M_GAP_FADED) ||
+	    !strcasecmp(name, M_GAP_POCKET) || !strcasecmp(name, M_GAP_WS)) gap = GAP_LIT;
 	else if (!strcasecmp(name, M_GAP_TINT)) gap = GAP_TINT;
 	else if (!strcasecmp(name, M_GAP_DARK)) gap = GAP_DARK;
 	else return 0;
@@ -1440,7 +1467,7 @@ static int vp_output_scale()
   black matrix. v2 words are bits 10/9/8 selecting bright-or-dim per channel, bits
   7:4 the bright nibble as 1 + n/16, bits 3:0 the dim nibble as n/16.
 */
-static void write_grid_mask(const char *name, int scale, double gap)
+static void write_grid_mask(const char *name, int scale, double gap, uint32_t subst)
 {
 	genbuf g;
 	gb_reset(&g);
@@ -1469,8 +1496,16 @@ static void write_grid_mask(const char *name, int scale, double gap)
 		int gapw  = (gap >= 1.0) ? ((7 << 8) | (lit << 4)) : (0 << 8) | dim;
 		int bodyw = (7 << 8);
 
-		gb_addf(&g, "# LCD gap for %dx at %.2fx, one cell per source pixel\n\n", scale, gap);
-		gb_addf(&g, "v2\n%d,%d\n", scale, scale);
+		gb_addf(&g, "# LCD gap for %dx at %.2fx, one cell per source pixel\n", scale, gap);
+		if (subst)
+		{
+			// Bit 11 = emit the substrate. The multiplier stays in bits 10:0 so a
+			// core without the patch falls back to it instead of breaking.
+			gapw |= 0x800;
+			gb_addf(&g, "# substrate cells: %06X\n\nv2\nsubstrate=%06X\n", subst, subst);
+		}
+		else gb_addf(&g, "\nv2\n");
+		gb_addf(&g, "%d,%d\n", scale, scale);
 		for (int y = 0; y < scale; y++)
 		{
 			for (int x = 0; x < scale; x++)
@@ -1881,9 +1916,15 @@ void vp_install()
 	write_filter(F_SCANDP, 0, 0.45);
 	write_filter_grid(F_GRID, 0, vp_output_scale());
 	write_filter_grid(F_GRIDSH, 1, vp_output_scale());
-	write_grid_mask(M_GAP_LIT,  vp_output_scale(), GAP_LIT);
-	write_grid_mask(M_GAP_TINT, vp_output_scale(), GAP_TINT);
-	write_grid_mask(M_GAP_DARK, vp_output_scale(), GAP_DARK);
+	write_grid_mask(M_GAP_LIT,    vp_output_scale(), GAP_LIT,  0);
+	write_grid_mask(M_GAP_TINT,   vp_output_scale(), GAP_TINT, 0);
+	write_grid_mask(M_GAP_DARK,   vp_output_scale(), GAP_DARK, 0);
+	// The reflective panels, each with its own substrate.
+	write_grid_mask(M_GAP_DMG,    vp_output_scale(), GAP_LIT, SUB_DMG);
+	write_grid_mask(M_GAP_BRIGHT, vp_output_scale(), GAP_LIT, SUB_BRIGHT);
+	write_grid_mask(M_GAP_FADED,  vp_output_scale(), GAP_LIT, SUB_FADED);
+	write_grid_mask(M_GAP_POCKET, vp_output_scale(), GAP_LIT, SUB_POCKET);
+	write_grid_mask(M_GAP_WS,     vp_output_scale(), GAP_LIT, SUB_WS);
 	write_shadow_filter(F_SHADOW,   vp_output_scale(), SHADOW_MIX_MONO,   SHADOW_SPAN);
 	write_shadow_filter(F_SHADOWLT, vp_output_scale(), SHADOW_MIX_COLOUR, SHADOW_SPAN);
 
@@ -2378,9 +2419,15 @@ int vp_grid_for_now(int force)
 	printf("ClassicUI: the scaler is giving each pixel %dx, rebuilding the LCD grid\n", n);
 	write_filter_grid(F_GRID, 0, n);
 	write_filter_grid(F_GRIDSH, 1, n);
-	write_grid_mask(M_GAP_LIT,  n, GAP_LIT);
-	write_grid_mask(M_GAP_TINT, n, GAP_TINT);
-	write_grid_mask(M_GAP_DARK, n, GAP_DARK);
+	write_grid_mask(M_GAP_LIT,    n, GAP_LIT,  0);
+	write_grid_mask(M_GAP_TINT,   n, GAP_TINT, 0);
+	write_grid_mask(M_GAP_DARK,   n, GAP_DARK, 0);
+	// The reflective panels, each with its own substrate.
+	write_grid_mask(M_GAP_DMG,    n, GAP_LIT, SUB_DMG);
+	write_grid_mask(M_GAP_BRIGHT, n, GAP_LIT, SUB_BRIGHT);
+	write_grid_mask(M_GAP_FADED,  n, GAP_LIT, SUB_FADED);
+	write_grid_mask(M_GAP_POCKET, n, GAP_LIT, SUB_POCKET);
+	write_grid_mask(M_GAP_WS,     n, GAP_LIT, SUB_WS);
 	write_shadow_filter(F_SHADOW,   n, SHADOW_MIX_MONO,   SHADOW_SPAN);
 	write_shadow_filter(F_SHADOWLT, n, SHADOW_MIX_COLOUR, SHADOW_SPAN);
 
@@ -2406,7 +2453,9 @@ static int vp_uses_grid(int i)
 	const preset_def *d = &presets[i];
 	const char *f[3] = { d->hfilter, d->vfilter, d->mask };
 	static const char *scaled[] = { F_GRID, F_GRIDSH, F_SHADOW, F_SHADOWLT,
-	                                M_GAP_LIT, M_GAP_TINT, M_GAP_DARK };
+	                                M_GAP_LIT, M_GAP_TINT, M_GAP_DARK,
+	                                M_GAP_DMG, M_GAP_BRIGHT, M_GAP_FADED,
+	                                M_GAP_POCKET, M_GAP_WS };
 	for (int k = 0; k < 3; k++)
 		for (unsigned j = 0; f[k] && j < sizeof(scaled) / sizeof(scaled[0]); j++)
 			if (!strcasecmp(f[k], scaled[j])) return 1;
@@ -2875,7 +2924,10 @@ const uint32_t *vp_preview(int i, int w, int h, const uint32_t *ref, int sw_nati
 	if (d->mask)
 	{
 		if (!strcasecmp(d->mask, M_MATRIX))         { matrix = 1; gap_mul = 0.75; }
-		else if (!strcasecmp(d->mask, M_GAP_LIT))   { matrix = 1; gap_mul = GAP_LIT; }
+		else if (!strcasecmp(d->mask, M_GAP_LIT) || !strcasecmp(d->mask, M_GAP_DMG) ||
+		         !strcasecmp(d->mask, M_GAP_BRIGHT) || !strcasecmp(d->mask, M_GAP_FADED) ||
+		         !strcasecmp(d->mask, M_GAP_POCKET) || !strcasecmp(d->mask, M_GAP_WS))
+		                                            { matrix = 1; gap_mul = GAP_LIT; }
 		else if (!strcasecmp(d->mask, M_GAP_TINT))  { matrix = 1; gap_mul = GAP_TINT; }
 		else if (!strcasecmp(d->mask, M_GAP_DARK))  { matrix = 1; gap_mul = GAP_DARK; }
 	}

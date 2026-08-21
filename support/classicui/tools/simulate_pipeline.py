@@ -44,8 +44,13 @@ Usage:
     --mask FILE         shadow mask, applied after the scaler
     --maskmode 1x|2x
     --screen WxH        letterbox the result into a screen (default: none)
-    --grid-mask N:LIFT  write a 2D grid mask for scale N to --mask's path and
-                        use it; LIFT is the gap multiplier, e.g. 3:1.15
+    --grid-mask N:LIFT[:RRGGBB]
+                        write a 2D grid mask for scale N to --mask's path and use
+                        it; LIFT is the gap multiplier, e.g. 3:1.15. A third field
+                        makes the gap a SUBSTRATE cell emitting that colour
+                        outright - the reflective-panel case, which no multiplier
+                        can express. Needs a core carrying rtl/shadowmask-substrate.patch;
+                        older cores fall back to LIFT.
     --shadow N:MIX:DIM[:W]
                         write a shadow-only filter for scale N and use it; W is
                         the shadow's width in output pixels (default 1)
@@ -117,7 +122,7 @@ def apply_gamma(rows, lut):
     return [[(lut[r][0], lut[g][1], lut[b][2]) for (r, g, b) in row] for row in rows]
 
 
-def write_grid_mask(path, scale, lift):
+def write_grid_mask(path, scale, lift, substrate=None):
     """A grid drawn as a mask instead of as filter taps.
 
     The filter cannot do this well for two reasons met on hardware: it runs on
@@ -146,12 +151,20 @@ def write_grid_mask(path, scale, lift):
         n = max(0, min(15, int(round(lift * 16))))
         gap = n                      # all three channels take the dim nibble
     body = (7 << 8)
+    if substrate is not None:
+        # Bit 11 makes the cell EMIT the substrate instead of scaling. Bits 10:0
+        # keep the multiplicative gap, so a core that predates the feature
+        # truncates the flag and renders the old approximation.
+        gap |= 0x800
     rows = []
     for y in range(scale):
         row = [gap if (x == 0 or y == 0) else body for x in range(scale)]
         rows.append(','.join('%03X' % v for v in row))
     with open(path, 'w') as f:
-        f.write("v2\n%d,%d\n" % (scale, scale))
+        f.write("v2\n")
+        if substrate is not None:
+            f.write("substrate=%06X\n" % substrate)
+        f.write("%d,%d\n" % (scale, scale))
         f.write('\n'.join(rows) + '\n')
     return path
 
@@ -261,9 +274,10 @@ def main():
 
     # 3. ascal, with the filter as its taps
     if 'grid-mask' in flags:
-        n, lift = flags['grid-mask'].split(':')
-        flags['mask'] = write_grid_mask(flags.get('mask', 'grid_mask.txt'),
-                                        int(n), float(lift))
+        parts = flags['grid-mask'].split(':')
+        n, lift = int(parts[0]), float(parts[1])
+        sub = int(parts[2], 16) if len(parts) > 2 else None
+        flags['mask'] = write_grid_mask(flags.get('mask', 'grid_mask.txt'), n, lift, sub)
         flags.setdefault('maskmode', '1x')
     if 'shadow' in flags:
         parts = flags['shadow'].split(':')

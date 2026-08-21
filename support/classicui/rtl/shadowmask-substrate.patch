@@ -1,0 +1,86 @@
+--- a/sys/shadowmask.sv
++++ b/sys/shadowmask.sv
+@@ -24,8 +24,26 @@
+ reg        mask_2x;
+ reg        mask_rotate;
+ reg        mask_enable;
+-reg [10:0] mask_lut[256];
++/*
++  12 bits per cell, not 11. Bit 11 is the SUBSTRATE flag: that cell emits a fixed
++  colour instead of scaling the pixel under it.
+ 
++  Why the datapath needed it at all: everything here multiplies, so a cell can
++  attenuate but never replace. That is right for a backlit panel, whose black
++  matrix genuinely absorbs light passing it, and wrong for a reflective one,
++  whose inter-pixel gap is the lit substrate showing through - a fixed colour,
++  independent of the pixel beside it. Multiplying cannot express that: a gap over
++  a dark pixel stays dark, so the grid appears on bright areas where the real
++  panel has none and vanishes on dark ones where the real panel shows it most.
++
++  Compatible both ways. Firmware that predates this writes 11-bit words, so bit
++  11 reads 0 and nothing changes. Firmware that uses it sets bit 11 AND leaves a
++  sensible multiplier in bits 10:0, so a core that predates this truncates the
++  flag away and renders the old approximation instead of breaking.
++*/
++reg [11:0] mask_lut[256];
++reg [23:0] subst = 24'hFFFFFF;   // the substrate colour, loaded like the LUT
++
+ always @(posedge clk) begin
+ 	reg [4:0] hcount;
+ 	reg [4:0] vcount;
+@@ -70,13 +88,16 @@
+ end
+ 
+ reg [4:0] r_mul, g_mul, b_mul; // 1.4 fixed point multipliers
++reg       sub_sel;             // this cell emits `subst` rather than a product
+ always @(posedge clk) begin
+-	reg [10:0] lut;
++	reg [11:0] lut;
+ 
+ 	lut <= mask_lut[mask_idx];
+ 
+ 	r_mul <= 5'b10000; g_mul <= 5'b10000; b_mul <= 5'b10000; // default 100% to all channels
++	sub_sel <= 1'b0;
+ 	if (mask_enable) begin
++		sub_sel <= lut[11];
+ 		r_mul <= lut[10] ? {1'b1,lut[7:4]} : {1'b0,lut[3:0]};
+ 		g_mul <= lut[9]  ? {1'b1,lut[7:4]} : {1'b0,lut[3:0]};
+ 		b_mul <= lut[8]  ? {1'b1,lut[7:4]} : {1'b0,lut[3:0]};
+@@ -90,6 +111,7 @@
+ 	reg  [7:0] r3_x, g3_x, b3_x; // 6.25% + 12.5%
+ 	reg  [8:0] r3_y, g3_y, b3_y; // 25% + 50% + 100%
+ 	reg  [8:0] r4,   g4,   b4;
++	reg        sub3, sub4;       // sub_sel is valid alongside r_mul at C3
+ 
+ 	// C1 - data input
+ 	{r1,g1,b1} <= din;
+@@ -106,13 +128,17 @@
+ 	b3_x <= ({4{b_mul[0]}} & b2[7:4]) + ({8{b_mul[1]}} & b2[7:3]);
+ 	b3_y <= ({6{b_mul[2]}} & b2[7:2]) + ({7{b_mul[3]}} & b2[7:1]) + ({9{b_mul[4]}} & b2[7:0]);
+ 
++	sub3 <= sub_sel;
++	sub4 <= sub3;
++
+ 	// C4 - combine results
+ 	r4 <= r3_x + r3_y;
+ 	g4 <= g3_x + g3_y;
+ 	b4 <= b3_x + b3_y;
+ 
+ 	// C5 - clamp and output
+-	dout <= {{8{r4[8]}} | r4[7:0], {8{g4[8]}} | g4[7:0], {8{b4[8]}} | b4[7:0]};
++	dout <= sub4 ? subst
++	             : {{8{r4[8]}} | r4[7:0], {8{g4[8]}} | g4[7:0], {8{b4[8]}} | b4[7:0]};
+ 	{vs_out,hs_out,de_out} <= vid[11:9];
+ end
+ 
+@@ -126,7 +152,9 @@
+ 		3'b000: begin {m_enable, mask_rotate, mask_2x} <= cmd_in[3:1]; idx <= 0; end
+ 		3'b001: vmax <= cmd_in[3:0];
+ 		3'b010: hmax <= cmd_in[3:0];
+-		3'b011: begin mask_lut[idx] <= cmd_in[10:0]; idx <= idx + 1'd1; end
++		3'b011: begin mask_lut[idx] <= cmd_in[11:0]; idx <= idx + 1'd1; end
++		3'b100: subst[11:0]  <= cmd_in[11:0];
++		3'b101: subst[23:12] <= cmd_in[11:0];
+ 		endcase
+ 	end
+ 
