@@ -119,7 +119,7 @@ Verified:
   block: body 127.9, vertical gap lines **1.123×**, against a designed 1.125
   (nibble 2 → 1 + 2/16). That is the reflective panel behaviour, and the number is
   the design's.
-- **The corner**: the 2D table is verified, the residual is not explained - see below.
+- **The corner is correct in the fabric** - the residual is the capture instrument, see below.
 - **The look's core half applies too**: the Olive palette is live, its lightest
   shade landing at luma 135 exactly as authored.
 
@@ -143,45 +143,67 @@ with filters off produced **byte-identical means** — body 130.20, row 145.57, 
 Independently, the device's `Pixel Shadow.txt` is byte-identical to what
 `simulate_pipeline.py` emits, at all 64 phases, and every phase row sums to 128.
 
-**3. The excess is real, and its cause is still unknown.** Same mask file, same
-LUT words, only the feature width changed via `maskmode=2x`:
+**3. The excess is the capture instrument, and this time it is measured.** A Fable
+agent reverse-engineered the pipeline from the RTL and settled it on hardware. Two
+experiments decide it:
 
-| | 1× cells (1px lines) | 2× cells (2px lines) | designed |
-|---|---|---|---|
-| gap lines | 1.118 / 1.124 | 1.122 / 1.118 | 1.125 |
-| corner | **1.219** | **1.138** | 1.125 |
+**The excess follows geometry, not the LUT index.** A *shifted* grid — bright row 3
+and column 3, with cell {0,0} carrying the body word — put the crossing at interior
+index {3,3}, where nothing happens in the RTL: no counter reset, no border fudge,
+no table edge, `hcount` and `mask_idx` merely increment. It rendered **158.71**
+against the original corner's **158.77** at index {0,0}. The anomaly moved with the
+crossing. That refutes the registered-lookup-across-a-counter-reset hypothesis and
+every upload-corruption story with it — and static analysis agrees, because the
+index/LUT/mul pipeline is a uniform two-clock lag, which can only translate the
+whole mask sideways, never change a value.
 
-This was first written up as a capture artefact. That explanation does not survive
-its own tests and is withdrawn:
+**A uniform mask calibrates the wire.** An all-0x720 table multiplies every pixel
+by 1.125 and produces a flat field the capture cannot spatially alter: it reads
+**142.00 raw**, all 49 phase classes identical to 0.01. So in dongle units the
+truth is body 128.0, line level 142.0. Against that:
 
-- The stream is **uncompressed** — `rawvideo (UYVY / 0x59565955)`, luma per pixel.
-  Nothing is being compressed, so nothing can ring from compression.
-- There is **no blur and no ringing**. On a flat field with a 1px bright grid, body
-  luma is 127.2 immediately beside a bright line and 127.4 as far from one as the
-  cell allows. No undershoot, and no energy leaking out of the line into its
-  neighbour either. A low-pass would have shown one or the other.
-- **Dilution does not explain it.** At 2× cells all four pixels of the 2×2 corner
-  region read alike (143.6 / 143.1 / 143.9 / 143.6 against lines at 140.4), so it
-  is not one elevated pixel averaged down — it is a smaller uniform excess.
-- And the mask's corner word is **identical to its line words**. Read off the card:
-  `720,720,720,720` / `720,700,700,700` / …
+| feature (fabric truth) | reads | delta |
+|---|---|---|
+| flat body {128.0} | 128.0 | 0 — transparent on flat |
+| flat 1.125× field {142.0} | 142.0 | 0 |
+| isolated 1px bright dot {142} | 130.8 | **−11.2, annihilated** |
+| isolated 1px line {142} | 142.2–142.7 | ≈0, with ±1 undershoot / ±2 overshoot |
+| grid line pixel {142} | 144.4–147 | +2.4 … +5 |
+| grid crossing {142} | 152.3 | **+10.3 — the anomaly** |
+| 1px dark hole at a crossing {128} | 140.8 | **+12.8, filled to line level** |
+| 2×2 crossing at maskmode=2x {142} | 143.5 | +1.5, uniform |
 
-So: with the same 11-bit word, the corner pixel renders about 10 luma above the
-lines at 1× cells and about 3 at 2×, uniformly, reproducibly. The mechanism is not
-established.
+An isolated bright pixel is deleted; a dark pixel surrounded by bright ones is
+filled in. That is content-adaptive single-pixel suppression — a denoise/enhance
+engine in the capture chip — and it boosts thin lines in proportion to local
+pattern density, which is why a crossing gains most. Superposition fails
+quantitatively (row excess 14.7 + column excess 16.3 ≠ crossing excess 29.1), so it
+is nonlinear, not a linear kernel, and it collapses at 2px feature size.
 
-The leading untested hypothesis is timing inside `shadowmask.sv`. `lut` is a
-registered read of `mask_lut[mask_idx]` and `r_mul` is registered again from it, so
-the multiplier trails the pixel by two clocks — while `hcount` resets **once per
-cell** (`if(hcount == hmax2 || pde == pcnt) hcount <= 0;`). A registered lookup
-across a per-cell counter reset is exactly the shape that produces a one-pixel
-anomaly at every cell boundary, in both axes, which is where this one lives. Not
-verified; it needs either a testbench or a mask crafted so a stale index is
-distinguishable from a correct one.
+That the engine is in the dongle rather than the transmitter is **inferred**, not
+measured: everything between the mask and the HDMI pins is pointwise (the OSD
+passes `din` through when hidden, then one output register), and the vertical
+ringing and 2D dot deletion both need line buffers, which an ADV7513 does not have.
+A second capture device on the same output is the experiment that would close it.
 
-Magnitude, for perspective: the corner lands at 1.22 where 1.125 was asked for. One
-pixel per cell, and you have to go looking. It does not change which panel gets
-which gap.
+**So the fabric is right and the model is right.** The corner on the wire is
+byte-identical to the lines, as the design intends, and the +11.7 was never in the
+picture.
+
+### What this means for measuring with the dongle
+
+**It is only trustworthy for features two output pixels wide or more.** A
+single-pixel claim measured through it is worthless — and worse, plausible. The way
+to validate a single-pixel mask word is a **uniform field of that word**, which the
+adaptive engine cannot touch; that is how the 142.00 truth above was established,
+and it is the technique to reuse for any future mask.
+
+An earlier entry here said the dongle neither blurs nor rings. That was over-read
+from one measurement — horizontal body at ±1 from a line, which really is flat
+(−0.26). It was never checked at ±2 (**+1.3 overshoot**) or vertically (**−1.6 at
+±1**). It rings, faintly and anisotropically, and it deletes isolated pixels
+outright. It also smooths large single-pixel steps: a 177→135 sawtooth boundary
+read 165.8/148.5.
 
 ## How good the local simulator is
 
@@ -197,7 +219,7 @@ hardware luma:
 | residual RMS | **7.1** luma levels (range 49..159) |
 | mean absolute error | **5.0** levels |
 | bias on body / gap row / gap col | **+0.16 / +0.41 / +0.01** |
-| bias on corner | **−7.0** (unexplained - see the corner test) |
+| bias on corner | **−7.0** (the capture's adaptive engine, not the model - see below) |
 
 Read that as: **structure yes, photometry approximately, corners no.** The gap
 multiplier - the number every structural decision turns on - is reproduced to
