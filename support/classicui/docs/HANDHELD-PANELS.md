@@ -119,7 +119,7 @@ Verified:
   block: body 127.9, vertical gap lines **1.123×**, against a designed 1.125
   (nibble 2 → 1 + 2/16). That is the reflective panel behaviour, and the number is
   the design's.
-- **The corner is correct**, and separately verified - see the corner test below.
+- **The corner**: the 2D table is verified, the residual is not explained - see below.
 - **The look's core half applies too**: the Olive palette is live, its lightest
   shade landing at luma 135 exactly as authored.
 
@@ -143,24 +143,45 @@ with filters off produced **byte-identical means** — body 130.20, row 145.57, 
 Independently, the device's `Pixel Shadow.txt` is byte-identical to what
 `simulate_pipeline.py` emits, at all 64 phases, and every phase row sums to 128.
 
-**3. The excess is the capture, not the fabric.** Same mask file, same LUT words,
-only the feature width changed via `maskmode=2x`:
+**3. The excess is real, and its cause is still unknown.** Same mask file, same
+LUT words, only the feature width changed via `maskmode=2x`:
 
 | | 1× cells (1px lines) | 2× cells (2px lines) | designed |
 |---|---|---|---|
 | gap lines | 1.118 / 1.124 | 1.122 / 1.118 | 1.125 |
 | corner | **1.219** | **1.138** | 1.125 |
 
-The lines are unmoved and the corner excess collapses from +8.3% to +1.1%. A 1×1
-bright crossing has bright neighbours on two sides where a 1-pixel line has body
-on both sides perpendicular to it, so the dongle's spatial response treats them
-differently; thicken both and the difference nearly goes. Nothing in the FPGA
-changed between those two rows.
+This was first written up as a capture artefact. That explanation does not survive
+its own tests and is withdrawn:
 
-**So the corner is correct in the fabric, and the model was right about it all
-along.** The −7.0 corner bias measured against hardware is the capture's error,
-not the model's. Which inverts the usual assumption in a way worth remembering:
-**for one-pixel structure the model is more trustworthy than the dongle.**
+- The stream is **uncompressed** — `rawvideo (UYVY / 0x59565955)`, luma per pixel.
+  Nothing is being compressed, so nothing can ring from compression.
+- There is **no blur and no ringing**. On a flat field with a 1px bright grid, body
+  luma is 127.2 immediately beside a bright line and 127.4 as far from one as the
+  cell allows. No undershoot, and no energy leaking out of the line into its
+  neighbour either. A low-pass would have shown one or the other.
+- **Dilution does not explain it.** At 2× cells all four pixels of the 2×2 corner
+  region read alike (143.6 / 143.1 / 143.9 / 143.6 against lines at 140.4), so it
+  is not one elevated pixel averaged down — it is a smaller uniform excess.
+- And the mask's corner word is **identical to its line words**. Read off the card:
+  `720,720,720,720` / `720,700,700,700` / …
+
+So: with the same 11-bit word, the corner pixel renders about 10 luma above the
+lines at 1× cells and about 3 at 2×, uniformly, reproducibly. The mechanism is not
+established.
+
+The leading untested hypothesis is timing inside `shadowmask.sv`. `lut` is a
+registered read of `mask_lut[mask_idx]` and `r_mul` is registered again from it, so
+the multiplier trails the pixel by two clocks — while `hcount` resets **once per
+cell** (`if(hcount == hmax2 || pde == pcnt) hcount <= 0;`). A registered lookup
+across a per-cell counter reset is exactly the shape that produces a one-pixel
+anomaly at every cell boundary, in both axes, which is where this one lives. Not
+verified; it needs either a testbench or a mask crafted so a stale index is
+distinguishable from a correct one.
+
+Magnitude, for perspective: the corner lands at 1.22 where 1.125 was asked for. One
+pixel per cell, and you have to go looking. It does not change which panel gets
+which gap.
 
 ## How good the local simulator is
 
@@ -176,7 +197,7 @@ hardware luma:
 | residual RMS | **7.1** luma levels (range 49..159) |
 | mean absolute error | **5.0** levels |
 | bias on body / gap row / gap col | **+0.16 / +0.41 / +0.01** |
-| bias on corner | **−7.0** (the capture's error, not the model's - see the corner test) |
+| bias on corner | **−7.0** (unexplained - see the corner test) |
 
 Read that as: **structure yes, photometry approximately, corners no.** The gap
 multiplier - the number every structural decision turns on - is reproduced to
@@ -190,7 +211,7 @@ Fitted gain 0.755 against BT.709 studio range's expected 0.859 is part of that
 tone mismatch: the model's contrast is slightly wider than the transmitter's.
 
 Practical consequence: gap direction, period, alignment, shadow width, cell
-geometry and corner behaviour can all be decided locally and confirmed on the
+geometry can all be decided locally and confirmed on the
 device at the end. Exact brightness cannot - anything resting on a few luma levels
 needs a capture, and even then the capture is the weaker instrument for features
 one output pixel wide.
