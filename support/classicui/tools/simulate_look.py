@@ -260,26 +260,33 @@ def ascal_1d(rows, sw, dw, hw_taps, phase_bias):
 def load_mask(path):
     """w,h then h rows of hex words. Returns per-cell (rm,gm,bm) 1.4 multipliers.
 
+    The v1-or-v2 decision is per FILE, on the "v2" header line, exactly as
+    setShadowMask() makes it. It used to be per WORD, on `v <= 7`, and that is a
+    real divergence rather than a shortcut: a file carrying v2-style words but
+    missing its header renders on hardware as v1, where 0x720 becomes
+    ((0x720 & 7) << 8) | 0x2A - every channel at 0.625x - while the old reader
+    decoded it as the intended 1.125x. Silent, and a factor of 1.8 wrong.
+
     Only the FIRST table is read. Several distribution masks carry a second one
     under a "Resolution=" line for taller modes, and reading on past it produced
     rows of two different widths in one grid - which then indexed off the end of a
     row. setShadowMask() in video.cpp picks a table by output height; the preview
     and the tools want the one the file leads with.
     """
-    dims, cells = None, []
+    dims, cells, v2 = None, [], False
     for line in open(path):
         line = line.split('#')[0].split(';')[0].strip()
         if not line: continue
         if line.lower().startswith('resolution='):
             if cells: break                      # the next table is for another mode
             continue
-        if line.lower() == 'v2': continue
+        if line.lower() == 'v2': v2 = True; continue
         if dims is None and ',' in line:
             w,h = line.split(','); dims = (int(w),int(h)); continue
         row = []
         for tok in line.split(','):
             v = int(tok.strip(), 16)
-            if v <= 7:
+            if not v2:
                 # simple mask: one bit per channel, full on or black
                 # video.cpp ORs a constant 0x2A into the low byte for v1 cells, so a
                 # set bit is {1,2} = 1.125 and a clear bit is {0,A} = 0.625. NOT a
