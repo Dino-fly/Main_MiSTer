@@ -864,6 +864,21 @@ static bool has_shadow_mask = false;
 #define SM_VMAX(v) ( ( 0x1 << 13 ) | (v) )
 #define SM_HMAX(v) ( ( 0x2 << 13 ) | (v) )
 #define SM_LUT(v)  ( ( 0x3 << 13 ) | (v) )
+/*
+  The substrate colour, for mask cells that carry bit 11 (SM_CELL_SUBSTRATE).
+  Such a cell emits this colour instead of scaling the pixel under it - which is
+  the only way to draw a REFLECTIVE panel's inter-pixel gap, because that gap is
+  the lit substrate showing through and is therefore a fixed colour rather than
+  an attenuation of its neighbour. Everything else in shadowmask.sv multiplies,
+  and a multiply can attenuate but never replace.
+
+  Cores that predate the feature truncate bit 11 away and ignore opcodes 4 and 5,
+  so they render whatever multiplier the cell left in bits 10:0 - the old
+  approximation - rather than breaking. Nothing needs to detect support.
+*/
+#define SM_SUBLO(v) ( ( 0x4 << 13 ) | ( (v) & 0xFFF ) )
+#define SM_SUBHI(v) ( ( 0x5 << 13 ) | ( (v) & 0xFFF ) )
+#define SM_CELL_SUBSTRATE 0x800
 
 enum
 {
@@ -924,6 +939,8 @@ static void setShadowMask()
 		int w = -1, h = -1;
 		int y = 0;
 		int v2 = 0;
+		uint32_t substrate = 0xFFFFFF;
+		int have_substrate = 0;
 
 		reader.pos = start_pos;
 		while ((line = FileReadLine(&reader)))
@@ -938,6 +955,14 @@ static void setShadowMask()
 
 				if (!strncasecmp(line, "resolution=", 11))
 				{
+					continue;
+				}
+
+				// substrate=RRGGBB - the colour a bit-11 cell emits.
+				if (!strncasecmp(line, "substrate=", 10))
+				{
+					substrate = (uint32_t)strtoul(line + 10, 0, 16) & 0xFFFFFF;
+					have_substrate = 1;
 					continue;
 				}
 
@@ -956,7 +981,7 @@ static void setShadowMask()
 					break;
 				}
 
-				for (int x = 0; x < 16; x++) spi_w(SM_LUT(v2 ? (p[x] & 0x7FF) : (((p[x] & 7) << 8) | 0x2A)));
+				for (int x = 0; x < 16; x++) spi_w(SM_LUT(v2 ? (p[x] & 0xFFF) : (((p[x] & 7) << 8) | 0x2A)));
 				y += 1;
 
 				if (y == h)
@@ -969,6 +994,11 @@ static void setShadowMask()
 
 		if (y == h)
 		{
+			if (have_substrate)
+			{
+				spi_w(SM_SUBLO(substrate));
+				spi_w(SM_SUBHI(substrate >> 12));
+			}
 			spi_w(SM_HMAX(w - 1));
 			spi_w(SM_VMAX(h - 1));
 		}

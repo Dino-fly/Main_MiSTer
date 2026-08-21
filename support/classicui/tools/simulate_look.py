@@ -274,6 +274,7 @@ def load_mask(path):
     and the tools want the one the file leads with.
     """
     dims, cells, v2 = None, [], False
+    subst = None                                  # substrate=RRGGBB, if present
     for line in open(path):
         line = line.split('#')[0].split(';')[0].strip()
         if not line: continue
@@ -281,11 +282,22 @@ def load_mask(path):
             if cells: break                      # the next table is for another mode
             continue
         if line.lower() == 'v2': v2 = True; continue
+        if line.lower().startswith('substrate='):
+            subst = int(line.split('=',1)[1].strip(), 16) & 0xFFFFFF
+            continue
         if dims is None and ',' in line:
             w,h = line.split(','); dims = (int(w),int(h)); continue
         row = []
         for tok in line.split(','):
             v = int(tok.strip(), 16)
+            if v2 and (v & 0x800):
+                # Bit 11: this cell EMITS the substrate colour rather than scaling
+                # the pixel under it. The only way to draw a reflective panel's
+                # gap, which is the lit substrate and therefore a fixed colour.
+                # Marked with a sentinel so apply_mask can tell it from a
+                # multiplier triple.
+                row.append(('S', subst if subst is not None else 0xFFFFFF))
+                continue
             if not v2:
                 # simple mask: one bit per channel, full on or black
                 # video.cpp ORs a constant 0x2A into the low byte for v1 cells, so a
@@ -319,7 +331,12 @@ def apply_mask(rows, cells, twox):
     for y, row in enumerate(rows):
         crow = cells[(y//step) % mh]
         for x, (r,g,b) in enumerate(row):
-            rm,gm,bm = crow[(x//step) % mw]
+            cell = crow[(x//step) % mw]
+            if cell[0] == 'S':                    # substrate cell - replace, do not scale
+                c = cell[1]
+                row[x] = ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF)
+                continue
+            rm,gm,bm = cell
             row[x] = (mask_mul(r,rm), mask_mul(g,gm), mask_mul(b,bm))
     return rows
 
