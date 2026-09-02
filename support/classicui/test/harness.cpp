@@ -13530,6 +13530,40 @@ static void assert_snac_ownership()
 	check(!snacpad_test_present(0) && !snacpad_test_present(1),
 		"a core with no reader in its sys reports no pads");
 
+	/*
+	  Except on one of them. The Console Mode menu core has no framework reader either,
+	  but it does read the port - through hps_io 0x2E rather than sys_top's 0x45. It has
+	  to work there, because that is the core that can put the shelf on a television in
+	  colour: if the pad died on it, colour and a PlayStation controller would be
+	  alternatives instead of both, and somebody would have to pick one.
+	*/
+	harness_set_native_fb_available(1);
+	harness_set_cm_snac_pad(1, 0x0010);            // Up held
+	snacpad_init();
+	snac_tick();
+	check(snacpad_test_present(0), "the Console Mode core's own pad is read at 0x2E");
+	check(snacpad_reader() == SNAC_READER,
+		"and reported as a reader, not as the fault that would call a working pad broken");
+	check(!snacpad_test_present(1), "one port, which is all that reader has");
+
+	harness_set_cm_snac_pad(0, 0);
+	snac_tick();
+	check(!snacpad_test_present(0), "controller_valid going low disconnects it");
+
+	/*
+	  And nowhere else. Words 2 and 3 of 0x2E are undefined on every other core, so the
+	  reach for them is gated on the core being identified - reading another core's
+	  undefined bytes as a gamepad is how a pad nobody plugged in gets invented.
+	*/
+	harness_set_native_fb_available(0);
+	harness_set_cm_snac_pad(1, 0xFFFF);
+	snacpad_init();
+	snac_tick();
+	check(!snacpad_test_present(0), "on any other core those words are not read as a pad");
+	check(snacpad_reader() == SNAC_NO_READER, "and the missing reader is reported plainly");
+
+	harness_set_cm_snac_pad(0, 0);
+
 	/* ------------------------------------------- and they are reachable now --- */
 
 	/*

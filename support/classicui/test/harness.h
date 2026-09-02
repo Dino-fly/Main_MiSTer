@@ -119,6 +119,10 @@ int harness_present_count();
 int harness_fb_analog();
 // Pretend a menu core that scans the framebuffer out as core video is running (native_fb.h).
 void harness_set_native_fb(int on);
+// Whether the loaded core carries the reader at all - a different fact; see stubs.cpp.
+void harness_set_native_fb_available(int there);
+// The PSX pad that core reports on 0x2E: controller_valid, and the button word.
+void harness_set_cm_snac_pad(int valid, uint16_t btns);
 int harness_analog_claims();
 void harness_reset_analog_claims();
 int harness_neogeo_scanned();

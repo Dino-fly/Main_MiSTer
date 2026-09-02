@@ -476,8 +476,19 @@ char *neogeo_get_altname(char *path, char *name, char *altname)
   bit, and getting it backwards is a wrong answer on somebody's television.
 */
 static int native_fb_on = 0;
+static int native_fb_there = 0;
 void harness_set_native_fb(int on) { native_fb_on = on ? 1 : 0; }
+void harness_set_native_fb_available(int there) { native_fb_there = there ? 1 : 0; }
 int native_fb_active() { return native_fb_on; }
+
+/*
+  Deliberately a separate knob from the one above. "This core carries the reader" and
+  "the reader is driving the output" are different facts with different consumers -
+  vp_analog_facts() wants the second, cm_pad_poll() in snacpad.cpp wants the first, and
+  a core sitting there with the path switched off is a real state that one knob could
+  not express.
+*/
+int native_fb_available() { return native_fb_there; }
 
 /*
   Models video_menu_fb_analog(). The part the UI has to cope with is that taking
@@ -1568,17 +1579,39 @@ void harness_reset_snac()
 	snac_last_want = -1;
 }
 
+/*
+  And the other reader: the Console Mode menu core answers a PSX pad on command 0x2E,
+  in words 2 and 3 behind the menu mask. Modelled to the same depth and for the same
+  reason - what is being tested is that the firmware reaches for it only on that core
+  and decodes controller_valid out of the right bit, not the fabric's protocol.
+*/
+static int cm_pad_valid = 0;
+static uint16_t cm_pad_btns = 0;
+void harness_set_cm_snac_pad(int valid, uint16_t btns)
+{
+	cm_pad_valid = valid ? 1 : 0;
+	cm_pad_btns = btns;
+}
+
 #define SNAC_MAGIC_STUB 0x4A
 static int snac_word = -1;
+static int cm_word = -1;
 
 uint16_t spi_uio_cmd_cont(uint16_t cmd)
 {
+	snac_word = -1;
+	cm_word = -1;
+
 	if (cmd == UIO_SNAC_PAD)
 	{
 		snac_word = 0;
 		return snac_reader_present ? (uint16_t)(SNAC_MAGIC_STUB << 8) : 0;
 	}
-	snac_word = -1;
+	if (cmd == UIO_GET_OSDMASK)
+	{
+		cm_word = 0;
+		return 0;
+	}
 	return 0;
 }
 
@@ -1588,6 +1621,19 @@ uint16_t spi_uio_cmd_cont(uint16_t cmd)
 */
 uint16_t fpga_spi(uint16_t v)
 {
+	if (cm_word >= 0)
+	{
+		// byte_cnt 1 is the menu mask; 2 the buttons; 3 the debug word, whose bit 11 is
+		// ps1_snac_controller's controller_valid. See menu.sv in menu_ConsoleMode.
+		switch (cm_word++)
+		{
+		case 0: return osd_mask;
+		case 1: return cm_pad_btns;
+		case 2: return (uint16_t)(cm_pad_valid ? (1 << 11) : 0);
+		default: return 0;
+		}
+	}
+
 	if (snac_word < 0) return 0;
 
 	int w = snac_word++;
