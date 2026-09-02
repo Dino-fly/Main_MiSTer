@@ -26,6 +26,7 @@
 #include "user_io.h"
 #include "cfg.h"
 #include "snacpad.h"
+#include "native_fb.h"
 
 #define SNAC_MAGIC     0x4A
 #define SNAC_POLL_MS   2
@@ -506,6 +507,66 @@ void snacpad_init()
 	poll_timer = 0;
 }
 
+/*
+  The Console Mode menu core reads a PSX pad too, and reports it somewhere else.
+
+  It carries its own ps1_snac_controller rather than the framework's psx_snac_pad, and
+  publishes it through hps_io command 0x2E - the menu-mask read - in words 2 and 3.
+  Nothing in that core implements UIO_SNAC_PAD at all, so the probe below finds no reader
+  and the pad would simply be dead. Without this, the one core that can put the shelf on
+  a television in colour (see native_fb.h) would be the one core where a PlayStation pad
+  does not work, and a player would have to choose between the two.
+
+  The button word needs no translation: the same sixteen bits in the same order, active
+  high, because both readers decode the same protocol. What that core does not offer is
+  the analog sticks or a second port, and it reports controller_valid where the framework
+  reader reports the pad's ID - so the ID is given as 0x41. A digital pad is what this
+  delivers, and claiming a DualShock would be a lie about the axes.
+
+  Gated on the core being identified from its config string, never probed blind: words 2
+  and 3 of 0x2E are undefined on every other core, and reading somebody else's undefined
+  bytes as a gamepad is how a phantom pad gets invented.
+
+  One asymmetry worth knowing. The framework reader is *told* whether to drive the port;
+  this one has snac_enable tied high and polls regardless, so `want` here decides only
+  whether a uinput device exists, not whether the core touches the pins. Handing the port
+  to something else is therefore not in our gift on this core.
+*/
+static int cm_pad_poll(int want)
+{
+	if (!native_fb_available()) return 0;
+
+	spi_uio_cmd_cont(UIO_GET_OSDMASK);
+	spi_w(0);                     // byte_cnt 1: the menu mask, which is not ours
+	uint16_t btns = spi_w(0);     // byte_cnt 2: snac_buttons, active high
+	uint16_t dbg = spi_w(0);      // byte_cnt 3: snac_debug; bit 11 is controller_valid
+	DisableIO();
+
+	if (supported != SNAC_READER)
+	{
+		printf("snacpad: this core reads the SNAC port at 0x2E (Console Mode), using that\n");
+		supported = SNAC_READER;
+	}
+	enabled = want;
+
+	/*
+	  Centred, not zero. This reader has no sticks, and 0,0 is hard up and to the left to
+	  anything that reads the axes - which for a pad the whole input pipeline treats as
+	  ordinary would be a stuck stick rather than an absent one.
+	*/
+	static const uint8_t centred[4] = { 0x80, 0x80, 0x80, 0x80 };
+
+	const int present = want && ((dbg >> 11) & 1);
+#ifdef CHOME_HOST_TEST
+	test_present[0] = present;
+	test_present[1] = 0;
+#endif
+
+	pad_update(0, present, 0x41, btns, centred);
+	pad_update(1, 0, 0, 0, centred);      // one port only; releases it if it ever existed
+	return 1;
+}
+
 void snacpad_poll()
 {
 	/*
@@ -562,6 +623,11 @@ void snacpad_poll()
 	if ((status >> 8) != SNAC_MAGIC)
 	{
 		DisableIO();
+
+		// No framework reader - but see cm_pad_poll(): one core reads the port itself and
+		// says so elsewhere, and on that core this is not a fault to report.
+		if (cm_pad_poll(want)) return;
+
 		if (supported != SNAC_NO_READER)
 		{
 			if (want) printf("snacpad: no SNAC pad reader in this core (sys update needed)\n");
