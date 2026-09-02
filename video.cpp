@@ -20,6 +20,7 @@
 #include "mat4x4.h"
 #include "menu.h"
 #include "video.h"
+#include "native_fb.h"
 #include "input.h"
 #include "shmem.h"
 #include "smbus.h"
@@ -3440,9 +3441,44 @@ void video_mode_adjust(bool force)
 	static bool rep_force = false;
 	if (force) rep_force = true;
 
-	// mode is pinned while the framebuffer owns the analog output (fb terminal or
-	// an alternative front-end); core video changes are picked up after release
-	if (vga_fb_takeover) return;
+	/*
+	  The mode is pinned while the framebuffer owns the analog output (fb terminal or
+	  an alternative front-end); core video changes are picked up after release.
+
+	  The native path is an exception in one direction only. Its picture is core video
+	  leaving through yc_out, so set_yc_mode() has to keep running or the subcarrier is
+	  never programmed and the set shows black and white with everything else correct.
+	  Everything past this point stays skipped: three of its branches call
+	  video_set_mode(), which would throw away the TV mode tv_fb_mode() pinned at
+	  takeover and resize the front-end's canvas underneath it on the next poll.
+
+	  So only the measurement and set_yc_mode() run, and the force is held rather than
+	  spent: the reader's timing takes a frame or two to reach the fabric, so the forced
+	  run native_fb_enable() asks for can still measure the mode it replaced. Retry
+	  across a few polls (500ms each, from user_io_poll) until the fabric reports the
+	  change, then stop - a steady picture must not reprogram the subcarrier for ever.
+	*/
+	if (vga_fb_takeover)
+	{
+		static int yc_tries = 0;
+		if (native_fb_active())
+		{
+			VideoInfo vi;
+			const bool changed = get_video_info(rep_force, &vi);
+			if (changed || rep_force)
+			{
+				current_video_info = vi;
+				set_yc_mode();
+				if (changed || ++yc_tries >= 4)
+				{
+					rep_force = false;
+					yc_tries = 0;
+				}
+			}
+		}
+		else yc_tries = 0;
+		return;
+	}
 
 	VideoInfo video_info;
 
@@ -3688,13 +3724,25 @@ static void vga_fb_takeover_update()
 		vmode_custom_t v;
 		tv_fb_mode(&v);
 		video_set_mode(&v, 0);
-		set_vga_fb(1);
+		/*
+		  On the Console Mode menu core the front-end's frames go out through the
+		  core's own DDR reader (see native_fb.h), which puts them on the core video
+		  path and through the colour encoder. vga_fb must stay low for that: raising
+		  it muxes the scaler in over the top and the picture is back to greyscale.
+		  The fb terminal (buffer 0) is not sized for that reader, so it keeps the
+		  scaler takeover.
+		*/
+		if (want_ui && native_fb_available()) native_fb_enable(1);
+		// Not an else: native_fb_enable() can decline - shmem_map() failing is the way
+		// it does - and a grey picture is a great deal better than no picture.
+		if (!native_fb_active()) set_vga_fb(1);
 	}
 	else if (!want && vga_fb_takeover)
 	{
 		vga_fb_takeover = 0;
 		takeover_sized_for = -1;
-		set_vga_fb(0);
+		if (native_fb_active()) native_fb_enable(0);
+		else set_vga_fb(0);
 		video_set_mode(&v_takeover_saved, 0);
 	}
 	else if (want && vga_fb_takeover && takeover_sized_for != !!fb_num)
@@ -3702,6 +3750,31 @@ static void vga_fb_takeover_update()
 		// The takeover changed hands without a mode change, and the two owners want
 		// different framebuffer widths (see video_fb_config).
 		takeover_sized_for = !!fb_num;
+
+		/*
+		  They want different wires, too. Only the front-end's buffers are laid out for
+		  the reader and only the front-end hands it a frame, through
+		  video_menu_fb_present() - so the Linux console coming up on buffer 0 while the
+		  native path is held would leave the reader scanning the last menu frame for
+		  ever, with the console drawing into a buffer that nothing reads. A player
+		  running a script would watch a frozen menu.
+
+		  So the port goes back to the scaler for as long as the terminal owns it, and
+		  is taken again on the way out. One frame of the wrong picture either way, at a
+		  moment where the screen is changing hands anyway.
+		*/
+		const int want_native = want_ui && native_fb_available();
+		if (want_native && !native_fb_active())
+		{
+			native_fb_enable(1);
+			if (native_fb_active()) set_vga_fb(0);
+		}
+		else if (!want_native && native_fb_active())
+		{
+			native_fb_enable(0);
+			set_vga_fb(1);
+		}
+
 		video_fb_config();
 	}
 }
@@ -3930,6 +4003,24 @@ int video_menu_fb_present(int n)
 
 	fb_enabled = 1;
 	fb_num = n;
+
+	if (native_fb_active())
+	{
+		native_fb_present(video_menu_fb(n), fb_width, fb_height, n);
+	}
+	else if (vga_fb_takeover && n && native_fb_available())
+	{
+		// Takeover ran before the core's config string was read, so detection
+		// missed there. Catch up now: switch to the native reader and drop the
+		// scaler off the analog mux (set_vga_fb(1) was the fallback at takeover).
+		printf("native_fb: late detect, switching takeover to native\n");
+		native_fb_enable(1);
+		if (native_fb_active())
+		{
+			set_vga_fb(0);
+			native_fb_present(video_menu_fb(n), fb_width, fb_height, n);
+		}
+	}
 	return 1;
 }
 

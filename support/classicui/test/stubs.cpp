@@ -469,6 +469,17 @@ char *neogeo_get_altname(char *path, char *name, char *altname)
 }
 
 /*
+  The native analog path (native_fb.h). There is no fabric here, so the whole module is
+  one bit: whether a menu core that scans a framebuffer out as core video is running and
+  has been switched on. It exists because vp_analog_facts() asks - the difference between
+  telling a player their picture is black and white and saying nothing is exactly this
+  bit, and getting it backwards is a wrong answer on somebody's television.
+*/
+static int native_fb_on = 0;
+void harness_set_native_fb(int on) { native_fb_on = on ? 1 : 0; }
+int native_fb_active() { return native_fb_on; }
+
+/*
   Models video_menu_fb_analog(). The part the UI has to cope with is that taking
   the scaler resizes the framebuffer to the TV mode, so the canvas shrinks under it
   mid-session; where the scaler output already reaches the screen it is a no-op.

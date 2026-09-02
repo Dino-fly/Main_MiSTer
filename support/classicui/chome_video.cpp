@@ -12,6 +12,7 @@
 #include "chome_core.h"
 #include "chome_ini.h"
 #include "../../cfg.h"
+#include "../../native_fb.h"
 #include "../../file_io.h"
 #include "../../user_io.h"
 #include "../../video.h"
@@ -2647,9 +2648,17 @@ void vp_output_poll()
   vga_mode=subcarrier is dead there too. It is worse than a missing burst: yc_out
   packs chroma into R and luma into G (`dout = {C, Y, 8'd0}`), so on the scaler path
   the set's chroma input is fed a plain red channel and its luma input a plain green
-  one. Black and white at best. Nothing on the HPS side can change it - the wire is
-  not there - and set_yc_mode() is unreachable during the takeover anyway, because
-  video_mode_adjust() returns early while it is held.
+  one. Black and white at best.
+
+  Removing that `& ~vgas_en` gate does not help, and this is worth writing down because
+  it looks so much like the fix: the frame is still travelling vgas_o and never reaches
+  the encoder to have a burst added to it. There is nothing to ungate. A menu.rbf built
+  without the gate was tested on a subcarrier board and changed nothing at all.
+
+  What does work is moving the frame onto vga_o, which means a core has to scan it out -
+  see native_fb.h for the reader that does, and for the second half of it, which is that
+  set_yc_mode() then has to be reachable during the takeover. Where that reader is absent
+  the paragraph above stands unchanged, and this is the case the report below describes.
 
   This is why the report says which of the four is happening rather than offering to
   change it. See README.md, "Analog video", for the whole chain.
@@ -2693,7 +2702,16 @@ int vp_analog_facts(int hdmi)
 	*/
 	if (takeover && !cfg.menu_pal) f |= VP_AN_60HZ;
 
-	if (enc && on_analog) f |= VP_AN_MONO;
+	/*
+	  Not on the native path. There the picture is core video coming out of the reader in
+	  the menu core, so it goes through yc_out like a game does and the colour is real -
+	  saying "black and white" over a colour picture is worse than saying nothing.
+
+	  Only the takeover qualifies. Under vga_scaler or direct_video the analog pins are
+	  wired to the scaler for the whole session, so vgas_en never drops and the reader's
+	  output cannot reach them however well it scans.
+	*/
+	if (enc && on_analog && !(takeover && native_fb_active())) f |= VP_AN_MONO;
 
 	return f;
 }
