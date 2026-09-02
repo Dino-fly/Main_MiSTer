@@ -117,6 +117,8 @@ void harness_set_muted(int v);
 
 int harness_present_count();
 int harness_fb_analog();
+// Pretend a menu core that scans the framebuffer out as core video is running (native_fb.h).
+void harness_set_native_fb(int on);
 int harness_analog_claims();
 void harness_reset_analog_claims();
 int harness_neogeo_scanned();

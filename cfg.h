@@ -197,6 +197,25 @@ typedef struct {
 	uint8_t classicui_ss_replace_pack;
 	// OFF by default: see support/classicui/chome_disc.h.
 	uint8_t classicui_disc;
+
+	/*
+	  The native analog path - see native_fb.h. Only these three, and only because a
+	  television cannot be asked where its picture is.
+
+	  Centering is not a preference, it is a property of the set: the reader scans a
+	  fixed active window, and where that lands on the tube varies by television, so a
+	  picture sitting off to one side is not something the front-end can measure and
+	  correct for. Both are signed sixths of nothing in particular - the units are the
+	  reader's, six bits each, 0 meaning the core's own default.
+
+	  The mode override exists because the reader's raster is not the scaler's: it has
+	  eight of them, and only the two 15 kHz progressive ones are picked automatically
+	  (by menu_pal, as everything else here follows). Anyone on a PVM or a 31 kHz set
+	  can name one; 0 leaves it alone.
+	*/
+	int8_t  classicui_native_hoff;
+	int8_t  classicui_native_voff;
+	uint8_t classicui_native_mode;
 	char classicui_artdir[256];
 	char classicui_arturl[512];
 	char classicui_ss_user[64];

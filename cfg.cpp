@@ -172,6 +172,9 @@ static const ini_var_t ini_vars[] =
 	{ "CLASSICUI_SS_USER", (void*)(&(cfg.classicui_ss_user)), STRING, 0, sizeof(cfg.classicui_ss_user) - 1 },
 	{ "CLASSICUI_SS_PASS", (void*)(&(cfg.classicui_ss_pass)), STRING, 0, sizeof(cfg.classicui_ss_pass) - 1 },
 	{ "CLASSICUI_SS_REPLACE_PACK", (void*)(&(cfg.classicui_ss_replace_pack)), UINT8, 0, 1 },
+	{ "CLASSICUI_NATIVE_HOFF", (void*)(&(cfg.classicui_native_hoff)), INT8, -32, 31 },
+	{ "CLASSICUI_NATIVE_VOFF", (void*)(&(cfg.classicui_native_voff)), INT8, -32, 31 },
+	{ "CLASSICUI_NATIVE_MODE", (void*)(&(cfg.classicui_native_mode)), UINT8, 0, 7 },
 };
 
 static const int nvars = (int)(sizeof(ini_vars) / sizeof(ini_var_t));

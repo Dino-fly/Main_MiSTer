@@ -20118,6 +20118,40 @@ static void assert_analog_report()
 	cfg.vga_mode_int = 4;
 	check(vp_analog_facts(0) & VP_AN_MONO, "so does an external encoder");
 
+	/*
+	  Unless a menu core is scanning the framebuffer out as core video, in which case the
+	  picture goes through yc_out like a game's does and the colour is real. Reporting
+	  "black and white" over a colour picture is a worse failure than reporting nothing,
+	  which is why this is checked on all three encoded modes rather than the one that
+	  was tested on hardware.
+	*/
+	harness_set_native_fb(1);
+	for (int vm = 2; vm <= 4; vm++)
+	{
+		cfg.vga_mode_int = (char)vm;
+		check(!(vp_analog_facts(0) & VP_AN_MONO),
+			"the native path carries colour, so no mono claim is made");
+	}
+	check(vp_analog_facts(0) == VP_AN_60HZ,
+		"and the 60 Hz still is - the reader picks its raster off menu_pal too");
+
+	/*
+	  But only for the takeover. Under vga_scaler or direct_video the analog pins are
+	  wired to the scaler for the whole session, so vgas_en never drops and the reader's
+	  output cannot reach them however well it scans - the mono claim stands, and a stray
+	  native_fb_active() must not suppress it.
+	*/
+	cfg.vga_scaler = 1;
+	check(vp_analog_facts(0) & VP_AN_MONO,
+		"vga_scaler pins the port to the scaler, so the reader cannot help");
+	cfg.vga_scaler = 0;
+	cfg.direct_video = 1;
+	check(vp_analog_facts(0) & VP_AN_MONO, "and direct_video the same");
+	cfg.direct_video = 0;
+	harness_set_native_fb(0);
+	cfg.vga_mode_int = 4;
+	check(vp_analog_facts(0) & VP_AN_MONO, "with the reader off it is grey again");
+
 	// Component carries no subcarrier, so there is no colour to lose - only the 60 Hz
 	// that the first report of this class was about.
 	cfg.vga_mode_int = 1;
