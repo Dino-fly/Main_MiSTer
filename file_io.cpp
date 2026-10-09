@@ -770,30 +770,44 @@ int FileSave(const char *name, void *pBuffer, int size)
 {
 	make_fullpath(name);
 
-	int fd = open(full_path, O_WRONLY | O_CREAT | O_TRUNC | O_SYNC, S_IRWXU | S_IRWXG | S_IRWXO);
+	// write a temp file and rename it over the target, so a power cut never leaves a truncated file
+	char tmp_path[sizeof(full_path) + 4];
+	snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", full_path);
+
+	int fd = open(tmp_path, O_WRONLY | O_CREAT | O_TRUNC | O_SYNC, S_IRWXU | S_IRWXG | S_IRWXO);
 	if (fd < 0)
 	{
-		printf("FileSave error: cannot open %s (%s).\n", full_path, strerror(errno));
+		printf("FileSave error: cannot open %s (%s).\n", tmp_path, strerror(errno));
 		return 0;
 	}
 
 	int ret = write(fd, pBuffer, size);
 	if (ret < 0)
 	{
-		printf("FileSave error: write to %s failed (%s).\n", full_path, strerror(errno));
+		printf("FileSave error: write to %s failed (%s).\n", tmp_path, strerror(errno));
 		close(fd);
+		unlink(tmp_path);
 		return 0;
 	}
 	if (ret != size)
 	{
-		printf("FileSave error: short write to %s, wrote %d of %d bytes.\n", full_path, ret, size);
+		printf("FileSave error: short write to %s, wrote %d of %d bytes.\n", tmp_path, ret, size);
 		close(fd);
+		unlink(tmp_path);
 		return 0;
 	}
 
 	if (close(fd))
 	{
-		printf("FileSave error: close %s failed (%s).\n", full_path, strerror(errno));
+		printf("FileSave error: close %s failed (%s).\n", tmp_path, strerror(errno));
+		unlink(tmp_path);
+		return 0;
+	}
+
+	if (rename(tmp_path, full_path))
+	{
+		printf("FileSave error: rename to %s failed (%s).\n", full_path, strerror(errno));
+		unlink(tmp_path);
 		return 0;
 	}
 
@@ -928,10 +942,10 @@ int FileCreatePath(const char *dir)
 void FileGenerateScreenshotName(const char *name, char *out_name, const char* extension, int buflen)
 {
 	// If the name ends with target extension then don't modify it
-	       
+
 	size_t name_len = strlen(name);
 	size_t ext_len = strlen(extension);
-	
+
 	if (name_len >= ext_len && !strcasecmp(name + name_len - ext_len, extension))	{
 		const char *p = strrchr(name, '/');
 		make_fullpath(SCREENSHOT_DIR);
@@ -1045,6 +1059,16 @@ uint32_t getFileType(const char *name)
 	if (stat64(full_path, &st)) return 0;
 
 	return st.st_mode;
+}
+
+uint64_t getFileSize(const char *name)
+{
+	make_fullpath(name);
+
+	struct stat64 st;
+	if (stat64(full_path, &st)) return 0;
+
+	return st.st_size;
 }
 
 static int findPrefixDir(const char *prefix, bool no_prefix_check, char *dir, size_t dir_len)
@@ -1949,7 +1973,7 @@ int ScanDirectory(char* path, int mode, const char *extension, int options, cons
 			//
 			int found = -1;
 			char curdType = DirItem[iSelectedEntry].de.d_type;
-			char curChar = DirItem[iSelectedEntry].altname[0]; 
+			char curChar = DirItem[iSelectedEntry].altname[0];
 			if ((curChar == '_') && (curdType == DT_DIR) && (options & SCANO_CORES))
 				curChar = DirItem[iSelectedEntry].altname[1];
 			curChar = toupper(curChar);
@@ -1975,13 +1999,13 @@ int ScanDirectory(char* path, int mode, const char *extension, int options, cons
 		{
 			//Previous seek seeks to the FIRST entry that starts with the previous letter
 			//Search backward until the first char changes, and then continue looking backward
-			//until it changes again. 
+			//until it changes again.
 
 
 			int found = -1;
 			char curdType = DirItem[iSelectedEntry].de.d_type;
 			bool sawChange = false;
-			char curChar = DirItem[iSelectedEntry].altname[0]; 
+			char curChar = DirItem[iSelectedEntry].altname[0];
 			if ((curChar == '_') && (curdType == DT_DIR) && (options & SCANO_CORES))
 				curChar = DirItem[iSelectedEntry].altname[1];
 			curChar = toupper(curChar);
@@ -2152,6 +2176,7 @@ bool FileOpenTextReader( fileTextReader *reader, const char *filename )
 				reader->pos = reader->buffer;
 				return true;
 			}
+			free(buf);
 		}
 	}
 	return false;

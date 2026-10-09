@@ -71,12 +71,16 @@ static const ini_var_t ini_vars[] =
 	{ "BOOTCORE_TIMEOUT", (void*)(&(cfg.bootcore_timeout)), INT16, 2, 30 },
 	{ "FONT", (void*)(&(cfg.font)), STRING, 0, sizeof(cfg.font) - 1 },
 	{ "FB_SIZE", (void*)(&(cfg.fb_size)), UINT8, 0, 4 },
-	{ "FB_TERMINAL", (void*)(&(cfg.fb_terminal)), UINT8, 0, 1 },
+	// Upstream widened this to 2 (console sized for VGA without the scaler, #1337),
+	// which overlaps our own FB_TERMINAL_VGA. Both kept for now; they are not the
+	// same switch and collapsing them is a decision, not a merge.
+	{ "FB_TERMINAL", (void*)(&(cfg.fb_terminal)), UINT8, 0, 2 },
 	{ "FB_TERMINAL_VGA", (void*)(&(cfg.fb_terminal_vga)), UINT8, 0, 1 },
 	{ "OSD_TIMEOUT", (void*)(&(cfg.osd_timeout)), INT16, 0, 3600 },
 	{ "DIRECT_VIDEO", (void*)(&(cfg.direct_video)), UINT8, 0, 2 },
-	{ "OSD_ROTATE", (void*)(&(cfg.osd_rotate)), UINT8, 0, 2 },
+	{ "OSD_ROTATE", (void*)(&(cfg.osd_rotate)), UINT8, 0, 3 },
 	{ "DEADZONE", (void*)(&(cfg.controller_deadzone)), STRINGARR, sizeof(cfg.controller_deadzone) / sizeof(*cfg.controller_deadzone), sizeof(*cfg.controller_deadzone) },
+	{ "DPAD_THRESHOLD", (void*)(&(cfg.dpad_threshold)), UINT8, 5, 95 },
 	{ "GAMEPAD_DEFAULTS", (void*)(&(cfg.gamepad_defaults)), UINT8, 0, 1 },
 	{ "RECENTS", (void*)(&(cfg.recents)), UINT8, 0, 1 },
 	{ "CONTROLLER_INFO", (void*)(&(cfg.controller_info)), UINT8, 0, 10 },
@@ -175,6 +179,7 @@ static const ini_var_t ini_vars[] =
 	{ "CLASSICUI_NATIVE_HOFF", (void*)(&(cfg.classicui_native_hoff)), INT8, -32, 31 },
 	{ "CLASSICUI_NATIVE_VOFF", (void*)(&(cfg.classicui_native_voff)), INT8, -32, 31 },
 	{ "CLASSICUI_NATIVE_MODE", (void*)(&(cfg.classicui_native_mode)), UINT8, 0, 7 },
+	{ "SANITY_CHECK", (void *)(&(cfg.sanity_check)), UINT8, 0, 1 },
 };
 
 static const int nvars = (int)(sizeof(ini_vars) / sizeof(ini_var_t));
@@ -735,6 +740,7 @@ void cfg_parse()
 	  range of drives and discs.
 	*/
 	cfg.classicui_disc = 0;
+	cfg.dpad_threshold = 50;
 	cfg.wheel_force = 50;
 	cfg.dvi_mode = 2;
 	cfg.lookahead = 1;
