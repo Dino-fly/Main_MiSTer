@@ -20,8 +20,6 @@
 #include "hardware.h"
 #include "cd.h"
 #include "ide.h"
-#include "support/minimig/akiko_cd32.h"
-#include "support/minimig/cdtv_cd.h"
 
 #if 0
 #define dbg_printf     printf
@@ -45,9 +43,9 @@
 #define CD_FPS 75
 #define MSF_TO_FRAMES(M, S, F) ((M)*60*CD_FPS+(S)*CD_FPS+(F))
 
-#define CD_ERR_NO_DISK 2 
-#define CD_ERR_ILLEGAL_REQUEST 5 
-#define CD_ERR_UNIT_ATTENTION 6 
+#define CD_ERR_NO_DISK 2
+#define CD_ERR_ILLEGAL_REQUEST 5
+#define CD_ERR_UNIT_ATTENTION 6
 
 #define CD_ASC_CODE_COMMAND_SEQUENCE_ERR 0x2C
 #define CD_ASC_CODE_ILLEGAL_OPCODE 0x20
@@ -1201,6 +1199,16 @@ int cdrom_read_raw_sector(drive_t *drive, uint32_t lba, uint8_t *buf)
 	return -1;
 }
 
+bool cdrom_read_track_raw(track_t *track, uint32_t lba, uint8_t *buf, int buflen)
+{
+	if (!track || !buf) return false;
+	if (!track->f.opened()) return false;
+
+	uint32_t pos = track->skip + (lba - track->start) * track->sectorSize;
+	if (FileSeek(&track->f, pos, SEEK_SET) < 0) return false;
+	return FileReadAdv(&track->f, buf, buflen, -1) == buflen;
+}
+
 static int disc_info(drive_t *drv, uint16_t maxlen)
 {
 	if (!maxlen) return 0;
@@ -1216,10 +1224,10 @@ static int disc_info(drive_t *drv, uint16_t maxlen)
 	ide_buf[7] = 0x20;  		/* Disc defined for unrestricted use */
 	ide_buf[8] = 0x00;  		/* CD-Rom Disk */
 
-	
+
 	memset(ide_buf+16, 0xFF, 4);	/* Lead-in Start Time for Last Session, all 0xFF if disc is complete*/
 	memset(ide_buf+20, 0xFF, 4);	/* Last Possible Start Time for Start Time of Lead-out, all 0xFF if disc is complete*/
-	
+
 	dbg_hexdump(ide_buf, maxlen, 0);
 	return maxlen;
 }
@@ -1270,8 +1278,8 @@ static void get_conf(ide_config *ide, uint8_t* cmdbuf, uint16_t maxlen) {
 		if (maxlen > 16) {
 			maxlen = 16;
 		}
-		
-		memset(ide_buf, 0, 16);		
+
+		memset(ide_buf, 0, 16);
 		ide_buf[3] = 0x0F;			// Length LSB (Word 0-3)
 									// Word 4 Reserved
 									// Word 5 Reserved
@@ -1286,7 +1294,7 @@ static void get_conf(ide_config *ide, uint8_t* cmdbuf, uint16_t maxlen) {
 		dbg_hexdump(ide_buf, maxlen);
 		pkt_send(ide, ide_buf, maxlen);
 	}
-	else 
+	else
 	{
 		printf("(!) Error in packet command %02X\n", cmdbuf[0]);
 		hexdump(cmdbuf, 12, 0);
@@ -1342,7 +1350,7 @@ static int get_sense(drive_t *drv)
 static bool pause_resume(drive_t *drv, uint8_t *cmdbuf)
 {
 	bool resume = !!(cmdbuf[8] & 1);
-	if (drv->playing) 
+	if (drv->playing)
 	{
 		drv->paused = !resume;
 		return true;
@@ -1445,7 +1453,7 @@ void cdrom_handle_pkt(ide_config *ide)
 	int err = 0;
 
 	//See MMC-5 section 4.1.6.1
-	//If the no disk/load state isn't "done", most commands need to return CHECK CONDITION+sense data. 
+	//If the no disk/load state isn't "done", most commands need to return CHECK CONDITION+sense data.
 	//The only commands that ignore this are the ones listed below.
 	//GET CONFIG ,GET EVENT STATUS NOTIFICATION, INQUIRY, REQUEST SENSE
 	//0x46, 0x4A, 0x12, 0x3h
@@ -1535,13 +1543,13 @@ void cdrom_handle_pkt(ide_config *ide)
 
 	case 0x43: // read TOC
 		dbg_printf("** Read TOC\n");
-		if (!drv->load_state) 
+		if (!drv->load_state)
 		{
 			pkt_send(ide, ide_buf, read_toc(drv, cmdbuf));
-		} 
+		}
 		else cdrom_nodisk(ide);
 		break;
-	
+
 	case 0x4E: // stop play/scan
 		dbg_printf("** Stop Play/Scan\n");
 		drv->playing = 0;
@@ -1553,30 +1561,30 @@ void cdrom_handle_pkt(ide_config *ide)
 		dbg_printf("** Inquiry\n");
 		pkt_send(ide, ide_buf, cd_inquiry(cmdbuf[4]));
 		break;
-	
+
 	case 0x35: // synchronize cache
 		dbg_printf("** synchronize cache\n");
 		dbg_hexdump(cmdbuf, 10, 0);
 		cdrom_reply(ide,0);
 		break;
-	
+
 	case 0x46: // get configuration
 		dbg_printf("** get configuration\n");
 		get_conf(ide, cmdbuf, cmdbuf[7] << 8 | cmdbuf[8]);
 		break;
-	
+
 	case 0x51: // read disc information
 		dbg_printf("** read disc information\n");
 		dbg_hexdump(cmdbuf, 12, 0);
-		if ((cmdbuf[1] & 7) == 0) 
+		if ((cmdbuf[1] & 7) == 0)
 		{
 			pkt_send(ide, ide_buf, disc_info(drv, cmdbuf[7] << 8 | cmdbuf[8]));
-		} 
+		}
 		else err = 1;
 		break;
-	
+
 	case 0x52: // read track information
-		dbg_printf("** read track information\n");	
+		dbg_printf("** read track information\n");
 		dbg_hexdump(cmdbuf, 12, 0);
 		if (cmdbuf[1]==1)
 		{
@@ -1928,15 +1936,12 @@ void ide_cdda_send_sector()
 			track_t *read_track = track;
 			if (is_index0 && track->number > 1)
 			{
-				//track number is 1-based, track array is zero. 
+				//track number is 1-based, track array is zero.
 				read_track = &drv->track[track->number-2];
 
 			}
-			uint32_t pos = read_track->skip + (drv->play_start_lba - read_track->start) * read_track->sectorSize;
-			if (FileSeek(&read_track->f, pos, SEEK_SET))
+			if (!cdrom_read_track_raw(read_track, drv->play_start_lba, cdda_buf, sizeof(cdda_buf)))
 			{
-				FileReadAdv(&read_track->f, cdda_buf, sizeof(cdda_buf), -1);
-			} else {
 				memset(cdda_buf, 0, sizeof(cdda_buf));
 			}
 		}
