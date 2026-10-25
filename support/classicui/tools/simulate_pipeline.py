@@ -122,7 +122,7 @@ def apply_gamma(rows, lut):
     return [[(lut[r][0], lut[g][1], lut[b][2]) for (r, g, b) in row] for row in rows]
 
 
-def write_grid_mask(path, scale, lift, substrate=None):
+def write_grid_mask(path, scale, lift, substrate=None, gap_frac=0.15, blend=None):
     """A grid drawn as a mask instead of as filter taps.
 
     The filter cannot do this well for two reasons met on hardware: it runs on
@@ -156,14 +156,22 @@ def write_grid_mask(path, scale, lift, substrate=None):
         # keep the multiplicative gap, so a core that predates the feature
         # truncates the flag and renders the old approximation.
         gap |= 0x800
+    # The gap is a FRACTION of the cell, not a fixed one pixel. A fixed pixel
+    # changes its proportion with magnification - a third of a cell at 3x, a
+    # seventh at 7x - so the grid grew heavier the lower the scale, which is
+    # backwards: on a real panel the gap keeps its share of the pixel pitch. Line
+    # thickness and pixel size have to scale together.
+    g = max(1, int(gap_frac * scale + 0.5))
     rows = []
     for y in range(scale):
-        row = [gap if (x == 0 or y == 0) else body for x in range(scale)]
+        row = [gap if (x < g or y < g) else body for x in range(scale)]
         rows.append(','.join('%03X' % v for v in row))
     with open(path, 'w') as f:
         f.write("v2\n")
         if substrate is not None:
             f.write("substrate=%06X\n" % substrate)
+            if blend is not None:
+                f.write("blend=%d\n" % blend)
         f.write("%d,%d\n" % (scale, scale))
         f.write('\n'.join(rows) + '\n')
     return path
@@ -246,6 +254,56 @@ def letterbox(rows, sw, sh, screen):
     return out
 
 
+# The looks Dinofly tuned in tools/shadow_bench.html, kept here so a render is
+# reproducible by name. gain/offset/spread/opacity describe the shadow we want, and
+# only the derived mix and gap reach the fabric today - see the lcd_model block in
+# chome_video.cpp for which half of each model is live and why.
+LOOKS = {
+    #          palette          gap   mix   span_px  gain  off spread opacity
+    'dmg':    dict(palette='olive',  gap=0.10, mix=0.59, span_px=5,
+                   gain=1.85, offset=2, spread=3, opacity=0.19),
+    'pocket': dict(palette='pocket', gap=0.08, mix=0.31, span_px=5,
+                   gain=1.25, offset=1, spread=4, opacity=0.31),
+}
+SUBSTRATE = { 'olive': 0x8B9814, 'pocket': 0xE0DBCD }
+
+# The ramps, copied from the gbp_spec table in chome_video.cpp. A .gbp is written
+# rather than named because the firmware generates those files at runtime onto the
+# card, so there is nothing on a development machine to point --palette at.
+RAMPS = {
+    'olive':  [(0x8B, 0x98, 0x14), (0x60, 0x78, 0x14), (0x3C, 0x58, 0x18), (0x1E, 0x3E, 0x1A)],
+    'pocket': [(0xE0, 0xDB, 0xCD), (0xA8, 0x9F, 0x94), (0x70, 0x6B, 0x66), (0x2B, 0x2B, 0x26)],
+}
+
+
+def write_gbp(path, name):
+    """The 16-byte file the core's Custom Palette slot reads: four RGB triples,
+    lightest first, then the tag write_gbp() in chome_video.cpp stamps."""
+    with open(path, 'wb') as f:
+        for c in RAMPS[name]:
+            f.write(bytes(c))
+        f.write(b'CH\0\0')
+    return path
+
+
+def apply_look(flags, name, scale):
+    """Expand --look NAME into the grid-mask and shadow flags it implies."""
+    if name not in LOOKS:
+        raise SystemExit('unknown look %r; have %s' % (name, ', '.join(sorted(LOOKS))))
+    L = LOOKS[name]
+    sub = SUBSTRATE[L['palette']]
+    flags.setdefault('palette', write_gbp('%s.gbp' % L['palette'], L['palette']))
+    flags.setdefault('grid-mask', '%d:1.15:%06X:%.2f:3' % (scale, sub, L['gap']))
+    # write_shadow_filter's width is in OUTPUT PIXELS here, unlike the firmware's,
+    # whose width is a share of a cell that it multiplies by the scale. Both end at
+    # the same span_px; passing the firmware's fraction straight through gives a
+    # band under one pixel wide and no measurable shadow at all.
+    # dim stays 0: the firmware calls filter_line() with gain 1.0 and has no
+    # uniform-dimming term to match.
+    flags.setdefault('shadow', '%d:%.2f:0:%d' % (scale, L['mix'], L['span_px']))
+    return L
+
+
 def main():
     args, flags, pos = sys.argv[1:], {}, []
     i = 0
@@ -259,6 +317,8 @@ def main():
         raise SystemExit(__doc__)
     inp, outp = pos[0], pos[1]
     scale = int(flags.get('scale', '3'))
+    if 'look' in flags:
+        apply_look(flags, flags['look'], scale)
 
     w, h, px = read_png(inp)
     rows = [[(px[(y * w + x) * 3], px[(y * w + x) * 3 + 1], px[(y * w + x) * 3 + 2])
@@ -276,8 +336,10 @@ def main():
     if 'grid-mask' in flags:
         parts = flags['grid-mask'].split(':')
         n, lift = int(parts[0]), float(parts[1])
-        sub = int(parts[2], 16) if len(parts) > 2 else None
-        flags['mask'] = write_grid_mask(flags.get('mask', 'grid_mask.txt'), n, lift, sub)
+        sub = int(parts[2], 16) if len(parts) > 2 and parts[2] else None
+        gf = float(parts[3]) if len(parts) > 3 and parts[3] else 0.15
+        bl = int(parts[4]) if len(parts) > 4 else None
+        flags['mask'] = write_grid_mask(flags.get('mask','grid_mask.txt'), n, lift, sub, gf, bl)
         flags.setdefault('maskmode', '1x')
     if 'shadow' in flags:
         parts = flags['shadow'].split(':')

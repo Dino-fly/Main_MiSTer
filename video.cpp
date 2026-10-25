@@ -878,6 +878,10 @@ static bool has_shadow_mask = false;
 */
 #define SM_SUBLO(v) ( ( 0x4 << 13 ) | ( (v) & 0xFFF ) )
 #define SM_SUBHI(v) ( ( 0x5 << 13 ) | ( (v) & 0xFFF ) )
+// How far a substrate cell moves toward the substrate, in QUARTERS (0..4). Less
+// than 4 lets the pixel through, and with it the shadow the filter left in the
+// gap - which a full replace would discard, since the mask runs after the scaler.
+#define SM_SUBBLEND(v) ( ( 0x6 << 13 ) | ( (v) & 0x7 ) )
 #define SM_CELL_SUBSTRATE 0x800
 
 enum
@@ -941,6 +945,7 @@ static void setShadowMask()
 		int v2 = 0;
 		uint32_t substrate = 0xFFFFFF;
 		int have_substrate = 0;
+		int sub_blend = 4;                 // quarters; 4 = replace outright
 
 		reader.pos = start_pos;
 		while ((line = FileReadLine(&reader)))
@@ -963,6 +968,15 @@ static void setShadowMask()
 				{
 					substrate = (uint32_t)strtoul(line + 10, 0, 16) & 0xFFFFFF;
 					have_substrate = 1;
+					continue;
+				}
+
+				// blend=0..4 - quarters toward the substrate; 4 replaces outright.
+				if (!strncasecmp(line, "blend=", 6))
+				{
+					sub_blend = atoi(line + 6);
+					if (sub_blend < 0) sub_blend = 0;
+					if (sub_blend > 4) sub_blend = 4;
 					continue;
 				}
 
@@ -998,6 +1012,7 @@ static void setShadowMask()
 			{
 				spi_w(SM_SUBLO(substrate));
 				spi_w(SM_SUBHI(substrate >> 12));
+				spi_w(SM_SUBBLEND(sub_blend));
 			}
 			spi_w(SM_HMAX(w - 1));
 			spi_w(SM_VMAX(h - 1));

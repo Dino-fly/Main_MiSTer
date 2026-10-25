@@ -8117,6 +8117,261 @@ static void assert_gap_masks()
 	vp_install();
 }
 
+/*
+  The per-look gaps. Dinofly tuned the DMG and the Pocket in the shadow bench and
+  picked 0.10 and 0.08 of a cell against the generic 0.15, so the gap is no longer
+  one number for every panel. The writer takes the proportion and rounds it; the
+  Display preview synthesises the same table from the same proportion, and those two
+  had already drifted once - the preview drew a hardcoded one-pixel line, which
+  agreed with the writer only up to 9x.
+
+  6x-8x is where the numbers deliberately coincide (all three round to one pixel, so
+  1080p looks identical whichever is used); 10x and 12x is where they part, which is
+  the only place a regression here could show. Test both.
+*/
+static void assert_per_look_gaps()
+{
+	printf("\n== the per-look gaps, where they coincide and where they part ==\n");
+
+	static const struct { const char *name; const char *label; double frac; } looks[] =
+	{
+		{ "ClassicHome LCD Gap Lit.txt",        "generic", 0.15 },
+		{ "ClassicHome LCD Gap DMG.txt",        "DMG",     0.10 },
+		{ "ClassicHome LCD Gap DMG Bright.txt", "Bright",  0.10 },
+		{ "ClassicHome LCD Gap DMG Faded.txt",  "Faded",   0.10 },
+		{ "ClassicHome LCD Gap Pocket.txt",     "Pocket",  0.08 },
+	};
+	static const int scales[] = { 6, 7, 8, 10, 12 };
+
+	harness_set_fb_state(0);
+	int gap_at_12[5] = { 0, 0, 0, 0, 0 };
+
+	for (unsigned si = 0; si < sizeof(scales) / sizeof(scales[0]); si++)
+	{
+		int n = scales[si];
+		harness_set_scale(144, 144 * n);
+		harness_advance(1100);
+		vp_grid_for_now(1);
+
+		for (unsigned m = 0; m < sizeof(looks) / sizeof(looks[0]); m++)
+		{
+			int cells[32][32], w = 0, h = 0;
+			char what[200];
+
+			if (!read_mask_cells(looks[m].name, cells, &w, &h) || w != n || h != n)
+			{
+				snprintf(what, sizeof(what), "%dx: the %s mask is %dx%d cells",
+					n, looks[m].label, n, n);
+				check(0, what);
+				continue;
+			}
+
+			// Count the leading columns that differ from the cell body: that is the gap.
+			int body = mask_mul16(cells[n - 1][n - 1], 1), gap_px = 0;
+			for (int x = 0; x < n; x++)
+			{
+				if (mask_mul16(cells[n - 1][x], 1) == body) break;
+				gap_px++;
+			}
+
+			int want = (int)(looks[m].frac * n + 0.5);
+			if (want < 1) want = 1;
+
+			snprintf(what, sizeof(what), "%dx: the %s gap is %d px, %.2f of a cell",
+				n, looks[m].label, want, looks[m].frac);
+			check(gap_px == want, what);
+
+			// The gap must be square: as many leading rows as leading columns.
+			int gap_rows = 0;
+			for (int y = 0; y < n; y++)
+			{
+				if (mask_mul16(cells[y][n - 1], 1) == body) break;
+				gap_rows++;
+			}
+			snprintf(what, sizeof(what), "%dx: the %s gap is as tall as it is wide",
+				n, looks[m].label);
+			check(gap_rows == gap_px, what);
+
+			if (n == 12) gap_at_12[m] = gap_px;
+		}
+	}
+
+	check(gap_at_12[0] == 2, "at 12x the generic gap has grown to two pixels");
+	check(gap_at_12[1] == 1, "at 12x the DMG gap is still one - 0.10 of a cell, not 0.15");
+	check(gap_at_12[4] == 1, "at 12x the Pocket gap is still one, finer again at 0.08");
+	check(gap_at_12[1] == gap_at_12[2] && gap_at_12[1] == gap_at_12[3],
+		"Bright and Faded are DMG panels and share its gap");
+
+	harness_set_scale(0, 0);
+	harness_set_fb_state(0);
+	vp_install();
+}
+
+/*
+  The pixel shadow's depth and reach, per look.
+
+  Both come from the models Dinofly tuned in the bench, not from a pair of shared
+  constants: the DMG and the Pocket used to point at the same filter file, so the
+  Pocket wore the DMG's shadow. `mix` is the peak the pre-mask filter can express,
+  measured off the bench render, and it lands as a tap at unity 128. The reach is
+  (offset + spread) output pixels, which is what lcd_span() converts into a share
+  of a cell.
+
+  The shadow tap is w[0] for the first half of the phases and w[1] for the second,
+  because write_shadow_filter() picks the neighbour on whichever side the phase
+  falls - reading a fixed tap index finds the MAIN tap for half of them and reports
+  a peak of 128.
+*/
+static void assert_look_shadow_depth()
+{
+	printf("\n== each look's shadow, at the depth and reach its model asks for ==\n");
+
+	static const struct { const char *file; const char *label; double mix; int reach; } looks[] =
+	{
+		{ "filters/ClassicHome Pixel Shadow DMG.txt",    "DMG",     0.59, 5 },
+		{ "filters/ClassicHome Pixel Shadow Pocket.txt", "Pocket",  0.31, 5 },
+		{ "filters/ClassicHome Pixel Shadow.txt",        "generic", 0.45, 0 },
+	};
+
+	harness_set_fb_state(0);
+	const int n = 7;                        // what a 1080p set gives a 144-line core
+	harness_set_scale(144, 144 * n);
+	harness_advance(1100);
+	vp_grid_for_now(1);
+
+	int peak[3] = { 0, 0, 0 };
+
+	for (unsigned m = 0; m < sizeof(looks) / sizeof(looks[0]); m++)
+	{
+		int taps[64][4];
+		char what[200];
+
+		snprintf(what, sizeof(what), "the %s shadow filter is there, 64 phases", looks[m].label);
+		int got = read_taps64(looks[m].file, taps);
+		check(got == 64, what);
+		if (got != 64) continue;
+
+		int hi = 0, live = 0;
+		for (int p = 0; p < 64; p++)
+		{
+			int v = taps[p][(p < 32) ? 0 : 1];
+			if (v > hi) hi = v;
+			if (v > 0) live++;
+		}
+		peak[m] = hi;
+
+		int want = (int)(looks[m].mix * 128.0 + 0.5);
+		snprintf(what, sizeof(what), "the %s shadow peaks at %d/128, its model's mix of %.2f",
+			looks[m].label, want, looks[m].mix);
+		check(hi >= want - 1 && hi <= want + 1, what);
+
+		if (looks[m].reach)
+		{
+			// live phases / 64 is the share of a cell; times the scale is output pixels.
+			int px = (int)((double)live / 64.0 * n + 0.5);
+			snprintf(what, sizeof(what),
+				"the %s shadow reaches %d px of a %d px cell - offset plus spread",
+				looks[m].label, looks[m].reach, n);
+			check(px == looks[m].reach, what);
+		}
+	}
+
+	check(peak[0] > peak[2] && peak[2] > peak[1],
+		"DMG is the deepest shadow, the Pocket the lightest, the generic between them");
+	check(peak[0] != peak[1],
+		"the Pocket no longer wears the DMG's shadow - they are separate files now");
+
+	harness_set_scale(0, 0);
+	harness_set_fb_state(0);
+	vp_install();
+}
+
+/*
+  The look over the in-game still, at magnifications the grid cannot be built for.
+
+  ig_open() renders the captured frame through vp_render_exact() so the menu sits
+  over what the television is showing. That render picks its own magnification from
+  the canvas - dw/sw - which is NOT the scaler's. A gap mask is one cell per source
+  pixel, so it only means anything at a known scale; below 2x vp_synth_gap_mask()
+  refuses, and the renderer used to fall through to the card's copy, written for the
+  scaler's scale. Cells at the wrong pitch draw a moire, not a coarse grid: irregular
+  vertical banding that shifts whenever the canvas resizes.
+
+  A FLAT source is the probe. Flat stays flat through any linear filter, so any
+  structure in the output at a refused magnification is a mask at the wrong pitch.
+  The 7x case is the control: it must NOT be flat, or the test cannot see a grid at
+  all and proves nothing.
+*/
+static void assert_ig_still_has_no_wrong_pitch_grid()
+{
+	printf("\n== the look over the still, where the grid cannot be built ==\n");
+
+	const int sw = 160, sh = 144;
+	uint32_t *src = (uint32_t*)malloc((size_t)sw * sh * 4);
+	if (!src) { check(0, "room for a flat source"); return; }
+	for (int i = 0; i < sw * sh; i++) src[i] = 0xFF808080;
+
+	int dmg = -1;
+	for (int i = 0; i < vp_count(); i++)
+		if (!strcmp(vp_name(i), "Game Boy DMG")) dmg = i;
+	check(dmg >= 0, "the DMG look is there to render");
+	if (dmg < 0) { free(src); return; }
+
+	// Make sure the card really does carry a gap mask, at some other scale, so the
+	// old fallback would have had something wrong to find.
+	harness_set_scale(144, 144 * 4);
+	harness_advance(1100);
+	vp_grid_for_now(1);
+
+	static const int scales[] = { 1, 7 };
+	for (unsigned k = 0; k < sizeof(scales) / sizeof(scales[0]); k++)
+	{
+		int n = scales[k];
+		int dw = sw * n, dh = sh * n;
+		uint32_t *dst = (uint32_t*)malloc((size_t)dw * dh * 4);
+		if (!dst) { check(0, "room for the render"); break; }
+		memset(dst, 0, (size_t)dw * dh * 4);
+
+		int drew = vp_render_exact(dmg, src, sw, sh, dst, dw, dh);
+
+		/*
+		  Sample MID-CELL, not on a cell boundary. A gap row is one where every x is a
+		  gap cell, so it comes out uniform and reads as flat - the first version of
+		  this probe picked dh/2, which at 7x is row 504 and 504 %% 7 == 0, exactly
+		  such a row, and the control failed for that reason rather than for a missing
+		  grid. Check a few rows so one unlucky choice cannot decide it.
+		*/
+		int flat = 1;
+		for (int r = 0; r < 3 && flat; r++)
+		{
+			int y = dh / 2 + (n / 2) + r * n;
+			if (y >= dh) break;
+			uint32_t first = dst[(size_t)y * dw];
+			for (int x = 0; x < dw && flat; x++)
+				if (dst[(size_t)y * dw + x] != first) flat = 0;
+		}
+
+		char what[200];
+		if (n < 2)
+		{
+			snprintf(what, sizeof(what),
+				"%dx: a flat still stays flat - no gap mask is invented at a scale it cannot be built for", n);
+			check(!drew || flat, what);
+		}
+		else
+		{
+			snprintf(what, sizeof(what),
+				"%dx: a flat still gains its grid - the probe can see one when it is there", n);
+			check(drew && !flat, what);
+		}
+		free(dst);
+	}
+
+	free(src);
+	harness_set_scale(0, 0);
+	vp_install();
+}
+
 static void assert_grid_shadow_is_sampled()
 {
 	printf("\n== the pixel shadow, at the scales cores really run at ==\n");
@@ -11556,9 +11811,72 @@ static void assert_video()
 	}
 
 	int n_gb = vp_options_for(VC_GB, opts);
-	check(n_gb == 5, "Game Boy offers three DMG ramps, the Pocket and the off switch");
+	check(n_gb == 7, "Game Boy offers three DMG ramps, the Pocket, the SGB, the off switch and the SGB off switch");
 	check(strstr(vp_name(opts[0]), "DMG") && strstr(vp_name(opts[3]), "Pocket"),
 		"Game Boy leads with DMG and still offers the Pocket");
+
+	/*
+	  Super Game Boy is a look of its own and comes OFF the panel looks. It used to
+	  ride the DMG family; on the television the SGB canvas turned out to inset the
+	  Game Boy picture, so the panel being simulated was smaller than the screen the
+	  grid was drawn on. A DMG look must therefore ask for it Off explicitly - an
+	  absent option is the core's own last value, not a known one.
+	*/
+	{
+		int sgb = -1, none_sgb = -1;
+		for (int i = 0; i < n_gb; i++)
+		{
+			if (!strcmp(vp_name(opts[i]), "Super Game Boy")) sgb = opts[i];
+			if (!strcmp(vp_name(opts[i]), "None with Super Game Boy")) none_sgb = opts[i];
+		}
+		check(sgb >= 0, "the Super Game Boy is offered as a look of its own");
+		check(none_sgb >= 0, "and None has an SGB twin, per Dinofly's ask");
+
+		if (sgb >= 0)
+		{
+			const char *c = vp_core_colour(sgb);
+			check(c && strstr(c, "Super Game Boy=On"), "the SGB look turns the adaptor on");
+			check(!vp_mask_of(sgb) || !strcasecmp(vp_mask_of(sgb), "off") ||
+			      !strstr(vp_mask_of(sgb), "LCD Gap"),
+				"and wears no panel gap - the SGB picture is inset, so a Game Boy pitch fits neither half");
+		}
+		if (none_sgb >= 0)
+		{
+			const char *c = vp_core_colour(none_sgb);
+			check(c && strstr(c, "Super Game Boy=On"), "the None twin turns the adaptor on");
+		}
+
+		for (int i = 0; i < n_gb; i++)
+		{
+			const char *nm = vp_name(opts[i]);
+			if (!strstr(nm, "DMG") && !strstr(nm, "Pocket")) continue;
+			const char *c = vp_core_colour(opts[i]);
+			char what[160];
+			snprintf(what, sizeof(what), "%s asks for Super Game Boy=Off", nm);
+			check(c && strstr(c, "Super Game Boy=Off"), what);
+		}
+	}
+
+	/*
+	  Two shadows is one too many: the core's darkens a whole Game Boy pixel, ours
+	  fades across the cell. Any look wearing one of our shadow filters has to turn
+	  the core's off by name.
+	*/
+	{
+		int bad = 0;
+		for (int i = 0; i < vp_count(); i++)
+		{
+			const char *hf = vp_hfilter_of(i);
+			if (!hf || !strstr(hf, "Pixel Shadow")) continue;
+			const char *st = vp_core_struct(i);
+			if (!st || !strstr(st, "Screen Shadow=No"))
+			{
+				printf("  %s wears %s but does not turn the core's shadow off\n", vp_name(i), hf);
+				bad = 1;
+			}
+		}
+		check(!bad, "every look with a pixel-shadow filter turns the core's own shadow off");
+	}
 
 	int n_gbc = vp_options_for(VC_GBC, opts);
 	check(n_gbc == 2, "GBC offers its screen and the off switch");
@@ -25399,6 +25717,9 @@ int main()
 	// arithmetic, this one proves the coefficients reach a phase the arithmetic will read.
 	assert_grid_shadow_is_sampled();
 	assert_gap_masks();
+	assert_per_look_gaps();
+	assert_look_shadow_depth();
+	assert_ig_still_has_no_wrong_pitch_grid();
 	// And after that one, for the third time for the same reason: this section opens the
 	// in-game menu too, to reach the one state where "a core owns the drive" can be seen
 	// from a host test. Everything else in it would run anywhere.

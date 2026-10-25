@@ -275,6 +275,7 @@ def load_mask(path):
     """
     dims, cells, v2 = None, [], False
     subst = None                                  # substrate=RRGGBB, if present
+    blend = 16                                    # blend=N/16 toward the substrate
     for line in open(path):
         line = line.split('#')[0].split(';')[0].strip()
         if not line: continue
@@ -284,6 +285,14 @@ def load_mask(path):
         if line.lower() == 'v2': v2 = True; continue
         if line.lower().startswith('substrate='):
             subst = int(line.split('=',1)[1].strip(), 16) & 0xFFFFFF
+            continue
+        if line.lower().startswith('blend='):
+            # How far a substrate cell moves toward the substrate, in sixteenths.
+            # 16 replaces outright; less lets the pixel - and so the SHADOW the
+            # filter put there - through into the gap. The mask runs after the
+            # scaler, so a full replace discards the shadow entirely, and the gap
+            # can never be the shadowed substrate a real panel shows.
+            blend = max(0, min(16, int(line.split('=',1)[1].strip())))
             continue
         if dims is None and ',' in line:
             w,h = line.split(','); dims = (int(w),int(h)); continue
@@ -296,7 +305,7 @@ def load_mask(path):
                 # gap, which is the lit substrate and therefore a fixed colour.
                 # Marked with a sentinel so apply_mask can tell it from a
                 # multiplier triple.
-                row.append(('S', subst if subst is not None else 0xFFFFFF))
+                row.append(('S', subst if subst is not None else 0xFFFFFF, blend))
                 continue
             if not v2:
                 # simple mask: one bit per channel, full on or black
@@ -332,9 +341,15 @@ def apply_mask(rows, cells, twox):
         crow = cells[(y//step) % mh]
         for x, (r,g,b) in enumerate(row):
             cell = crow[(x//step) % mw]
-            if cell[0] == 'S':                    # substrate cell - replace, do not scale
-                c = cell[1]
-                row[x] = ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF)
+            if cell[0] == 'S':                    # substrate cell
+                c, w = cell[1], cell[2]
+                sr, sg, sb = (c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF
+                if w >= 16:
+                    row[x] = (sr, sg, sb)
+                else:
+                    row[x] = ((sr * w + r * (16 - w)) // 16,
+                              (sg * w + g * (16 - w)) // 16,
+                              (sb * w + b * (16 - w)) // 16)
                 continue
             rm,gm,bm = cell
             row[x] = (mask_mul(r,rm), mask_mul(g,gm), mask_mul(b,bm))

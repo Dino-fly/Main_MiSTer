@@ -124,6 +124,8 @@ struct preset_def
 #define M_GAP_DARK PREFIX " LCD Gap Dark.txt"
 #define F_SHADOW   PREFIX " Pixel Shadow.txt"
 #define F_SHADOWLT PREFIX " Pixel Shadow Light.txt"
+#define F_SHADOWDM PREFIX " Pixel Shadow DMG.txt"
+#define F_SHADOWPK PREFIX " Pixel Shadow Pocket.txt"
 
 /*
   The three panel gaps and the two shadow strengths, as the looks use them.
@@ -148,6 +150,72 @@ struct preset_def
 #define SUB_FADED  0x6D833D          // pal_weak   (109,131,61)
 #define SUB_POCKET 0xE0DBCD          // pal_pocket (224,219,205)
 #define SUB_WS     0xD0CABA          // the WonderSwan panel's warm grey top
+/*
+  Quarters toward the substrate. 4 replaces the gap outright, which looked right
+  in isolation and wrong in a picture: the mask runs after the scaler, so a full
+  replace discards the shadow the filter left in the gap, and at 3x a one-pixel
+  gap is 55% of the screen - two thirds of the frame became the single brightest
+  colour and the contrast went with it. 3 keeps the gap invisible on bright areas
+  (an unshadowed bright pixel already equals the substrate) while letting the
+  shadow through, measured at -11 luma in the gap beside a dark pixel.
+*/
+#define SUB_BLEND  3
+
+/*
+  The gap's share of the cell, not a pixel count. A fixed one-pixel gap changes
+  its proportion with magnification - a third of a cell at 3x, a seventh at 7x -
+  so the grid grew heavier the lower the scale, which is backwards. A real panel's
+  gap keeps its share of the pixel pitch, so line thickness and pixel size have to
+  scale together. 0.15 lands on one pixel at 6x and 7x, which is where a 1080p set
+  puts these cores, and two at 12x and above.
+*/
+#define GAP_FRAC   0.15
+
+/*
+  A panel's shadow, as a model rather than as two filter constants.
+
+  Dinofly tuned these in the DMG Shadow Bench (tools/shadow_bench.html) against a
+  render of the whole pipeline, so they describe the shadow we WANT: the pixel areas
+  cast an opacity map, it is offset right and down, box-blurred, and composited over
+  everything - not only over the gaps. A bright pixel on a reflective panel is
+  essentially transparent, so it has to receive shadow too, and the shadow lerps
+  toward the panel's black floor rather than toward black, or large dark areas dull.
+
+  Only part of this reaches the fabric today. The mask is the last programmable
+  stage, so a shadow that lands AFTER the grid needs a new stage; until it exists
+  the shadow is a scaler filter running BEFORE the mask, which can express the
+  depth and the reach but not the offset, the blur or the gap. `mix` is that
+  filter's peak, measured off the bench render at the leading edge of a bright
+  pixel beside a dark one - derived from the model, not guessed alongside it. See
+  docs/HANDHELD-PANELS.md.
+
+  gap_frac at 0.10 and 0.08 both round to the same single pixel as the old 0.15 at
+  6x-9x; they differ only at 10x and above. They are stored as the proportion he
+  chose because that is what a 4K set will read, not because 1080p changes.
+*/
+struct lcd_model
+{
+	double gain;      // gain on the opacity map, clamped at 1
+	int    offset;    // output px, right and down
+	int    spread;    // box-blur radius, output px
+	double opacity;   // how much a pixel hides the shadow. 1 = gaps only
+	double gap_frac;  // the gap's share of the cell
+	int    floor;     // 1 = the shadow stops at the darkest shade
+	double mix;       // derived: the pre-mask filter's peak depth
+};
+
+//                        gain  off spr  opac  gap   flr   mix
+static const lcd_model lcd_dmg    = { 1.85, 2,  3,  0.19, 0.10, 1, 0.59 };
+static const lcd_model lcd_pocket = { 1.25, 1,  4,  0.31, 0.08, 1, 0.31 };
+
+// The reach the model asks for, as a share of a cell: the offset carries the
+// shadow out and the blur radius carries it further.
+static double lcd_span(const lcd_model *m, int scale)
+{
+	if (scale < 2) return SHADOW_SPAN;
+	double s = (double)(m->offset + m->spread) / (double)scale;
+	return (s > 1.0) ? 1.0 : s;
+}
 #define F_GRIDSH  PREFIX " LCD Grid Shadow.txt"
 #define M_GRILLE  PREFIX " Grille.txt"
 #define M_MATRIX  PREFIX " Dot Matrix.txt"
@@ -181,18 +249,34 @@ struct preset_def
 */
 #define CO_INTEGER  "Scale=Narrower HV-Integer"
 /*
-  Super Game Boy=On rides every DMG-family look: Dinofly runs Zelda with the
-  SGB border around the Pocket screen and asked for it as the default -
-  confirmed live off the core (the border in the capture; the stale CFG still
-  said Off). The custom palette wins the colours, the SGB canvas keeps the
-  border, and a player who disagrees flips it in Core options, where the
-  per-game record outranks the look.
+  Super Game Boy is now OFF on every panel look, and a look of its own instead.
 
-  It stays with the colour half: an SGB border is a second machine's canvas, not
-  a simulation of the Game Boy's panel, and Super Game Boy on a television is
-  how that machine was actually played.
+  It used to ride the DMG family, on Dinofly's word that he played Zelda with the
+  SGB border. Seeing it on the television settled it the other way: the SGB canvas
+  is 256x224 with the Game Boy picture inset, so the panel it is meant to be
+  simulating ends up smaller than the screen it is drawn on and everything outside
+  it wears the grid too. A DMG look is a claim about a handheld's panel; an SGB
+  border is a second machine's canvas around it, and the two cannot both be the
+  subject of one picture.
+
+  So the adaptor gets P_SGB, with a CRT treatment rather than a panel one - an SGB
+  is a Super Nintendo, and a Super Nintendo lived on a television - and P_NONE_SGB
+  for the border with nothing else done to it. Anyone who wants the old
+  combination still has Core options, where the per-game record outranks the look.
 */
-#define CO_GB_DMG_COLOUR "Super Game Boy=On;Custom Palette=On"
+#define CO_GB_DMG_COLOUR "Super Game Boy=Off;Custom Palette=On"
+
+/*
+  The core's own drop shadow, off wherever one of our filters draws its own.
+
+  Two shadows is one too many and they do not agree: the core's darkens a whole
+  Game Boy pixel uniformly (it draws at 160x144), ours is evaluated per output
+  sample and fades across the cell. Named rather than indexed, so a core that has
+  no such option skips the line instead of breaking - which is most of them. Only
+  the Gameboy core's name is measured; if another core turns out to publish one
+  under a different name, it needs adding here explicitly.
+*/
+#define CO_NO_SHADOW "Screen Shadow=No"
 
 /*
   Screen Shadow is the core's own drop shadow under each LCD pixel and Frame
@@ -268,11 +352,11 @@ static const preset_def presets[] =
 	  survives as Bright, for players who want the legibility.
 	*/
 	{ "dmg", "Game Boy DMG", "Muted olive-green reflective LCD, pixel grid and shadow.",
-	  F_SHADOW, F_SHADOW, "off", M_GAP_DMG, "1x", "off",
+	  F_SHADOWDM, F_SHADOWDM, "off", M_GAP_DMG, "1x", "off",
 	  CO_GB_DMG_COLOUR, CO_GB_DMG_PANEL, PAL_OLIVE },
 
 	{ "pocket", "Game Boy Pocket", "Neutral grey reflective LCD, finer grid, pixel shadow.",
-	  F_SHADOW, F_SHADOW, "off", M_GAP_POCKET, "1x", "off",
+	  F_SHADOWPK, F_SHADOWPK, "off", M_GAP_POCKET, "1x", "off",
 	  CO_GB_DMG_COLOUR, CO_GB_DMG_PANEL, PAL_POCKET },
 
 	/*
@@ -295,11 +379,11 @@ static const preset_def presets[] =
 	*/
 	{ "agb001", "GBA", "The original unlit screen. Dim and washed out.",
 	  F_SHADOWLT, F_SHADOWLT, "off", M_GAP_TINT, "1x", "off",
-	  "Modify Colors=GBA 2.2", CO_INTEGER, 0 },
+	  "Modify Colors=GBA 2.2", CO_NO_SHADOW ";" CO_INTEGER, 0 },
 
 	{ "ags001", "GBA SP", "Frontlit SP: brighter than AGB, still washed out.",
 	  F_SHADOWLT, F_SHADOWLT, "off", M_GAP_TINT, "1x", "off",
-	  "Modify Colors=GBA 1.6", CO_INTEGER, 0 },
+	  "Modify Colors=GBA 1.6", CO_NO_SHADOW ";" CO_INTEGER, 0 },
 
 	{ "ags101", "GBA SP Brighter", "Backlit SP: bright with proper contrast and colour.",
 	  "off", "off", "off", M_GAP_DARK, "1x", "off",
@@ -334,14 +418,15 @@ static const preset_def presets[] =
 
 	{ "ws", "WonderSwan", "Reflective mono FSTN: warm grey, low contrast.",
 	  F_SHADOW, F_SHADOW, "off", M_GAP_WS, "1x", G_WS,
-	  0, "Flickerblend=2 Frames;" CO_INTEGER, 0 },
+	  0, CO_NO_SHADOW ";Flickerblend=2 Frames;" CO_INTEGER, 0 },
 
 	{ "wsc", "WonderSwan Color", "Reflective colour panel: muted and slightly warm.",
 	  F_SHADOWLT, F_SHADOWLT, "off", M_GAP_TINT, "1x", G_WSC,
-	  0, "Flickerblend=2 Frames;" CO_INTEGER, 0 },
+	  0, CO_NO_SHADOW ";Flickerblend=2 Frames;" CO_INTEGER, 0 },
 
 	{ "ngpc", "Neo Geo Pocket Color", "Reflective pastel colour LCD, gentle contrast.",
-	  F_SHADOWLT, F_SHADOWLT, "off", M_GAP_TINT, "1x", G_NGPC, 0, CO_INTEGER, 0 },
+	  F_SHADOWLT, F_SHADOWLT, "off", M_GAP_TINT, "1x", G_NGPC,
+	  0, CO_NO_SHADOW ";" CO_INTEGER, 0 },
 
 	/*
 	  One switch to turn every layer of processing off: scaler filters, mask and
@@ -365,12 +450,37 @@ static const preset_def presets[] =
 	  and inserting one here would silently move every player's saved look.
 	*/
 	{ "dmg-bright", "Game Boy DMG (Bright)", "The high-contrast ramp: easier to read, further from the panel.",
-	  F_SHADOW, F_SHADOW, "off", M_GAP_BRIGHT, "1x", "off",
+	  F_SHADOWDM, F_SHADOWDM, "off", M_GAP_BRIGHT, "1x", "off",
 	  CO_GB_DMG_COLOUR, CO_GB_DMG_PANEL, PAL_DMG },
 
 	{ "dmg-faded", "Game Boy DMG (Faded)", "A tired panel in poor light: the light shades nearly merge.",
-	  F_SHADOW, F_SHADOW, "off", M_GAP_FADED, "1x", "off",
+	  F_SHADOWDM, F_SHADOWDM, "off", M_GAP_FADED, "1x", "off",
 	  CO_GB_DMG_COLOUR, CO_GB_DMG_PANEL, PAL_WEAK },
+
+	/*
+	  The Super Game Boy, as a television rather than as a panel. Appended for the
+	  ABI reason every row after None is appended.
+
+	  No mask and no pixel shadow: the SGB draws the Game Boy picture inset in a
+	  256x224 canvas, so a grid pitched to a Game Boy pixel would be wrong on the
+	  border and wrong on the picture at the same time. A Super Nintendo on a CRT
+	  is what this machine was, so it gets the CRT treatment - sharp, scanlines,
+	  aperture grille - and the core keeps its own SGB colours rather than taking
+	  one of our panel ramps over them.
+	*/
+	{ "sgb", "Super Game Boy", "The SNES adaptor on a CRT: its border and colours, scanlines and grille.",
+	  F_SHARP, F_SHARP, F_SCAN, M_GRILLE, "1x", "off",
+	  "Super Game Boy=On;Custom Palette=Off",
+	  CO_NO_SHADOW ";Frame blend=Off;" CO_INTEGER, 0 },
+
+	/*
+	  None, with the adaptor on. None itself deliberately carries no core half at
+	  all - "touch nothing" - so this cannot be None plus a flag; it is None with
+	  exactly one thing asked for, which is the border.
+	*/
+	{ "none-sgb", "None with Super Game Boy", "Every effect off, with the Super Game Boy border and colours.",
+	  "off", "off", "off", "off", "off", "off",
+	  "Super Game Boy=On", 0, 0 },
 };
 
 #define NPRESETS ((int)(sizeof(presets) / sizeof(presets[0])))
@@ -514,24 +624,49 @@ struct vp_mask
   So the render path synthesises the same table at its own scale. The numbers are
   the ones write_grid_mask() uses, and the two must move together.
 */
+/*
+  Is this one of the gap masks - the ones whose cells are one SOURCE pixel and so
+  only mean anything at a known magnification? Callers need this separately from
+  vp_synth_gap_mask()'s answer, because "not a gap mask" and "a gap mask I cannot
+  build at this scale" want opposite handling and both used to return 0.
+*/
+static int vp_is_gap_mask(const char *name)
+{
+	if (!name || !*name) return 0;
+	return !strcasecmp(name, M_GAP_DMG)    || !strcasecmp(name, M_GAP_BRIGHT) ||
+	       !strcasecmp(name, M_GAP_FADED)  || !strcasecmp(name, M_GAP_POCKET) ||
+	       !strcasecmp(name, M_GAP_LIT)    || !strcasecmp(name, M_GAP_WS)     ||
+	       !strcasecmp(name, M_GAP_TINT)   || !strcasecmp(name, M_GAP_DARK);
+}
+
 static int vp_synth_gap_mask(const char *name, int scale, vp_mask *out)
 {
-	double gap;
-	if (!strcasecmp(name, M_GAP_LIT) || !strcasecmp(name, M_GAP_DMG) ||
-	    !strcasecmp(name, M_GAP_BRIGHT) || !strcasecmp(name, M_GAP_FADED) ||
-	    !strcasecmp(name, M_GAP_POCKET) || !strcasecmp(name, M_GAP_WS)) gap = GAP_LIT;
+	double gap, frac = GAP_FRAC;
+	if (!strcasecmp(name, M_GAP_DMG) || !strcasecmp(name, M_GAP_BRIGHT) ||
+	    !strcasecmp(name, M_GAP_FADED)) { gap = GAP_LIT; frac = lcd_dmg.gap_frac; }
+	else if (!strcasecmp(name, M_GAP_POCKET)) { gap = GAP_LIT; frac = lcd_pocket.gap_frac; }
+	else if (!strcasecmp(name, M_GAP_LIT) || !strcasecmp(name, M_GAP_WS)) gap = GAP_LIT;
 	else if (!strcasecmp(name, M_GAP_TINT)) gap = GAP_TINT;
 	else if (!strcasecmp(name, M_GAP_DARK)) gap = GAP_DARK;
 	else return 0;
 
 	if (scale < 2 || scale > VP_MASK_MAX) return 0;
 
+	/*
+	  The gap is gap_frac of a cell, exactly as write_grid_mask() computes it. This
+	  used to be a hardcoded (!x || !y) one-pixel line, which agreed with the writer
+	  only because 0.15 rounds to one pixel at 6x-9x; at 12x the device drew two and
+	  the preview drew one. Read the proportion, not a pixel count.
+	*/
+	int gpx = (int)lround(frac * scale);
+	if (gpx < 1) gpx = 1;
+
 	memset(out, 0, sizeof(*out));
 	out->w = out->h = scale;
 	for (int y = 0; y < scale; y++)
 		for (int x = 0; x < scale; x++)
 		{
-			double m = (!x || !y) ? gap : 1.0;
+			double m = (x < gpx || y < gpx) ? gap : 1.0;
 			int v = (int)lround(m * 16.0);
 			if (v < 0) v = 0;
 			if (v > 31) v = 31;
@@ -722,8 +857,25 @@ int vp_render_exact_rect(int look, const uint32_t *src, int sw, int sh,
 	  fixed pattern and comes off the card as written. See vp_synth_gap_mask().
 	*/
 	int mscale = (sw > 0) ? (dw / sw) : 0;
-	int have_mask = d->mask ? vp_synth_gap_mask(d->mask, mscale, &mask) : 0;
-	if (!have_mask) have_mask = vp_load_mask(d->mask, &mask);
+	int have_mask = 0;
+	if (d->mask)
+	{
+		if (vp_is_gap_mask(d->mask))
+		{
+			/*
+			  A gap mask and NOTHING ELSE at this magnification. It used to fall
+			  through to vp_load_mask() when the synth refused, which reads the card's
+			  copy - written for whatever scale the SCALER is running - and applies it
+			  at this render's, a different number. Cells at the wrong pitch do not
+			  draw a coarse grid, they draw a moire: irregular vertical banding across
+			  the picture, shifting whenever the canvas changes size. Drawing no grid
+			  is the honest answer, and the same one vp_synth_gap_mask() gives for an
+			  unknown scale.
+			*/
+			have_mask = vp_synth_gap_mask(d->mask, mscale, &mask);
+		}
+		else have_mask = vp_load_mask(d->mask, &mask);
+	}
 
 	if (!have_h && !have_v && !have_mask) return 0;
 
@@ -804,6 +956,11 @@ int vp_render_exact(int look, const uint32_t *src, int sw, int sh,
 int vp_count() { return NPRESETS; }
 const char *vp_name(int i) { return (i >= 0 && i < NPRESETS) ? presets[i].name : "?"; }
 const char *vp_blurb(int i) { return (i >= 0 && i < NPRESETS) ? presets[i].blurb : ""; }
+
+const char *vp_core_colour(int i) { return (i >= 0 && i < NPRESETS) ? presets[i].core_colour : 0; }
+const char *vp_core_struct(int i) { return (i >= 0 && i < NPRESETS) ? presets[i].core_struct : 0; }
+const char *vp_hfilter_of(int i)  { return (i >= 0 && i < NPRESETS) ? presets[i].hfilter     : 0; }
+const char *vp_mask_of(int i)     { return (i >= 0 && i < NPRESETS) ? presets[i].mask        : 0; }
 
 /* --------------------------------------------- which output are we on? ---- */
 
@@ -913,7 +1070,7 @@ enum
 	P_SHARP = 0, P_PVM_RGB, P_PVM_SVIDEO, P_COMPOSITE, P_PAL_TV, P_VGA,
 	P_DMG, P_POCKET, P_GBC, P_AGB001, P_AGS001, P_AGS101,
 	P_GG, P_GGMOD, P_LYNX, P_WS, P_WSC, P_NGPC, P_NONE, P_BVM,
-	P_DMG_BRIGHT, P_DMG_FADED
+	P_DMG_BRIGHT, P_DMG_FADED, P_SGB, P_NONE_SGB
 };
 
 /*
@@ -946,7 +1103,8 @@ static const int opt_console[]  = { P_PVM_RGB, P_BVM, P_PVM_SVIDEO, P_COMPOSITE,
 static const int opt_arcade[]   = { P_PVM_RGB, P_BVM, P_PVM_SVIDEO, P_SHARP };
 static const int opt_computer[] = { P_PAL_TV, P_COMPOSITE, P_PVM_SVIDEO, P_SHARP };
 static const int opt_vga[]      = { P_VGA, P_SHARP };
-static const int opt_gb[]       = { P_DMG, P_DMG_BRIGHT, P_DMG_FADED, P_POCKET, P_NONE };
+static const int opt_gb[]       = { P_DMG, P_DMG_BRIGHT, P_DMG_FADED, P_POCKET,
+                                    P_SGB, P_NONE, P_NONE_SGB };
 static const int opt_gbc[]      = { P_GBC, P_NONE };
 static const int opt_gba[]      = { P_AGB001, P_AGS001, P_AGS101, P_NONE };
 static const int opt_gg[]       = { P_GG, P_GGMOD, P_NONE };
@@ -1467,7 +1625,8 @@ static int vp_output_scale()
   black matrix. v2 words are bits 10/9/8 selecting bright-or-dim per channel, bits
   7:4 the bright nibble as 1 + n/16, bits 3:0 the dim nibble as n/16.
 */
-static void write_grid_mask(const char *name, int scale, double gap, uint32_t subst)
+static void write_grid_mask(const char *name, int scale, double gap, uint32_t subst,
+                            double gap_frac)
 {
 	genbuf g;
 	gb_reset(&g);
@@ -1496,20 +1655,24 @@ static void write_grid_mask(const char *name, int scale, double gap, uint32_t su
 		int gapw  = (gap >= 1.0) ? ((7 << 8) | (lit << 4)) : (0 << 8) | dim;
 		int bodyw = (7 << 8);
 
-		gb_addf(&g, "# LCD gap for %dx at %.2fx, one cell per source pixel\n", scale, gap);
+		gb_addf(&g, "# LCD gap for %dx at %.2fx, %.2f of a cell, one cell per source pixel\n",
+			scale, gap, gap_frac);
 		if (subst)
 		{
 			// Bit 11 = emit the substrate. The multiplier stays in bits 10:0 so a
 			// core without the patch falls back to it instead of breaking.
 			gapw |= 0x800;
-			gb_addf(&g, "# substrate cells: %06X\n\nv2\nsubstrate=%06X\n", subst, subst);
+			gb_addf(&g, "# substrate cells: %06X, blend %d/4\n\nv2\nsubstrate=%06X\nblend=%d\n",
+				subst, SUB_BLEND, subst, SUB_BLEND);
 		}
 		else gb_addf(&g, "\nv2\n");
 		gb_addf(&g, "%d,%d\n", scale, scale);
+		int gpx = (int)lround(gap_frac * scale);
+		if (gpx < 1) gpx = 1;
 		for (int y = 0; y < scale; y++)
 		{
 			for (int x = 0; x < scale; x++)
-				gb_addf(&g, "%s%03X", x ? "," : "", (!x || !y) ? gapw : bodyw);
+				gb_addf(&g, "%s%03X", x ? "," : "", (x < gpx || y < gpx) ? gapw : bodyw);
 			gb_addf(&g, "\n");
 		}
 	}
@@ -1598,6 +1761,36 @@ static void write_shadow_filter(const char *name, int scale, double mix, double 
 	char rel[1024];
 	snprintf(rel, sizeof(rel), "filters/%s", name);
 	gen_commit(rel, &g, 0);
+}
+
+/*
+  Every mask and shadow the LCD looks wear, in one place. Both callers used to
+  carry their own copy of this list and they had already drifted once; a look whose
+  mask is generated in one path and not the other reads as "the grid vanished at
+  that scale" and is miserable to find.
+
+  The DMG family and the Pocket each follow their own measured model. WonderSwan is
+  a genuinely different panel - FSTN, cooler, its own substrate - and has not been
+  tuned in the bench yet, so it keeps the generic mono values rather than borrowing
+  the DMG's.
+*/
+static void write_lcd_structure(int scale)
+{
+	write_grid_mask(M_GAP_LIT,    scale, GAP_LIT,  0,          GAP_FRAC);
+	write_grid_mask(M_GAP_TINT,   scale, GAP_TINT, 0,          GAP_FRAC);
+	write_grid_mask(M_GAP_DARK,   scale, GAP_DARK, 0,          GAP_FRAC);
+
+	// The reflective panels, each with its own substrate and its own gap.
+	write_grid_mask(M_GAP_DMG,    scale, GAP_LIT, SUB_DMG,    lcd_dmg.gap_frac);
+	write_grid_mask(M_GAP_BRIGHT, scale, GAP_LIT, SUB_BRIGHT, lcd_dmg.gap_frac);
+	write_grid_mask(M_GAP_FADED,  scale, GAP_LIT, SUB_FADED,  lcd_dmg.gap_frac);
+	write_grid_mask(M_GAP_POCKET, scale, GAP_LIT, SUB_POCKET, lcd_pocket.gap_frac);
+	write_grid_mask(M_GAP_WS,     scale, GAP_LIT, SUB_WS,     GAP_FRAC);
+
+	write_shadow_filter(F_SHADOWDM, scale, lcd_dmg.mix,       lcd_span(&lcd_dmg, scale));
+	write_shadow_filter(F_SHADOWPK, scale, lcd_pocket.mix,    lcd_span(&lcd_pocket, scale));
+	write_shadow_filter(F_SHADOW,   scale, SHADOW_MIX_MONO,   SHADOW_SPAN);
+	write_shadow_filter(F_SHADOWLT, scale, SHADOW_MIX_COLOUR, SHADOW_SPAN);
 }
 
 static void write_filter_grid(const char *name, int shadow, int scale)
@@ -1916,17 +2109,7 @@ void vp_install()
 	write_filter(F_SCANDP, 0, 0.45);
 	write_filter_grid(F_GRID, 0, vp_output_scale());
 	write_filter_grid(F_GRIDSH, 1, vp_output_scale());
-	write_grid_mask(M_GAP_LIT,    vp_output_scale(), GAP_LIT,  0);
-	write_grid_mask(M_GAP_TINT,   vp_output_scale(), GAP_TINT, 0);
-	write_grid_mask(M_GAP_DARK,   vp_output_scale(), GAP_DARK, 0);
-	// The reflective panels, each with its own substrate.
-	write_grid_mask(M_GAP_DMG,    vp_output_scale(), GAP_LIT, SUB_DMG);
-	write_grid_mask(M_GAP_BRIGHT, vp_output_scale(), GAP_LIT, SUB_BRIGHT);
-	write_grid_mask(M_GAP_FADED,  vp_output_scale(), GAP_LIT, SUB_FADED);
-	write_grid_mask(M_GAP_POCKET, vp_output_scale(), GAP_LIT, SUB_POCKET);
-	write_grid_mask(M_GAP_WS,     vp_output_scale(), GAP_LIT, SUB_WS);
-	write_shadow_filter(F_SHADOW,   vp_output_scale(), SHADOW_MIX_MONO,   SHADOW_SPAN);
-	write_shadow_filter(F_SHADOWLT, vp_output_scale(), SHADOW_MIX_COLOUR, SHADOW_SPAN);
+	write_lcd_structure(vp_output_scale());
 
 
 	write_mask(M_GRILLE, 0);
@@ -2419,17 +2602,7 @@ int vp_grid_for_now(int force)
 	printf("ClassicUI: the scaler is giving each pixel %dx, rebuilding the LCD grid\n", n);
 	write_filter_grid(F_GRID, 0, n);
 	write_filter_grid(F_GRIDSH, 1, n);
-	write_grid_mask(M_GAP_LIT,    n, GAP_LIT,  0);
-	write_grid_mask(M_GAP_TINT,   n, GAP_TINT, 0);
-	write_grid_mask(M_GAP_DARK,   n, GAP_DARK, 0);
-	// The reflective panels, each with its own substrate.
-	write_grid_mask(M_GAP_DMG,    n, GAP_LIT, SUB_DMG);
-	write_grid_mask(M_GAP_BRIGHT, n, GAP_LIT, SUB_BRIGHT);
-	write_grid_mask(M_GAP_FADED,  n, GAP_LIT, SUB_FADED);
-	write_grid_mask(M_GAP_POCKET, n, GAP_LIT, SUB_POCKET);
-	write_grid_mask(M_GAP_WS,     n, GAP_LIT, SUB_WS);
-	write_shadow_filter(F_SHADOW,   n, SHADOW_MIX_MONO,   SHADOW_SPAN);
-	write_shadow_filter(F_SHADOWLT, n, SHADOW_MIX_COLOUR, SHADOW_SPAN);
+	write_lcd_structure(n);
 
 	return 1;
 }
@@ -2453,6 +2626,7 @@ static int vp_uses_grid(int i)
 	const preset_def *d = &presets[i];
 	const char *f[3] = { d->hfilter, d->vfilter, d->mask };
 	static const char *scaled[] = { F_GRID, F_GRIDSH, F_SHADOW, F_SHADOWLT,
+	                                F_SHADOWDM, F_SHADOWPK,
 	                                M_GAP_LIT, M_GAP_TINT, M_GAP_DARK,
 	                                M_GAP_DMG, M_GAP_BRIGHT, M_GAP_FADED,
 	                                M_GAP_POCKET, M_GAP_WS };
