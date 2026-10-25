@@ -69,11 +69,12 @@ static const ini_var_t ini_vars[] =
 	{ "BOOTCORE_TIMEOUT", (void*)(&(cfg.bootcore_timeout)), INT16, 2, 30 },
 	{ "FONT", (void*)(&(cfg.font)), STRING, 0, sizeof(cfg.font) - 1 },
 	{ "FB_SIZE", (void*)(&(cfg.fb_size)), UINT8, 0, 4 },
-	{ "FB_TERMINAL", (void*)(&(cfg.fb_terminal)), UINT8, 0, 1 },
+	{ "FB_TERMINAL", (void*)(&(cfg.fb_terminal)), UINT8, 0, 2 },
 	{ "OSD_TIMEOUT", (void*)(&(cfg.osd_timeout)), INT16, 0, 3600 },
 	{ "DIRECT_VIDEO", (void*)(&(cfg.direct_video)), UINT8, 0, 2 },
-	{ "OSD_ROTATE", (void*)(&(cfg.osd_rotate)), UINT8, 0, 2 },
+	{ "OSD_ROTATE", (void*)(&(cfg.osd_rotate)), UINT8, 0, 3 },
 	{ "DEADZONE", (void*)(&(cfg.controller_deadzone)), STRINGARR, sizeof(cfg.controller_deadzone) / sizeof(*cfg.controller_deadzone), sizeof(*cfg.controller_deadzone) },
+	{ "DPAD_THRESHOLD", (void*)(&(cfg.dpad_threshold)), UINT8, 5, 95 },
 	{ "GAMEPAD_DEFAULTS", (void*)(&(cfg.gamepad_defaults)), UINT8, 0, 1 },
 	{ "RECENTS", (void*)(&(cfg.recents)), UINT8, 0, 1 },
 	{ "CONTROLLER_INFO", (void*)(&(cfg.controller_info)), UINT8, 0, 10 },
@@ -143,10 +144,12 @@ static const ini_var_t ini_vars[] =
 	{ "AUTOFIRE_RATES", (void *)(&(cfg.autofire_rates)), STRING, 0, sizeof(cfg.autofire_rates) - 1 },
 	{ "AUTOFIRE_ON_DIRECTIONS", (void *)(&(cfg.autofire_on_directions)), UINT8, 0, 1 },
 	{ "SCREENSHOT_IMAGE_FORMAT", (void *)(&(cfg.screenshot_image_format)), STRING, 0, sizeof(cfg.screenshot_image_format) - 1 },
+	{ "SCREENSHOT_INFO", (void *)(&(cfg.screenshot_info)), UINT8, 0, 1 },
 	{ "XBE2_SHIFT", (void*)(&(cfg.xbe2_shift)), UINT16, 0, 0x22F },
 	{ "SPD_QUIRK", (void*)(&(cfg.spd_quirk)), UINT8, 0, 3 },
 	{ "HDMI_OFF", (void*)(&(cfg.hdmi_off)), UINT16, 0, 1440 },
 	{ "KEYBOARD_AS_JOYSTICK", (void*)(cfg.keyboard_as_joystick), HEX32ARR, 0, 0xFFFFFFFF },
+	{ "SANITY_CHECK", (void *)(&(cfg.sanity_check)), UINT8, 0, 1 },
 };
 
 static const int nvars = (int)(sizeof(ini_vars) / sizeof(ini_var_t));
@@ -599,6 +602,7 @@ void cfg_parse()
 	cfg.browse_expand = 1;
 	cfg.logo = 1;
 	cfg.rumble = 1;
+	cfg.dpad_threshold = 50;
 	cfg.wheel_force = 50;
 	cfg.dvi_mode = 2;
 	cfg.lookahead = 1;
@@ -616,6 +620,7 @@ void cfg_parse()
 	cfg_error_count = 0;
 	strcpy(cfg.autofire_rates, "10,15,30");
 	strcpy(cfg.screenshot_image_format, "png");
+	cfg.screenshot_info = 1;
 
 	ini_parse(altcfg(), video_get_core_mode_name(1));
 	if (has_video_sections && !using_video_section)
