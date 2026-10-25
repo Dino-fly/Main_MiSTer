@@ -1,0 +1,549 @@
+<title>DMG Shadow Bench</title>
+<style>
+:root{
+  --booth:#1a1c18; --booth-line:#2b2e27;
+  --bg:#f4f4ee; --panel:#fffffb; --line:#dcdcd0; --ink:#181a14; --mid:#5d6154;
+  --faint:#8d9182; --accent:#6f7a10; --accent-soft:#eef0d8; --warn:#a8492f;
+  --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:ui-sans-serif,system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#111310; --panel:#191c16; --line:#2c3026; --ink:#e8eade; --mid:#a0a595;
+    --faint:#767b6b; --accent:#b6c53a; --accent-soft:#242a12; --warn:#d97a5c;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#111310; --panel:#191c16; --line:#2c3026; --ink:#e8eade; --mid:#a0a595;
+  --faint:#767b6b; --accent:#b6c53a; --accent-soft:#242a12; --warn:#d97a5c;
+}
+*{box-sizing:border-box}
+body{margin:0; background:var(--bg); color:var(--ink); font-family:var(--sans);
+     font-size:15px; line-height:1.55; -webkit-font-smoothing:antialiased}
+.wrap{max-width:1500px; margin:0 auto; padding:30px 26px 70px}
+header.top{display:flex; flex-wrap:wrap; align-items:baseline; gap:14px;
+           border-bottom:1px solid var(--line); padding-bottom:16px; margin-bottom:24px}
+h1{font-size:23px; font-weight:640; letter-spacing:-.02em; margin:0; text-wrap:balance}
+.sub{color:var(--mid); font-size:14px; margin:0; max-width:64ch}
+.eyebrow{font-family:var(--mono); font-size:10.5px; letter-spacing:.14em; text-transform:uppercase;
+         color:var(--accent); margin:0 0 5px}
+.grid{display:grid; grid-template-columns:minmax(0,1fr) 316px; gap:24px; align-items:start}
+@media (max-width:1080px){ .grid{grid-template-columns:minmax(0,1fr)} }
+
+/* the stage is a viewing booth: a fixed neutral surround in BOTH themes, so the
+   theme never influences a judgement about the render itself */
+.booth{background:var(--booth); border:1px solid var(--booth-line); border-radius:8px;
+       padding:16px; overflow:auto}
+.booth canvas{display:block; image-rendering:pixelated; cursor:zoom-in; border-radius:2px}
+.boothbar{display:flex; justify-content:space-between; align-items:center; gap:12px;
+          font-family:var(--mono); font-size:11px; color:#8b9081; padding:0 2px 10px}
+
+.card{background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:15px 16px 17px}
+.card + .card{margin-top:14px}
+.card h2{font-size:11px; font-family:var(--mono); letter-spacing:.13em; text-transform:uppercase;
+         color:var(--faint); margin:0 0 13px; font-weight:600}
+
+.ctl{margin-bottom:15px}
+.ctl:last-child{margin-bottom:0}
+.ctl .row{display:flex; justify-content:space-between; align-items:baseline; gap:8px; margin-bottom:5px}
+.ctl label{font-size:13.5px; font-weight:520}
+.ctl .val{font-family:var(--mono); font-size:12.5px; color:var(--accent); font-variant-numeric:tabular-nums}
+.ctl .hint{font-size:11.5px; color:var(--faint); margin:4px 0 0; line-height:1.4}
+input[type=range]{width:100%; accent-color:var(--accent); margin:0; height:20px}
+select{width:100%; font:inherit; font-size:13px; padding:6px 8px; color:var(--ink);
+       background:var(--bg); border:1px solid var(--line); border-radius:5px}
+.chk{display:flex; align-items:center; gap:8px; font-size:13.5px}
+.chk input{accent-color:var(--accent); width:15px; height:15px}
+
+.presets{display:flex; flex-wrap:wrap; gap:6px}
+button{font:inherit; font-size:12.5px; padding:6px 11px; border-radius:5px; cursor:pointer;
+       border:1px solid var(--line); background:var(--bg); color:var(--ink)}
+button:hover{border-color:var(--accent); color:var(--accent)}
+button:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+
+table.m{width:100%; border-collapse:collapse; font-size:12.5px}
+table.m th{text-align:left; font-weight:600; font-size:10.5px; font-family:var(--mono);
+           letter-spacing:.08em; text-transform:uppercase; color:var(--faint);
+           padding:0 0 6px; border-bottom:1px solid var(--line)}
+table.m td{padding:6px 0; border-bottom:1px solid var(--line); vertical-align:baseline}
+table.m tr:last-child td{border-bottom:0}
+table.m td.n{font-family:var(--mono); text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap}
+.pill{display:inline-block; font-family:var(--mono); font-size:11px; padding:1px 6px;
+      border-radius:99px; background:var(--accent-soft); color:var(--accent)}
+.pill.bad{background:transparent; color:var(--warn); border:1px solid var(--warn)}
+.mnote{font-size:11.5px; color:var(--faint); margin:11px 0 0; line-height:1.45}
+pre.out{font-family:var(--mono); font-size:11.5px; background:var(--bg); border:1px solid var(--line);
+        border-radius:6px; padding:10px 11px; margin:0; overflow-x:auto; color:var(--mid); line-height:1.5}
+#lens{position:fixed; width:330px; height:330px; border:2px solid var(--accent); border-radius:7px;
+      pointer-events:none; opacity:0; transition:opacity .1s; z-index:60; background:#000;
+      box-shadow:0 10px 34px rgba(0,0,0,.45); overflow:hidden}
+#lens.on{opacity:1}
+#lens canvas{display:block; image-rendering:pixelated}
+@media (prefers-reduced-motion:reduce){ #lens{transition:none} }
+.legend{display:flex; flex-wrap:wrap; gap:5px 16px; font-size:12px; color:var(--mid); margin:14px 0 0}
+.legend b{color:var(--ink); font-weight:600}
+</style>
+<div id="lens" aria-hidden="true"><canvas id="lensc" width="330" height="330"></canvas></div>
+<div class="wrap">
+<header class="top">
+  <div style="flex:1 1 460px">
+    <p class="eyebrow">Classic Home &middot; reflective panel model</p>
+    <h1>DMG Shadow Bench</h1>
+  </div>
+  <p class="sub">Every render is at an <b>integer scale</b> and shown <b>1:1</b> &mdash; nothing resampled.
+     Hover the image for a <b>10&times;</b> lens. The stage keeps a fixed neutral surround in both
+     light and dark themes so the page never colours your judgement.</p>
+</header>
+
+<div class="grid">
+  <div>
+    <div class="boothbar">
+      <span id="dims">&nbsp;</span>
+      <span id="perf">&nbsp;</span>
+    </div>
+    <div class="booth" id="booth"><canvas id="cv"></canvas></div>
+    <p class="legend">
+      <span><b>Shadow intensity</b> gain on the opacity map, clamped at 1</span>
+      <span><b>Pixel opacity</b> 1 = pixels hide the shadow entirely</span>
+      <span><b>Spread</b> box-blur radius</span>
+      <span><b>Offset</b> right and down, in output pixels</span>
+    </p>
+  </div>
+
+  <div>
+    <div class="card">
+      <h2>The four knobs</h2>
+      <div class="ctl">
+        <div class="row"><label for="s_int">Shadow intensity</label><span class="val" id="v_int"></span></div>
+        <input type="range" id="s_int" min="0" max="4" step="0.05">
+        <p class="hint">Gain on the opacity map. The map itself maxes near 0.46, so 2.2&ndash;2.5 is where
+           a gap buried in darkness reaches the black floor and the grid disappears there.</p>
+      </div>
+      <div class="ctl">
+        <div class="row"><label for="s_op">Pixel opacity</label><span class="val" id="v_op"></span></div>
+        <input type="range" id="s_op" min="0" max="1" step="0.01">
+        <p class="hint">How much a pixel hides the shadow behind it. 0 = fully transparent, shadow shows
+           through everywhere. 1 = shadow only in the gaps, the old rule.</p>
+      </div>
+      <div class="ctl">
+        <div class="row"><label for="s_off">Shadow offset</label><span class="val" id="v_off"></span></div>
+        <input type="range" id="s_off" min="0" max="10" step="1">
+        <p class="hint">Right and down. Must exceed the spread or the blur symmetrises it into a glow.</p>
+      </div>
+      <div class="ctl">
+        <div class="row"><label for="s_sp">Shadow spread</label><span class="val" id="v_sp"></span></div>
+        <input type="range" id="s_sp" min="0" max="8" step="1">
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Live measurement</h2>
+      <table class="m">
+        <thead><tr><th>What it measures</th><th style="text-align:right">Luma</th><th></th></tr></thead>
+        <tbody id="mrows"></tbody>
+      </table>
+      <p class="mnote" id="mnote"></p>
+    </div>
+
+    <div class="card">
+      <h2>Panel and scene</h2>
+      <div class="ctl">
+        <div class="row"><label for="s_scene">Scene</label></div>
+        <select id="s_scene"></select>
+      </div>
+      <div class="ctl">
+        <div class="row"><label for="s_pal">Palette</label></div>
+        <select id="s_pal"></select>
+      </div>
+      <div class="ctl">
+        <div class="row"><label for="s_scale">Integer scale</label><span class="val" id="v_scale"></span></div>
+        <input type="range" id="s_scale" min="3" max="8" step="1">
+        <p class="hint">7&times; is what a 1080p set gives a 144-line core.</p>
+      </div>
+      <div class="ctl">
+        <div class="row"><label for="s_gap">Gap width</label><span class="val" id="v_gap"></span></div>
+        <input type="range" id="s_gap" min="0.05" max="0.35" step="0.01">
+        <p class="hint">A share of the cell, so the line scales with the pixel.</p>
+      </div>
+      <div class="ctl chk"><input type="checkbox" id="s_floor" checked>
+        <label for="s_floor">Stop at the panel's black floor</label></div>
+      <p class="hint">On: the shadow lerps toward the darkest shade, so dark areas cannot dull.
+         Off: it multiplies toward black, which dulls them.</p>
+      <div class="ctl chk" style="margin-top:12px"><input type="checkbox" id="s_noshadow">
+        <label for="s_noshadow">Shadow off (compare)</label></div>
+    </div>
+
+    <div class="card">
+      <h2>Presets</h2>
+      <div class="presets" id="presets"></div>
+      <p class="hint" style="margin-top:11px">Current settings, in the firmware's own units:</p>
+      <pre class="out" id="defines"></pre>
+    </div>
+  </div>
+</div>
+</div>
+<script>
+const SCENES={zelda:{w:160,h:144,d:"VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVf////9VVVVVVVVVVUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAAAADAAAAAAAAAAFKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqwAAAA6qqqqqqqqqhS////////////////////////////////////8AAAAP/////////4UvVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVXAAAADVVVVVVVVV+FLdVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV/////1VVVVVVVV3hS11VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVcAAAANVVVVVVVV14UtXVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVXf///3VVVVVVVV1eFLVf//////////////////////////////////3VVVd////////1XhS1X1VVV1VXVVdVV1VXVVdVV1VXVVdVV1VXVVdd1X1XdVdVV1VV9V4UtV3qqquqq6qrqquqq6qrqquqq6qrqquqq6qrrdVBV3qrqquqq3VeFLVduqqrqquqq6qrqquqq6qrqquqq6qrqquqq63///96q6qrqq51XhS1Xa/////////////////////////////////91VVXf//////6dV4UtV2vq6qrqquqq6qrqquqq6qrqquqq6qrqquqrdV9V3uqq6qq+nVeFLVdrv////////////////////////////////3VQVd//////7p1XhS1Xa7////////////////////////////////9////f/////+6dV4UtV2u9RUVRVUVFUVVFRVFVRUVRVUVFUVQAAAADdVVV3P////PunVeFLVdrvUAFVFVABVRVQAVUVUAFVFVABVRUAAAAA3VfVd9VVVVf7p1XhS1Xa7xFRVQARUVUAEVFVABFRVQARUVUAFAAAAN1UFXfnVVXb+6dV4UtV/+9FVFUVRVRVFUVUVRVFVFUVRVRVFQAAAADf///31VVVV/v/VeFLVdrvRVQAFUVUABVFVAAVRVQAFUVUABUAAFQA3VVVd+qqqqv7p1XhS1Xa70FRUUVBUVFFQVFRRUFRUUVBUVFFAAAAAN1X1XfVVVVX+6dV4UtV2v8UBVFQFAVRUBQFUVAUBVFQFAVRUAAAAADdVBV351VV2/+nVeFLVdrvVUVRVFVFUVRVRVFUVUVRVFVFUVRVVVVV3///99VVVVf7p1XhS1Xa71VRUVRVUVFUVVFRVFVRUVRVUVFUBUAAAAVAAADqqqqr+6dV4UtV2u8VRABUFUQAVBVEAFQVRABUFUQAVAAAAAAAAAAA1VVVV/unVeFLVdrvRRUVAUUVFQFFFRUBRRUVAUUVFQEAAAAAAAAAAOdVVdv7p1XhS1X/71BVFUVQVRVFUFUVRVBVFUVQVRVFAAAAUAAAAFDVVVVX+/9V4UtV2u9UVRVFVFUVRVRVFUVUVRVFVFUVRQAAAAAAAAAA//////unVeFLVdrvUBQFQVAUBUFQFAVBUBQFQVAUBUEAAAAAAAAAAOuuuuv7p1XhS1Xa/wVBUBQFQVAUBUFQFAVBUBQFQVAUAAFQAAABUADrrrrr/6dV4UtV2u9FUVRVRVFUVUVRVFVFUVRVRVFUVVVVVVVVVVVVP////PunVeFLVdrvAAAAAFFRVFUAAAAAUVFUVVFRVFUAAAAAAAAAAD////z7p1XhS1Xa7x////RQAVUVH///9FABVRVQAVUVAAAAAAAAAADVVVVX+6dV4UtV2u89qqq8EVFVAD2qqrwRUVUAEVFVABQAAAAUAAAA51VV2/unVeFLVf/vNqqqrEVUVRU2qqqsRVRVFUVUVRUAAAAAAAAAANVVVVf7/1XhS1Xa7za//qxFVAAVNr/+rEVUABVFVAAVAABUAAAAVADqqqqr+6dV4UtV2u8/wAP8QVFRRT//8/xBUVFFQVFRRQAAAAAAAAAA1VVVV/unVeFLVdr/MMVTDBQFUVAw1R8MFAVRUBQFUVAAAAAAAAAAAOdVVdv/p1XhS1Xa7z////xVRVFUP1Bw/FVFUVRVRVFUVVVVVVVVVVXVVVVX+6dV4UtV2u/QAAAHVVFRVN11wf9VUVFUVVFRVAVAAAAFQAAA6qqqq/unVeFLVdrv0AAABxVEAFT1zwf3FUQA/9VEAFQAAAAAAAAAANVVVVf7p1XhS1Xa79VUABdFFRUB9cd/F0UVP0F9FRUBAAAAAAAAAADnVVXb+6dV4UtV/+/UAAAHUFUVRd3DzPdQVdFVV1UVRQAAAFAAAABQ1VVVV/v/VeFLVdrv0AAAB1RVFUXTwww3VFXf1Vf1FUUAAAAAAAAAAP/////7p1XhS1Xa79AAAAdQFAVB3dMBx1AUPzVVdAVBAAAAAAAAAADrrrrr+6dV4UtV2v/QAAAHBUFQFP33V38FQVM/f3FQFAABUAAAAVAA66666/+nVeFLVdrv0AAAB0VRVFXND/xzRVFXM3PRVFVVVVVVVVVVVT////z7p1XhS1Xa79AAAAdRUVRVxw/w01FRXDPHcVRVAAAAAAAAAAAAAAAA+6dV4UtV2u/QAAAHUAFVFcH0H0NQAVwAHV1VFQAAAAAAAAAAAAAAAPunVeFLVdrv1VQAFxFRVQDwAAAPEVFXAXVXVQAUAAAAFAAAABQAAAD7p1XhS1X/79QAAAdFVFUV3///90VUVf/9V1UVAAAAAAAAAAAAAAAA+/9V4UtV2u/QAAAHRVQAFdAAAAdFVAAw1/wAFQAAVAAAAFQAAABUAPunVeFLVdrv0AAAB0FRUUXQAAAHQVFR8NXRUUUAAAAAAAAAAAAAAAD7p1XhS1Xa/9AAAAcUBVFQ0AAABxQFU19VdVFQAAAAAAAAAAAAAAAA/6dV4UtV2u/QAAAHVUVRVNAAAAdVRVP///VRVFVVVVVVVVVVVVVVVfunVeFLVdrv1AAAF1VRUVTUAAAXVVFRVFVRUVQFQAAABUAAAAVAAAD7p1XhS1Xa79VVVVcVRABU1VVVVxVEAFQVRABUAAAAAAAAAAAAAAAA+6dV4UtV2u/lVVVbRRUVAeVVVVtFFRUBRRUVAQAAAAAAAAAAAAAAAPunVeFLVf/v/////1BVFUX/////UFUVRVBVFUUAAABQAAAAUAAAAFD7/1XhS1Xa73qqqq1UVRVFeqqqrVRVFUVUVRVFAAAAAAAAAAAAAAAA+6dV4UtV2u9v///4UBQFQW////hQFAVBUBQFQQAAAAAAAAAAAAAAAPunVeFLVdr/AAAAAAVBUBQAAAAABUFQFAVBUBQAAVAAAAFQAAABUAD/p1XhS1Xa71VVVVVFUVRVVVVVVUVRVFVFUVRVVVVVVVVVVVVVVVVV+6dV4UtV2u9RUVRVUVFUVVFRVFVRUVRVUVFUVQAAAAAMz/AAAAAAAPunVeFLVdrvUAFVFVABVRVQAVUVUAFVFVABVRUAAAAAD///AAP8P8D7p1XhS1Xa7xFRVQARUVUAEVFVABFRVQARUVUAFAAAAB///8ANV9Vw+6dV4UtV/+9FVFUVRVRVFUVUVRVFVFUVRVRVFQAAAAADAP/wNWlaXPv/VeFLVdrvRVQAFUVUABVFVAAVRVQAFUVUABUAAFQADMwMMDWapZz7p1XhS1Xa70FRUUVBUVFFQVFRRUFRUUVBUVFFAAAAAA/MDDAtlVWc+6dV4UtV2v8UBVFQFAVRUBQFUVAUBVFQFAVRUAAAAAA0EABwLZvmfP+nVeFLVdrvVUVRVFVFUVRVRVFUVUVRVFVFUVRVVVVVdV/A1TWVVnj7p1XhS1Xa71VRUVRVUVFUVVFRVFVRUVRVUVFUBUAAAD//AMA2WqWc+6dV4UtV2u8VRABUFUQAVBVEAFQVRABUFUQAVAAAAAAP/APANqlaXPunVeFLVdrvRRUVAUUVFQFFFRUBRRUVAUUVFQEAAAAAA0D9cD1X9Xz7p1XhS1X/71BVFUVQVRVFUFUVRVBVFUVQVRVFAAAAUAD/DXA7/q/s+/9V4UtV2u9UVRVFVFUVRVRVFUVUVRVFVFUVRQAAAAADVw1wOqqqrPunVeFLVdrvUBQFQVAUBUFQFAVBUBQFQVAUBUEAAAAAA///wB6r+rT7p1XhS1Xa/wVBUBQFQVAUBUFQFAVBUBQFQVAUAAFQAADQBwAH/R/Q/6dV4UtV2u9FUVRVRVFUVUVRVFVFUVRVRVFUVVVVVVVX///VAAAAAPunVeFLVf///////////////////////////////////////////////1XhS1X///////////////////////////////////////////////9V4UtV////////////////////////////////////////////////VeFLVf///////////////////////////////////////////////1XhS1X///////////////////////////////////////////////9V4UtV////////////////////////////////////////////////VeFLVf///////////////////////////////////////////////1XhS1X///////////////////////////////////////////////9V4UtV///P8/z/////////////////////P/8P////w/w////8D///VeFLVf//z/P8/////z///////////////z///////z/8P////z///1XhS1X//8/P8//8P/AP///8P////M/8P/z////8P8AD/D////z///9V4UtV//88z/P/88/8////88////w/88/8//z/88/8//z////8////VeFLVf//MM/wP8/P/P///8/P///8/8AP/P/8/8AP/P/8////8////1XhS1X//ww/zz/PP/P////PP///8//P//P/8//P//P///////P///9V4UtV//8/P88/8M/z////8M////P/8D/z//P/8D/z//D////A////VeFLVf///////////////////////////////////////////////1XhS1X///////////////////////////////////////////////9V4UtV////////////////////////////////////////////////VeFLVf///////////////////////////////////////////////1XhS1X///////////////////////////////////////////////9V4UtV////////////////////////////////////////////////VeFLVf///////////////////////////////////////////////1XhS1X///////////////////////////////////////////////9V4UtV////////////////////////////////////////////////VeFLVf/////8//////////z//////////////8P///P//////////1XhS1X///8//P/////////8//8////////////z///z//////////9V4UtV///wD/P//D/zz/w/8//wD///8/P8P/PPz///z///////////VeFLVf///P/z//PP88/zz/P//P////zP88/zz///8A///////////1XhS1X///z/8D/Pz88/88/wP/z////8P8/Pzz///88///////////9V4UtV///z/88/zz/PP/wPzz/z/////P/PP88////PP///////////VeFLVf//8//PP/D/8M/PP88/8/////P/8P/wz///8D///////////1XhS1X/////////////wP/////////P//////////////////////9V4UtV////////////////////////////////////////////////VeFLVf///////////////////////////////////////////////1XhS1X///////////////////////////////////////////////9V4UtV////////////////////////////////////////////////VeFLVf///////////////////////////////////////////////1XhS1X///////////////////////////////////////////////9V4UtV////////////////////////////////////////////////VeFLVf///////////////////////////////////////////////1XhS1dVVVVVVVVVVVVVVVVVVepDAAAAAMGrVVVVVVVVVVVVVVVVVVXV4UtdVVVVVVVVVVVVVVVVVVXmQwAAAADBm1VVVVVVVVVVVVVVVVVVdeFLdVVVVVVVVVVVVVVVVVVV5kMAAAAAwZtVVVVVVVVVVVVVVVVVVV3hS9VVVVVVVVVVVVVVVVVVVe/zAAAAAM/7VVVVVVVVVVVVVVVVVVVX4Uv////////////////////wDwAAAADwD////////////////////+FKqqqqqqqqqqqqqqqqqqqqwoMAAAAAwoOqqqqqqqqqqqqqqqqqqqqhQAAAAAAAAAAAAAAAAAAAAMgjAAAAAMgjAAAAAAAAAAAAAAAAAAAAAVVVVVVVVVVVVVVVVVVVVVXIIwAAAADII1VVVVVVVVVVVVVVVVVVVVUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/DwAAAAAAAPAADw8AAAAAAADwAAD/AAAAADzwPPA88AAAAAAAAAAAMMwAAAAAAAAwADDMAAAAAAAAMAADAwAAAADXXNdc11wAAAAAAAAAADDMAAAAAAAAMAAwzAAAAAAAADAADBMAAAAA2ZzZnNmcAAAAAAAAAAA/DAAAAAAAADAAP8wAAAAAAAAwADCrAAAAANqc2pzanAAAAAAAAAAAMMwAAAAAAAAwADDMAAAAAAAAMAA6rAAAAAA2cDZwNnAAAAAAAAAAADDMAAAAAAAAMAAwzAAAAAAAADAAOrAAAAAADcANwA3AAAAAAAAAAAA/DAAAAAAAADAAMMwAAAAAAAAwAD/AAAAAAAMAAwADAAAAAAAAAAAAAAwAAAAAAAAwAAAMAAAAAAAAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMAAAAAAAAMAAADAAAAAAAADAAD/AP8A/wAAAAAAAAAAAAAAAAAAAADAAAAAAAADAAAAwAAAAAAAAwADw8PDw8PAAAAAAAAAAAAAAAAAAAAAwAAAAAAAAwAAAMAAAAAAAAMAA8PDw8PDwAAAAAAAAAAAAAAAAAAAAMAAAAAAAAMAAADAAAAAAAADAAPDw8PDw8AAAAAAAAAAAAAAAAAAAADAAAAAAAADAAAAwAAAAAAAAwADw8PDw8PAAAAAAAAAAAAAAAAAAAAA8AAAAAAADwAAAPAAAAAAAA8AAP8A/wD/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},ws:{w:224,h:144,d:"//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////v/////////////////////////////////////////////////////////////////////////6//////////////////////////////////////////////////////////////////////////r/////////////////////////////////////////////////////////////////////////5v/////////////////////////////////////////////////////////////////////////m/////////////////////////////////////////////////////////////////////////+b/////////////////////////////////////////////////////////////////////////lv////////////////////////////////////////////////////////////////////////+W/////////////////////////////////////////////////////////////////////////pb////////////////////////////////////////////////////////////////////////+W/////////////////////////////////////////////////////////////////////////pv//////////////////////+/////////////////////////////////////////////////+b///////////////////////r/////////////////////////////////////////////////lv//////////////////////+v////////////////////////////////////////////////+W///////////////////////q/////////////////+///////////////////////////////lb////7/////////////////+v//////v//////////6//////////////////////////////6Vv///+b//r//////////////m//////+v/////////+r//////////////////////////////lW//5flb/+//////////////+b//////q//////////5v/////////////////////////////+VVvlVVqW+v//////////////pv/////+b/////////+W//////////////////////////////6VVlW+a+Wm//////////////6W//+///lv/////////pb///////////////////////////7//5VVW/6/+Vv/////////////+pW//6//lb/+v//////+Wv///////////////////////////v//lVV////+b//////////////+VW//r/5a/+m///////mr///////////////////////////+//5VVr////+///////////////pWr/5b+l/vlv//////+b////////////////////////////r//lVW///+///////////+v///+lb//pb5W6uW////r//lv///////////////////////////9v/+lVW//+m///////+//+Vb+v/+lb//5aVWmqWv//6v+pW////////////////////////////m/v+lVWq6VZv//+v//lr+VVblv/+Va//lqZqW5W///r6lWv///////////////////////////+Wpv6VVVVVlVv//lv+qVVVVVVVv/5VWv5W5ulalaq/5rlVv////////////////////////////pVW+pVVVVWlVv+lqqq+lVWlVWlv+lVZqVWVuVVWpauVVVVvr///////////////////////////pValaVVqlrpVqlb/q//pVbpValrlVWVlVVVaVpVVWqlWv5pb///////////////////////////5VVW+lb/r//lVW//v//5W/5W+lpVVaqpapVVqppWuqVf/5Vr///////////////////////////5Va//q/////pa//////qb/qb/pWpVv/6v5Vb/6qv/6Wr6lVf///////////////////////////lVf////////6//////////+v/6v6qv///6q//////6VpVVW///////////////////////////6VWv/////////////////////////////////////+qVVVVb//////////////////////////+lVr919fffX33XfdX9f1fX1f3d9ffdX1dX/V3d9fffpVVVVVv////////////////////////r/lVVvd3fd333d3d933fff33ffd3fdd33f333/d3fdd+lVVVVq////////////////////////+b+llW93d91/fd3d33fd99Xfd993d93XfdXff193d93X5VVVVW/////////////////////////5b/n1r3d1Xd9V3d3fdX1X3991f3d33fd939X/93d1Xff5VVVVv/////////////////////////5aqfW/d3fd933d3fX33fff9fff3f1991fV331f3ffd9/5VVVW//6r/////////////////////+VVVuq//////////////////////////////////////rpVVVb/6q//////////////////////lVVavr6/////////6/+b//////////rq/7//+v///6qqaVVVa/5b/////////////////////+pVVVVlqW/m/6qXq6+W6/br/6v+b/+rv7W+XqW1vq+qlf//9VVvpa//////////////////////6WpVVVVVW5VvqqfqqpWrv5a/luVW/lr6eWluqbm5apVW6pW5VWlW///////////////////////+v5VVv/////6qp/////+r+XlVpVVpX+p+VW6puWVVVVbqqblVZVb/////////////////////////5VW6qqqqqqqqqqqpv6qv6VVVVqv+qn5Vbqm5VVVVVuqpuVVVVv/////////////////////////pVbqqqqqqqqqqqqm/qqr//////qqqf//+qb//1VVW6qm5VVVav////////////////////////+VVuqqqqqqqqqqqqb+qqqVVVVVaqqp+qqqqqqbv///qqb/+VW+////////////////////////+pVW6qqqqqqqqqqqpv6lqqqqqqqqpan6qqqqqpv6qqqqqqm5Vv/////////////////////////lVVbqpVW5XVVV6WlW/qZqqqqqqqqZqfqqqqqqm/qqqqqqqblV////////////////////////+b1VVuqm//pv///qb//+p9WqqqqqpX2p+qqqqqqb+qqqqqqpuVb////////////////////+///lv5VW6quqqqqX6qqqm66m/laqqqlb+an6qqqqqpv6qqqqqqm5b/////////////////////+r/pVv1Vbqr6qqqpfqqqqbrqlv+Wqqpb+WqflVaqpVW/qqqqqqqblv/////////////////////6a5aW+VVuqvaqqql+aqqpuuqpVvmqpb5Wqp///6q///9VVWqqVVuVv/////////////////////+VVpWlVW6q5VqqVb5WpVW66qqlbmqW5Wqqnqquqr6qq///+qpv/5W//////////////////////+Vb5VVVbqr/qaqq6/qqr/rqqqqXmptaqqqdVW6qvpVWqqq6qm6qlW//////////////////////+W/pVVVuqvqmqqX76qWqbuqVVqpalqlVam1VvqqulVVVZXqqblVar////r/////////////////+//lVVW6q+pupmr+mpWpv+pqpWqqqlqpqfVW6qq+lVVW1eqpuVVv/m/6aq///////////////////+VVVbqr5fqlqq5qWmm/6p//lqqlv/al5Vuqqq+lVVvl6qm5VVr5VqVv////////////////////5VVVuq/66pfqWvpbpvrqpVb5qpvlWqblbqqqq+lWbuXqqblVVWVVVv////////////////////5VVVW6r6qqv6qrvqvq6vqqqW5qblqqW6W6qqqqulu6teqpuVVVVblv////////////////////6VVVVbqvqqqqqqqqqqbluqqqnWpdqqVvluqqqqqvrua56qm5VVVW/7////////////////////lVVVVVuq+pqqqqqqqmpuVuqqqqqqqqVv5bqqqpqqr+abnqqblVqVf/////////////////////+lalVVW6r6pVWqqqVVqm5Vvqqqqqqqm/qW6qmqlqqbmqvuqpuVr+W///////////////////////r5VVVbqvqq/1qqX/qqbla/qqqqqqqqr1uqqaqVqlumpr6qm5W/+v///////////////////////+VVVVuq+qqq9qn6qqpur/qqqlVVaqqq/qqlqpmqbqWq/qqblW//////////////////////////5VVVW6r6qVqmqapWqm/+qqqVWqlWqqquqpeqmmm6pWq+qpuVVa/7///////////////////////5VVVbqvqn1WqqlX2qr6qqpVaq6qVWqqaqX6qblbmpZv6qm5VVVab///////////////////////5VVV+q+qq/Wqpf6qq/6qqQa9LR/kGqpul/qpvm+mlZvqqblVVWv///////////////////////+lVVbqr6qqr2qfqqqbr6qkAXwMD1AGqW+vuqm/rulVu+qpuVWlv////////////////////////pVVV+qrqqqqqqqqqlub6pAALgwuAAGl+v66qbr5uVWv6qm5Vv/////////////////////////5VVVbqqbmqqqqqqqVb5b5UAAfzP0AAVvlqWqpuqlvWrrqqblVv/////////////////////////5VVW6qlvlqpaqVVWv66b6gAG7/7kACr5VVaqm5VVr/5eqpuVVv/////////////////////////5VVuqqbvqqlalqqv6W+a/QBuVVbkAf6VVVqqblVVaqW6qm5VVr//////////////////////6/pVVbqqm5v6pqqW+rqluuatAHlVVbQB6VpVWqpuVWqlVuqqblVVr//////////////////////llVqW6qqeb6qm6pfqqlbquW0AeWqltAHlX5Vaqm5VbqqqqqpuVVv/////////////////////6pVWv5uqqm7+qpfqluqlb6qtbkB5v/m0BuVaVVqqblVfqqqqqm5Vb///////////////////////qlq/W+qp+qqqm+qlqVaqql1bQHm/+bQHlb5WWqpuVVuqqqqqblVa//////////////////////////5W/qf6qqlv6qqqqqqpbluQeb/5tBtW+Vuaqm5VVuqqqqm6VVb//////////////////////////lVvm/6qlb/qqqqqqpW6luR5r+m0blvlW9qqblVV+qqqpulZVv/////////////////////////6VVt+r6la6vlVVVVVWualuR5v5tG5b/pWmqpuVVW6qqpbpVulv/////////////////////+r/lVVVvpb5a+lv///////mupuR5ubRuZb/6WZVW5VVbVVVb6VW/lbv///////////////////+Vb5VVqlpVb76lVqqqqqqqlr/pv/5W//llb/+lv//lVVv///6lVf/lVr///////////////////lValVv+VVpaqlVVVVVVVVVa/+laqmWqlblv/+WqqqValqqqqlVVv/6r///////////////////5bppVb+VVbpVVWpVVVVVVVW//+VVVuVVVvm//5VVVVW/lVVVVVVVv/////////////////////+r/5Vb/6VVvlVVvpWuVW5VVv//2pVb+mWm/m//5VVWpv+VVVVVVVVv/////////////////////7//5X///pW+r+b+Vr+W/+ab///vrlv/ur7/r//qqW///lVVVVaqVVuv///////////////////////6v///pW////lb/+v/6qv/////b///v//v/+v5b//+VpVaW/6VVW/////////////////////////////lWr//5a////////////6////v////7/5b/+lr6Wqv/+VVb/////////////////////////////lVv/+a//////////////////////+//qb/lb/+////+VVv/////////////////////////////lW//+v//////////////////////6//+//q///////+lVqv///////////////////////////+Vv//7/+r////6u+r//////////+qv//////////////6VVv///////////////////////////5W/////lb////Wmlv/////r////lVv//////////////5VW////////////////////////////lv////5a////9dZb/////5v///5Wr///////////////qlW///////////////////////////+a////+lrquqvl11+q+qvqX6r6rlv+vuuquqv/////////pW///////////////////////////5v////lVZVpVeWWXlVVV5VdVaVXVWml1lVlVv/////////5W//////////////////////////+r/////paXmW25pdZeZbWXll1ltuVZaaZbVXm//////////+W//////////////////////////5v/////lptZv+Xmlm1l9ZuZVab//5l11l5Vtb//////////2r//////////////////////////r/////5WWlm/5ZZZaWXlW1l/5vqqWWWWXmW1v/////////6v//////////////////////////+v/////lpVpb/lVWlVpuaVWVbW5VVdVVtVZvW//////////m///////////////////////////7//////q6qu/+qqrqr6+uquq6v6qq6qr66q+r//////////q//////////////////////////////////v/r//+rq/6////7////76v/7//6/+///////////r////////////////////////////////////v//+/r/v////v////v6/////7/7///////////r////////////////////////////////////////+/////////////v/////v/////////////v////////////////////////////////////////7////////////+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////VV9VX9VX9V/1X///1X9VV/1dVX9VV//9VX9V9fVVfVVf1X9X9f/////////////////////////V99X39ffV99X3//9X3fX3999X3fX3//9f39f93193199fX9f9//////////////////////////X39ff1//X/9f///9f/1//fX9ff1////19/1/39f/9f/X/f1/f/////////////////////////9ff199V//1//X////X/f/39f19/f///9Vf9f9/3//3/9f9/V9//////////////////////////1X/Vf1///1//X////X1//VV/Vf1////1/f1/39f/9f/1/313X/////////////////////////9//33/X939Xf1f//f1fX/3/X33/X////X1fX9f1//1//19/X1//////////////////////////f/9/11Vf1V/VX///VX/f9/19/1/f///1VX/VX/3//3//1f1/3/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////"}};
+
+const KR=0.2126, KG=0.7152, KB=0.0722;
+const PALETTES=[
+ {k:'olive', n:'Olive (ships on DMG)', c:[[0x8B,0x98,0x14],[0x60,0x78,0x14],[0x3C,0x58,0x18],[0x1E,0x3E,0x1A]]},
+ {k:'dmg',   n:'DMG Green (high contrast)', c:[[0xC4,0xCF,0xA1],[0x8B,0x95,0x6D],[0x4D,0x53,0x3C],[0x1F,0x1F,0x1F]]},
+ {k:'pocket',n:'Pocket', c:[[0xE0,0xDB,0xCD],[0xA8,0x9F,0x94],[0x70,0x6B,0x66],[0x2B,0x2B,0x26]]},
+ {k:'weak',  n:'TU DMG Weak', c:[[0x6D,0x83,0x3D],[0x5E,0x7A,0x40],[0x57,0x72,0x40],[0x36,0x4E,0x1A]]}
+];
+function lum(c){ return KR*c[0]+KG*c[1]+KB*c[2]; }
+
+/* ---- scenes ------------------------------------------------------------- */
+function unpack(b64,w,h){
+  const bin=atob(b64), n=w*h, out=new Uint8Array(n);
+  for(let i=0;i<n;i++) out[i]=(bin.charCodeAt(i>>2)>>(6-2*(i&3)))&3;
+  return out;
+}
+function testPattern(){
+  const w=160,h=144,a=new Uint8Array(w*h);
+  for(let y=0;y<h;y++) for(let x=0;x<w;x++){
+    let v;
+    if(y<46)       v=(x%10===5&&y%10===5)?0:3;          // isolated bright on dark
+    else if(y<92)  v=(x%10===5&&y%10===5)?3:0;          // isolated dark on bright
+    else if(y<116) v=Math.min(3,((y-92)/6)|0);          // four bands
+    else           v=(x<80)?(((x+y)&1)?0:3):((x&1)?0:3);// checker | 1px lines
+    a[y*w+x]=v;
+  }
+  return {w:w,h:h,a:a};
+}
+const SCENELIST=[
+  {k:'zelda', n:'Zelda: Link’s Awakening (DMG)', get:()=>({w:SCENES.zelda.w,h:SCENES.zelda.h,a:unpack(SCENES.zelda.d,SCENES.zelda.w,SCENES.zelda.h)})},
+  {k:'ws',    n:'WonderSwan (mostly dark)',           get:()=>({w:SCENES.ws.w,h:SCENES.ws.h,a:unpack(SCENES.ws.d,SCENES.ws.w,SCENES.ws.h)})},
+  {k:'test',  n:'Test pattern (all cases)',           get:testPattern}
+];
+
+/* ---- state -------------------------------------------------------------- */
+const state={ scene:'zelda', pal:'olive', scale:7, gap:0.15,
+               intensity:1.20, opacity:0.45, offset:2, spread:2,
+               floor:true, noshadow:false };
+const PRESETS=[
+ {n:'Lighter, opaque pixels', s:{intensity:1.20,opacity:0.45,offset:2,spread:2,floor:true}},
+ {n:'Gain 2.5 (saturating)',  s:{intensity:2.50,opacity:0.00,offset:2,spread:2,floor:true}},
+ {n:'Old rule (gaps only)',   s:{intensity:1.00,opacity:1.00,offset:2,spread:3,floor:true}},
+ {n:'Multiply to black',      s:{intensity:1.20,opacity:0.45,offset:2,spread:2,floor:false}},
+ {n:'No shadow',              s:{intensity:0.00,opacity:0.45,offset:2,spread:2,floor:true}}
+];
+
+/* ---- pipeline stages ---------------------------------------------------- */
+let G=null;      // geometry + probes   (scene, scale, gap)
+let OPA=null;    // opacity map         (+ palette)
+let BLUR=null;   // blurred map         (+ spread)
+let TMP=null, IMG=null;
+
+function buildGeom(){
+  const sc=state.scene, S=state.scale;
+  const src=SCENELIST.find(s=>s.k===sc).get();
+  const sw=src.w, sh=src.h, a=src.a;
+  const g=Math.max(1,Math.round(state.gap*S));
+  const W=sw*S, H=sh*S;
+  const colCell=new Int32Array(W), gapX=new Uint8Array(W);
+  for(let x=0;x<W;x++){ colCell[x]=(x/S)|0; gapX[x]=(x%S)<g?1:0; }
+  const rowCell=new Int32Array(H), gapY=new Uint8Array(H);
+  for(let y=0;y<H;y++){ rowCell[y]=(y/S)|0; gapY[y]=(y%S)<g?1:0; }
+
+  // cell-level classification, then output-pixel probe lists
+  const at=(cx,cy)=>a[Math.min(sh-1,Math.max(0,cy))*sw+Math.min(sw-1,Math.max(0,cx))];
+  const cls=new Uint8Array(sw*sh);   // 1 deepDark 2 deepBright 4 isDark 8 brOpen 16 brShad
+  for(let cy=0;cy<sh;cy++) for(let cx=0;cx<sw;cx++){
+    let all3=true, all0=true;
+    for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++){
+      const v=at(cx+dx,cy+dy); if(v!==3) all3=false; if(v!==0) all0=false;
+    }
+    let f=0, me=a[cy*sw+cx];
+    if(all3) f|=1;
+    if(all0) f|=2;
+    if(me===3) f|=4;
+    if(me===0){
+      if(all0) f|=8;
+      else if(at(cx-1,cy)===3||at(cx,cy-1)===3||at(cx-1,cy-1)===3) f|=16;
+    }
+    cls[cy*sw+cx]=f;
+  }
+  // Probe lists. Two passes: count each class, then decimate it by its own count.
+  // A single shared stride starves the small classes (the shadowed-edge probe fell to
+  // 3 samples on a mostly-dark scene) while the big ones hit their cap early and bias
+  // toward the top of the frame. Both passes are inlined — routing 2.3M classifications
+  // through a callback cost ~120ms, which is a visible hitch on the scale slider.
+  const KEYS=['buriedGap','openGap','darkPx','brOpen','brShad'];
+  const half=S>>1;
+  const cnt=new Int32Array(5);
+  for(let y=0;y<H;y++){
+    const gy=gapY[y], ro=rowCell[y]*sw, ym=y%S;
+    for(let x=0;x<W;x++){
+      const f=cls[ro+colCell[x]];
+      if(gy|gapX[x]){ if(f&1)cnt[0]++; else if(f&2)cnt[1]++; }
+      else if(f&4) cnt[2]++;
+      else if(f&8) cnt[3]++;
+      else if((f&16)&&(x%S)<half&&ym<half) cnt[4]++;
+    }
+  }
+  const TARGET=20000, Dk=new Int32Array(5), sn=new Int32Array(5), L=[[],[],[],[],[]];
+  for(let i=0;i<5;i++) Dk[i]=Math.max(1,Math.ceil(cnt[i]/TARGET));
+  for(let y=0;y<H;y++){
+    const gy=gapY[y], ro=rowCell[y]*sw, o=y*W, ym=y%S;
+    for(let x=0;x<W;x++){
+      const f=cls[ro+colCell[x]];
+      let c=-1;
+      if(gy|gapX[x]){ if(f&1)c=0; else if(f&2)c=1; }
+      else if(f&4) c=2;
+      else if(f&8) c=3;
+      else if((f&16)&&(x%S)<half&&ym<half) c=4;
+      if(c>=0 && (sn[c]++%Dk[c])===0) L[c].push(o+x);
+    }
+  }
+  const P={}; KEYS.forEach((k,i)=>P[k]=L[i]);
+  G={sw,sh,a,S,g,W,H,colCell,rowCell,gapX,gapY,P};
+  OPA=null; BLUR=null;
+  TMP=new Float32Array(W*H); IMG=new Float32Array(W*H);
+}
+
+function buildOpacity(){
+  const {sw,W,H,colCell,rowCell,gapX,gapY,a}=G;
+  const pal=PALETTES.find(p=>p.k===state.pal).c;
+  const mx=lum(pal[0]);
+  const dk=[0,1,2,3].map(i=>Math.max(0,1-lum(pal[i])/mx));
+  OPA=new Float32Array(W*H);
+  for(let y=0;y<H;y++){
+    const gy=gapY[y], ro=rowCell[y]*sw, off=y*W;
+    for(let x=0;x<W;x++){
+      if(gy|gapX[x]) continue;                       // a gap is substrate: casts nothing
+      OPA[off+x]=dk[a[ro+colCell[x]]];
+    }
+  }
+  BLUR=null;
+}
+
+let SUMROW=null;
+function buildBlur(){
+  const {W,H}=G, r=state.spread;
+  if(r===0){ BLUR=OPA; return; }
+  const K=2*r+1, inv=1/K;
+  // Horizontal: already row-major. Ternary clamps rather than Math.min/max — this
+  // is 2M iterations and the call overhead showed up in the profile.
+  for(let y=0;y<H;y++){
+    const o=y*W; let sum=0;
+    for(let i=-r;i<=r;i++) sum+=OPA[o+(i<0?0:(i>=W?W-1:i))];
+    for(let x=0;x<W;x++){
+      TMP[o+x]=sum*inv;
+      const ai=x+r+1, si=x-r;
+      sum+=OPA[o+(ai>=W?W-1:ai)]-OPA[o+(si<0?0:si)];
+    }
+  }
+  // Vertical: keep a running sum PER COLUMN and sweep row-major. Walking one column
+  // at a time strides by W and misses cache on almost every read — that alone was
+  // costing ~650ms at 7x, which is nowhere near interactive.
+  if(!SUMROW||SUMROW.length<W) SUMROW=new Float32Array(W);
+  const sum=SUMROW; sum.fill(0,0,W);
+  for(let i=-r;i<=r;i++){
+    const o=(i<0?0:(i>=H?H-1:i))*W;
+    for(let x=0;x<W;x++) sum[x]+=TMP[o+x];
+  }
+  for(let y=0;y<H;y++){
+    const o=y*W;
+    for(let x=0;x<W;x++) IMG[o+x]=sum[x]*inv;
+    const ai=y+r+1, si=y-r;
+    const oa=(ai>=H?H-1:ai)*W, ob=(si<0?0:si)*W;
+    for(let x=0;x<W;x++) sum[x]+=TMP[oa+x]-TMP[ob+x];
+  }
+  BLUR=IMG;
+}
+
+let cv, ctx, idata, u32=null, LE=true;
+(function(){ const bb=new ArrayBuffer(4);
+  new Uint32Array(bb)[0]=0x01000000; LE=new Uint8Array(bb)[0]===0; })();
+
+function composite(){
+  const {W,H,sw,colCell,rowCell,gapX,gapY,a}=G;
+  const pal=PALETTES.find(p=>p.k===state.pal).c;
+  const sub=pal[0], flo=state.floor?pal[3]:[0,0,0];
+  const gain=state.noshadow?0:state.intensity, keep=1-state.opacity, off=state.offset;
+  if(!idata||idata.width!==W||idata.height!==H){
+    idata=ctx.createImageData(W,H);
+    u32=LE?new Uint32Array(idata.data.buffer):null;
+  }
+  const d=idata.data;
+  const pk=c=>((255<<24)|(c[2]<<16)|(c[1]<<8)|c[0])>>>0;
+  const packGap=pk(sub), packSh=[pk(pal[0]),pk(pal[1]),pk(pal[2]),pk(pal[3])];
+  for(let y=0;y<H;y++){
+    const gy=gapY[y], ro=rowCell[y]*sw, o=y*W;
+    const base=(y>off?y-off:0)*W;
+    for(let x=0;x<W;x++){
+      const isg=gy|gapX[x];
+      const shade=isg?-1:a[ro+colCell[x]];
+      let k=gain>0?gain*BLUR[base+(x>off?x-off:0)]:0;
+      if(k>0){
+        if(k>1)k=1;
+        if(!isg) k*=keep;
+      }
+      if(k<=0){                                     // fast path: one 32-bit store
+        if(u32) u32[o+x]=isg?packGap:packSh[shade];
+        else { const c=isg?sub:pal[shade], p=(o+x)<<2;
+               d[p]=c[0]; d[p+1]=c[1]; d[p+2]=c[2]; d[p+3]=255; }
+        continue;
+      }
+      const c=isg?sub:pal[shade];
+      const r0=c[0]+k*(flo[0]-c[0]), g0=c[1]+k*(flo[1]-c[1]), b0=c[2]+k*(flo[2]-c[2]);
+      if(u32) u32[o+x]=((255<<24)|((b0+0.5)<<16)|((g0+0.5)<<8)|(r0+0.5))>>>0;
+      else { const p=(o+x)<<2; d[p]=r0; d[p+1]=g0; d[p+2]=b0; d[p+3]=255; }
+    }
+  }
+  if(cv.width!==W||cv.height!==H){ cv.width=W; cv.height=H; }
+  ctx.putImageData(idata,0,0);
+  return d;
+}
+
+/* ---- measurement -------------------------------------------------------- */
+function measure(d){
+  const avg=(list)=>{
+    if(!list.length) return null;
+    let s=0; for(let i=0;i<list.length;i++){ const p=list[i]<<2; s+=KR*d[p]+KG*d[p+1]+KB*d[p+2]; }
+    return s/list.length;
+  };
+  const P=G.P;
+  return { bg:avg(P.buriedGap), og:avg(P.openGap), dp:avg(P.darkPx),
+           bo:avg(P.brOpen), bs:avg(P.brShad),
+           n:{bg:P.buriedGap.length,og:P.openGap.length,dp:P.darkPx.length,
+              bo:P.brOpen.length,bs:P.brShad.length} };
+}
+function pill(txt,bad){ return '<span class="pill'+(bad?' bad':'')+'">'+txt+'</span>'; }
+function num(v){ return v===null?'&mdash;':v.toFixed(1); }
+function renderMeasure(m){
+  const pal=PALETTES.find(p=>p.k===state.pal).c;
+  const floorL=lum(pal[3]);
+  const rows=[];
+  const gd=(m.bg!==null&&m.dp!==null)?m.bg-m.dp:null;
+  rows.push(['Grid in <b>dark</b> areas', gd,
+    gd===null?pill('n/a'):(gd<2?pill('gone',1):(gd<6?pill('faint'):pill('visible'))),
+    'gap buried in darkness, minus the dark pixel beside it']);
+  const gb=(m.og!==null&&m.bo!==null)?m.og-m.bo:null;
+  rows.push(['Grid in <b>bright</b> areas', gb,
+    gb===null?pill('n/a'):(Math.abs(gb)<2?pill('flat'):pill('shows',1)),
+    'should be flat: on a mono panel the gap IS the brightest shade']);
+  const sh=(m.bs!==null&&m.bo!==null)?m.bs-m.bo:null;
+  rows.push(['Shadow on <b>bright pixels</b>', sh,
+    sh===null?pill('n/a'):(sh<=-6?pill('lands'):(sh<=-2?pill('faint'):pill('none',1))),
+    'a bright pixel is transparent, so it must receive shadow']);
+  const du=(m.dp!==null)?m.dp-floorL:null;
+  rows.push(['Dark pixels <b>dulled</b>', du,
+    du===null?pill('n/a'):(Math.abs(du)<1?pill('clean'):pill('dulled',1)),
+    'drift from the palette floor; anything but 0 loses contrast']);
+  document.getElementById('mrows').innerHTML=rows.map(r=>
+    '<tr><td>'+r[0]+'<div style="color:var(--faint);font-size:11px;line-height:1.35;margin-top:2px">'+r[3]+'</div></td>'+
+    '<td class="n">'+(r[1]===null?'&mdash;':(r[1]>0?'+':'')+r[1].toFixed(1))+'</td>'+
+    '<td class="n">'+r[2]+'</td></tr>').join('');
+  document.getElementById('mnote').innerHTML=
+    'Absolute luma &mdash; buried gap <b>'+num(m.bg)+'</b>, dark pixel <b>'+num(m.dp)+'</b>, '+
+    'open bright <b>'+num(m.bo)+'</b>, bright in shadow <b>'+num(m.bs)+'</b>. '+
+    'Palette floor '+floorL.toFixed(1)+', substrate '+lum(pal[0]).toFixed(1)+'. '+
+    '<br>Sample sizes &mdash; buried gap '+m.n.bg+', open gap '+m.n.og+', dark '+m.n.dp+
+    ', bright open '+m.n.bo+', bright shadowed '+m.n.bs+
+    (Math.min(m.n.og,m.n.bo,m.n.bs)<200?' &mdash; <b>this scene has few bright pixels, so those rows are noisy</b>.':'.');
+}
+
+/* ---- wiring ------------------------------------------------------------- */
+let dirty={geom:true,opa:true,blur:true};
+function mark(k){ if(k==='geom'){dirty.geom=dirty.opa=dirty.blur=true;}
+                  else if(k==='opa'){dirty.opa=dirty.blur=true;} else if(k==='blur'){dirty.blur=true;} }
+let pending=false;
+function schedule(){ if(pending) return; pending=true; requestAnimationFrame(run); }
+function run(){
+  pending=false;
+  const t0=performance.now();
+  if(dirty.geom){ buildGeom(); dirty.geom=false; }
+  if(dirty.opa){ buildOpacity(); dirty.opa=false; }
+  if(dirty.blur){ buildBlur(); dirty.blur=false; }
+  const d=composite();
+  renderMeasure(measure(d));
+  document.getElementById('dims').textContent=G.W+' × '+G.H+'  ·  '+state.scale+'× integer, shown 1:1';
+  document.getElementById('perf').textContent=(performance.now()-t0).toFixed(0)+' ms';
+  document.getElementById('defines').textContent=
+    '#define SHADOW_GAIN    '+state.intensity.toFixed(2)+'\n'+
+    '#define SHADOW_OFFSET  '+state.offset+'      // output px, right and down\n'+
+    '#define SHADOW_SPREAD  '+state.spread+'      // box-blur radius\n'+
+    '#define PIXEL_OPACITY  '+state.opacity.toFixed(2)+'   // 1 = gaps only\n'+
+    '#define GAP_FRAC       '+state.gap.toFixed(2)+'\n'+
+    '#define SHADOW_FLOOR   '+(state.floor?1:0)+'      // 1 = stop at the darkest shade\n'+
+    '// palette '+state.pal+', scale '+state.scale+'x';
+}
+function bindRange(id,key,fmt,stage){
+  const el=document.getElementById(id), out=document.getElementById('v_'+id.slice(2));
+  el.value=state[key];
+  const upd=()=>{ state[key]=parseFloat(el.value); if(out)out.textContent=fmt(state[key]);
+                  mark(stage); schedule(); };
+  el.addEventListener('input',upd); upd();
+}
+function init(){
+  cv=document.getElementById('cv'); ctx=cv.getContext('2d');
+  const sc=document.getElementById('s_scene');
+  sc.innerHTML=SCENELIST.map(s=>'<option value="'+s.k+'">'+s.n+'</option>').join('');
+  sc.value=state.scene;
+  sc.addEventListener('change',()=>{ state.scene=sc.value; mark('geom'); schedule(); });
+  const pl=document.getElementById('s_pal');
+  pl.innerHTML=PALETTES.map(p=>'<option value="'+p.k+'">'+p.n+'</option>').join('');
+  pl.value=state.pal;
+  pl.addEventListener('change',()=>{ state.pal=pl.value; mark('opa'); schedule(); });
+
+  bindRange('s_int','intensity',v=>v.toFixed(2)+'×','comp');
+  bindRange('s_op','opacity', v=>v.toFixed(2),'comp');
+  bindRange('s_off','offset', v=>v+' px','comp');
+  bindRange('s_sp','spread',  v=>v+' px','blur');
+  bindRange('s_scale','scale',v=>v+'×','geom');
+  bindRange('s_gap','gap',    v=>v.toFixed(2)+' of a cell','geom');
+
+  const fl=document.getElementById('s_floor');
+  fl.checked=state.floor;
+  fl.addEventListener('change',()=>{ state.floor=fl.checked; schedule(); });
+  const ns=document.getElementById('s_noshadow');
+  ns.addEventListener('change',()=>{ state.noshadow=ns.checked; schedule(); });
+
+  document.getElementById('presets').innerHTML=
+    PRESETS.map((p,i)=>'<button data-i="'+i+'">'+p.n+'</button>').join('');
+  document.getElementById('presets').addEventListener('click',function(e){
+    const b=e.target.closest('button'); if(!b) return;
+    const s=PRESETS[+b.dataset.i].s;
+    for(const k in s) state[k]=s[k];
+    ['s_int','s_op','s_off','s_sp'].forEach(id=>{
+      const key={s_int:'intensity',s_op:'opacity',s_off:'offset',s_sp:'spread'}[id];
+      const el=document.getElementById(id); el.value=state[key];
+      const out=document.getElementById('v_'+id.slice(2));
+      const fmt={intensity:v=>v.toFixed(2)+'×',opacity:v=>v.toFixed(2),
+                 offset:v=>v+' px',spread:v=>v+' px'}[key];
+      if(out) out.textContent=fmt(state[key]);
+    });
+    document.getElementById('s_floor').checked=state.floor;
+    mark('blur'); schedule();
+  });
+
+  // 10x lens
+  const lens=document.getElementById('lens'), lc=document.getElementById('lensc');
+  const lctx=lc.getContext('2d'); lctx.imageSmoothingEnabled=false;
+  const Z=10, R=Math.round(330/Z);
+  function place(e){
+    const r=cv.getBoundingClientRect();
+    const x=Math.round((e.clientX-r.left)*cv.width/r.width);
+    const y=Math.round((e.clientY-r.top)*cv.height/r.height);
+    if(x<0||y<0||x>=cv.width||y>=cv.height){ lens.classList.remove('on'); return; }
+    lctx.imageSmoothingEnabled=false;
+    lctx.clearRect(0,0,330,330);
+    lctx.drawImage(cv, x-(R>>1), y-(R>>1), R, R, 0,0,330,330);
+    let L=e.clientX+22, T=e.clientY+22;
+    if(L+334>window.innerWidth)  L=e.clientX-352;
+    if(T+334>window.innerHeight) T=e.clientY-352;
+    lens.style.left=L+'px'; lens.style.top=T+'px'; lens.classList.add('on');
+  }
+  cv.addEventListener('mouseenter',place);
+  cv.addEventListener('mousemove',place);
+  cv.addEventListener('mouseleave',()=>lens.classList.remove('on'));
+
+  schedule();
+}
+if(document.readyState==='loading') window.addEventListener('DOMContentLoaded',init);
+else init();
+
+</script>
