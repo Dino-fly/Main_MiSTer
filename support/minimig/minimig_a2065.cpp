@@ -18,6 +18,7 @@
 
 #include "../../shmem.h"
 #include "../../user_io.h"
+#include "../../hardware.h"
 #include "../../file_io.h"
 
 #include "minimig_a2065.h"
@@ -34,11 +35,16 @@ extern void registers_set_on_interrupt(void (*fn)(void));
 extern void registers_set_on_transmit(int (*fn)(void));
 extern uint16_t registers_csr0(void);
 extern uint16_t registers_csr(int n);
+extern int  registers_am_initialized(void);
 extern uint16_t registers_mode(void);
 extern void chip_wput(uint8_t reg_offset, uint16_t v);
 extern int  do_transmit(void);
+extern int  rings_tx_ready(void);
 extern void gotfunc(const uint8_t *data, int len);
 extern int  rings_rx_has_space(void);
+extern int  rings_rx_unserviced(void);
+extern void registers_csr0_set(uint16_t v);
+extern void rethink(void);
 extern void mac_set_addresses(const uint8_t *fake, const uint8_t *real);
 extern int  ethernet_open(const char *iface, int promiscuous);
 extern void ethernet_close(void);
@@ -72,20 +78,13 @@ enum { MODE_DIRECT = 0, MODE_BPF = 1, MODE_MACVLAN = 2, MODE_TAP = 3 };
 // Name of the macvlan child created for MODE_MACVLAN.
 #define MACVLAN_NAME "ve-amiga"
 
-// The selection is kept in core status bits (A2065_STATUS_OPT). Minimig is
-// excluded from the generic status-word config load, and the mm_configTYPE
-// blob can't grow (its loader does an exact sizeof() check), so the field is
-// persisted next to the numbered Minimig config slots instead.
-static char *a2065_cfg_name(int num)
-{
-	static char name[128];
-	if (num) sprintf(name, "%s%d.a2065", user_io_get_core_name(), num);
-	else     sprintf(name, "%s.a2065",   user_io_get_core_name());
-	return name;
-}
-
 static volatile uint8_t *map = NULL;
 static int card_up = 0;
+
+// Local read position in the FPGA's CMD ring (see minimig_a2065_ddr3.h). The
+// FPGA's write index only ever advances; comparing the two as unsigned
+// 32-bit counters is wrap-safe without needing to touch the ring itself.
+static uint32_t cmd_rd_idx = 0;
 
 static const char *iface_name = "eth0";
 static const char *parent_name = "eth0";
@@ -148,7 +147,7 @@ const char *a2065_iface_msg(int mode)
 	case A2065_ETH1:    return "eth1";
 	case A2065_MACVLAN: return "macvlan";
 	case A2065_TAP:     return "tap0";
-	default:            return "OFF";
+	default:            return "Off";
 	}
 }
 
@@ -166,22 +165,14 @@ int a2065_get_iface(void)
 	return mode;
 }
 
-void a2065_cfg_save(int num)
+uint8_t a2065_cfg_get()
 {
-	uint8_t mode = (uint8_t)a2065_get_iface();
-	FileSaveConfig(a2065_cfg_name(num), &mode, sizeof(mode));
+	return (uint8_t)a2065_get_iface();
 }
 
-void a2065_cfg_load(int num)
+void a2065_cfg_set(uint8_t mode)
 {
-	// No stored selection for this slot means the card has never been enabled
-	// here, so leave it off. Opting in is explicit: the card only comes up
-	// once a mode has been chosen in the OSD and the config slot saved.
-	uint8_t mode = A2065_OFF;
-
-	uint8_t saved;
-	if (FileLoadConfig(a2065_cfg_name(num), &saved, sizeof(saved)) && saved < A2065_MODES)
-		mode = saved;
+	if (mode >= A2065_MODES) mode = A2065_OFF;
 
 	// A stored mode this box can no longer support falls back to off rather
 	// than quietly moving the Amiga onto MiSTer's own NIC.
@@ -202,6 +193,34 @@ static void wr64(unsigned long off, uint64_t val)
 	memcpy((void *)(map + off), &val, 8);
 }
 
+// Current FPGA write index into the CMD ring. Free-running 32-bit counter,
+// only ever incremented by the FPGA — never wraps in practice.
+static uint32_t rd_wptr(void)
+{
+	return (uint32_t)rd64(DDR3_CMD_WPTR_OFF);
+}
+
+// One ring entry: bit0=valid, bits[7:1]=RAP, bits[23:8]=RDP data (see
+// minimig_a2065_ddr3.h). idx is masked to the ring size, not bounds-checked
+// against wptr — callers are responsible for only reading entries the FPGA
+// has actually published.
+static void ring_read_entry(uint32_t idx, uint8_t *rap_out, uint16_t *data_out)
+{
+	unsigned long off = DDR3_CMD_RING_OFF
+	                   + (unsigned long)(idx & DDR3_CMD_RING_MASK) * DDR3_CMD_RING_STRIDE;
+	uint64_t entry = rd64(off);
+	*rap_out  = (uint8_t)((entry >> DDR3_CMD_RAP_SHIFT) & DDR3_CMD_RAP_MASK);
+	*data_out = (uint16_t)((entry >> DDR3_CMD_DATA_SHIFT) & DDR3_CMD_DATA_MASK);
+}
+
+// For acknowledge ordering (minimig_a2065_registers.cpp): the CMD ring index
+// of the entry being applied, or the write index now when none is.
+static uint32_t cmd_applying = 0;
+static int      cmd_applying_valid = 0;
+uint32_t a2065_event_index(void) { return map ? rd_wptr() : 0; }
+uint32_t a2065_ack_index(void)   { return cmd_applying_valid ? cmd_applying : a2065_event_index(); }
+extern void registers_forget_events(void);
+
 static void push_csr_shadow(void)
 {
 	uint16_t c0 = registers_csr0();
@@ -220,7 +239,13 @@ static void update_int_state(void)
 {
 	uint16_t csr0 = registers_csr0();
 
-	wr64(DDR3_INT_OFF, ((csr0 & CSR0_INTR) && (csr0 & CSR0_INEA)) ? 1 : 0);
+	// Written after the CSR shadow, so a read index here covers that CSR value.
+	// The core reads INT_STATE first and CSR_SHADOW second and relies on this
+	// order; keep the two stores from being reordered.
+	__sync_synchronize();
+	wr64(DDR3_INT_OFF, (((csr0 & CSR0_INTR) && (csr0 & CSR0_INEA)) ? DDR3_INT_ASSERT_BIT : 0)
+	                 | DDR3_INT_RDIDX_BIT
+	                 | ((uint64_t)cmd_rd_idx << DDR3_INT_RDIDX_SHIFT));
 }
 
 static void on_interrupt_cb(void)
@@ -230,9 +255,12 @@ static void on_interrupt_cb(void)
 	update_int_state();
 }
 
+// do_transmit() sends one frame. A real LANCE keeps going while the ring holds
+// frames, so a TDMD announcing one frame also sends any queued behind it.
 static int on_transmit_cb(void)
 {
-	int r = do_transmit();
+	int r = 0;
+	for (int n = 0; n < 64 && do_transmit(); n++) r = 1;
 	push_csr_shadow();
 	update_int_state();
 	return r;
@@ -426,7 +454,9 @@ static int a2065_open(void)
 
 	boardram = map + DDR3_BRAM_OFF;
 
-	wr64(DDR3_CMD_OFF, 0);
+	// Start at the ring's current head — do not replay whatever the FPGA
+	// posted before the daemon was ready to read it.
+	cmd_rd_idx = rd_wptr();
 	wr64(DDR3_CSR_OFF, 0);
 	wr64(DDR3_INT_OFF, 0);
 
@@ -468,28 +498,52 @@ static int a2065_open(void)
 
 // One pass of the card's work, called from Main's poll loop.
 //
-// Two jobs: drain any register write the Amiga has posted through the doorbell,
-// and move received frames into its ring. Both are bounded and non-blocking, so
-// the cost per call stays small and predictable.
+// Two jobs: drain any register writes the Amiga has posted through the ring
+// doorbell, and move received frames into its ring. Both are bounded and
+// non-blocking, so the cost per call stays small and predictable.
 //
-// A register write is DTACK-stretched by the FPGA until the doorbell is
-// drained, so the Amiga is held off for as long as it takes to get back here.
-// That is the reason this must not sit behind anything slow.
+// The FPGA never blocks on Main for the doorbell itself (the ring push and
+// its DTACK release are self-contained on the FPGA side — see
+// a2065_ddr3_mailbox.v), but a queued register write only takes effect once
+// this drains it, so CSR state and IDON/interrupt timing still depend on
+// getting back here promptly.
+// One ring's worth per pass. The ring is 256 entries deep — comfortably
+// more than the 68k can post between two poll passes (see the sizing note
+// in a2065_ddr3_mailbox.v) — so this stays bounded without ever falling
+// permanently behind.
+#define CMD_DRAIN_MAX DDR3_CMD_RING_ENTRIES
+
 void a2065_poll(void)
 {
 	if (!card_up) return;
 
-	uint64_t cmd = rd64(DDR3_CMD_OFF);
-	if (cmd & DDR3_CMD_PENDING_BIT)
+	uint32_t wptr = rd_wptr();
+	uint32_t pending = wptr - cmd_rd_idx;   // unsigned subtraction, wrap-safe
+
+	if (pending)
 	{
-		uint8_t  rap_v = (cmd >> DDR3_CMD_RAP_SHIFT) & DDR3_CMD_RAP_MASK;
-		uint16_t data  = (cmd >> DDR3_CMD_DATA_SHIFT) & DDR3_CMD_DATA_MASK;
+		if (pending > CMD_DRAIN_MAX)
+		{
+			// Fell behind by more than the ring holds — the oldest entries
+			// are already overwritten on the FPGA side. Jump to the oldest
+			// one still valid rather than replay stale slots.
+			cmd_rd_idx = wptr - CMD_DRAIN_MAX;
+			pending = CMD_DRAIN_MAX;
+		}
 
-		chip_wput(A2065_RAP_OFF, rap_v);
-		chip_wput(A2065_RDP_OFF, data);
+		for (uint32_t n = 0; n < pending; n++)
+		{
+			uint8_t  rap_v;
+			uint16_t data;
+			ring_read_entry(cmd_rd_idx, &rap_v, &data);
+			cmd_applying = cmd_rd_idx;
+			cmd_applying_valid = 1;
+			cmd_rd_idx++;
 
-		wr64(DDR3_CMD_OFF, 0);
-		__sync_synchronize();
+			chip_wput(A2065_RAP_OFF, rap_v);
+			chip_wput(A2065_RDP_OFF, data);
+			cmd_applying_valid = 0;
+		}
 
 		push_csr_shadow();
 		update_int_state();
@@ -518,7 +572,29 @@ void a2065_poll(void)
 		}
 	}
 
+	// A late acknowledge may have cleared the RINT for frames the Amiga has
+	// not taken yet (see rings_rx_unserviced()); raise it again.
+	if ((registers_csr0() & (CSR0_RXON | CSR0_RINT)) == CSR0_RXON && rings_rx_unserviced())
+	{
+		registers_csr0_set(CSR0_RINT);
+		rethink();
+		push_csr_shadow();
+		update_int_state();
+	}
+
 	a2065_drain_rx();
+
+	// Poll the transmit ring like the LANCE does: a frame whose OWN bit reached
+	// boardram after the TDMD that announced it is sent on the next poll
+	// instead of waiting for the next TDMD.
+	{
+		static unsigned long tx_poll = 0;
+		if (!tx_poll || CheckTimer(tx_poll))
+		{
+			tx_poll = GetTimer(2);
+			if (registers_am_initialized() && rings_tx_ready()) on_transmit_cb();
+		}
+	}
 }
 
 void a2065_stop(void)
@@ -555,7 +631,11 @@ void a2065_start(void)
 		}
 	}
 
-	wr64(DDR3_CMD_OFF, 0);
+	// Resync to wherever the FPGA's ring head is right now — a core reset
+	// re-inits the mailbox on its side too, so an old rd_idx would either
+	// stall (behind a wptr that just reset to 0) or replay stale entries.
+	cmd_rd_idx = rd_wptr();
+	registers_forget_events();
 	wr64(DDR3_CSR_OFF, 0);
 	wr64(DDR3_INT_OFF, 0);
 

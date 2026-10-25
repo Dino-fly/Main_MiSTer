@@ -81,6 +81,7 @@ typedef struct {
 	char preset_default[1023];
 	char player_controller[6][8][256];
 	char controller_deadzone[32][256];
+	uint8_t dpad_threshold;
 	uint8_t rumble;
 	uint8_t snac_pad;
 	/*
@@ -141,6 +142,7 @@ typedef struct {
 	char autofire_rates[3072];
 	uint8_t autofire_on_directions;
 	char screenshot_image_format[16];
+	uint8_t screenshot_info;
 	uint16_t xbe2_shift;
 	uint8_t spd_quirk;
 	uint16_t hdmi_off;
@@ -201,6 +203,7 @@ typedef struct {
 	char classicui_arturl[512];
 	char classicui_ss_user[64];
 	char classicui_ss_pass[64];
+	uint8_t sanity_check;
 } cfg_t;
 
 extern cfg_t cfg;

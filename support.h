@@ -4,17 +4,33 @@
 #include "support/minimig/minimig_fdd.h"
 #include "support/minimig/minimig_share.h"
 #include "support/minimig/minimig_a2065.h"
+#include "support/next/next_enet.h"
+#include "support/next/next_scsi.h"
 
-// SharpMz support
-#include "support/sharpmz/sharpmz.h"
 
 // Apple 2 support
 #include "support/a2/dsk2nib_lib.h"
 // Apple IIgs disk integration
 #include "support/a2/iigs_disk.h"
+// Apple III
+#include "support/a3/a3_disk.h"
 
 // Mac
 #include "support/mac/mac.h"
+
+// PC-8801
+#include "support/pc88/pc88.h"
+
+// Atari Falcon SCSI support
+#include "support/falcon/falcon_scsi.h"
+// Sun family support
+#include "support/sun/sun.h"
+#include "support/sun/sun_enet.h"
+// HP 9000 family support
+#include "support/hp9k/hp9k.h"
+#include "support/hp9k/hp9k_enet.h"
+#include "support/sgi/sgi.h"
+#include "support/sgi/sgi_enet.h"
 
 // Archie support
 #include "support/archie/archie.h"
@@ -77,3 +93,9 @@
 
 // 3DO  support
 #include "support/3do/3do.h"
+
+// FM Towns Marty support
+#include "support/marty/marty.h"
+
+// NEC PC-FX support
+#include "support/pcfx/pcfx.h"
