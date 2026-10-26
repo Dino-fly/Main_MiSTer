@@ -11846,15 +11846,38 @@ static void assert_video()
 			check(c && strstr(c, "Super Game Boy=On"), "the None twin turns the adaptor on");
 		}
 
-		for (int i = 0; i < n_gb; i++)
+		/*
+		  Keyed on the grid, not on the name: the GBC look slipped through a
+		  DMG/Pocket name filter with the adaptor still on under its panel gap.
+		*/
+		for (int cls = VC_GB; cls <= VC_GBC; cls++)
 		{
-			const char *nm = vp_name(opts[i]);
-			if (!strstr(nm, "DMG") && !strstr(nm, "Pocket")) continue;
-			const char *c = vp_core_colour(opts[i]);
-			char what[160];
-			snprintf(what, sizeof(what), "%s asks for Super Game Boy=Off", nm);
-			check(c && strstr(c, "Super Game Boy=Off"), what);
+			int list[VP_MAX_OPTIONS];
+			int n = vp_options_for(cls, list);
+			for (int i = 0; i < n; i++)
+			{
+				const char *m = vp_mask_of(list[i]);
+				if (!m || !strstr(m, "LCD Gap")) continue;
+				const char *c = vp_core_colour(list[i]);
+				char what[160];
+				snprintf(what, sizeof(what), "%s wears a panel grid, so asks for Super Game Boy=Off", vp_name(list[i]));
+				check(c && strstr(c, "Super Game Boy=Off") && !strstr(c, "Super Game Boy=On"), what);
+			}
 		}
+
+		// GBC offers the same split: the panel, or the SGB on a television.
+		int list[VP_MAX_OPTIONS];
+		int n = vp_options_for(VC_GBC, list);
+		bool has_sgb = false, has_none_sgb = false;
+		for (int i = 0; i < n; i++)
+		{
+			const char *c = vp_core_colour(list[i]);
+			bool gbc_on = c && strstr(c, "Super Game Boy + GBC=On");
+			if (list[i] == sgb) has_sgb = gbc_on;
+			if (list[i] == none_sgb) has_none_sgb = gbc_on;
+		}
+		check(has_sgb, "a GBC cartridge can take the SGB look, which asks for SGB + GBC");
+		check(has_none_sgb, "and the None SGB twin, likewise");
 	}
 
 	/*
@@ -11879,7 +11902,7 @@ static void assert_video()
 	}
 
 	int n_gbc = vp_options_for(VC_GBC, opts);
-	check(n_gbc == 2, "GBC offers its screen and the off switch");
+	check(n_gbc == 4, "GBC offers its screen, the SGB, the off switch and the SGB off switch");
 	check(strstr(vp_name(opts[0]), "Color") != 0, "GBC defaults to the GBC screen");
 
 	int n_gba = vp_options_for(VC_GBA, opts);
@@ -12153,7 +12176,7 @@ static void assert_video()
 		harness_set_scaler_visible(0);
 		check(vp_options_for(VC_GB, o2) == gb_hdmi, "every Game Boy screen is still offered on a CRT");
 		check(vp_options_for(VC_GBA, o2) == 4, "so are the three GBA models and the off switch");
-		check(vp_options_for(VC_GBC, o2) == 2, "and the GBC screen");
+		check(vp_options_for(VC_GBC, o2) == 4, "and the GBC screen and its SGB looks");
 		check(vp_options_for(VC_CONSOLE, o2) == 5, "and the CRT classes are untouched by any of this");
 
 		int gg_an = vp_options_for(VC_GG, o2);

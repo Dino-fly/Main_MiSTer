@@ -360,16 +360,14 @@ static const preset_def presets[] =
 	  CO_GB_DMG_COLOUR, CO_GB_DMG_PANEL, PAL_POCKET },
 
 	/*
-	  Super Game Boy on a colour cartridge takes two options, not one: the core
-	  keeps "Super Game Boy + GBC" separate precisely because a GBC game on an SGB
-	  is a combination the hardware never shipped, and it will not infer one from
-	  the other. Both are asked for by name, so a core too old to have the second
-	  simply skips it and the first still lands - Dinofly asked for the border on
-	  Game Boy first and on Color after seeing it.
+	  The GBC panel has the adaptor OFF, for the DMG reason: a pixel grid and an
+	  SGB border cannot share one picture. Dinofly's rule (2026-10-26): a GBC
+	  cartridge gets either the SGB border on a television (P_SGB, P_NONE_SGB,
+	  which ask for "Super Game Boy + GBC" too) or no border and the grid.
 	*/
 	{ "gbc", "Game Boy Color", "Reflective colour LCD with its pixel grid.",
 	  F_SHADOWLT, F_SHADOWLT, "off", M_GAP_TINT, "1x", "off",
-	  "Super Game Boy=On;Super Game Boy + GBC=On;GBC Colors=Corrected",
+	  "Super Game Boy=Off;GBC Colors=Corrected",
 	  "Screen Shadow=No;Frame blend=Off;" CO_INTEGER, 0 },
 
 	/*
@@ -467,20 +465,25 @@ static const preset_def presets[] =
 	  is what this machine was, so it gets the CRT treatment - sharp, scanlines,
 	  aperture grille - and the core keeps its own SGB colours rather than taking
 	  one of our panel ramps over them.
+
+	  It serves GBC cartridges too, so it also asks for "Super Game Boy + GBC": the
+	  core keeps that separate because the hardware never shipped the combination,
+	  and will not infer it. On a DMG cartridge the option does nothing, and a core
+	  too old to publish it skips the name.
 	*/
 	{ "sgb", "Super Game Boy", "The SNES adaptor on a CRT: its border and colours, scanlines and grille.",
 	  F_SHARP, F_SHARP, F_SCAN, M_GRILLE, "1x", "off",
-	  "Super Game Boy=On;Custom Palette=Off",
+	  "Super Game Boy=On;Super Game Boy + GBC=On;Custom Palette=Off",
 	  CO_NO_SHADOW ";Frame blend=Off;" CO_INTEGER, 0 },
 
 	/*
 	  None, with the adaptor on. None itself deliberately carries no core half at
 	  all - "touch nothing" - so this cannot be None plus a flag; it is None with
-	  exactly one thing asked for, which is the border.
+	  exactly one thing asked for, which is the border (and its GBC twin option).
 	*/
 	{ "none-sgb", "None with Super Game Boy", "Every effect off, with the Super Game Boy border and colours.",
 	  "off", "off", "off", "off", "off", "off",
-	  "Super Game Boy=On", 0, 0 },
+	  "Super Game Boy=On;Super Game Boy + GBC=On", 0, 0 },
 };
 
 #define NPRESETS ((int)(sizeof(presets) / sizeof(presets[0])))
@@ -1105,7 +1108,7 @@ static const int opt_computer[] = { P_PAL_TV, P_COMPOSITE, P_PVM_SVIDEO, P_SHARP
 static const int opt_vga[]      = { P_VGA, P_SHARP };
 static const int opt_gb[]       = { P_DMG, P_DMG_BRIGHT, P_DMG_FADED, P_POCKET,
                                     P_SGB, P_NONE, P_NONE_SGB };
-static const int opt_gbc[]      = { P_GBC, P_NONE };
+static const int opt_gbc[]      = { P_GBC, P_SGB, P_NONE, P_NONE_SGB };
 static const int opt_gba[]      = { P_AGB001, P_AGS001, P_AGS101, P_NONE };
 static const int opt_gg[]       = { P_GG, P_GGMOD, P_NONE };
 static const int opt_lynx[]     = { P_LYNX, P_NONE };
