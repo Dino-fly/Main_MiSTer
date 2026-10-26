@@ -265,13 +265,13 @@ LOOKS = {
     'pocket': dict(palette='pocket', gap=0.08, mix=0.31, span_px=5,
                    gain=1.25, offset=1, spread=4, opacity=0.31),
 }
-SUBSTRATE = { 'olive': 0x8B9814, 'pocket': 0xE0DBCD }
+SUBSTRATE = { 'olive': 0x6E7438, 'pocket': 0xE0DBCD }
 
 # The ramps, copied from the gbp_spec table in chome_video.cpp. A .gbp is written
 # rather than named because the firmware generates those files at runtime onto the
 # card, so there is nothing on a development machine to point --palette at.
 RAMPS = {
-    'olive':  [(0x8B, 0x98, 0x14), (0x60, 0x78, 0x14), (0x3C, 0x58, 0x18), (0x1E, 0x3E, 0x1A)],
+    'olive':  [(0x6E, 0x74, 0x38), (0x52, 0x5D, 0x30), (0x3A, 0x46, 0x2A), (0x26, 0x34, 0x24)],
     'pocket': [(0xE0, 0xDB, 0xCD), (0xA8, 0x9F, 0x94), (0x70, 0x6B, 0x66), (0x2B, 0x2B, 0x26)],
 }
 
@@ -293,7 +293,7 @@ def apply_look(flags, name, scale):
     L = LOOKS[name]
     sub = SUBSTRATE[L['palette']]
     flags.setdefault('palette', write_gbp('%s.gbp' % L['palette'], L['palette']))
-    flags.setdefault('grid-mask', '%d:1.15:%06X:%.2f:3' % (scale, sub, L['gap']))
+    flags.setdefault('grid-mask', '%d:1.15:%06X:%.2f:0' % (scale, sub, L['gap']))
     # write_shadow_filter's width is in OUTPUT PIXELS here, unlike the firmware's,
     # whose width is a share of a cell that it multiplies by the scale. Both end at
     # the same span_px; passing the firmware's fraction straight through gives a

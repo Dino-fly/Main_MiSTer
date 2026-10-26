@@ -145,21 +145,23 @@ struct preset_def
 
 // Each look's substrate: the lightest entry of the palette it wears. Keep these
 // in step with pal_* below and with the .gbp files they name.
-#define SUB_DMG    0x8B9814          // pal_olive  (139,152,20)
+#define SUB_DMG    0x6E7438          // pal_olive  (110,116,56)
 #define SUB_BRIGHT 0xC4CFA1          // pal_dmg    (196,207,161)
 #define SUB_FADED  0x6D833D          // pal_weak   (109,131,61)
 #define SUB_POCKET 0xE0DBCD          // pal_pocket (224,219,205)
 #define SUB_WS     0xD0CABA          // the WonderSwan panel's warm grey top
 /*
-  Quarters toward the substrate. 4 replaces the gap outright, which looked right
-  in isolation and wrong in a picture: the mask runs after the scaler, so a full
-  replace discards the shadow the filter left in the gap, and at 3x a one-pixel
-  gap is 55% of the screen - two thirds of the frame became the single brightest
-  colour and the contrast went with it. 3 keeps the gap invisible on bright areas
-  (an unshadowed bright pixel already equals the substrate) while letting the
-  shadow through, measured at -11 luma in the gap beside a dark pixel.
+  Quarters toward the substrate: 0 now, so a substrate cell draws exactly what a
+  stock core's multiplier does, the pixel x 1.15. The shadow lives in the PIXEL the
+  filter darkened, and any share of a fixed colour painted over the gap afterwards
+  washes it out of the one place it should be darkest: Dinofly, on the HDMI
+  capture (2026-10-26): "the pixel shadows should leak into the space between
+  pixels". Measured in the simulator on the Zelda frame at 7x, gap minus pixel
+  body beside a dark pixel: +20 at 3, +9 at 2, -3 at 1, -13 at 0; between light
+  pixels the gap stays at the substrate (139) at every setting. The old "-11 at 3"
+  figure came from a simulator that read blend= in sixteenths.
 */
-#define SUB_BLEND  3
+#define SUB_BLEND  0
 
 /*
   The gap's share of the cell, not a pixel count. A fixed one-pixel gap changes
@@ -2025,12 +2027,14 @@ static const gbp_spec pal_pocket =
   since the gap is a multiplication and 31 x 1.15 is a step of five nobody sees.
 
   Olive is authored to sit where the measurements do while keeping enough range to
-  stay legible on a television. Weak is trashuncle's "TU DMG Weak" from the
+  stay legible on a television. Its first cut (8B9814 at the top) read as acid
+  green on the HDMI capture; Dinofly picked this one, the same hues at 45% of
+  the saturation, as the closest to a DMG (2026-10-26). Weak is trashuncle's "TU DMG Weak" from the
   Gameboy_Palettes set (github.com/trashuncle/Gameboy_Palettes), reproduced with
   credit: a tired panel in poor light, where the three light shades nearly merge.
 */
 static const gbp_spec pal_olive =
-{ PAL_OLIVE,  { { 0x8B, 0x98, 0x14 }, { 0x60, 0x78, 0x14 }, { 0x3C, 0x58, 0x18 }, { 0x1E, 0x3E, 0x1A } } };
+{ PAL_OLIVE,  { { 0x6E, 0x74, 0x38 }, { 0x52, 0x5D, 0x30 }, { 0x3A, 0x46, 0x2A }, { 0x26, 0x34, 0x24 } } };
 
 static const gbp_spec pal_weak =
 { PAL_WEAK,   { { 0x6D, 0x83, 0x3D }, { 0x5E, 0x7A, 0x40 }, { 0x57, 0x72, 0x40 }, { 0x36, 0x4E, 0x1A } } };
