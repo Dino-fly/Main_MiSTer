@@ -8192,6 +8192,19 @@ static void assert_per_look_gaps()
 				n, looks[m].label);
 			check(gap_rows == gap_px, what);
 
+			/*
+			  No substrate cells: the shadow has to reach the gap, and the first
+			  patched Gameboy core paints a substrate cell flat whatever blend=
+			  says - measured on HDMI as one gap level under every pixel.
+			*/
+			int subst_cells = 0;
+			for (int y = 0; y < n; y++)
+				for (int x = 0; x < n; x++)
+					if (cells[y][x] & 0x800) subst_cells++;
+			snprintf(what, sizeof(what), "%dx: the %s gap is a multiplier, not a substrate cell",
+				n, looks[m].label);
+			check(subst_cells == 0, what);
+
 			if (n == 12) gap_at_12[m] = gap_px;
 		}
 	}

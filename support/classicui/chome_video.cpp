@@ -1662,7 +1662,15 @@ static void write_grid_mask(const char *name, int scale, double gap, uint32_t su
 
 		gb_addf(&g, "# LCD gap for %dx at %.2fx, %.2f of a cell, one cell per source pixel\n",
 			scale, gap, gap_frac);
-		if (subst)
+		/*
+		  At SUB_BLEND 0 a substrate cell would draw the multiplier anyway, so
+		  none are written. That is not just tidiness: the first patched Gameboy
+		  core (Aug 2026, no SM_SUBBLEND) ignores blend= and paints the substrate
+		  outright, and on the HDMI capture its gap sat at one flat level whatever
+		  the pixel beside it - the shadow never reached it. Plain multiplier cells
+		  look the same on every core, patched or not.
+		*/
+		if (subst && SUB_BLEND > 0)
 		{
 			// Bit 11 = emit the substrate. The multiplier stays in bits 10:0 so a
 			// core without the patch falls back to it instead of breaking.
