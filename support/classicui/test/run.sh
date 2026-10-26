@@ -6,7 +6,7 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 OUTDIR="${1:-/tmp/chome_out}"
 
-docker run --rm -v "$REPO":/mister -w /mister ubuntu:20.04 bash -c '
+docker run --rm -e CHOME_GEN_LOOKS="${CHOME_GEN_LOOKS:-}" -v "$REPO":/mister -w /mister ubuntu:20.04 bash -c '
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq >/dev/null
@@ -63,6 +63,16 @@ g++ -std=gnu++14 -O1 -g -Wall -Wextra -Wno-unused-parameter -Wno-format-truncati
     lib/miniz/miniz.c \
     /tmp/harness/sxmlc.o \
     -lImlib2
+
+# CHOME_GEN_LOOKS=1 bash run.sh: do not run the suite, write the handheld looks generated
+# files (every scale, plus a manifest) to test/out/looks-gen for tools/render_looks.py.
+# The harness has a mode for it; see gen_looks() in harness.cpp. No apostrophes here.
+if [ -n "${CHOME_GEN_LOOKS:-}" ]; then
+    rm -rf /mister/support/classicui/test/out/looks-gen
+    mkdir -p /mister/support/classicui/test/out
+    CHOME_GEN_LOOKS=/mister/support/classicui/test/out/looks-gen /tmp/harness/chome_test
+    exit $?
+fi
 
 # The same chome_ss.cpp compiled the way it actually ships - no devid - to prove that
 # configuration cannot reach the network. See support/classicui/test/gate.cpp.
