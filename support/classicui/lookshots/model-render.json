@@ -7,16 +7,16 @@
  "looks": {
   "dmg": {
    "source_px": [
-    42,
-    28
+    52,
+    80
    ],
    "crop_out_px": [
-    294,
-    196
+    364,
+    560
    ],
    "scale": 7,
-   "frame": "zelda_native_gb",
-   "source": "test frame zelda_native_gb.png fitted to 160x144",
+   "frame": "advisland-play",
+   "source": "corpus/gb/advisland-play.png",
    "files": {
     "palette": {
      "path": "7x/games/GAMEBOY/Palettes/ClassicHome DMG Olive.gbp",
@@ -42,16 +42,16 @@
   },
   "dmg-bright": {
    "source_px": [
-    42,
-    28
+    52,
+    80
    ],
    "crop_out_px": [
-    294,
-    196
+    364,
+    560
    ],
    "scale": 7,
-   "frame": "zelda_native_gb",
-   "source": "test frame zelda_native_gb.png fitted to 160x144",
+   "frame": "advisland-play",
+   "source": "corpus/gb/advisland-play.png",
    "files": {
     "palette": {
      "path": "7x/games/GAMEBOY/Palettes/ClassicHome DMG Green.gbp",
@@ -77,16 +77,16 @@
   },
   "dmg-faded": {
    "source_px": [
-    44,
-    28
+    58,
+    88
    ],
    "crop_out_px": [
-    308,
-    196
+    406,
+    616
    ],
    "scale": 7,
-   "frame": "zelda_native_gb",
-   "source": "test frame zelda_native_gb.png fitted to 160x144",
+   "frame": "advisland-play",
+   "source": "corpus/gb/advisland-play.png",
    "files": {
     "palette": {
      "path": "7x/games/GAMEBOY/Palettes/ClassicHome DMG Weak.gbp",
@@ -112,16 +112,16 @@
   },
   "pocket": {
    "source_px": [
-    42,
-    28
+    58,
+    86
    ],
    "crop_out_px": [
-    294,
-    196
+    406,
+    602
    ],
    "scale": 7,
-   "frame": "zelda_native_gb",
-   "source": "test frame zelda_native_gb.png fitted to 160x144",
+   "frame": "advisland-play",
+   "source": "corpus/gb/advisland-play.png",
    "files": {
     "palette": {
      "path": "7x/games/GAMEBOY/Palettes/ClassicHome Pocket.gbp",
@@ -147,16 +147,16 @@
   },
   "gbc": {
    "source_px": [
-    42,
-    28
+    84,
+    60
    ],
    "crop_out_px": [
-    294,
-    196
+    588,
+    420
    ],
    "scale": 7,
-   "frame": "zelda_native_gb",
-   "source": "test frame zelda_native_gb.png fitted to 160x144",
+   "frame": "oracle-intro",
+   "source": "corpus/gbc/oracle-intro.png",
    "files": {
     "hfilter": {
      "path": "7x/filters/ClassicHome Pixel Shadow Light.txt",
@@ -178,16 +178,16 @@
   },
   "agb001": {
    "source_px": [
-    144,
-    78
+    30,
+    20
    ],
    "crop_out_px": [
-    864,
-    468
+    180,
+    120
    ],
    "scale": 6,
-   "frame": "look-gba-agb001-ingame",
-   "source": "test frame look-gba-agb001-ingame.png",
+   "frame": "lttp-play",
+   "source": "corpus/gba/lttp-play.png",
    "files": {
     "hfilter": {
      "path": "6x/filters/ClassicHome Pixel Shadow Light.txt",
@@ -209,16 +209,16 @@
   },
   "ags001": {
    "source_px": [
-    144,
-    78
+    30,
+    20
    ],
    "crop_out_px": [
-    864,
-    468
+    180,
+    120
    ],
    "scale": 6,
-   "frame": "look-gba-ags101-ingame",
-   "source": "test frame look-gba-ags101-ingame.png",
+   "frame": "lttp-play",
+   "source": "corpus/gba/lttp-play.png",
    "files": {
     "hfilter": {
      "path": "6x/filters/ClassicHome Pixel Shadow Light.txt",
@@ -240,16 +240,16 @@
   },
   "ags101": {
    "source_px": [
-    144,
-    78
+    30,
+    20
    ],
    "crop_out_px": [
-    864,
-    468
+    180,
+    120
    ],
    "scale": 6,
-   "frame": "look-gba-ags101-ingame",
-   "source": "test frame look-gba-ags101-ingame.png",
+   "frame": "lttp-play",
+   "source": "corpus/gba/lttp-play.png",
    "files": {
     "mask": {
      "path": "6x/shadow_masks/ClassicHome LCD Gap Dark.txt",
@@ -263,16 +263,16 @@
   },
   "gg": {
    "source_px": [
-    42,
-    28
+    72,
+    90
    ],
    "crop_out_px": [
-    294,
-    196
+    504,
+    630
    ],
    "scale": 7,
-   "frame": "zelda_native_gb",
-   "source": "test frame zelda_native_gb.png fitted to 160x144",
+   "frame": "sonicblast-play",
+   "source": "corpus/gg/sonicblast-play.png",
    "files": {
     "gamma": {
      "path": "7x/gamma/ClassicHome Game Gear.txt",
@@ -290,16 +290,16 @@
   },
   "gg-mod": {
    "source_px": [
-    42,
-    28
+    72,
+    90
    ],
    "crop_out_px": [
-    294,
-    196
+    504,
+    630
    ],
    "scale": 7,
-   "frame": "zelda_native_gb",
-   "source": "test frame zelda_native_gb.png fitted to 160x144",
+   "frame": "sonicblast-play",
+   "source": "corpus/gg/sonicblast-play.png",
    "files": {
     "gamma": {
      "path": "7x/gamma/ClassicHome Game Gear Backlit.txt",
@@ -317,16 +317,16 @@
   },
   "lynx": {
    "source_px": [
-    46,
-    14
+    50,
+    20
    ],
    "crop_out_px": [
-    460,
-    140
+    500,
+    200
    ],
    "scale": 10,
-   "frame": "zelda_native_gb",
-   "source": "test frame zelda_native_gb.png fitted to 160x102",
+   "frame": "basketbrawl-credits",
+   "source": "corpus/lynx/basketbrawl-credits.png",
    "files": {
     "gamma": {
      "path": "10x/gamma/ClassicHome Lynx.txt",
@@ -344,16 +344,16 @@
   },
   "ws": {
    "source_px": [
-    74,
-    28
+    86,
+    34
    ],
    "crop_out_px": [
-    518,
-    196
+    602,
+    238
    ],
    "scale": 7,
-   "frame": "zelda_native_gb",
-   "source": "test frame zelda_native_gb.png fitted to 224x144",
+   "frame": "title-logo",
+   "source": "corpus/ws/title-logo.png",
    "files": {
     "gamma": {
      "path": "7x/gamma/ClassicHome WonderSwan.txt",
@@ -379,16 +379,16 @@
   },
   "wsc": {
    "source_px": [
-    74,
-    28
+    28,
+    54
    ],
    "crop_out_px": [
-    518,
-    196
+    196,
+    378
    ],
    "scale": 7,
-   "frame": "zelda_native_gb",
-   "source": "test frame zelda_native_gb.png fitted to 224x144",
+   "frame": "ff-crystals",
+   "source": "corpus/wsc/ff-crystals.png",
    "files": {
     "gamma": {
      "path": "7x/gamma/ClassicHome WonderSwan Color.txt",
@@ -414,16 +414,16 @@
   },
   "ngpc": {
    "source_px": [
-    42,
-    33
+    72,
+    46
    ],
    "crop_out_px": [
-    294,
-    231
+    504,
+    322
    ],
    "scale": 7,
-   "frame": "zelda_native_gb",
-   "source": "test frame zelda_native_gb.png fitted to 160x152",
+   "frame": "bios-logo",
+   "source": "corpus/ngpc/bios-logo.png",
    "files": {
     "gamma": {
      "path": "7x/gamma/ClassicHome Neo Geo Pocket Color.txt",
