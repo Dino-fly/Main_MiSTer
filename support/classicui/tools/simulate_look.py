@@ -275,6 +275,7 @@ def load_mask(path):
     """
     dims, cells, v2 = None, [], False
     subst = None                                  # substrate=RRGGBB, if present
+    blend = 4                                     # blend=N/4 toward the substrate
     for line in open(path):
         line = line.split('#')[0].split(';')[0].strip()
         if not line: continue
@@ -284,6 +285,15 @@ def load_mask(path):
         if line.lower() == 'v2': v2 = True; continue
         if line.lower().startswith('substrate='):
             subst = int(line.split('=',1)[1].strip(), 16) & 0xFFFFFF
+            continue
+        if line.lower().startswith('blend='):
+            # How far a substrate cell moves toward the substrate, in QUARTERS -
+            # the unit video.cpp clamps to (0..4) and the RTL's blend8 decodes.
+            # 4 replaces outright; less lets the pixel - and so the SHADOW the
+            # filter put there - through into the gap. The mask runs after the
+            # scaler, so a full replace discards the shadow entirely, and the gap
+            # can never be the shadowed substrate a real panel shows.
+            blend = max(0, min(4, int(line.split('=',1)[1].strip())))
             continue
         if dims is None and ',' in line:
             w,h = line.split(','); dims = (int(w),int(h)); continue
@@ -295,8 +305,11 @@ def load_mask(path):
                 # the pixel under it. The only way to draw a reflective panel's
                 # gap, which is the lit substrate and therefore a fixed colour.
                 # Marked with a sentinel so apply_mask can tell it from a
-                # multiplier triple.
-                row.append(('S', subst if subst is not None else 0xFFFFFF))
+                # multiplier triple. Bits 10:0 still carry a multiplier: the RTL
+                # blends the substrate with the pixel AFTER it, not the raw pixel.
+                m = tuple((0x10 | ((v>>4)&0xF)) if (v>>bit)&1 else (v&0xF)
+                          for bit in (10,9,8))
+                row.append(('S', subst if subst is not None else 0xFFFFFF, blend, m))
                 continue
             if not v2:
                 # simple mask: one bit per channel, full on or black
@@ -325,6 +338,14 @@ def mask_mul(ch, mul):
         if (mul >> k) & 1: s += ch >> (4-k)
     return min(s, 255)
 
+def blend8(s, p, w):
+    """The RTL patch's blend8: w quarters toward s, each shifted term truncated."""
+    if w <= 0: return p
+    if w == 1: return (s >> 2) + (p >> 1) + (p >> 2)
+    if w == 2: return (s >> 1) + (p >> 1)
+    if w == 3: return (s >> 1) + (s >> 2) + (p >> 2)
+    return s
+
 def apply_mask(rows, cells, twox):
     mh, mw = len(cells), len(cells[0])
     step = 2 if twox else 1
@@ -332,9 +353,12 @@ def apply_mask(rows, cells, twox):
         crow = cells[(y//step) % mh]
         for x, (r,g,b) in enumerate(row):
             cell = crow[(x//step) % mw]
-            if cell[0] == 'S':                    # substrate cell - replace, do not scale
-                c = cell[1]
-                row[x] = ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF)
+            if cell[0] == 'S':                    # substrate cell
+                c, w, (rm, gm, bm) = cell[1], cell[2], cell[3]
+                sr, sg, sb = (c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF
+                row[x] = (blend8(sr, mask_mul(r, rm), w),
+                          blend8(sg, mask_mul(g, gm), w),
+                          blend8(sb, mask_mul(b, bm), w))
                 continue
             rm,gm,bm = cell
             row[x] = (mask_mul(r,rm), mask_mul(g,gm), mask_mul(b,bm))

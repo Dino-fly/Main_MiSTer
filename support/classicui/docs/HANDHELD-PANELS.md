@@ -240,3 +240,290 @@ one output pixel wide.
 
 Not verified at all: the colour-reflective and backlit gaps, and the shadow, all
 of which have only been rendered through the model.
+
+## The per-look shadow models (2026-08-22)
+
+The DMG and the Pocket each carry a **model** now, not a share of two constants.
+Dinofly tuned them in `tools/shadow_bench.html` — a live render of the whole
+pipeline with the four knobs and the four constraint measurements — and picked:
+
+| | gain | offset | spread | pixel opacity | gap | floor |
+|---|---|---|---|---|---|---|
+| DMG    | 1.85 | 2 | 3 | 0.19 | 0.10 | on |
+| Pocket | 1.25 | 1 | 4 | 0.31 | 0.08 | on |
+
+They live in `lcd_dmg` / `lcd_pocket` in `chome_video.cpp`. The DMG family
+(`dmg`, `dmg-bright`, `dmg-faded`) shares the DMG model; the Pocket has its own.
+**WonderSwan deliberately does not** — it is FSTN, cooler, its own substrate, and
+has not been tuned, so it keeps the generic `SHADOW_MIX_MONO` / `SHADOW_SPAN`
+rather than inheriting numbers measured on a different panel.
+
+### What of a model reaches the fabric
+
+The full model wants the shadow **after** the grid, which needs a stage that does
+not exist yet. What ships is the pre-mask scaler filter, driven by two values
+derived from the model rather than guessed beside it:
+
+- `mix` — the filter's peak depth, **measured off the bench render** at the
+  leading edge of a bright pixel beside a dark one. DMG 0.59, Pocket 0.31,
+  against the generic 0.45. It lands as a tap at unity 128, so 76 and 40.
+- `span` — `(offset + spread)` output pixels, which `lcd_span()` converts to the
+  share of a cell `write_shadow_filter()` wants. Both looks reach 5 px of a 7 px
+  cell at 7×.
+
+Measured, model against shipped path, on the Zelda frame at 7× (probes are the
+bench's own, `tools/simulate_pipeline.py --look dmg`):
+
+| | model | shipped | diff |
+|---|---|---|---|
+| gap buried in darkness | 66.15 | 68.15 | +2.00 |
+| gap, open bright field | 139.71 | 139.71 | 0 |
+| dark pixel | 52.60 | 56.25 | +3.66 |
+| bright pixel, open | 139.71 | 139.71 | 0 |
+| bright pixel, shadowed edge | 106.71 | 102.56 | −4.15 |
+
+**Within ~4 luma on every probe** — much closer than the stage-order argument
+suggests, and worth being precise about why. An earlier claim in this file's
+history, that a pre-mask shadow cannot reach the gap, is **wrong**: a gap cell's
+value is the *scaled pixel* times the gap multiplier, so a pixel already darkened
+by the filter darkens the gap with it. What the pre-mask filter cannot do is
+darken the gap **independently** of the pixel above it, or offset the shadow, or
+blur it. The visible residue is that the filter mixes neighbouring *source*
+pixels, which softens pixel edges slightly — compare the two renders and the
+shipped one is a touch blurrier, not a touch flatter.
+
+So the post-mask stage is still the right thing to build, but it buys refinement
+rather than rescuing the look.
+
+### Two couplings that had already drifted
+
+Both were latent before these models and would have bitten harder with them:
+
+- `vp_synth_gap_mask()` draws the **Display preview** and must match
+  `write_grid_mask()`. It hardcoded a one-pixel gap (`!x || !y`), which agreed
+  with the writer only because 0.15 rounds to one pixel at 6×–9×; at 12× the
+  device drew two and the preview drew one. It reads the proportion now.
+- Both generation call sites carried their own copy of the mask/filter list and
+  had already diverged once. There is one `write_lcd_structure()` now.
+
+`gap_frac` at 0.10 and 0.08 both round to the **same single pixel** as the old
+0.15 from 6× to 9×, so 1080p looks identical whichever is used; they part at 10×
+and above. They are stored as the proportion chosen, because that is what a 4K
+set reads. `assert_per_look_gaps()` tests both the coincidence and the parting.
+
+### Hardware verification, 2026-08-22
+
+Build `834e70bd` (`Version 260822`) deployed to the device and the generated files
+read back off the card. **Every value the models ask for arrives:**
+
+| file | measured on the card | expected |
+|---|---|---|
+| `Pixel Shadow DMG.txt` | peak tap **76**/128 | mix 0.59 |
+| `Pixel Shadow Pocket.txt` | peak tap **40**/128 | mix 0.31 |
+| `Pixel Shadow.txt` | peak tap **58**/128 | 0.45, untouched |
+| `LCD Gap DMG.txt` | `0.10 of a cell`, `substrate=8B9814`, `blend=3`, gap `F20` body `700` | DMG model |
+| `LCD Gap Pocket.txt` | `0.08 of a cell`, `substrate=E0DBCD`, `blend=3` | Pocket model |
+
+`F20` is `0x800` (substrate) | `0x720` (`7<<8` with lit `= lround(0.15*16) = 2`), and
+the corner cell equals the line cells rather than their square. `blend=3` had never
+reached the card before — the binary on it predated that fix.
+
+Also confirmed: a 144-line core at 1080p really is scaled **7×**. `screenshot scaled`
+returned **1120×1008** (and `screenshot` 160×144), so the span the model asks for
+(offset+spread = 5 px) fits a 7 px cell without the clamp.
+
+**No regression.** A/B tested by swapping `MiSTer.prev-20260822` back in: both builds
+respond to input identically (framebuffer `4c465a9c` -> `50864348` on a keypress). An
+earlier reading of "my build never draws" was wrong — it was a UI state where the key
+sent genuinely did nothing.
+
+**Not verified: the composited look at 7×.** The files on the card are generated for
+**4×**, and that is correct behaviour rather than a bug: `vp_output_watch()` returns
+early while our own framebuffer is up, so the scale reflects the last core whose
+*picture* was up — a 240-line NES core, 1080/240 = 4. Reaching 7× needs a Game Boy
+game actually running with the front-end's screen closed, i.e. a launch through the
+shelf, and driving that headlessly did not work this session (see the memory note on
+the device test path). The look itself therefore still rests on the simulator, which
+tracks the model within ~4 luma; what is proven on hardware is that the numbers
+reach the scaler's files intact.
+
+## Four fixes off the television, 2026-08-23
+
+Dinofly ran the looks on the set and found four things. Three are done; the fourth
+is a design note.
+
+### The substrate leaked outside the picture (fixed, needs a core rebuild)
+
+The grid and a dark olive cast covered the **whole screen**, not just the game.
+Cause: a substrate cell is the one element here that *adds* light. Every other
+component multiplies, and multiplying the black pillarbox leaves it black - but
+`blend=3` paints three quarters of the substrate over whatever is under it, so the
+border came out as a dark olive lattice. At 7x a 160x144 core fills 1120x1008 of a
+1920x1080 frame, so most of the screen is border; with Super Game Boy on it was
+worse still.
+
+`shadowmask.sv` already carries `brd_in` (ascal's `o_brd`, "border enable", driven
+from `not o_pev` - high *in* the border). `rtl/shadowmask-substrate.patch` now
+delays it four stages, matching the depth `vid` carries hs/vs/de before the output
+assignment reads its oldest slot, and gates the substrate mux on it:
+
+    dout <= (sub4 && !brd_d[3]) ? ...blend8... : ...product...
+
+**Proven in simulation, not just reasoned about.** `rtl/run_rtl_test.sh` patches a
+pristine `shadowmask.sv`, runs `rtl/shadowmask_border_tb.sv` against it, then runs the
+same testbench against a copy with the gate removed - and requires the second to
+FAIL. Black in everywhere, sampling away from the region edges so the five-stage
+pipeline cannot misattribute a pixel:
+
+| | border pixels lit | picture pixels lit |
+|---|---|---|
+| gate removed (control) | **570 / 912** | 266 / 456 |
+| gate in place | **0 / 912** | 266 / 456 |
+
+The picture column is identical, so the gate costs the feature nothing. Worth knowing
+if this test is ever edited: it had two vacuous passes before it worked, both reading
+as `X` on `dout` and both counted as "lit" by a naive not-black check - the LUT is
+strided by 16 (`mask_idx = {vindex, hindex}`, so a 2x2 mask lives at 0,1,16,17, not
+0..3), and `vcount` is only cleared on a vsync FALLING edge while `next_v` is only
+written on a border RISING edge, so a testbench that drives neither poisons the row
+index for the whole run.
+
+Built and fitted 2026-08-23 from Gameboy_MiSTer `7a5ff50`: 0 errors, timing clean,
+**52% of the ALMs** (21,806 / 41,910), 27 minutes. The gate is four registers and a
+mux, so it is free in practice. Artifact and log kept at
+`snac-build/cores/Gameboy_subst_bordergate_20260823.{rbf,log}`.
+
+Only the substrate is gated. The multipliers are left applying frame-wide, as
+upstream has them - they cannot brighten the border, so there is nothing to fix and
+no reason to diverge. Checked the other layers for the same class of leak and there
+is none: the pixel shadow and the gamma both run before or inside the scaler, which
+only touches the picture, and every gap multiplier - 1.15x as much as 0.80x - leaves
+a black border black. The substrate was the only additive element in the chain.
+
+The **preview renderer does not leak either**, for a duller reason: `vp_mask` carries
+`mul[][][3]` and nothing else, so `vp_synth_gap_mask()` can only express the
+multiplier approximation, and `vp_render_exact_rect()` maps its whole destination
+onto the source and never draws a border at all. Which is one more concrete instance
+of the preview limitation below - a DMG preview cannot show the substrate gap that is
+the whole point of the look, only the pre-substrate version of it. **This is RTL: it needs the cores rebuilt before it takes
+effect.** Until then the mitigation is a lower `SUB_BLEND`, which trades the leak
+for a weaker gap.
+
+### Super Game Boy is its own look now, not a rider on the panel ones
+
+It used to be `On` in `CO_GB_DMG_COLOUR`, on the strength of Dinofly playing Zelda
+with the border. On the television that turned out to be the wrong call: the SGB
+canvas is 256x224 with the Game Boy picture **inset**, so the panel a DMG look
+claims to simulate ends up smaller than the screen the grid is drawn on. A panel
+look and a second machine's canvas cannot both be the subject of one picture.
+
+So `Super Game Boy=Off` on every DMG/Pocket look, asked for **by name** (an absent
+option is the core's last value, not a known one), and two appended looks:
+
+- **Super Game Boy** - a CRT treatment, not a panel one: sharp, scanlines, aperture
+  grille, no gap mask and no pixel shadow. A grid pitched to a Game Boy pixel fits
+  neither the inset picture nor the border. The core keeps its own SGB colours.
+- **None with Super Game Boy** - None cannot simply gain a flag, because None
+  deliberately carries no core half at all ("touch nothing"); this is None with
+  exactly one thing asked for.
+
+`GBC` still asks for SGB On, deliberately - that look exists for the border - and is
+outside what was reported. It has the same border-leak exposure until the cores are
+rebuilt.
+
+### The core's own shadow is off wherever ours is on
+
+`CO_NO_SHADOW` ("Screen Shadow=No") now rides every look that wears a pixel-shadow
+filter. Five were missing it: `agb001`, `ags001`, `ws`, `wsc`, `ngpc`. Two shadows
+disagree - the core's darkens a whole Game Boy pixel because it draws at 160x144,
+ours fades across the cell per output sample. Only the Gameboy core's option name is
+measured; a core publishing one under a different name needs adding explicitly.
+`assert_look_shadow_depth()`'s neighbour test now fails the build if a look gains a
+shadow filter without it.
+
+### The Display previews cannot show a core-side look (design note, not built)
+
+`vp_render_exact_rect()` loads the scaler filters and synthesises the gap mask. It
+cannot show anything the **core** does - the palette, Super Game Boy, Screen Shadow,
+Modify Colors, Flickerblend - because those happen before the picture ever reaches
+us. So the previews are honest about our half and silent about the core's, which is
+why the two new SGB looks preview identically to their non-SGB twins, and why a DMG
+preview cannot show its own palette.
+
+Dinofly's conclusion, which is the right one: stop generating them on the fly and
+ship **captures**. What that needs:
+
+1. a capture harness that, per look, boots a fixed core+ROM+savestate, applies the
+   look, waits for the scaler, and grabs the dongle - the same loop as
+   `tools/filmstrip.sh`, driven by the look list rather than by frames;
+2. one reference scene per video class, chosen for coverage rather than looks: a
+   deep dark field, a full-bright field, a hard edge, and a single-pixel feature;
+3. the results in `classicui/lookshots/`, which `make_sdcard_root.sh` already ships,
+   keyed by look id and integer scale;
+4. and the renderer kept for the fallback case only - an unknown scale, or a look
+   whose shot is missing.
+
+The dongle's own limits apply and are the reason this is a design note rather than a
+patch: it rewrites single-pixel structure, so a 1-px gap at 7x cannot be
+photographed faithfully (see the capture-dongle memory note). A preview shot has to
+be taken at a scale where the gap is >= 2 px and then labelled as indicative, or
+taken from the model for that one component. Deciding which is the open question.
+
+## The menu background, and a wrong-pitch grid (2026-08-23)
+
+Dinofly opened the menu over a running Game Boy and saw **vertical green segments,
+not full screen height, slightly changing while the menu itself was still**, and read
+it as our filters leaking into the menu.
+
+They do reach the menu, but by design rather than by leak: `ig_open()` grabs the
+core's pre-scaler frame, calls `vp_grid_for_now(1)`, and runs the look over the still
+with `vp_render_exact()` so the menu sits over what the television is actually
+showing. Three things it is therefore NOT, each ruled out rather than assumed:
+
+- **not the fabric mask** - `shadowmask` is instantiated once, with
+  `.enable(~LFB_EN)`, and `video_fb_enable()` sets bit 15 (`FB_EN 0x8000` ->
+  `LFB_EN`) whenever the front-end takes the screen. The mask is hard off while the
+  menu is up.
+- **not the scaler filters** - with `LFB_EN` set, ascal's filter select becomes
+  `LFB_FLT`, a single bilinear bit, not our polyphase taps.
+- **not core video showing through** - the framebuffer replaces the video output.
+  That is exactly why the front-end has to draw the still itself; if the core were
+  visible underneath there would be nothing for `ig_bg` to do.
+
+### A real bug found while looking (fixed)
+
+`vp_render_exact_rect()` picked its mask like this:
+
+    int have_mask = d->mask ? vp_synth_gap_mask(d->mask, mscale, &mask) : 0;
+    if (!have_mask) have_mask = vp_load_mask(d->mask, &mask);
+
+`vp_synth_gap_mask()` returns 0 for two unrelated reasons: the name is not a gap mask
+(where reading the file is right), or it IS one and the magnification is unknown or
+below 2x. In the second case this loaded the card's gap file - written for whatever
+scale the SCALER is running - and applied it at the render's own `dw/sw`. Cells at the
+wrong pitch do not draw a coarse grid, they draw a **moire**: irregular vertical
+banding that shifts whenever the canvas resizes. `vp_is_gap_mask()` now separates the
+two cases and a gap mask that cannot be built is simply not drawn.
+
+Confirmed real rather than theoretical, with a control:
+`assert_ig_still_has_no_wrong_pitch_grid()` renders a **flat** still - flat stays flat
+through any linear filter, so structure can only be the mask - and checks both
+directions. At 1x it must stay flat; at 7x it must NOT, or the probe cannot see a grid
+and proves nothing. Reverting the fix makes the 1x case fail, which is the evidence
+that the old fallback really did invent a grid. (The probe also has to sample
+**mid-cell**: a gap row is one where every x is a gap cell, so it reads as uniform,
+and picking `dh/2` at 7x lands on row 504 - exactly such a row - which failed the
+control for the wrong reason.)
+
+### Honest limit
+
+This is probably **not** what Dinofly saw. It only fires below 2x, and a 160x144 core
+in a 1080p canvas renders at 7x-12x. It is a real defect in the same code path and
+worth having fixed, but the reported artefact is still unexplained.
+
+What would settle it, and needs the device: open the in-game menu with the **None**
+look, which has no mask and no filters. If the segments persist, our look is not
+involved at all and the artefact is in the framebuffer we draw or in the compositing
+after it. Alongside that, an `fbgrab` while the artefact is visible says whether it is
+in what we drew - if the grab is clean and the screen is not, the artefact is added
+downstream of us.
