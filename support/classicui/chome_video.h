@@ -67,6 +67,18 @@ const char *vp_name(int i);
 const char *vp_blurb(int i);
 
 /*
+  Read-only views of a look's recipe. The harness uses these to pin invariants that
+  span the table - that no look wears one of our pixel-shadow filters while leaving
+  the core's own shadow on, that a panel look asks for Super Game Boy=Off by name -
+  which are exactly the kind that get broken by editing one row and not its
+  neighbours. Nothing writes through these.
+*/
+const char *vp_core_colour(int i);
+const char *vp_core_struct(int i);
+const char *vp_hfilter_of(int i);
+const char *vp_mask_of(int i);
+
+/*
   Looks are offered per video class, not as one global list: a Game Boy game has
   no business being shown a PVM look, and a Mega Drive game has no business being
   shown an LCD one. vp_options_for() returns how many looks apply to a class and

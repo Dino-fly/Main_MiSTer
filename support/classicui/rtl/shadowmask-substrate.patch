@@ -1,6 +1,6 @@
---- a/sys/shadowmask.sv
-+++ b/sys/shadowmask.sv
-@@ -24,8 +24,26 @@
+--- a/sys/shadowmask.sv	2026-08-23 11:53:56
++++ b/sys/shadowmask.sv	2026-08-23 11:54:14
+@@ -24,8 +24,38 @@
  reg        mask_2x;
  reg        mask_rotate;
  reg        mask_enable;
@@ -24,13 +24,37 @@
 +*/
 +reg [11:0] mask_lut[256];
 +reg [23:0] subst = 24'hFFFFFF;   // the substrate colour, loaded like the LUT
++/*
++  How far a substrate cell moves TOWARD that colour, in quarters. 4 replaces the
++  pixel outright; less lets the pixel through, and with it the shadow the filter
++  put there.
++
++  This matters because the mask runs AFTER the scaler. A full replace discards the
++  pixel, and with it any shadow that fell in the gap - so the gap can never be the
++  shadowed substrate a real panel shows, which is a pixel casting onto its own
++  backplane. Blending is the only way to get the shadow into the space between
++  pixels given the fabric's stage order. Quarters keep it to shifts and adds.
++*/
++reg [2:0] sub_blend = 3'd4;
 +
  always @(posedge clk) begin
  	reg [4:0] hcount;
  	reg [4:0] vcount;
-@@ -70,13 +88,16 @@
+@@ -69,14 +99,28 @@
+ 	end
  end
  
++// Substrate-toward-pixel blend in quarters. Shifts and adds only - no multiplier.
++function [7:0] blend8(input [7:0] s, input [7:0] p);
++	case (sub_blend)
++		3'd0:    blend8 = p;
++		3'd1:    blend8 = (s >> 2) + (p >> 1) + (p >> 2);
++		3'd2:    blend8 = (s >> 1) + (p >> 1);
++		3'd3:    blend8 = (s >> 1) + (s >> 2) + (p >> 2);
++		default: blend8 = s;
++	endcase
++endfunction
++
  reg [4:0] r_mul, g_mul, b_mul; // 1.4 fixed point multipliers
 +reg       sub_sel;             // this cell emits `subst` rather than a product
  always @(posedge clk) begin
@@ -46,15 +70,31 @@
  		r_mul <= lut[10] ? {1'b1,lut[7:4]} : {1'b0,lut[3:0]};
  		g_mul <= lut[9]  ? {1'b1,lut[7:4]} : {1'b0,lut[3:0]};
  		b_mul <= lut[8]  ? {1'b1,lut[7:4]} : {1'b0,lut[3:0]};
-@@ -90,6 +111,7 @@
+@@ -90,10 +134,23 @@
  	reg  [7:0] r3_x, g3_x, b3_x; // 6.25% + 12.5%
  	reg  [8:0] r3_y, g3_y, b3_y; // 25% + 50% + 100%
  	reg  [8:0] r4,   g4,   b4;
 +	reg        sub3, sub4;       // sub_sel is valid alongside r_mul at C3
++	/*
++	  The border, delayed to meet the pixel it belongs to.
  
++	  A substrate cell ADDS light, so unlike every multiplier here it is visible
++	  outside the picture: ascal fills the pillarbox with black, and a cell that
++	  blends three quarters of the substrate over it paints a dark olive lattice
++	  across the whole screen instead of just the game. `vid` carries hs/vs/de
++	  four stages deep before the output assignment reads its oldest slot, so a
++	  four-deep shift on brd_in lines up with the pixel leaving at C5.
++	*/
++	reg  [3:0] brd_d;
++
  	// C1 - data input
  	{r1,g1,b1} <= din;
-@@ -106,13 +128,17 @@
+ 	vid <= {vid[8:0],vs_in, hs_in, de_in};
++	brd_d <= {brd_d[2:0], brd_in};
+ 
+ 	// C2 - relax timings
+ 	{r2,g2,b2} <= {r1,g1,b1};
+@@ -106,13 +163,19 @@
  	b3_x <= ({4{b_mul[0]}} & b2[7:4]) + ({8{b_mul[1]}} & b2[7:3]);
  	b3_y <= ({6{b_mul[2]}} & b2[7:2]) + ({7{b_mul[3]}} & b2[7:1]) + ({9{b_mul[4]}} & b2[7:0]);
  
@@ -68,12 +108,14 @@
  
  	// C5 - clamp and output
 -	dout <= {{8{r4[8]}} | r4[7:0], {8{g4[8]}} | g4[7:0], {8{b4[8]}} | b4[7:0]};
-+	dout <= sub4 ? subst
-+	             : {{8{r4[8]}} | r4[7:0], {8{g4[8]}} | g4[7:0], {8{b4[8]}} | b4[7:0]};
++	dout <= (sub4 && !brd_d[3]) ? {blend8(subst[23:16], {8{r4[8]}} | r4[7:0]),
++	                              blend8(subst[15:8],  {8{g4[8]}} | g4[7:0]),
++	                              blend8(subst[7:0],   {8{b4[8]}} | b4[7:0])}
++	                            : {{8{r4[8]}} | r4[7:0], {8{g4[8]}} | g4[7:0], {8{b4[8]}} | b4[7:0]};
  	{vs_out,hs_out,de_out} <= vid[11:9];
  end
  
-@@ -126,7 +152,9 @@
+@@ -126,7 +189,10 @@
  		3'b000: begin {m_enable, mask_rotate, mask_2x} <= cmd_in[3:1]; idx <= 0; end
  		3'b001: vmax <= cmd_in[3:0];
  		3'b010: hmax <= cmd_in[3:0];
@@ -81,6 +123,7 @@
 +		3'b011: begin mask_lut[idx] <= cmd_in[11:0]; idx <= idx + 1'd1; end
 +		3'b100: subst[11:0]  <= cmd_in[11:0];
 +		3'b101: subst[23:12] <= cmd_in[11:0];
++		3'b110: sub_blend    <= cmd_in[2:0];
  		endcase
  	end
  
