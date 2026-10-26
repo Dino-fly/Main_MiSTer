@@ -300,7 +300,9 @@ def apply_look(flags, name, scale):
     # band under one pixel wide and no measurable shadow at all.
     # dim stays 0: the firmware calls filter_line() with gain 1.0 and has no
     # uniform-dimming term to match.
-    flags.setdefault('shadow', '%d:%.2f:0:%d' % (scale, L['mix'], L['span_px']))
+    # Below 5x the span is wider than a cell; lcd_span() clamps it to one cell
+    # (= scale px), so clamp the same way rather than refuse.
+    flags.setdefault('shadow', '%d:%.2f:0:%d' % (scale, L['mix'], min(L['span_px'], scale)))
     return L
 
 
