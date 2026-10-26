@@ -25556,6 +25556,116 @@ static void assert_no_row_is_hidden()
 	check(!harness_optmap_full(), "the stub option map never ran out, so no write was dropped");
 }
 
+/*
+  CHOME_GEN_LOOKS=<dir>: write the files the firmware GENERATES for the handheld looks,
+  at each output scale a handheld can run at, and a manifest of the preset table.
+  Nothing is asserted.
+
+  tools/render_looks.py and tools/look_metrics.py read these instead of restating the
+  tables in Python, which is how the preview and the device drifted apart before. The
+  route is the real one: vp_install() under harness_set_scale(), exactly what the
+  firmware does when vp_output_watch() reads the scaler header, written to a fresh
+  fake card root per scale (<dir>/<N>x/). Palettes are discovered the way the device
+  does it, by applying the look against the Game Boy core's CONF_STR and watching
+  which .gbp is pushed at the palette slot, because the preset table is static in
+  chome_video.cpp and has no accessor for it.
+
+  <dir>/looks.tsv, one look per line, tab separated:
+    class  id  name  preset(root-relative)  palette(root-relative or empty)
+    core_colour  core_struct
+*/
+static int gen_looks(const char *dir)
+{
+	printf("generating handheld look files into %s\n", dir);
+	harness_set_fb_state(0);
+	mkpath(dir);
+
+	static const char *gb_core[] =
+	{
+		"GAMEBOY",
+		"FS1,GBCGB BIN,Load ROM",
+		"P1O12,Custom Palette,Off,Auto,On",
+		"h1P1FC3,GBP,Load Palette",
+		"P1o4,Screen Shadow,No,Yes",
+		"P1OG,Frame blend,Off,On",
+		"P1OLM,Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer",
+		0
+	};
+
+	for (int n = 2; n <= 10; n++)
+	{
+		char root[1024];
+		snprintf(root, sizeof(root), "%s/%dx", dir, n);
+		mkpath(root); mkdir(root, 0777);
+		harness_set_root(root);
+		// One source line per n output lines is what vp_output_scale() reports.
+		harness_set_scale(144, 144 * n);
+		harness_advance(1100);
+		vp_grid_for_now(1);
+		vp_install();
+	}
+
+	// The manifest comes from the 7x card; it is the same at every scale.
+	char root[1024];
+	snprintf(root, sizeof(root), "%s/7x", dir);
+	harness_set_root(root);
+	harness_set_scale(144, 144 * 7);
+	harness_advance(1100);
+	vp_grid_for_now(1);
+	harness_set_confstr_table(gb_core);
+	harness_set_menu_core(0);
+	vp_forget_originals();
+
+	int gbsys = -1;
+	for (int i = 0; i < lib_sys_count(); i++) if (!strcmp(lib_sys(i)->id, "gb")) gbsys = i;
+	if (gbsys < 0) { printf("no gb system on the fake card\n"); return 1; }
+
+	char path[1100];
+	snprintf(path, sizeof(path), "%s/looks.tsv", dir);
+	FILE *mf = fopen(path, "wt");
+	if (!mf) return 1;
+
+	for (int c = 0; c < VC_COUNT; c++)
+	{
+		if (!vp_class_is_handheld(c)) continue;
+		int opts[VP_MAX_OPTIONS];
+		int n = vp_options_for(c, opts);
+		for (int k = 0; k < n; k++)
+		{
+			vp_set(gbsys, c, opts[k]);
+			harness_reset_file_tx();
+			vp_forget_originals();
+			vp_apply_now(gbsys, c);
+			char pal[1100] = "";
+			const char *tx = harness_last_file_tx();
+			size_t rl = strlen(root);
+			if (tx[0] && !strncmp(tx, root, rl)) snprintf(pal, sizeof(pal), "%s", tx + rl + 1);
+
+			vp_arm_for_launch(gbsys, c);
+			char id[128] = "?";
+			FILE *pf = fopen("/tmp/classicui_preset", "rt");
+			if (pf)
+			{
+				char line[1200];
+				while (fgets(line, sizeof(line), pf))
+					if (!strncmp(line, "look=", 5)) { snprintf(id, sizeof(id), "%s", line + 5); id[strcspn(id, "\r\n")] = 0; }
+				fclose(pf);
+			}
+
+			char pp[1100];
+			vp_preset_path(opts[k], pp, sizeof(pp));
+			const char *rel = strstr(pp, "/presets/");
+			const char *cc = vp_core_colour(opts[k]), *cs = vp_core_struct(opts[k]);
+			fprintf(mf, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", vp_class_name(c), id, vp_name(opts[k]),
+				rel ? rel + 1 : "", pal, cc ? cc : "", cs ? cs : "");
+		}
+	}
+	fclose(mf);
+	harness_set_confstr_table(0);
+	printf("done\n");
+	return 0;
+}
+
 int main()
 {
 	printf("Classic Home host harness\n\n");
@@ -25618,6 +25728,9 @@ int main()
 	frame(3);
 	for (int i = 0; i < 200 && lib_scanning(); i++) frame(2);
 	frame(60);
+
+	// run.sh always passes the variable, empty when unset, so test for content.
+	if (getenv("CHOME_GEN_LOOKS") && *getenv("CHOME_GEN_LOOKS")) return gen_looks(getenv("CHOME_GEN_LOOKS"));
 
 	assert_index();
 	assert_views();
