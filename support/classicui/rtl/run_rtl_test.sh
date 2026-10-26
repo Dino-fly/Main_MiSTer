@@ -8,10 +8,12 @@
 # worked (an unwritten LUT and an uninitialised row counter, both of which read as X
 # and were counted as "lit").
 #
-# Needs iverilog and a Template_MiSTer checkout for the pristine file.
+# Needs iverilog and a Template_MiSTer checkout for the pristine file: pass the
+# file as $1, or point TEMPLATE_MISTER at the checkout. The default assumes it sits
+# beside this repository.
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
-SRC=${1:-/Users/derek/workspace/Template_MiSTer/sys/shadowmask.sv}
+SRC=${1:-${TEMPLATE_MISTER:-$HERE/../../../../Template_MiSTer}/sys/shadowmask.sv}
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
