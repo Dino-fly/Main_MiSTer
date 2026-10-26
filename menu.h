@@ -3,7 +3,7 @@
 
 #include <inttypes.h>
 
-void SelectFile(const char* path, const char* pFileExt, int Options, unsigned char MenuSelect, unsigned char MenuCancel);
+void SelectFile(const char* path, const char* pFileExt, int Options, unsigned char MenuSelect, unsigned char MenuCancel, int recent_idx = -1);
 
 void HandleUI(void);
 
@@ -26,6 +26,7 @@ int menu_lightgun_cb(int idx, uint16_t type, uint16_t code, int value);
 int menu_allow_cfg_switch();
 void StoreIdx_F(int idx, const char *path);
 void StoreIdx_S(int idx, const char *path);
+const char *GetIdx_S(int idx);
 
 int menu_present();
 

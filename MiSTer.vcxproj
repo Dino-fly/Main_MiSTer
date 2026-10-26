@@ -94,6 +94,7 @@
     <ClCompile Include="support\chd\mister_chd.cpp" />
     <ClCompile Include="support\megacd\megacd.cpp" />
     <ClCompile Include="support\megacd\megacdd.cpp" />
+    <ClCompile Include="support\minimig\ipffile.cpp" />
     <ClCompile Include="support\minimig\akiko_cd32.cpp" />
     <ClCompile Include="support\minimig\cdtv_cd.cpp" />
     <ClCompile Include="support\minimig\minimig_a2065.cpp" />
@@ -106,6 +107,7 @@
     <ClCompile Include="support\minimig\minimig_config.cpp" />
     <ClCompile Include="support\minimig\minimig_fdd.cpp" />
     <ClCompile Include="support\minimig\minimig_share.cpp" />
+    <ClCompile Include="support\minimig\scpfile.cpp" />
     <ClCompile Include="support\n64\n64.cpp" />
     <ClCompile Include="support\n64\n64_joy_emu.cpp" />
     <ClCompile Include="support\neogeo\neogeocd.cpp" />
@@ -116,7 +118,6 @@
     <ClCompile Include="support\psx\psx.cpp" />
     <ClCompile Include="support\saturn\saturn.cpp" />
     <ClCompile Include="support\saturn\saturncdd.cpp" />
-    <ClCompile Include="support\sharpmz\sharpmz.cpp" />
     <ClCompile Include="support\snes\snes.cpp" />
     <ClCompile Include="support\st\st_tos.cpp" />
     <ClCompile Include="support\uef\uef_reader.cpp" />
@@ -205,7 +206,6 @@
     <ClInclude Include="support\psx\mcdheader.h" />
     <ClInclude Include="support\psx\psx.h" />
     <ClInclude Include="support\saturn\saturn.h" />
-    <ClInclude Include="support\sharpmz\sharpmz.h" />
     <ClInclude Include="support\snes\snes.h" />
     <ClInclude Include="support\st\st_tos.h" />
     <ClInclude Include="support\uef\uef_reader.h" />

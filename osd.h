@@ -29,7 +29,6 @@ void OsdEnable(unsigned char mode);
 */
 void OsdStatusHold(int on);
 void InfoEnable(int x, int y, int width, int height);
-void OsdRotation(uint8_t rotate);
 void OsdDisable();
 void OsdMenuCtl(int en);
 void OsdUpdate();
@@ -46,6 +45,7 @@ void OsdCoreNameSet(const char* str);
 char* OsdCoreNameGet();
 void OsdSetSize(int n);
 int OsdGetSize();
+int OsdGetRotation(bool scaled);
 
 #define OsdIsBig (OsdGetSize()>8)
 
