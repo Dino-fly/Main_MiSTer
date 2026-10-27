@@ -119,6 +119,7 @@ struct preset_def
 #define M_GAP_BRIGHT PREFIX " LCD Gap DMG Bright.txt"
 #define M_GAP_FADED  PREFIX " LCD Gap DMG Faded.txt"
 #define M_GAP_POCKET PREFIX " LCD Gap Pocket.txt"
+#define M_GAP_LIGHT  PREFIX " LCD Gap Light.txt"
 #define M_GAP_WS     PREFIX " LCD Gap WonderSwan.txt"
 #define M_GAP_TINT PREFIX " LCD Gap Tint.txt"
 #define M_GAP_DARK PREFIX " LCD Gap Dark.txt"
@@ -149,6 +150,7 @@ struct preset_def
 #define SUB_BRIGHT 0xC4CFA1          // pal_dmg    (196,207,161)
 #define SUB_FADED  0x6D833D          // pal_weak   (109,131,61)
 #define SUB_POCKET 0xE0DBCD          // pal_pocket (224,219,205)
+#define SUB_LIGHT  0x5CA894          // pal_light  (92,168,148)
 #define SUB_WS     0xD0CABA          // the WonderSwan panel's warm grey top
 /*
   Quarters toward the substrate: 0 now, so a substrate cell draws exactly what a
@@ -234,6 +236,7 @@ static double lcd_span(const lcd_model *m, int scale)
 #define PAL_POCKET PAL_DIR "/" PREFIX " Pocket.gbp"
 #define PAL_OLIVE  PAL_DIR "/" PREFIX " DMG Olive.gbp"
 #define PAL_WEAK   PAL_DIR "/" PREFIX " DMG Weak.gbp"
+#define PAL_LIGHT  PAL_DIR "/" PREFIX " Light.gbp"
 
 /*
   The core-side halves, shared between entries.
@@ -449,11 +452,11 @@ static const preset_def presets[] =
 	  choice in classicui_video.cfg is a raw preset index, so table order is ABI
 	  and inserting one here would silently move every player's saved look.
 	*/
-	{ "dmg-bright", "Game Boy DMG (Bright)", "The high-contrast ramp: easier to read, further from the panel.",
+	{ "dmg-bright", "DMG Bright", "The high-contrast ramp: easier to read, further from the panel.",
 	  F_SHADOWDM, F_SHADOWDM, "off", M_GAP_BRIGHT, "1x", "off",
 	  CO_GB_DMG_COLOUR, CO_GB_DMG_PANEL, PAL_DMG },
 
-	{ "dmg-faded", "Game Boy DMG (Faded)", "A tired panel in poor light: the light shades nearly merge.",
+	{ "dmg-faded", "DMG Faded", "A tired panel in poor light: the light shades nearly merge.",
 	  F_SHADOWDM, F_SHADOWDM, "off", M_GAP_FADED, "1x", "off",
 	  CO_GB_DMG_COLOUR, CO_GB_DMG_PANEL, PAL_WEAK },
 
@@ -486,6 +489,15 @@ static const preset_def presets[] =
 	{ "none-sgb", "None with Super Game Boy", "Every effect off, with the Super Game Boy border and colours.",
 	  "off", "off", "off", "off", "off", "off",
 	  "Super Game Boy=On;Super Game Boy + GBC=On", 0, 0 },
+
+	/*
+	  The Game Boy Light: a Pocket panel with an electroluminescent sheet behind
+	  it, so it takes the Pocket's grid and shadow and the backlight's aqua glow.
+	  The gap is lit by the same sheet, so it stays a lit gap. Appended for ABI.
+	*/
+	{ "light", "Game Boy Light", "The Pocket's panel with its aqua backlight switched on.",
+	  F_SHADOWPK, F_SHADOWPK, "off", M_GAP_LIGHT, "1x", "off",
+	  CO_GB_DMG_COLOUR, CO_GB_DMG_PANEL, PAL_LIGHT },
 };
 
 #define NPRESETS ((int)(sizeof(presets) / sizeof(presets[0])))
@@ -640,6 +652,7 @@ static int vp_is_gap_mask(const char *name)
 	if (!name || !*name) return 0;
 	return !strcasecmp(name, M_GAP_DMG)    || !strcasecmp(name, M_GAP_BRIGHT) ||
 	       !strcasecmp(name, M_GAP_FADED)  || !strcasecmp(name, M_GAP_POCKET) ||
+	       !strcasecmp(name, M_GAP_LIGHT)  ||
 	       !strcasecmp(name, M_GAP_LIT)    || !strcasecmp(name, M_GAP_WS)     ||
 	       !strcasecmp(name, M_GAP_TINT)   || !strcasecmp(name, M_GAP_DARK);
 }
@@ -649,7 +662,7 @@ static int vp_synth_gap_mask(const char *name, int scale, vp_mask *out)
 	double gap, frac = GAP_FRAC;
 	if (!strcasecmp(name, M_GAP_DMG) || !strcasecmp(name, M_GAP_BRIGHT) ||
 	    !strcasecmp(name, M_GAP_FADED)) { gap = GAP_LIT; frac = lcd_dmg.gap_frac; }
-	else if (!strcasecmp(name, M_GAP_POCKET)) { gap = GAP_LIT; frac = lcd_pocket.gap_frac; }
+	else if (!strcasecmp(name, M_GAP_POCKET) || !strcasecmp(name, M_GAP_LIGHT)) { gap = GAP_LIT; frac = lcd_pocket.gap_frac; }
 	else if (!strcasecmp(name, M_GAP_LIT) || !strcasecmp(name, M_GAP_WS)) gap = GAP_LIT;
 	else if (!strcasecmp(name, M_GAP_TINT)) gap = GAP_TINT;
 	else if (!strcasecmp(name, M_GAP_DARK)) gap = GAP_DARK;
@@ -1075,7 +1088,7 @@ enum
 	P_SHARP = 0, P_PVM_RGB, P_PVM_SVIDEO, P_COMPOSITE, P_PAL_TV, P_VGA,
 	P_DMG, P_POCKET, P_GBC, P_AGB001, P_AGS001, P_AGS101,
 	P_GG, P_GGMOD, P_LYNX, P_WS, P_WSC, P_NGPC, P_NONE, P_BVM,
-	P_DMG_BRIGHT, P_DMG_FADED, P_SGB, P_NONE_SGB
+	P_DMG_BRIGHT, P_DMG_FADED, P_SGB, P_NONE_SGB, P_LIGHT
 };
 
 /*
@@ -1109,7 +1122,7 @@ static const int opt_arcade[]   = { P_PVM_RGB, P_BVM, P_PVM_SVIDEO, P_SHARP };
 static const int opt_computer[] = { P_PAL_TV, P_COMPOSITE, P_PVM_SVIDEO, P_SHARP };
 static const int opt_vga[]      = { P_VGA, P_SHARP };
 static const int opt_gb[]       = { P_DMG, P_DMG_BRIGHT, P_DMG_FADED, P_POCKET,
-                                    P_SGB, P_NONE, P_NONE_SGB };
+                                    P_LIGHT, P_SGB, P_NONE, P_NONE_SGB };
 static const int opt_gbc[]      = { P_GBC, P_SGB, P_NONE, P_NONE_SGB };
 static const int opt_gba[]      = { P_AGB001, P_AGS001, P_AGS101, P_NONE };
 static const int opt_gg[]       = { P_GG, P_GGMOD, P_NONE };
@@ -1798,6 +1811,7 @@ static void write_lcd_structure(int scale)
 	write_grid_mask(M_GAP_BRIGHT, scale, GAP_LIT, SUB_BRIGHT, lcd_dmg.gap_frac);
 	write_grid_mask(M_GAP_FADED,  scale, GAP_LIT, SUB_FADED,  lcd_dmg.gap_frac);
 	write_grid_mask(M_GAP_POCKET, scale, GAP_LIT, SUB_POCKET, lcd_pocket.gap_frac);
+	write_grid_mask(M_GAP_LIGHT,  scale, GAP_LIT, SUB_LIGHT,  lcd_pocket.gap_frac);
 	write_grid_mask(M_GAP_WS,     scale, GAP_LIT, SUB_WS,     GAP_FRAC);
 
 	write_shadow_filter(F_SHADOWDM, scale, lcd_dmg.mix,       lcd_span(&lcd_dmg, scale));
@@ -2047,6 +2061,14 @@ static const gbp_spec pal_olive =
 static const gbp_spec pal_weak =
 { PAL_WEAK,   { { 0x6D, 0x83, 0x3D }, { 0x5E, 0x7A, 0x40 }, { 0x57, 0x72, 0x40 }, { 0x36, 0x4E, 0x1A } } };
 
+/*
+  The Game Boy Light with its backlight on. The EL sheet glows blue-green, so the
+  whole ramp shifts to aqua; kept as muted as Olive, since a lit panel still had
+  the Pocket's low contrast and never the saturated cyan emulators give it.
+*/
+static const gbp_spec pal_light =
+{ PAL_LIGHT,  { { 0x5C, 0xA8, 0x94 }, { 0x40, 0x84, 0x76 }, { 0x2A, 0x5E, 0x58 }, { 0x18, 0x38, 0x38 } } };
+
 static void write_gbp(const gbp_spec *s)
 {
 	genbuf g;
@@ -2141,6 +2163,7 @@ void vp_install()
 	write_gbp(&pal_pocket);
 	write_gbp(&pal_olive);
 	write_gbp(&pal_weak);
+	write_gbp(&pal_light);
 
 	for (int i = 0; i < NPRESETS; i++)
 	{
@@ -2521,7 +2544,9 @@ static void vp_apply_core_side(int i, int with_palette)
 			char full[1200];
 			snprintf(full, sizeof(full), "%s/%s", getRootDir(), d->palette);
 			printf("ClassicUI: look \"%s\": palette %s\n", d->name, d->palette);
+			user_io_file_tx_quiet(1);    // no "Loading" box baked into the frozen frame
 			user_io_file_tx(full, 3 /* the GB core's FC3 slot */);
+			user_io_file_tx_quiet(0);
 		}
 		else if (!with_palette)
 		{
@@ -2644,7 +2669,7 @@ static int vp_uses_grid(int i)
 	                                F_SHADOWDM, F_SHADOWPK,
 	                                M_GAP_LIT, M_GAP_TINT, M_GAP_DARK,
 	                                M_GAP_DMG, M_GAP_BRIGHT, M_GAP_FADED,
-	                                M_GAP_POCKET, M_GAP_WS };
+	                                M_GAP_POCKET, M_GAP_LIGHT, M_GAP_WS };
 	for (int k = 0; k < 3; k++)
 		for (unsigned j = 0; f[k] && j < sizeof(scaled) / sizeof(scaled[0]); j++)
 			if (!strcasecmp(f[k], scaled[j])) return 1;
@@ -2951,6 +2976,9 @@ static const gbp_spec *pv_palette(int i)
 	if (!presets[i].palette) return 0;
 	if (!strcmp(presets[i].palette, PAL_DMG)) return &pal_dmg;
 	if (!strcmp(presets[i].palette, PAL_POCKET)) return &pal_pocket;
+	if (!strcmp(presets[i].palette, PAL_OLIVE)) return &pal_olive;
+	if (!strcmp(presets[i].palette, PAL_WEAK)) return &pal_weak;
+	if (!strcmp(presets[i].palette, PAL_LIGHT)) return &pal_light;
 	return 0;
 }
 
@@ -3115,7 +3143,8 @@ const uint32_t *vp_preview(int i, int w, int h, const uint32_t *ref, int sw_nati
 		if (!strcasecmp(d->mask, M_MATRIX))         { matrix = 1; gap_mul = 0.75; }
 		else if (!strcasecmp(d->mask, M_GAP_LIT) || !strcasecmp(d->mask, M_GAP_DMG) ||
 		         !strcasecmp(d->mask, M_GAP_BRIGHT) || !strcasecmp(d->mask, M_GAP_FADED) ||
-		         !strcasecmp(d->mask, M_GAP_POCKET) || !strcasecmp(d->mask, M_GAP_WS))
+		         !strcasecmp(d->mask, M_GAP_POCKET) || !strcasecmp(d->mask, M_GAP_LIGHT) ||
+		         !strcasecmp(d->mask, M_GAP_WS))
 		                                            { matrix = 1; gap_mul = GAP_LIT; }
 		else if (!strcasecmp(d->mask, M_GAP_TINT))  { matrix = 1; gap_mul = GAP_TINT; }
 		else if (!strcasecmp(d->mask, M_GAP_DARK))  { matrix = 1; gap_mul = GAP_DARK; }

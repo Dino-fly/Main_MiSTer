@@ -75,17 +75,15 @@ def fit(limit, cell):
         p -= 1
     return p
 
-def main():
-    args = sys.argv[1:]
-    if len(args) < 2 or args[0] in ('-h', '--help'):
-        print(__doc__); sys.exit(0 if args else 1)
-    src, outdir = args[0], args[1]
-    opts = dict(zip(args[2::2], args[3::2]))
-    sw, sh, px = read_png(src)
-    cx, cy = (map(int, opts['--center'].split(',')) if '--center' in opts
-              else picture_centre(px, sw, sh))
-    zx, zy = (map(int, opts['--zoom-center'].split(',')) if '--zoom-center' in opts
-              else (cx, cy))
+def make_views(px, sw, sh, outdir, center=None, zoom_center=None):
+    """Write the four crops for one rendered 1080p frame; return the show_look dict.
+
+    Split out of main() so render_looks.py can cut a frame it already holds in
+    memory instead of writing a PNG and parsing it back, which costs seconds per
+    look in pure Python. main() is a thin argv wrapper around this.
+    """
+    cx, cy = center if center else picture_centre(px, sw, sh)
+    zx, zy = zoom_center if zoom_center else (cx, cy)
     os.makedirs(outdir, exist_ok=True)
 
     # Terminal: up to 960x540, trimmed to whole cells so the box is exact.
@@ -104,7 +102,18 @@ def main():
         if max(len(base64.b64encode(open(x['path'], 'rb').read())) for x in (a, b)) <= DESK_BUDGET:
             res['full_desktop'], res['zoom_desktop'] = a, b
             break
-    print(json.dumps(res))
+    return res
+
+def main():
+    args = sys.argv[1:]
+    if len(args) < 2 or args[0] in ('-h', '--help'):
+        print(__doc__); sys.exit(0 if args else 1)
+    src, outdir = args[0], args[1]
+    opts = dict(zip(args[2::2], args[3::2]))
+    sw, sh, px = read_png(src)
+    center = tuple(map(int, opts['--center'].split(','))) if '--center' in opts else None
+    zoom = tuple(map(int, opts['--zoom-center'].split(','))) if '--zoom-center' in opts else None
+    print(json.dumps(make_views(px, sw, sh, outdir, center, zoom)))
 
 if __name__ == '__main__':
     main()
