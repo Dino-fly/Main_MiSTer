@@ -1,0 +1,451 @@
+{
+ "note": "MODEL RENDERS: simulate_look/simulate_pipeline run over the files chome_video.cpp generates (render_looks.py --lookshots). Not captures. Core-side options (colour profile, frame blend) are not simulated; see each look meta.json for the list.",
+ "size": [
+  320,
+  240
+ ],
+ "looks": {
+  "dmg": {
+   "source_px": [
+    52,
+    80
+   ],
+   "crop_out_px": [
+    364,
+    560
+   ],
+   "scale": 7,
+   "frame": "advisland-play",
+   "source": "corpus/gb/advisland-play.png",
+   "files": {
+    "palette": {
+     "path": "7x/games/GAMEBOY/Palettes/ClassicHome DMG Olive.gbp",
+     "md5": "359aba0015d7f8d303fc1ffbdcc0b8ab"
+    },
+    "hfilter": {
+     "path": "7x/filters/ClassicHome Pixel Shadow DMG.txt",
+     "md5": "035704e0b3d6d49b412eaedb490479a5"
+    },
+    "vfilter": {
+     "path": "7x/filters/ClassicHome Pixel Shadow DMG.txt",
+     "md5": "035704e0b3d6d49b412eaedb490479a5"
+    },
+    "mask": {
+     "path": "7x/shadow_masks/ClassicHome LCD Gap DMG.txt",
+     "md5": "37ac739fdd42d0608a25d3810c3b4a54"
+    },
+    "preset": {
+     "path": "7x/presets/ClassicHome Game Boy DMG.ini",
+     "md5": "3288de006739a6782ca345c4e57e8499"
+    }
+   }
+  },
+  "dmg-bright": {
+   "source_px": [
+    52,
+    80
+   ],
+   "crop_out_px": [
+    364,
+    560
+   ],
+   "scale": 7,
+   "frame": "advisland-play",
+   "source": "corpus/gb/advisland-play.png",
+   "files": {
+    "palette": {
+     "path": "7x/games/GAMEBOY/Palettes/ClassicHome DMG Green.gbp",
+     "md5": "d0ce3950aa7234a0d9bb6525c039d43b"
+    },
+    "hfilter": {
+     "path": "7x/filters/ClassicHome Pixel Shadow DMG.txt",
+     "md5": "035704e0b3d6d49b412eaedb490479a5"
+    },
+    "vfilter": {
+     "path": "7x/filters/ClassicHome Pixel Shadow DMG.txt",
+     "md5": "035704e0b3d6d49b412eaedb490479a5"
+    },
+    "mask": {
+     "path": "7x/shadow_masks/ClassicHome LCD Gap DMG Bright.txt",
+     "md5": "37ac739fdd42d0608a25d3810c3b4a54"
+    },
+    "preset": {
+     "path": "7x/presets/ClassicHome Game Boy DMG (Bright).ini",
+     "md5": "ba51c82005eead9487e578cc05e89420"
+    }
+   }
+  },
+  "dmg-faded": {
+   "source_px": [
+    58,
+    88
+   ],
+   "crop_out_px": [
+    406,
+    616
+   ],
+   "scale": 7,
+   "frame": "advisland-play",
+   "source": "corpus/gb/advisland-play.png",
+   "files": {
+    "palette": {
+     "path": "7x/games/GAMEBOY/Palettes/ClassicHome DMG Weak.gbp",
+     "md5": "88850f96f3a4e69e8a3471cedb263908"
+    },
+    "hfilter": {
+     "path": "7x/filters/ClassicHome Pixel Shadow DMG.txt",
+     "md5": "035704e0b3d6d49b412eaedb490479a5"
+    },
+    "vfilter": {
+     "path": "7x/filters/ClassicHome Pixel Shadow DMG.txt",
+     "md5": "035704e0b3d6d49b412eaedb490479a5"
+    },
+    "mask": {
+     "path": "7x/shadow_masks/ClassicHome LCD Gap DMG Faded.txt",
+     "md5": "37ac739fdd42d0608a25d3810c3b4a54"
+    },
+    "preset": {
+     "path": "7x/presets/ClassicHome Game Boy DMG (Faded).ini",
+     "md5": "477bd97b945c360e92d9630ec9c24cbe"
+    }
+   }
+  },
+  "pocket": {
+   "source_px": [
+    58,
+    86
+   ],
+   "crop_out_px": [
+    406,
+    602
+   ],
+   "scale": 7,
+   "frame": "advisland-play",
+   "source": "corpus/gb/advisland-play.png",
+   "files": {
+    "palette": {
+     "path": "7x/games/GAMEBOY/Palettes/ClassicHome Pocket.gbp",
+     "md5": "331ed80d0a66c88e0fca9e6e2db7d1a7"
+    },
+    "hfilter": {
+     "path": "7x/filters/ClassicHome Pixel Shadow Pocket.txt",
+     "md5": "412df6eafe35148e4334f2f9dba1b548"
+    },
+    "vfilter": {
+     "path": "7x/filters/ClassicHome Pixel Shadow Pocket.txt",
+     "md5": "412df6eafe35148e4334f2f9dba1b548"
+    },
+    "mask": {
+     "path": "7x/shadow_masks/ClassicHome LCD Gap Pocket.txt",
+     "md5": "48b71c4014b6bc8e7d7ca3eb7d738b1c"
+    },
+    "preset": {
+     "path": "7x/presets/ClassicHome Game Boy Pocket.ini",
+     "md5": "5669085b9b46dfe0fab66ef2ec8be559"
+    }
+   }
+  },
+  "gbc": {
+   "source_px": [
+    84,
+    60
+   ],
+   "crop_out_px": [
+    588,
+    420
+   ],
+   "scale": 7,
+   "frame": "oracle-intro",
+   "source": "corpus/gbc/oracle-intro.png",
+   "files": {
+    "hfilter": {
+     "path": "7x/filters/ClassicHome Pixel Shadow Light.txt",
+     "md5": "f9c850f4409b4d2391cf2442a73e9e15"
+    },
+    "vfilter": {
+     "path": "7x/filters/ClassicHome Pixel Shadow Light.txt",
+     "md5": "f9c850f4409b4d2391cf2442a73e9e15"
+    },
+    "mask": {
+     "path": "7x/shadow_masks/ClassicHome LCD Gap Tint.txt",
+     "md5": "7f0c1d35f1fc1350d9d09f7987fdf03f"
+    },
+    "preset": {
+     "path": "7x/presets/ClassicHome Game Boy Color.ini",
+     "md5": "b59b0a88bba7701bd069da1e558ff10a"
+    }
+   }
+  },
+  "agb001": {
+   "source_px": [
+    30,
+    20
+   ],
+   "crop_out_px": [
+    180,
+    120
+   ],
+   "scale": 6,
+   "frame": "lttp-play",
+   "source": "corpus/gba/lttp-play.png",
+   "files": {
+    "hfilter": {
+     "path": "6x/filters/ClassicHome Pixel Shadow Light.txt",
+     "md5": "a26f67082c5006ba0e4009cfcec11812"
+    },
+    "vfilter": {
+     "path": "6x/filters/ClassicHome Pixel Shadow Light.txt",
+     "md5": "a26f67082c5006ba0e4009cfcec11812"
+    },
+    "mask": {
+     "path": "6x/shadow_masks/ClassicHome LCD Gap Tint.txt",
+     "md5": "242145ba333bf55851b6e4f2e073a886"
+    },
+    "preset": {
+     "path": "6x/presets/ClassicHome GBA.ini",
+     "md5": "3de7cd593fc0e66b13bde365a8ed7802"
+    }
+   }
+  },
+  "ags001": {
+   "source_px": [
+    30,
+    20
+   ],
+   "crop_out_px": [
+    180,
+    120
+   ],
+   "scale": 6,
+   "frame": "lttp-play",
+   "source": "corpus/gba/lttp-play.png",
+   "files": {
+    "hfilter": {
+     "path": "6x/filters/ClassicHome Pixel Shadow Light.txt",
+     "md5": "a26f67082c5006ba0e4009cfcec11812"
+    },
+    "vfilter": {
+     "path": "6x/filters/ClassicHome Pixel Shadow Light.txt",
+     "md5": "a26f67082c5006ba0e4009cfcec11812"
+    },
+    "mask": {
+     "path": "6x/shadow_masks/ClassicHome LCD Gap Tint.txt",
+     "md5": "242145ba333bf55851b6e4f2e073a886"
+    },
+    "preset": {
+     "path": "6x/presets/ClassicHome GBA SP.ini",
+     "md5": "e366b6f607ba91f4ac58825af34715f8"
+    }
+   }
+  },
+  "ags101": {
+   "source_px": [
+    30,
+    20
+   ],
+   "crop_out_px": [
+    180,
+    120
+   ],
+   "scale": 6,
+   "frame": "lttp-play",
+   "source": "corpus/gba/lttp-play.png",
+   "files": {
+    "mask": {
+     "path": "6x/shadow_masks/ClassicHome LCD Gap Dark.txt",
+     "md5": "7bac051282b0677dcc1ee562645f7f08"
+    },
+    "preset": {
+     "path": "6x/presets/ClassicHome GBA SP Brighter.ini",
+     "md5": "116edddc58e8236ad5029508ea77c08e"
+    }
+   }
+  },
+  "gg": {
+   "source_px": [
+    72,
+    90
+   ],
+   "crop_out_px": [
+    504,
+    630
+   ],
+   "scale": 7,
+   "frame": "sonicblast-play",
+   "source": "corpus/gg/sonicblast-play.png",
+   "files": {
+    "gamma": {
+     "path": "7x/gamma/ClassicHome Game Gear.txt",
+     "md5": "cc32f6ed95b399a08d9b0e30ce46bd5f"
+    },
+    "mask": {
+     "path": "7x/shadow_masks/ClassicHome LCD Gap Dark.txt",
+     "md5": "ce2e2bb8cf3c45af7f8fe42cfc7a27eb"
+    },
+    "preset": {
+     "path": "7x/presets/ClassicHome Game Gear.ini",
+     "md5": "e11e5070dc8b8dc5ffe3b6f2bdae1912"
+    }
+   }
+  },
+  "gg-mod": {
+   "source_px": [
+    72,
+    90
+   ],
+   "crop_out_px": [
+    504,
+    630
+   ],
+   "scale": 7,
+   "frame": "sonicblast-play",
+   "source": "corpus/gg/sonicblast-play.png",
+   "files": {
+    "gamma": {
+     "path": "7x/gamma/ClassicHome Game Gear Backlit.txt",
+     "md5": "a205c7a19678f709b91ae9aa36b0daec"
+    },
+    "mask": {
+     "path": "7x/shadow_masks/ClassicHome LCD Gap Dark.txt",
+     "md5": "ce2e2bb8cf3c45af7f8fe42cfc7a27eb"
+    },
+    "preset": {
+     "path": "7x/presets/ClassicHome Game Gear (Backlit Mod).ini",
+     "md5": "2f564a2f6708896887eb104e59255529"
+    }
+   }
+  },
+  "lynx": {
+   "source_px": [
+    50,
+    20
+   ],
+   "crop_out_px": [
+    500,
+    200
+   ],
+   "scale": 10,
+   "frame": "basketbrawl-credits",
+   "source": "corpus/lynx/basketbrawl-credits.png",
+   "files": {
+    "gamma": {
+     "path": "10x/gamma/ClassicHome Lynx.txt",
+     "md5": "ac1441f14a518491ccbd242e13a426bb"
+    },
+    "mask": {
+     "path": "10x/shadow_masks/ClassicHome LCD Gap Dark.txt",
+     "md5": "8599be38732d248623f70c25a098af67"
+    },
+    "preset": {
+     "path": "10x/presets/ClassicHome Atari Lynx.ini",
+     "md5": "0c79668ae2adaeeae92a20c165b22b2d"
+    }
+   }
+  },
+  "ws": {
+   "source_px": [
+    86,
+    34
+   ],
+   "crop_out_px": [
+    602,
+    238
+   ],
+   "scale": 7,
+   "frame": "title-logo",
+   "source": "corpus/ws/title-logo.png",
+   "files": {
+    "gamma": {
+     "path": "7x/gamma/ClassicHome WonderSwan.txt",
+     "md5": "be033df7b7f15a291250d16ed0d1749e"
+    },
+    "hfilter": {
+     "path": "7x/filters/ClassicHome Pixel Shadow.txt",
+     "md5": "b15166c5fcbba0d7088117871f20df89"
+    },
+    "vfilter": {
+     "path": "7x/filters/ClassicHome Pixel Shadow.txt",
+     "md5": "b15166c5fcbba0d7088117871f20df89"
+    },
+    "mask": {
+     "path": "7x/shadow_masks/ClassicHome LCD Gap WonderSwan.txt",
+     "md5": "cc9f6da738f4604e4802d1d2f844f413"
+    },
+    "preset": {
+     "path": "7x/presets/ClassicHome WonderSwan.ini",
+     "md5": "5800547471e94391b6555742a2d053a3"
+    }
+   }
+  },
+  "wsc": {
+   "source_px": [
+    28,
+    54
+   ],
+   "crop_out_px": [
+    196,
+    378
+   ],
+   "scale": 7,
+   "frame": "ff-crystals",
+   "source": "corpus/wsc/ff-crystals.png",
+   "files": {
+    "gamma": {
+     "path": "7x/gamma/ClassicHome WonderSwan Color.txt",
+     "md5": "5950d5fc72ef281b78968be16ee309f7"
+    },
+    "hfilter": {
+     "path": "7x/filters/ClassicHome Pixel Shadow Light.txt",
+     "md5": "f9c850f4409b4d2391cf2442a73e9e15"
+    },
+    "vfilter": {
+     "path": "7x/filters/ClassicHome Pixel Shadow Light.txt",
+     "md5": "f9c850f4409b4d2391cf2442a73e9e15"
+    },
+    "mask": {
+     "path": "7x/shadow_masks/ClassicHome LCD Gap Tint.txt",
+     "md5": "7f0c1d35f1fc1350d9d09f7987fdf03f"
+    },
+    "preset": {
+     "path": "7x/presets/ClassicHome WonderSwan Color.ini",
+     "md5": "23ff2275849261506a9ea3bcbcc85b46"
+    }
+   }
+  },
+  "ngpc": {
+   "source_px": [
+    72,
+    46
+   ],
+   "crop_out_px": [
+    504,
+    322
+   ],
+   "scale": 7,
+   "frame": "bios-logo",
+   "source": "corpus/ngpc/bios-logo.png",
+   "files": {
+    "gamma": {
+     "path": "7x/gamma/ClassicHome Neo Geo Pocket Color.txt",
+     "md5": "4e8d138ec62f2b55061d29563dcce1be"
+    },
+    "hfilter": {
+     "path": "7x/filters/ClassicHome Pixel Shadow Light.txt",
+     "md5": "f9c850f4409b4d2391cf2442a73e9e15"
+    },
+    "vfilter": {
+     "path": "7x/filters/ClassicHome Pixel Shadow Light.txt",
+     "md5": "f9c850f4409b4d2391cf2442a73e9e15"
+    },
+    "mask": {
+     "path": "7x/shadow_masks/ClassicHome LCD Gap Tint.txt",
+     "md5": "7f0c1d35f1fc1350d9d09f7987fdf03f"
+    },
+    "preset": {
+     "path": "7x/presets/ClassicHome Neo Geo Pocket Color.ini",
+     "md5": "12970732f1830707a069e5afc10fa140"
+    }
+   }
+  }
+ }
+}
