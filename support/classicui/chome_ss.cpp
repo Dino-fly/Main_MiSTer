@@ -161,6 +161,7 @@ static const ss_sysmap builtin[] =
 	{ "sms",    "2"   },
 	{ "gg",     "21"  },     // the Game Gear shelf row; .gg under games/SMS maps below
 	{ "gb",     "9"   },
+	{ "gbc",    "10"  },     // the Game Boy Color shelf row (games/GBC)
 	{ "gba",    "12"  },
 	{ "n64",    "14"  },
 	{ "psx",    "57"  },
