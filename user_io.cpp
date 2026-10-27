@@ -3000,6 +3000,17 @@ int user_io_file_tx_a(const char* name, uint16_t index)
 	return 1;
 }
 
+/*
+  No "Loading" progress for the next transfers. Classic Home pushes a 16-byte
+  palette while its in-game menu has the core frozen, and the HDMI OSD is mixed
+  into the core's picture before the scaler: the box was drawn into the frozen
+  frame and stayed in the menu's look preview long after the OSD itself went away
+  (4 of 8 applies, 2026-10-26). Set and cleared around the one call; nothing else
+  in the firmware touches it.
+*/
+static int file_tx_quiet = 0;
+void user_io_file_tx_quiet(int on) { file_tx_quiet = on; }
+
 int user_io_file_tx(const char* name, unsigned char index, char opensave, char mute, char composite, uint32_t load_addr)
 {
 	fileTYPE f = {};
@@ -3137,7 +3148,7 @@ int user_io_file_tx(const char* name, unsigned char index, char opensave, char m
 
 	uint32_t skip = bytes2send & 0x3FF; // skip possible header up to 1023 bytes
 
-	int use_progress = 1; // (bytes2send > (1024 * 1024)) ? 1 : 0;
+	int use_progress = !file_tx_quiet; // (bytes2send > (1024 * 1024)) ? 1 : 0;
 	int size = bytes2send;
 	if (use_progress) ProgressMessage(0, 0, 0, 0);
 

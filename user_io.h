@@ -229,6 +229,7 @@ uint16_t user_io_get_sdram_cfg();
 
 int user_io_file_tx(const char* name, unsigned char index = 0, char opensave = 0, char mute = 0, char composite = 0, uint32_t load_addr = 0);
 int user_io_file_tx_a(const char* name, uint16_t index);
+void user_io_file_tx_quiet(int on);
 unsigned char user_io_ext_idx(char *, char*);
 void user_io_set_index(unsigned char index);
 void user_io_set_aindex(uint16_t index);

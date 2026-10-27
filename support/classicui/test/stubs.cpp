@@ -1003,10 +1003,16 @@ const char *harness_last_file_tx() { return last_file_tx; }
 int harness_last_file_tx_idx() { return last_file_tx_idx; }
 void harness_reset_file_tx() { last_file_tx[0] = 0; last_file_tx_idx = -1; }
 
+// The firmware's file_tx draws a "Loading" box unless told not to; the look must.
+static int file_tx_quiet = 0, file_tx_loud = 0;
+void user_io_file_tx_quiet(int on) { file_tx_quiet = on; }
+int harness_file_tx_loud() { return file_tx_loud; }
+
 int user_io_file_tx(const char *name, unsigned char index, char, char, char, uint32_t)
 {
 	snprintf(last_file_tx, sizeof(last_file_tx), "%s", name ? name : "");
 	last_file_tx_idx = index;
+	if (!file_tx_quiet) file_tx_loud++;
 	printf("  [stub] user_io_file_tx(\"%s\", %u)\n", last_file_tx, index);
 	return 1;
 }

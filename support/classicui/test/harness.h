@@ -52,6 +52,7 @@ void harness_reset_status();
 // The last file pushed at the core (a Display look's .gbp palette), and its index.
 const char *harness_last_file_tx();
 int  harness_last_file_tx_idx();
+int  harness_file_tx_loud();
 void harness_reset_file_tx();
 
 // 1 = a launch's file feed is still running; the look's core half must wait.
