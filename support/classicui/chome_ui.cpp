@@ -1255,6 +1255,7 @@ static int class_of(int sysidx, const char *path)
 	{
 		// Cores that host more than one machine are told apart by extension.
 		if (s->vclass == VC_GB && !strcasecmp(ext, "gbc")) return VC_GBC;
+		if (s->vclass == VC_GBC && !strcasecmp(ext, "gb")) return VC_GB;     // a DMG cart in games/GBC
 		if (s->vclass == VC_CONSOLE && !strcasecmp(ext, "gg")) return VC_GG;
 		if (s->vclass == VC_WS && !strcasecmp(ext, "wsc")) return VC_WSC;
 	}
@@ -15341,7 +15342,7 @@ static int ig_open()
 				break;
 			}
 
-			if (shot_lit(ig_shot, ig_shot_w * ig_shot_h) || tries >= 3) break;
+			if (shot_lit(ig_shot, ig_shot_w * ig_shot_h) || tries >= 3) { vp_note_frame_captured(); break; }
 			usleep(50 * 1000);
 		}
 		why = screenshot_grab_why();

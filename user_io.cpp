@@ -3241,7 +3241,8 @@ int user_io_file_tx(const char* name, unsigned char index, char opensave, char m
 	printf("Done.\n");
 	printf("CRC32: %08X\n", file_crc);
 
-	user_io_write_gameid(name, file_crc);
+	// A quiet push is a look's palette or LUT, not a game: /tmp/GAMEID stays the game's.
+	if (!file_tx_quiet) user_io_write_gameid(name, file_crc);
 
 	FileClose(&f);
 

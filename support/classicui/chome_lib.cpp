@@ -905,6 +905,9 @@ static int slot_path_raw(const chome_item *it, int n, char *out, int len)
 	const char *core = strrchr(s->rbf, '/');
 	core = core ? core + 1 : s->rbf;
 	if (s->mra) core = "Arcade";
+	// An MGL setname renames the core for its savestates too (user_io_name_override):
+	// Game Gear's states are in savestates/GameGear, Color's in savestates/GBC.
+	if (s->setname[0]) core = s->setname;
 	if (!*core) return 0;
 
 	const char *fn = strrchr(it->path, '/');
