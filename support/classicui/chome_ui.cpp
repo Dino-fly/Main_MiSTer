@@ -1664,6 +1664,7 @@ static const struct { const char *id; const char *icon; } sysicon_alias[] =
 	{ "megacd",   "md"     },
 	{ "pcecd",    "tg16"   },
 	{ "neogeocd", "neogeo" },
+	{ "gbc",      "gb"     },     // the licensed set has no Color glyph
 };
 
 /*

@@ -70,6 +70,10 @@ static const sys_def defaults[] =
 	{ "nes",   "Nintendo Entertainment System", "NES",  "_Console/NES",          "NES",     "nes,fds,nsf",  "Nintendo - Nintendo Entertainment System",       'f', 0, 2, 0, 0, 0x8a4b2b, 0, CH_SS_YES     },
 	{ "snes",  "Super Nintendo",                "SNES", "_Console/SNES",         "SNES",    "sfc,smc",      "Nintendo - Super Nintendo Entertainment System", 'f', 0, 2, 0, 0, 0x5b4b8a, 0, CH_SS_YES     },
 	{ "gb",    "Game Boy",                      "GB",   "_Console/Gameboy",      "GAMEBOY", "gb,gbc",       "Nintendo - Game Boy",                            'f', 0, 2, 0, 0, 0x3c6e4a, 0, CH_SS_YES     },
+	// The Gameboy core again, re-homed by setname the way Game Gear rides the SMS core:
+	// a card set up by the usual scripts keeps Color games in games/GBC, behind
+	// _Console/GameboyColor.mgl, and the Game Boy row above never walks that folder.
+	{ "gbc",   "Game Boy Color",                "GBC",  "_Console/Gameboy",      "GBC",     "gbc,gb",       "Nintendo - Game Boy Color",                      'f', 0, 2, 0, 0, 0x6a3c7a, 0, CH_SS_YES, "GBC" },
 	{ "gba",   "Game Boy Advance",              "GBA",  "_Console/GBA",          "GBA",     "gba",          "Nintendo - Game Boy Advance",                    'f', 0, 2, 0, 0, 0x4a3c8a, 0, CH_SS_YES     },
 	{ "n64",   "Nintendo 64",                   "N64",  "_Console/N64",          "N64",     "n64,z64,v64",  "Nintendo - Nintendo 64",                         'f', 0, 3, 0, 0, 0x2b5e8a, 0, CH_SS_NO      },
 	{ "md",    "Mega Drive",                    "MD",   "_Console/Genesis",      "Genesis", "md,bin,gen",   "Sega - Mega Drive - Genesis",                    'f', 0, 2, 0, 0, 0x2b4c7e, 0, CH_SS_NO      },

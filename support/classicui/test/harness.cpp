@@ -19880,7 +19880,13 @@ static void assert_scan_slices()
 	  taken deliberately rather than pasted blind - the root view moved because
 	  the shelf gained a system, and the item fingerprint because two files did.
 	*/
-	check(fixture_fp == 0xad88a908,
+	/*
+	  And for the Game Boy Color row (2026-10-27): no fixture file moved - the fake card
+	  has no games/GBC - but every system after Game Boy moved down one index, and the
+	  item fingerprint carries the index. The root view is unchanged for the same reason
+	  (an empty system gets no card).
+	*/
+	check(fixture_fp == 0xac61b800,
 		"the sliced walk produces the library the whole-system walk produced, item for item");
 	check(fixture_root == 0xc868c2f2, "and the shelf it builds, card for card and group for group");
 
