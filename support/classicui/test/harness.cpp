@@ -12166,11 +12166,56 @@ static void assert_video()
 		vp_apply_now(gbsys, VC_GBC);
 		check(!harness_last_file_tx()[0], "and once it is back nothing is pushed again");
 
+		/*
+		  FC7 is a remembered slot: the core reloads <core>.f7 at every boot, so a
+		  player who picked their own LUT in the core's OSD starts with THAT one, and
+		  leaving a LUT look must give it back rather than the stock table.
+		*/
+		{
+			static unsigned char own[98304];
+			for (int i = 0; i < 98304; i++) own[i] = (unsigned char)(i * 7);
+			mkpath(ROOT "/games/GAMEBOY/ColorLUT");
+			FILE *f = fopen(ROOT "/games/GAMEBOY/ColorLUT/Player Dark.lut", "wb");
+			if (f) { fwrite(own, 1, sizeof(own), f); fclose(f); }
+			mkpath(ROOT "/config");
+			f = fopen(ROOT "/config/GAMEBOY.f7", "wb");
+			if (f) { fputs("games/GAMEBOY/ColorLUT/Player Dark.lut", f); fputc(0, f); fclose(f); }
+		}
+		vp_forget_originals();             // a new core session: it booted with the player's LUT
+		vp_set(gbsys, VC_GBC, o3[i_gba]);
+		vp_apply_now(gbsys, VC_GBC);
+		harness_reset_file_tx();
+		vp_set(gbsys, VC_GBC, o3[i_none]);
+		vp_apply_now(gbsys, VC_GBC);
+		check(strstr(harness_last_file_tx(), "Player Dark.lut") && harness_last_file_tx_idx() == 7,
+			"with a LUT of the player's own remembered, None gives back theirs, not the stock table");
+		remove(ROOT "/config/GAMEBOY.f7");
+		remove(ROOT "/games/GAMEBOY/ColorLUT/Player Dark.lut");
+		vp_forget_originals();
+
 		vp_set(gbsys, VC_GBC, prior);
 		harness_set_confstr_table(0);
 		harness_set_menu_core(1);
 		harness_reset_file_tx();
 		harness_reset_status();
+	}
+
+	/*
+	  A row re-homed by an MGL setname keeps its savestates under that name too
+	  (user_io_name_override renames the core for FileGenerateSavestatePath), so the
+	  shelf has to look in savestates/GameGear, not savestates/SMS - and Color's
+	  states in savestates/GBC, not savestates/Gameboy.
+	*/
+	{
+		int ggsys = -1;
+		for (int i = 0; i < lib_sys_count(); i++) if (!strcmp(lib_sys(i)->id, "gg")) ggsys = i;
+		chome_item *col = 0;
+		for (int i = 0; i < lib_item_count(); i++)
+			if (lib_item(i)->sysidx == ggsys && strstr(lib_item(i)->path, "Columns")) col = lib_item(i);
+		char sp[1200] = "";
+		if (col) lib_slot_target(col, 0, sp, sizeof(sp));
+		printf("  Game Gear slot 1: %s\n", sp);
+		check(strstr(sp, "savestates/GameGear/Columns") != 0, "a setname row's savestates are looked for under its setname");
 	}
 
 	/*

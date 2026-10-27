@@ -162,6 +162,9 @@ void vp_forget_originals();
 // Applies the look the running core should have, right now rather than at next launch.
 int vp_apply_now(int sysidx, int vclass_hint);
 
+// The in-game menu grabbed the frame its previews are drawn from (see lut_cap).
+void vp_note_frame_captured();
+
 // Absolute path of a look's generated preset file, for applying it directly.
 int  vp_preset_path(int i, char *out, int len);
 

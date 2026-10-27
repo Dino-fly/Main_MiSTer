@@ -534,7 +534,7 @@ static const preset_def presets[] =
 	{ "gbc-ags101", "GBC on SP Brighter", "On the backlit SP: the cartridge's colours almost raw.",
 	  "off", "off", "off", M_GAP_DARK, "1x", "off",
 	  "Super Game Boy=Off;GBC Colors=Corrected",
-	  "Frame blend=Off;" CO_INTEGER, LUT_AGS101 },
+	  CO_NO_SHADOW ";Frame blend=Off;" CO_INTEGER, LUT_AGS101 },
 
 	/*
 	  Two more screens a GBA cartridge was played on. Appended for ABI.
@@ -2257,10 +2257,16 @@ static void lut_entry(int kind, int r, int g, int b, uint8_t out[3])
   tables with nothing in them to tune, so a file under one of these names that
   differs is simply rewritten; a hand-made LUT belongs under another name.
 */
-static void write_lut(const char *rel, int kind)
+static void lut_fill(int kind, uint8_t *t)
 {
-	static uint8_t want[LUT_BYTES], have[LUT_BYTES];
-	for (int i = 0; i < 32768; i++) lut_entry(kind, (i >> 10) & 31, (i >> 5) & 31, i & 31, want + i * 3);
+	for (int i = 0; i < 32768; i++) lut_entry(kind, (i >> 10) & 31, (i >> 5) & 31, i & 31, t + i * 3);
+}
+
+// Leaves the computed table in want, so a push knows exactly what it sent.
+static void write_lut(const char *rel, int kind, uint8_t *want)
+{
+	static uint8_t have[LUT_BYTES];
+	lut_fill(kind, want);
 
 	char p[1200];
 	snprintf(p, sizeof(p), "%s/%s", getRootDir(), rel);
@@ -2278,6 +2284,23 @@ static void write_lut(const char *rel, int kind)
 	fwrite(want, 1, LUT_BYTES, f);
 	fclose(f);
 	printf("ClassicUI: wrote %s\n", rel);
+}
+
+/*
+  At install only the missing ones are written. Computing all four costs real time
+  on the ARM - about 25 million compares for the two GBA tables - and vp_install()
+  runs on the first in-game menu of ANY core, PSX included, whose savestate
+  heartbeat does not forgive a long frame. A table whose code changed is put right
+  where it matters instead: vp_push_lut() rebuilds and compares before every push.
+*/
+static void write_lut_if_missing(const char *rel, int kind)
+{
+	char p[1200];
+	snprintf(p, sizeof(p), "%s/%s", getRootDir(), rel);
+	struct stat st;
+	if (!stat(p, &st) && st.st_size == LUT_BYTES) return;
+	static uint8_t t[LUT_BYTES];
+	write_lut(rel, kind, t);
 }
 
 static void write_gbp(const gbp_spec *s)
@@ -2377,10 +2400,10 @@ void vp_install()
 	write_gbp(&pal_weak);
 	write_gbp(&pal_light);
 
-	write_lut(LUT_STOCK,  LUT_K_STOCK);
-	write_lut(LUT_AGB001, LUT_K_GBA22);
-	write_lut(LUT_AGS001, LUT_K_GBA16);
-	write_lut(LUT_AGS101, LUT_K_GBARAW);
+	write_lut_if_missing(LUT_STOCK,  LUT_K_STOCK);
+	write_lut_if_missing(LUT_AGB001, LUT_K_GBA22);
+	write_lut_if_missing(LUT_AGS001, LUT_K_GBA16);
+	write_lut_if_missing(LUT_AGS101, LUT_K_GBARAW);
 
 	for (int i = 0; i < NPRESETS; i++)
 	{
@@ -2681,8 +2704,11 @@ static void vp_restore_originals()
   session and a process are the same thing and nobody needs this; the harness
   runs many sessions in one process and does.
 */
+static void lut_forget();
+
 void vp_forget_originals()
 {
+	lut_forget();
 	nvp_origs = 0;
 	vp_running_look = -1;
 	vp_applied_analog = -1;
@@ -2709,16 +2735,6 @@ static void vp_apply_opt_list(const preset_def *d, const char *opts)
 	}
 }
 
-/*
-  1 while a non-stock colour LUT is in the Game Boy core. Static is enough: a core
-  load re-execs this process, and a freshly booted core holds the stock table
-  from its .mif - exactly the state 0 describes. The one case it misreads is
-  this binary restarted under a running core, where None then leaves the GBA
-  table in place until the next launch.
-*/
-static int vp_lut_dirty = 0;
-static int vp_lut_kind = LUT_K_STOCK;     // which table that is, for the preview
-
 static int is_lut(const char *rel)
 {
 	size_t n = rel ? strlen(rel) : 0;
@@ -2734,17 +2750,106 @@ static int lut_kind_of(const char *rel)
 	return LUT_K_STOCK;
 }
 
-// Quiet for the reason the .gbp push is (see below), and in core RAM until reload.
+/*
+  Which colour table the Game Boy core holds, as bytes rather than as a name.
+
+  At boot it is not necessarily the stock one: FC7 is a remembered slot ("C"), so the
+  firmware reloads <core>.f7 - whatever LUT the player last picked in the core's own
+  OSD, dark.lut say - at every core start (user_io.cpp). So "the player's own" table
+  is that file when it exists and the .mif's stock table otherwise, and leaving a LUT
+  look gives back THAT, not def_corrected. Static state is right otherwise: a core
+  load re-execs this process. The one misread left is this binary restarted under a
+  running core that a LUT look had already changed.
+*/
+static uint8_t lut_have[LUT_BYTES];      // in the core now
+static int lut_have_known = 0;
+static int lut_ours = 0;                 // 1 while a look's table is in, not the player's
+static char lut_own[1024];               // the player's remembered LUT, "" = stock
+static int lut_own_read = 0;
+// The table held when the in-game menu grabbed its preview frame (see vp_note_frame_captured).
+static uint8_t lut_cap[LUT_BYTES];
+static int lut_cap_gen = 0;              // 0 = nothing captured under a known table
+static void lut_cap_gen_reset() { lut_cap_gen = 0; }
+
+static void lut_forget()
+{
+	lut_have_known = lut_ours = lut_own_read = 0;
+	lut_cap_gen_reset();
+}
+
+static int lut_read_file(const char *full, uint8_t *t)
+{
+	FILE *f = fopen(full, "rb");
+	if (!f) return 0;
+	int n = (int)fread(t, 1, LUT_BYTES, f);
+	fclose(f);
+	return n == LUT_BYTES;
+}
+
+static const char *lut_own_path()
+{
+	if (!lut_own_read)
+	{
+		lut_own_read = 1;
+		lut_own[0] = 0;
+		char cfgname[64], path[1024] = "";
+		snprintf(cfgname, sizeof(cfgname), "%s.f7", user_io_get_core_name());
+		if (FileLoadConfig(cfgname, path, sizeof(path) - 1) && path[0])
+		{
+			char full[1100];
+			if (path[0] == '/') snprintf(full, sizeof(full), "%s", path);
+			else snprintf(full, sizeof(full), "%s/%s", getRootDir(), path);
+			struct stat st;
+			if (!stat(full, &st) && st.st_size == LUT_BYTES) snprintf(lut_own, sizeof(lut_own), "%s", full);
+		}
+	}
+	return lut_own;
+}
+
+static void lut_have_init()
+{
+	if (lut_have_known) return;
+	const char *own = lut_own_path();
+	if (!own[0] || !lut_read_file(own, lut_have)) lut_fill(LUT_K_STOCK, lut_have);
+	lut_have_known = 1;
+}
+
+static void lut_send(const char *full)
+{
+	user_io_file_tx_quiet(1);    // quiet for the reason the .gbp push is (below)
+	user_io_file_tx(full, 7 /* the GB core's FC7 slot */);
+	user_io_file_tx_quiet(0);
+}
+
+// A look's own table: rebuilt and compared first, so a stale file is never sent.
 static void vp_push_lut(const char *rel)
 {
+	write_lut(rel, lut_kind_of(rel), lut_have);
 	if (!exists_rel(rel)) return;
 	char full[1200];
 	snprintf(full, sizeof(full), "%s/%s", getRootDir(), rel);
-	user_io_file_tx_quiet(1);
-	user_io_file_tx(full, 7 /* the GB core's FC7 slot */);
-	user_io_file_tx_quiet(0);
-	vp_lut_kind = lut_kind_of(rel);
-	vp_lut_dirty = vp_lut_kind != LUT_K_STOCK;
+	lut_send(full);
+	lut_have_known = 1;
+	lut_ours = 1;
+}
+
+// Back to the player's own: their remembered LUT, else the stock table.
+static void vp_restore_lut()
+{
+	const char *own = lut_own_path();
+	if (own[0] && lut_read_file(own, lut_have))
+	{
+		lut_send(own);
+	}
+	else
+	{
+		write_lut(LUT_STOCK, LUT_K_STOCK, lut_have);
+		char full[1200];
+		snprintf(full, sizeof(full), "%s/%s", getRootDir(), LUT_STOCK);
+		lut_send(full);
+	}
+	lut_have_known = 1;
+	lut_ours = 0;
 }
 
 static void vp_apply_core_side(int i, int with_palette)
@@ -2752,11 +2857,11 @@ static void vp_apply_core_side(int i, int with_palette)
 	if (i < 0 || i >= NPRESETS) return;
 	const preset_def *d = &presets[i];
 
-	// Leaving a LUT look: the stock table goes back before anything else happens.
-	if (vp_lut_dirty && with_palette && !is_lut(d->palette))
+	// Leaving a LUT look: the player's own table goes back before anything else happens.
+	if (lut_ours && with_palette && !is_lut(d->palette))
 	{
-		printf("ClassicUI: look \"%s\": restoring the core's own GBC colour LUT\n", d->name);
-		vp_push_lut(LUT_STOCK);
+		printf("ClassicUI: look \"%s\": restoring the player's own GBC colour LUT\n", d->name);
+		vp_restore_lut();
 	}
 
 	if (!d->core_colour && !d->core_struct && !d->palette)
@@ -3250,32 +3355,47 @@ static void lut_of(int i, uint8_t lut[3][256])
   A colour the table cannot produce (a frame from elsewhere) falls back to its
   top five bits.
 */
+/*
+  The table the core held when the preview's frame was grabbed - not the one it holds
+  now: applying a LUT look changes the core's table, but the frame the tiles are drawn
+  from stays the one captured when the menu opened.
+*/
+
+void vp_note_frame_captured()
+{
+	const char *cn = user_io_get_core_name();
+	if (strcasecmp(cn, "GBC") && strncasecmp(cn, "GAMEBOY", 7)) { lut_cap_gen = 0; return; }
+	lut_have_init();
+	memcpy(lut_cap, lut_have, LUT_BYTES);
+	lut_cap_gen++;
+}
+
+// -2 = the player's own table (the look will restore it), -1 = no LUT involved.
 static int pv_lut_kind(int i)
 {
 	if (is_lut(presets[i].palette)) return lut_kind_of(presets[i].palette);
-	// Any other look puts the stock table back (vp_apply_core_side), so it previews with it.
-	if (vp_lut_dirty && !presets[i].palette) return LUT_K_STOCK;
+	if (lut_cap_gen && (lut_ours || memcmp(lut_cap, lut_have, LUT_BYTES)) && !presets[i].palette) return -2;
 	return -1;
 }
 
 static int pv_lut_raw(const uint8_t c[3])
 {
-	static int built = -1;
+	static int built = 0;
 	static uint32_t key[65536];
 	static uint16_t val[65536];
-	if (built != vp_lut_kind)
+	if (!lut_cap_gen) return (c[0] >> 3) << 10 | (c[1] >> 3) << 5 | (c[2] >> 3);
+	if (built != lut_cap_gen)
 	{
 		memset(key, 0, sizeof(key));
 		for (int i = 0; i < 32768; i++)
 		{
-			uint8_t o[3];
-			lut_entry(vp_lut_kind, (i >> 10) & 31, (i >> 5) & 31, i & 31, o);
+			const uint8_t *o = lut_cap + i * 3;
 			uint32_t k = ((uint32_t)o[0] << 16 | o[1] << 8 | o[2]) + 1;
 			uint32_t h = (k * 2654435761u) >> 16;
 			while (key[h] && key[h] != k) h = (h + 1) & 0xffff;
 			if (!key[h]) { key[h] = k; val[h] = (uint16_t)i; }
 		}
-		built = vp_lut_kind;
+		built = lut_cap_gen;
 	}
 
 	uint32_t k = ((uint32_t)c[0] << 16 | c[1] << 8 | c[2]) + 1;
@@ -3287,6 +3407,17 @@ static int pv_lut_raw(const uint8_t c[3])
 static void pv_apply_lut(int kind, int exact, uint8_t c[3])
 {
 	int raw = exact ? pv_lut_raw(c) : ((c[0] >> 3) << 10 | (c[1] >> 3) << 5 | (c[2] >> 3));
+	if (kind == -2)
+	{
+		// The player's own table, whatever it is: the bytes, not a model.
+		const char *own = lut_own_path();
+		static uint8_t ownt[LUT_BYTES];
+		static int ownt_ok = -1;
+		if (ownt_ok < 0) ownt_ok = own[0] ? lut_read_file(own, ownt) : 0;
+		if (!ownt_ok) { lut_entry(LUT_K_STOCK, (raw >> 10) & 31, (raw >> 5) & 31, raw & 31, c); return; }
+		memcpy(c, ownt + raw * 3, 3);
+		return;
+	}
 	lut_entry(kind, (raw >> 10) & 31, (raw >> 5) & 31, raw & 31, c);
 }
 
@@ -3534,7 +3665,7 @@ const uint32_t *vp_preview(int i, int w, int h, const uint32_t *ref, int sw_nati
 					uint8_t c[3] = { (uint8_t)((p >> 16) & 0xff), (uint8_t)((p >> 8) & 0xff),
 						(uint8_t)(p & 0xff) };
 
-					if (lut_k >= 0) pv_apply_lut(lut_k, 1, c);      // core side, before the scaler's gamma
+					if (lut_k != -1) pv_apply_lut(lut_k, 1, c);      // core side, before the scaler's gamma
 					for (int k = 0; k < 3; k++) c[k] = lut[k][c[k]];
 					if (pal) pv_apply_palette(pal, c);
 					else if (gba_g > 0) pv_apply_gba(gba_g, c);
@@ -3623,7 +3754,7 @@ const uint32_t *vp_preview(int i, int w, int h, const uint32_t *ref, int sw_nati
 					c[k] = (uint8_t)((c[k] * (100 - 2 * wgt) + l[k] * wgt + r[k] * wgt) / 100);
 			}
 
-			if (lut_k >= 0) pv_apply_lut(lut_k, 0, c);
+			if (lut_k != -1) pv_apply_lut(lut_k, 0, c);
 			for (int k = 0; k < 3; k++) c[k] = lut[k][c[k]];
 
 			if (pal) pv_apply_palette(pal, c);
