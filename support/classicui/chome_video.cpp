@@ -2544,7 +2544,9 @@ static void vp_apply_core_side(int i, int with_palette)
 			char full[1200];
 			snprintf(full, sizeof(full), "%s/%s", getRootDir(), d->palette);
 			printf("ClassicUI: look \"%s\": palette %s\n", d->name, d->palette);
+			user_io_file_tx_quiet(1);    // no "Loading" box baked into the frozen frame
 			user_io_file_tx(full, 3 /* the GB core's FC3 slot */);
+			user_io_file_tx_quiet(0);
 		}
 		else if (!with_palette)
 		{

@@ -12015,11 +12015,14 @@ static void assert_video()
 		harness_set_opt("G", 1);           // Frame blend = On, deliberately
 		harness_set_opt("LM", 0);          // Scale = Normal
 
+		int loud = harness_file_tx_loud();
 		vp_set(gbsys, VC_GB, o2[0]);                     // DMG
 		vp_apply_now(gbsys, VC_GB);
 
 		check(strstr(harness_last_file_tx(), "ClassicHome DMG Olive.gbp") != 0,
 			"the DMG look sends its palette at the core");
+		check(harness_file_tx_loud() == loud,
+			"and sends it without the \"Loading\" box the frozen frame would keep");
 		check(harness_last_file_tx_idx() == 3, "the palette lands in the GB palette slot");
 		check(harness_opt_val("12") == 2, "DMG forces the custom palette on");
 		// Off since 2026-08-20: the filter's shadow is finer than the core's,
