@@ -307,6 +307,14 @@ static double lcd_span(const lcd_model *m, int scale)
 */
 #define CO_GB_DMG_PANEL  "Screen Shadow=No;Frame blend=On;" CO_INTEGER
 
+/*
+  Every GBA screen ghosted: the panels' slow response is what blended the 30 Hz
+  flicker games used for transparency (shadows, fog, the F-Zero track) into a
+  steady half-tone, and "Blend" is the core reproducing it. "30Hz" is the other
+  value, which shows the flicker as it was drawn - nobody's panel showed that.
+*/
+#define CO_GBA_PANEL     "Flickerblend=Blend;" CO_INTEGER
+
 static const preset_def presets[] =
 {
 	{ "sharp", "Sharp", "No filtering. Square pixels, nothing added.",
@@ -389,15 +397,15 @@ static const preset_def presets[] =
 	*/
 	{ "agb001", "GBA", "The original unlit screen. Dim and washed out.",
 	  F_SHADOWLT, F_SHADOWLT, "off", M_GAP_TINT, "1x", "off",
-	  "Modify Colors=GBA 2.2", CO_NO_SHADOW ";" CO_INTEGER, 0 },
+	  "Modify Colors=GBA 2.2", CO_NO_SHADOW ";" CO_GBA_PANEL, 0 },
 
 	{ "ags001", "GBA SP", "Frontlit SP: brighter than AGB, still washed out.",
 	  F_SHADOWLT, F_SHADOWLT, "off", M_GAP_TINT, "1x", "off",
-	  "Modify Colors=GBA 1.6", CO_NO_SHADOW ";" CO_INTEGER, 0 },
+	  "Modify Colors=GBA 1.6", CO_NO_SHADOW ";" CO_GBA_PANEL, 0 },
 
 	{ "ags101", "GBA SP Brighter", "Backlit SP: bright with proper contrast and colour.",
 	  "off", "off", "off", M_GAP_DARK, "1x", "off",
-	  "Modify Colors=Off", CO_INTEGER, 0 },
+	  "Modify Colors=Off", CO_GBA_PANEL, 0 },
 
 	/*
 	  The rest of the handhelds, same split, measured against each core's own
@@ -527,6 +535,23 @@ static const preset_def presets[] =
 	  "off", "off", "off", M_GAP_DARK, "1x", "off",
 	  "Super Game Boy=Off;GBC Colors=Corrected",
 	  "Frame blend=Off;" CO_INTEGER, LUT_AGS101 },
+
+	/*
+	  Two more screens a GBA cartridge was played on. Appended for ABI.
+
+	  The Micro (OXY-001) is backlit like the AGS-101 and takes the same raw colour,
+	  but its pixels are a third smaller behind a much finer matrix, so its grid is
+	  the light one rather than the backlit black. The DS and DS Lite ran GBA
+	  cartridges in slot 2 on their own backlit panels; "NDS 1.6" is the core's
+	  profile for exactly that screen.
+	*/
+	{ "gba-micro", "Game Boy Micro", "The tiny backlit Micro: vivid, sharp, the finest grid.",
+	  "off", "off", "off", M_GAP_TINT, "1x", "off",
+	  "Modify Colors=Off", CO_GBA_PANEL, 0 },
+
+	{ "gba-ds", "GBA on Nintendo DS", "A GBA cartridge in a DS: backlit, cooler and brighter.",
+	  "off", "off", "off", M_GAP_DARK, "1x", "off",
+	  "Modify Colors=NDS 1.6", CO_GBA_PANEL, 0 },
 };
 
 #define NPRESETS ((int)(sizeof(presets) / sizeof(presets[0])))
@@ -1118,7 +1143,7 @@ enum
 	P_DMG, P_POCKET, P_GBC, P_AGB001, P_AGS001, P_AGS101,
 	P_GG, P_GGMOD, P_LYNX, P_WS, P_WSC, P_NGPC, P_NONE, P_BVM,
 	P_DMG_BRIGHT, P_DMG_FADED, P_SGB, P_NONE_SGB, P_LIGHT,
-	P_GBC_AGB001, P_GBC_AGS001, P_GBC_AGS101
+	P_GBC_AGB001, P_GBC_AGS001, P_GBC_AGS101, P_GBA_MICRO, P_GBA_DS
 };
 
 /*
@@ -1155,7 +1180,7 @@ static const int opt_gb[]       = { P_DMG, P_DMG_BRIGHT, P_DMG_FADED, P_POCKET,
                                     P_LIGHT, P_SGB, P_NONE, P_NONE_SGB };
 static const int opt_gbc[]      = { P_GBC, P_GBC_AGB001, P_GBC_AGS001, P_GBC_AGS101,
                                     P_SGB, P_NONE, P_NONE_SGB };
-static const int opt_gba[]      = { P_AGB001, P_AGS001, P_AGS101, P_NONE };
+static const int opt_gba[]      = { P_AGB001, P_AGS001, P_AGS101, P_GBA_MICRO, P_GBA_DS, P_NONE };
 static const int opt_gg[]       = { P_GG, P_GGMOD, P_NONE };
 static const int opt_lynx[]     = { P_LYNX, P_NONE };
 static const int opt_ws[]       = { P_WS, P_NONE };

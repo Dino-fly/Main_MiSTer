@@ -11925,7 +11925,7 @@ static void assert_video()
 	}
 
 	int n_gba = vp_options_for(VC_GBA, opts);
-	check(n_gba == 4, "GBA offers three screen revisions and the off switch");
+	check(n_gba == 6, "GBA offers three screen revisions, the Micro, the DS and the off switch");
 	{
 		int have001 = 0, haveS001 = 0, haveS101 = 0;
 		for (int i = 0; i < n_gba; i++)
@@ -12298,7 +12298,7 @@ static void assert_video()
 		// A CRT with the scaler bypassed: direct_video, or the analog takeover.
 		harness_set_scaler_visible(0);
 		check(vp_options_for(VC_GB, o2) == gb_hdmi, "every Game Boy screen is still offered on a CRT");
-		check(vp_options_for(VC_GBA, o2) == 4, "so are the three GBA models and the off switch");
+		check(vp_options_for(VC_GBA, o2) == 6, "so are the GBA screens and the off switch");
 		check(vp_options_for(VC_GBC, o2) == 7, "and the GBC screens and its SGB looks");
 		check(vp_options_for(VC_CONSOLE, o2) == 5, "and the CRT classes are untouched by any of this");
 
