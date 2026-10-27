@@ -238,6 +238,13 @@ static double lcd_span(const lcd_model *m, int scale)
 #define PAL_WEAK   PAL_DIR "/" PREFIX " DMG Weak.gbp"
 #define PAL_LIGHT  PAL_DIR "/" PREFIX " Light.gbp"
 
+// Where the Game Boy core's "Load GBC Color LUT" browser looks (FC7).
+#define LUT_DIR     "games/GAMEBOY/ColorLUT"
+#define LUT_STOCK   LUT_DIR "/" PREFIX " GBC Corrected.lut"
+#define LUT_AGB001  LUT_DIR "/" PREFIX " GBC on GBA.lut"
+#define LUT_AGS001  LUT_DIR "/" PREFIX " GBC on GBA SP.lut"
+#define LUT_AGS101  LUT_DIR "/" PREFIX " GBC on GBA SP Brighter.lut"
+
 /*
   The core-side halves, shared between entries.
 
@@ -498,6 +505,28 @@ static const preset_def presets[] =
 	{ "light", "Game Boy Light", "The Pocket's panel with its aqua backlight switched on.",
 	  F_SHADOWPK, F_SHADOWPK, "off", M_GAP_LIGHT, "1x", "off",
 	  CO_GB_DMG_COLOUR, CO_GB_DMG_PANEL, PAL_LIGHT },
+
+	/*
+	  A GBC cartridge on each Game Boy Advance screen, through the Game Boy core's
+	  colour LUT slot: the GBA looks' own colour profiles over the GBC's 15 bits
+	  (see lut_entry), and the GBA looks' own panel structure. The "palette" here
+	  is a .lut, which vp_apply_core_side() sends to FC7 instead of FC3. Appended
+	  for ABI.
+	*/
+	{ "gbc-agb001", "GBC on GBA", "A Color cartridge on the original unlit GBA: dim and washed out.",
+	  F_SHADOWLT, F_SHADOWLT, "off", M_GAP_TINT, "1x", "off",
+	  "Super Game Boy=Off;GBC Colors=Corrected",
+	  "Screen Shadow=No;Frame blend=Off;" CO_INTEGER, LUT_AGB001 },
+
+	{ "gbc-ags001", "GBC on GBA SP", "On the frontlit SP: brighter, still washed out.",
+	  F_SHADOWLT, F_SHADOWLT, "off", M_GAP_TINT, "1x", "off",
+	  "Super Game Boy=Off;GBC Colors=Corrected",
+	  "Screen Shadow=No;Frame blend=Off;" CO_INTEGER, LUT_AGS001 },
+
+	{ "gbc-ags101", "GBC on SP Brighter", "On the backlit SP: the cartridge's colours almost raw.",
+	  "off", "off", "off", M_GAP_DARK, "1x", "off",
+	  "Super Game Boy=Off;GBC Colors=Corrected",
+	  "Frame blend=Off;" CO_INTEGER, LUT_AGS101 },
 };
 
 #define NPRESETS ((int)(sizeof(presets) / sizeof(presets[0])))
@@ -1088,7 +1117,8 @@ enum
 	P_SHARP = 0, P_PVM_RGB, P_PVM_SVIDEO, P_COMPOSITE, P_PAL_TV, P_VGA,
 	P_DMG, P_POCKET, P_GBC, P_AGB001, P_AGS001, P_AGS101,
 	P_GG, P_GGMOD, P_LYNX, P_WS, P_WSC, P_NGPC, P_NONE, P_BVM,
-	P_DMG_BRIGHT, P_DMG_FADED, P_SGB, P_NONE_SGB, P_LIGHT
+	P_DMG_BRIGHT, P_DMG_FADED, P_SGB, P_NONE_SGB, P_LIGHT,
+	P_GBC_AGB001, P_GBC_AGS001, P_GBC_AGS101
 };
 
 /*
@@ -1123,7 +1153,8 @@ static const int opt_computer[] = { P_PAL_TV, P_COMPOSITE, P_PVM_SVIDEO, P_SHARP
 static const int opt_vga[]      = { P_VGA, P_SHARP };
 static const int opt_gb[]       = { P_DMG, P_DMG_BRIGHT, P_DMG_FADED, P_POCKET,
                                     P_LIGHT, P_SGB, P_NONE, P_NONE_SGB };
-static const int opt_gbc[]      = { P_GBC, P_SGB, P_NONE, P_NONE_SGB };
+static const int opt_gbc[]      = { P_GBC, P_GBC_AGB001, P_GBC_AGS001, P_GBC_AGS101,
+                                    P_SGB, P_NONE, P_NONE_SGB };
 static const int opt_gba[]      = { P_AGB001, P_AGS001, P_AGS101, P_NONE };
 static const int opt_gg[]       = { P_GG, P_GGMOD, P_NONE };
 static const int opt_lynx[]     = { P_LYNX, P_NONE };
@@ -2069,6 +2100,161 @@ static const gbp_spec pal_weak =
 static const gbp_spec pal_light =
 { PAL_LIGHT,  { { 0x5C, 0xA8, 0x94 }, { 0x40, 0x84, 0x76 }, { 0x2A, 0x5E, 0x58 }, { 0x18, 0x38, 0x38 } } };
 
+/*
+  The Game Boy core's colour LUT: 32768 entries of R,G,B, one per 15-bit GBC
+  colour, addressed {r5,g5,b5} (lcd.v). It is used only on a GBC cartridge with
+  "GBC Colors=Corrected", and it lives in core RAM until the core reloads - so a
+  look that pushes one owes the core the stock table back when it leaves.
+
+  The stock table (ColorLUT/def_corrected.lut, the core's own .mif) reduces to
+  two small tables, verified entry for entry against the shipped file: red and
+  blue are a curve of their own channel alone, and green is a function of green
+  and blue only (blue bleeds into green, nothing else mixes). That is 1056 bytes
+  instead of 96 KB, and bit exact.
+*/
+static const uint8_t lut_stock_t[32] =
+{
+	  0,  23,  37,  50,  61,  71,  81,  90,  99, 107, 116, 123, 131, 139, 146, 153,
+	160, 167, 174, 181, 188, 194, 201, 207, 213, 219, 225, 231, 237, 243, 249, 255,
+};
+
+// [g][b]
+static const uint8_t lut_stock_g[32][32] =
+{
+	{   0,  14,  22,  29,  36,  42,  47,  53,  58,  63,  68,  72,  77,  81,  86,  90,  94,  98, 102, 106, 110, 114, 118, 121, 125, 129, 132, 136, 139, 143, 146, 150 },
+	{  22,  23,  27,  32,  38,  43,  49,  54,  59,  64,  68,  73,  77,  82,  86,  90,  95,  99, 103, 106, 110, 114, 118, 122, 125, 129, 132, 136, 140, 143, 146, 150 },
+	{  35,  36,  37,  40,  44,  48,  53,  57,  62,  66,  70,  75,  79,  83,  87,  92,  96, 100, 103, 107, 111, 115, 119, 122, 126, 129, 133, 137, 140, 143, 147, 150 },
+	{  47,  47,  48,  50,  52,  55,  59,  62,  66,  70,  74,  78,  82,  86,  90,  94,  97, 101, 105, 109, 112, 116, 120, 123, 127, 130, 134, 137, 141, 144, 148, 151 },
+	{  57,  57,  58,  59,  61,  63,  66,  69,  72,  75,  78,  82,  85,  89,  93,  96, 100, 104, 107, 111, 114, 118, 121, 125, 128, 132, 135, 139, 142, 145, 149, 152 },
+	{  67,  67,  67,  68,  69,  71,  73,  75,  78,  81,  84,  87,  90,  93,  97, 100, 103, 107, 110, 113, 117, 120, 124, 127, 130, 134, 137, 140, 144, 147, 150, 153 },
+	{  76,  76,  76,  77,  78,  79,  81,  83,  85,  87,  90,  92,  95,  98, 101, 104, 107, 110, 114, 117, 120, 123, 126, 130, 133, 136, 139, 142, 146, 149, 152, 155 },
+	{  84,  84,  85,  85,  86,  87,  88,  90,  92,  94,  96,  98, 101, 103, 106, 109, 112, 115, 117, 120, 123, 126, 130, 133, 136, 139, 142, 145, 148, 151, 154, 157 },
+	{  92,  93,  93,  93,  94,  95,  96,  97,  99, 101, 102, 104, 107, 109, 111, 114, 116, 119, 122, 125, 127, 130, 133, 136, 139, 142, 145, 148, 151, 154, 157, 159 },
+	{ 100, 100, 101, 101, 102, 102, 103, 104, 106, 107, 109, 111, 113, 115, 117, 119, 121, 124, 126, 129, 132, 134, 137, 140, 142, 145, 148, 151, 154, 156, 159, 162 },
+	{ 108, 108, 108, 109, 109, 110, 111, 112, 113, 114, 116, 117, 119, 121, 123, 125, 127, 129, 131, 134, 136, 139, 141, 144, 146, 149, 152, 154, 157, 160, 162, 165 },
+	{ 116, 116, 116, 116, 116, 117, 118, 119, 120, 121, 122, 123, 125, 127, 128, 130, 132, 134, 136, 139, 141, 143, 145, 148, 150, 153, 155, 158, 160, 163, 166, 168 },
+	{ 123, 123, 123, 123, 124, 124, 125, 126, 126, 127, 129, 130, 131, 133, 134, 136, 138, 140, 142, 144, 146, 148, 150, 152, 155, 157, 159, 162, 164, 167, 169, 172 },
+	{ 130, 130, 130, 130, 131, 131, 132, 132, 133, 134, 135, 136, 137, 139, 140, 142, 143, 145, 147, 149, 151, 153, 155, 157, 159, 161, 164, 166, 168, 170, 173, 175 },
+	{ 137, 137, 137, 137, 137, 138, 138, 139, 140, 141, 141, 142, 144, 145, 146, 148, 149, 151, 152, 154, 156, 158, 160, 162, 164, 166, 168, 170, 172, 174, 177, 179 },
+	{ 144, 144, 144, 144, 144, 145, 145, 146, 146, 147, 148, 149, 150, 151, 152, 153, 155, 156, 158, 159, 161, 163, 165, 166, 168, 170, 172, 174, 176, 179, 181, 183 },
+	{ 150, 150, 150, 151, 151, 151, 152, 152, 153, 153, 154, 155, 156, 157, 158, 159, 160, 162, 163, 165, 166, 168, 170, 171, 173, 175, 177, 179, 181, 183, 185, 187 },
+	{ 157, 157, 157, 157, 157, 158, 158, 158, 159, 160, 160, 161, 162, 163, 164, 165, 166, 167, 169, 170, 172, 173, 175, 176, 178, 180, 182, 183, 185, 187, 189, 191 },
+	{ 163, 163, 163, 163, 164, 164, 164, 165, 165, 166, 166, 167, 168, 169, 170, 171, 172, 173, 174, 176, 177, 178, 180, 181, 183, 185, 186, 188, 190, 192, 194, 195 },
+	{ 169, 169, 170, 170, 170, 170, 170, 171, 171, 172, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 184, 185, 186, 188, 190, 191, 193, 194, 196, 198, 200 },
+	{ 176, 176, 176, 176, 176, 176, 177, 177, 177, 178, 178, 179, 180, 180, 181, 182, 183, 184, 185, 186, 188, 189, 190, 192, 193, 194, 196, 198, 199, 201, 202, 204 },
+	{ 182, 182, 182, 182, 182, 182, 183, 183, 183, 184, 184, 185, 186, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 197, 198, 199, 201, 202, 204, 205, 207, 209 },
+	{ 188, 188, 188, 188, 188, 188, 189, 189, 189, 190, 190, 191, 191, 192, 193, 194, 194, 195, 196, 197, 198, 199, 201, 202, 203, 204, 206, 207, 209, 210, 212, 213 },
+	{ 194, 194, 194, 194, 194, 194, 194, 195, 195, 195, 196, 196, 197, 198, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 211, 212, 213, 215, 216, 218 },
+	{ 200, 200, 200, 200, 200, 200, 200, 201, 201, 201, 202, 202, 203, 203, 204, 205, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 216, 217, 218, 220, 221, 222 },
+	{ 205, 205, 205, 205, 206, 206, 206, 206, 207, 207, 207, 208, 208, 209, 209, 210, 211, 212, 212, 213, 214, 215, 216, 217, 218, 219, 221, 222, 223, 224, 226, 227 },
+	{ 211, 211, 211, 211, 211, 211, 212, 212, 212, 213, 213, 213, 214, 214, 215, 216, 216, 217, 218, 219, 219, 220, 221, 222, 223, 224, 225, 227, 228, 229, 230, 232 },
+	{ 217, 217, 217, 217, 217, 217, 217, 218, 218, 218, 218, 219, 219, 220, 220, 221, 222, 222, 223, 224, 225, 225, 226, 227, 228, 229, 230, 231, 233, 234, 235, 236 },
+	{ 222, 222, 222, 222, 223, 223, 223, 223, 223, 224, 224, 224, 225, 225, 226, 226, 227, 228, 228, 229, 230, 231, 231, 232, 233, 234, 235, 236, 237, 239, 240, 241 },
+	{ 228, 228, 228, 228, 228, 228, 228, 229, 229, 229, 229, 230, 230, 231, 231, 232, 232, 233, 234, 234, 235, 236, 237, 237, 238, 239, 240, 241, 242, 243, 244, 246 },
+	{ 233, 233, 233, 233, 233, 234, 234, 234, 234, 234, 235, 235, 236, 236, 236, 237, 237, 238, 239, 239, 240, 241, 242, 242, 243, 244, 245, 246, 247, 248, 249, 250 },
+	{ 239, 239, 239, 239, 239, 239, 239, 239, 240, 240, 240, 240, 241, 241, 242, 242, 243, 243, 244, 245, 245, 246, 247, 247, 248, 249, 250, 251, 252, 253, 254, 255 },
+};
+
+/*
+  A Game Boy Advance running a GBC cartridge sends the cartridge's 15-bit colour
+  to its own LCD, so a GBC game on a GBA screen is the GBA core's colour pipeline
+  over those 15 bits. These are gba_gpu_colorshade.vhd's tables for its first two
+  modes - "GBA 2.2" (AGB-001) and "GBA 1.6" (AGS-001), which share a matrix and
+  differ in their curves - and its arithmetic: decode through a 32-entry linear
+  table, 3x3 matrix over 1024 (VHDL's "/", truncating toward zero), clip to
+  0..1023, re-encode as the count of the 64 thresholds the value is above, and
+  widen 6 to 8 bits as GBA.sv does, {c, c[5:4]}. AGS-101 is "Modify Colors=Off",
+  the raw path: {c5, c5[4]} widened the same way. The GBA looks use exactly these
+  profiles, so a GBC cartridge on a GBA screen matches a GBA cartridge on it.
+*/
+static const int16_t gba_lin[2][32] =
+{
+	{ 0, 1, 2, 6, 11, 17, 26, 36, 49, 63, 79, 98, 118, 141, 166, 193,
+	  223, 255, 289, 325, 364, 405, 449, 495, 544, 595, 649, 705, 763, 825, 888, 955 },
+	{ 0, 4, 12, 23, 37, 53, 70, 90, 111, 135, 159, 185, 213, 242, 273, 305,
+	  338, 372, 408, 445, 483, 522, 562, 604, 646, 690, 735, 780, 827, 875, 924, 973 },
+};
+
+static const int16_t gba_mult[9] = { 865, 174, -15, 92, 696, 236, 164, 87, 773 };
+
+static const int16_t gba_border[2][64] =
+{
+	{ 0, 1, 2, 3, 4, 5, 6, 8, 11, 14, 17, 21, 26, 31, 36, 42,
+	  49, 55, 63, 71, 79, 88, 98, 108, 118, 129, 141, 153, 166, 179, 193, 208,
+	  223, 238, 255, 271, 289, 307, 325, 344, 364, 384, 405, 427, 449, 472, 495, 519,
+	  544, 569, 595, 621, 649, 676, 705, 734, 763, 794, 825, 856, 888, 921, 955, 989 },
+	{ 0, 1, 4, 8, 12, 17, 23, 30, 37, 44, 53, 61, 70, 80, 90, 100,
+	  111, 123, 135, 147, 159, 172, 185, 199, 213, 228, 242, 257, 273, 289, 305, 321,
+	  338, 355, 372, 390, 408, 426, 445, 464, 483, 502, 522, 542, 562, 583, 604, 625,
+	  646, 668, 690, 712, 735, 757, 780, 804, 827, 851, 875, 899, 924, 948, 973, 999 },
+};
+
+enum { LUT_K_STOCK, LUT_K_GBA22, LUT_K_GBA16, LUT_K_GBARAW };
+
+static uint8_t gba_widen(int c6) { return (uint8_t)((c6 << 2) | (c6 >> 4)); }
+
+static void lut_entry(int kind, int r, int g, int b, uint8_t out[3])
+{
+	if (kind == LUT_K_STOCK)
+	{
+		out[0] = lut_stock_t[r];
+		out[1] = lut_stock_g[g][b];
+		out[2] = lut_stock_t[b];
+		return;
+	}
+
+	const int in[3] = { r, g, b };
+	if (kind == LUT_K_GBARAW)
+	{
+		for (int c = 0; c < 3; c++) out[c] = gba_widen((in[c] << 1) | (in[c] >> 4));
+		return;
+	}
+
+	int m = (kind == LUT_K_GBA22) ? 0 : 1;
+	for (int c = 0; c < 3; c++)
+	{
+		int v = (gba_mult[c * 3 + 0] * gba_lin[m][r] + gba_mult[c * 3 + 1] * gba_lin[m][g] +
+		         gba_mult[c * 3 + 2] * gba_lin[m][b]) / 1024;
+		if (v < 0) v = 0;
+		if (v > 1023) v = 1023;
+		int q = 0;
+		for (int t = 1; t < 64; t++) if (v > gba_border[m][t]) q = t;
+		out[c] = gba_widen(q);
+	}
+}
+
+#define LUT_BYTES (32768 * 3)
+
+/*
+  Not through gen_commit(): a LUT is four times its buffer, and it has no byte to
+  spare for a stamp - the core takes every byte it is sent, and a 98305th would
+  wrap the write address onto entry 0. These are computed from the cores' own
+  tables with nothing in them to tune, so a file under one of these names that
+  differs is simply rewritten; a hand-made LUT belongs under another name.
+*/
+static void write_lut(const char *rel, int kind)
+{
+	static uint8_t want[LUT_BYTES], have[LUT_BYTES];
+	for (int i = 0; i < 32768; i++) lut_entry(kind, (i >> 10) & 31, (i >> 5) & 31, i & 31, want + i * 3);
+
+	char p[1200];
+	snprintf(p, sizeof(p), "%s/%s", getRootDir(), rel);
+	FILE *f = fopen(p, "rb");
+	if (f)
+	{
+		int n = (int)fread(have, 1, sizeof(have), f);
+		int more = fgetc(f) != EOF;
+		fclose(f);
+		if (n == LUT_BYTES && !more && !memcmp(have, want, LUT_BYTES)) return;
+	}
+
+	f = fopen(p, "wb");
+	if (!f) { printf("ClassicUI: could not write %s\n", rel); return; }
+	fwrite(want, 1, LUT_BYTES, f);
+	fclose(f);
+	printf("ClassicUI: wrote %s\n", rel);
+}
+
 static void write_gbp(const gbp_spec *s)
 {
 	genbuf g;
@@ -2132,6 +2318,7 @@ void vp_install()
 	ensure_dir("games");
 	ensure_dir("games/GAMEBOY");
 	ensure_dir(PAL_DIR);
+	ensure_dir(LUT_DIR);
 
 	write_filter(F_SHARP, 0, 0.0);
 	write_filter(F_SOFT, 1, 0.0);
@@ -2164,6 +2351,11 @@ void vp_install()
 	write_gbp(&pal_olive);
 	write_gbp(&pal_weak);
 	write_gbp(&pal_light);
+
+	write_lut(LUT_STOCK,  LUT_K_STOCK);
+	write_lut(LUT_AGB001, LUT_K_GBA22);
+	write_lut(LUT_AGS001, LUT_K_GBA16);
+	write_lut(LUT_AGS101, LUT_K_GBARAW);
 
 	for (int i = 0; i < NPRESETS; i++)
 	{
@@ -2492,10 +2684,55 @@ static void vp_apply_opt_list(const preset_def *d, const char *opts)
 	}
 }
 
+/*
+  1 while a non-stock colour LUT is in the Game Boy core. Static is enough: a core
+  load re-execs this process, and a freshly booted core holds the stock table
+  from its .mif - exactly the state 0 describes. The one case it misreads is
+  this binary restarted under a running core, where None then leaves the GBA
+  table in place until the next launch.
+*/
+static int vp_lut_dirty = 0;
+static int vp_lut_kind = LUT_K_STOCK;     // which table that is, for the preview
+
+static int is_lut(const char *rel)
+{
+	size_t n = rel ? strlen(rel) : 0;
+	return n > 4 && !strcasecmp(rel + n - 4, ".lut");
+}
+
+static int lut_kind_of(const char *rel)
+{
+	if (!rel) return LUT_K_STOCK;
+	if (!strcmp(rel, LUT_AGB001)) return LUT_K_GBA22;
+	if (!strcmp(rel, LUT_AGS001)) return LUT_K_GBA16;
+	if (!strcmp(rel, LUT_AGS101)) return LUT_K_GBARAW;
+	return LUT_K_STOCK;
+}
+
+// Quiet for the reason the .gbp push is (see below), and in core RAM until reload.
+static void vp_push_lut(const char *rel)
+{
+	if (!exists_rel(rel)) return;
+	char full[1200];
+	snprintf(full, sizeof(full), "%s/%s", getRootDir(), rel);
+	user_io_file_tx_quiet(1);
+	user_io_file_tx(full, 7 /* the GB core's FC7 slot */);
+	user_io_file_tx_quiet(0);
+	vp_lut_kind = lut_kind_of(rel);
+	vp_lut_dirty = vp_lut_kind != LUT_K_STOCK;
+}
+
 static void vp_apply_core_side(int i, int with_palette)
 {
 	if (i < 0 || i >= NPRESETS) return;
 	const preset_def *d = &presets[i];
+
+	// Leaving a LUT look: the stock table goes back before anything else happens.
+	if (vp_lut_dirty && with_palette && !is_lut(d->palette))
+	{
+		printf("ClassicUI: look \"%s\": restoring the core's own GBC colour LUT\n", d->name);
+		vp_push_lut(LUT_STOCK);
+	}
 
 	if (!d->core_colour && !d->core_struct && !d->palette)
 	{
@@ -2536,7 +2773,16 @@ static void vp_apply_core_side(int i, int with_palette)
 	else if (d->core_struct)
 		printf("ClassicUI: look \"%s\": analog display, panel effects left off\n", d->name);
 
-	if (d->palette)
+	if (d->palette && is_lut(d->palette))
+	{
+		// GBC Colors=Corrected is in core_colour; it is what routes through the LUT.
+		if (with_palette)
+		{
+			printf("ClassicUI: look \"%s\": colour LUT %s\n", d->name, d->palette);
+			vp_push_lut(d->palette);
+		}
+	}
+	else if (d->palette)
 	{
 		vp_record_original("Custom Palette");
 		if (with_palette && core_opt_set_named("Custom Palette", "On") && exists_rel(d->palette))
@@ -2971,6 +3217,54 @@ static void lut_of(int i, uint8_t lut[3][256])
   LUT sections: 2.2 encodes darker than it decodes (the unlit panel), 1.6
   meets it in the middle.
 */
+/*
+  A LUT look over a captured frame. The frame went through whatever table the
+  core held at capture (the stock one unless a LUT look ran), so it is mapped
+  back to the GBC's own 15 bits through that table first - exactly, by reverse
+  lookup, for every colour the table can produce - and then through the look's.
+  A colour the table cannot produce (a frame from elsewhere) falls back to its
+  top five bits.
+*/
+static int pv_lut_kind(int i)
+{
+	if (is_lut(presets[i].palette)) return lut_kind_of(presets[i].palette);
+	// Any other look puts the stock table back (vp_apply_core_side), so it previews with it.
+	if (vp_lut_dirty && !presets[i].palette) return LUT_K_STOCK;
+	return -1;
+}
+
+static int pv_lut_raw(const uint8_t c[3])
+{
+	static int built = -1;
+	static uint32_t key[65536];
+	static uint16_t val[65536];
+	if (built != vp_lut_kind)
+	{
+		memset(key, 0, sizeof(key));
+		for (int i = 0; i < 32768; i++)
+		{
+			uint8_t o[3];
+			lut_entry(vp_lut_kind, (i >> 10) & 31, (i >> 5) & 31, i & 31, o);
+			uint32_t k = ((uint32_t)o[0] << 16 | o[1] << 8 | o[2]) + 1;
+			uint32_t h = (k * 2654435761u) >> 16;
+			while (key[h] && key[h] != k) h = (h + 1) & 0xffff;
+			if (!key[h]) { key[h] = k; val[h] = (uint16_t)i; }
+		}
+		built = vp_lut_kind;
+	}
+
+	uint32_t k = ((uint32_t)c[0] << 16 | c[1] << 8 | c[2]) + 1;
+	uint32_t h = (k * 2654435761u) >> 16;
+	while (key[h]) { if (key[h] == k) return val[h]; h = (h + 1) & 0xffff; }
+	return (c[0] >> 3) << 10 | (c[1] >> 3) << 5 | (c[2] >> 3);
+}
+
+static void pv_apply_lut(int kind, int exact, uint8_t c[3])
+{
+	int raw = exact ? pv_lut_raw(c) : ((c[0] >> 3) << 10 | (c[1] >> 3) << 5 | (c[2] >> 3));
+	lut_entry(kind, (raw >> 10) & 31, (raw >> 5) & 31, raw & 31, c);
+}
+
 static const gbp_spec *pv_palette(int i)
 {
 	if (!presets[i].palette) return 0;
@@ -3153,6 +3447,7 @@ const uint32_t *vp_preview(int i, int w, int h, const uint32_t *ref, int sw_nati
 
 	const gbp_spec *pal = pv_palette(i);
 	double gba_g = pv_gba_gamma(i);
+	int lut_k = pv_lut_kind(i);
 
 	/*
 	  With a real frame, the look is applied by the scaler's own arithmetic - the
@@ -3214,6 +3509,7 @@ const uint32_t *vp_preview(int i, int w, int h, const uint32_t *ref, int sw_nati
 					uint8_t c[3] = { (uint8_t)((p >> 16) & 0xff), (uint8_t)((p >> 8) & 0xff),
 						(uint8_t)(p & 0xff) };
 
+					if (lut_k >= 0) pv_apply_lut(lut_k, 1, c);      // core side, before the scaler's gamma
 					for (int k = 0; k < 3; k++) c[k] = lut[k][c[k]];
 					if (pal) pv_apply_palette(pal, c);
 					else if (gba_g > 0) pv_apply_gba(gba_g, c);
@@ -3302,6 +3598,7 @@ const uint32_t *vp_preview(int i, int w, int h, const uint32_t *ref, int sw_nati
 					c[k] = (uint8_t)((c[k] * (100 - 2 * wgt) + l[k] * wgt + r[k] * wgt) / 100);
 			}
 
+			if (lut_k >= 0) pv_apply_lut(lut_k, 0, c);
 			for (int k = 0; k < 3; k++) c[k] = lut[k][c[k]];
 
 			if (pal) pv_apply_palette(pal, c);

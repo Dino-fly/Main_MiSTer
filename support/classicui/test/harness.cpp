@@ -11800,7 +11800,7 @@ static void assert_video()
 		{
 			const char *nm = vp_name(opts[i]);
 			if (!strcmp(nm, "None") || !strcmp(nm, "Sharp")) continue;
-			int is_lcd = (strstr(nm, "Game Boy") != 0 || strstr(nm, "DMG") != 0 ||
+			int is_lcd = (strstr(nm, "Game Boy") != 0 || strstr(nm, "DMG") != 0 || strstr(nm, "GBC") != 0 ||
 			              strstr(nm, "GBA") != 0);
 			if (is_lcd != handheld) leak = 1;
 		}
@@ -11916,8 +11916,13 @@ static void assert_video()
 	}
 
 	int n_gbc = vp_options_for(VC_GBC, opts);
-	check(n_gbc == 4, "GBC offers its screen, the SGB, the off switch and the SGB off switch");
+	check(n_gbc == 7, "GBC offers its screen, the three GBA screens, the SGB, the off switch and the SGB off switch");
 	check(strstr(vp_name(opts[0]), "Color") != 0, "GBC defaults to the GBC screen");
+	{
+		int on_gba = 0;
+		for (int i = 0; i < n_gbc; i++) if (!strncmp(vp_name(opts[i]), "GBC on ", 7)) on_gba++;
+		check(on_gba == 3, "and a GBC cartridge can be put on each of the three GBA screens");
+	}
 
 	int n_gba = vp_options_for(VC_GBA, opts);
 	check(n_gba == 4, "GBA offers three screen revisions and the off switch");
@@ -12068,6 +12073,107 @@ static void assert_video()
 	}
 
 	/*
+	  The GBC colour LUTs. The stock table is regenerated from two small arrays,
+	  so it is pinned to the core's own ColorLUT/def_corrected.lut by hash (FNV-1a
+	  over all 98304 bytes, md5 5d239e82e1d7848e4ecb896b6f9fed0e). A GBC-on-GBA look
+	  pushes its table at FC7 without the "Loading" box, and whatever look follows
+	  puts the stock table back - the LUT stays in core RAM until the core reloads.
+	*/
+	{
+		printf("\n== the GBC colour LUTs ==\n");
+		static const struct { const char *rel; uint32_t fnv; } luts[] =
+		{
+			{ "games/GAMEBOY/ColorLUT/ClassicHome GBC Corrected.lut", 0x326f2f5du },
+			{ "games/GAMEBOY/ColorLUT/ClassicHome GBC on GBA.lut", 0 },
+			{ "games/GAMEBOY/ColorLUT/ClassicHome GBC on GBA SP.lut", 0 },
+			{ "games/GAMEBOY/ColorLUT/ClassicHome GBC on GBA SP Brighter.lut", 0 },
+		};
+		int sizes_ok = 1;
+		static unsigned char buf[98304 + 1];
+		unsigned char white[4][3] = {};
+		for (int k = 0; k < 4; k++)
+		{
+			char p[1200];
+			snprintf(p, sizeof(p), "%s/%s", ROOT, luts[k].rel);
+			FILE *f = fopen(p, "rb");
+			int n = f ? (int)fread(buf, 1, sizeof(buf), f) : 0;
+			if (f) fclose(f);
+			if (n != 98304) { printf("  %s: %d bytes\n", luts[k].rel, n); sizes_ok = 0; continue; }
+			memcpy(white[k], buf + 32767 * 3, 3);
+			if (luts[k].fnv)
+			{
+				uint32_t h = 2166136261u;
+				for (int i = 0; i < n; i++) { h ^= buf[i]; h *= 16777619u; }
+				check(h == luts[k].fnv, "the stock GBC table is the core's own def_corrected.lut, byte for byte");
+			}
+			printf("  %-48s white %d,%d,%d\n", strrchr(luts[k].rel, '/') + 1, white[k][0], white[k][1], white[k][2]);
+		}
+		check(sizes_ok, "every LUT is exactly 32768 entries of R,G,B");
+		check(white[3][0] == 255 && white[3][1] == 255 && white[3][2] == 255, "the backlit SP shows GBC white as white");
+		check(white[1][0] < 255 && white[1][0] == white[1][1], "the unlit GBA dims white but keeps it neutral");
+
+		static const char *gbc_core[] =
+		{
+			"GAMEBOY",
+			"FS1,GBCGB BIN,Load ROM",
+			"P1O12,Custom Palette,Off,Auto,On",
+			"h1P1FC3,GBP,Load Palette",
+			"P1o4,Screen Shadow,No,Yes",
+			"P1OG,Frame blend,Off,On",
+			"P1OLM,Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer",
+			"d4P1OU,GBC Colors,Corrected,Raw",
+			"H9P1FC7,LUT,Load GBC Color LUT",
+			0
+		};
+		harness_set_confstr_table(gbc_core);
+		harness_set_menu_core(0);
+		harness_reset_file_tx();
+		vp_forget_originals();
+
+		int gbsys = -1;
+		for (int i = 0; i < lib_sys_count(); i++) if (!strcmp(lib_sys(i)->id, "gb")) gbsys = i;
+		int o3[VP_MAX_OPTIONS];
+		int n3 = vp_options_for(VC_GBC, o3);
+		int prior = vp_effective(gbsys, VC_GBC);
+		int i_gba = -1, i_none = -1, i_gbc = -1;
+		for (int i = 0; i < n3; i++)
+		{
+			if (!strcmp(vp_name(o3[i]), "GBC on GBA")) i_gba = i;
+			if (!strcmp(vp_name(o3[i]), "None")) i_none = i;
+			if (!strcmp(vp_name(o3[i]), "Game Boy Color")) i_gbc = i;
+		}
+
+		vp_set(gbsys, VC_GBC, o3[i_gbc]);
+		vp_apply_now(gbsys, VC_GBC);
+		check(!harness_last_file_tx()[0], "the GBC screen on a fresh core pushes no table: the core's own is in");
+
+		int loud = harness_file_tx_loud();
+		vp_set(gbsys, VC_GBC, o3[i_gba]);
+		vp_apply_now(gbsys, VC_GBC);
+		check(strstr(harness_last_file_tx(), "GBC on GBA.lut") && harness_last_file_tx_idx() == 7,
+			"GBC on GBA sends its table at the core's LUT slot");
+		check(harness_file_tx_loud() == loud, "without the \"Loading\" box");
+		check(harness_opt_val("U") == 0, "and routes colour through it (GBC Colors=Corrected)");
+
+		harness_reset_file_tx();
+		vp_set(gbsys, VC_GBC, o3[i_none]);
+		vp_apply_now(gbsys, VC_GBC);
+		check(strstr(harness_last_file_tx(), "GBC Corrected.lut") && harness_last_file_tx_idx() == 7,
+			"None after it puts the core's own table back");
+
+		harness_reset_file_tx();
+		vp_set(gbsys, VC_GBC, o3[i_gbc]);
+		vp_apply_now(gbsys, VC_GBC);
+		check(!harness_last_file_tx()[0], "and once it is back nothing is pushed again");
+
+		vp_set(gbsys, VC_GBC, prior);
+		harness_set_confstr_table(0);
+		harness_set_menu_core(1);
+		harness_reset_file_tx();
+		harness_reset_status();
+	}
+
+	/*
 	  The same look on an analog display, where half of it is damage.
 
 	  A CRT has a structure of its own and does not want a simulated one: the pixel
@@ -12193,7 +12299,7 @@ static void assert_video()
 		harness_set_scaler_visible(0);
 		check(vp_options_for(VC_GB, o2) == gb_hdmi, "every Game Boy screen is still offered on a CRT");
 		check(vp_options_for(VC_GBA, o2) == 4, "so are the three GBA models and the off switch");
-		check(vp_options_for(VC_GBC, o2) == 4, "and the GBC screen and its SGB looks");
+		check(vp_options_for(VC_GBC, o2) == 7, "and the GBC screens and its SGB looks");
 		check(vp_options_for(VC_CONSOLE, o2) == 5, "and the CRT classes are untouched by any of this");
 
 		int gg_an = vp_options_for(VC_GG, o2);
@@ -25598,6 +25704,9 @@ static int gen_looks(const char *dir)
 		"P1o4,Screen Shadow,No,Yes",
 		"P1OG,Frame blend,Off,On",
 		"P1OLM,Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer",
+		"d4P1OU,GBC Colors,Corrected,Raw",
+		"H9P1FC7,LUT,Load GBC Color LUT",
+		"P3o3,Super Game Boy + GBC,Off,On",
 		0
 	};
 
