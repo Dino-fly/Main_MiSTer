@@ -11800,7 +11800,8 @@ static void assert_video()
 		{
 			const char *nm = vp_name(opts[i]);
 			if (!strcmp(nm, "None") || !strcmp(nm, "Sharp")) continue;
-			int is_lcd = (strstr(nm, "Game Boy") != 0 || strstr(nm, "GBA") != 0);
+			int is_lcd = (strstr(nm, "Game Boy") != 0 || strstr(nm, "DMG") != 0 ||
+			              strstr(nm, "GBA") != 0);
 			if (is_lcd != handheld) leak = 1;
 		}
 	}
@@ -11824,7 +11825,7 @@ static void assert_video()
 	}
 
 	int n_gb = vp_options_for(VC_GB, opts);
-	check(n_gb == 7, "Game Boy offers three DMG ramps, the Pocket, the SGB, the off switch and the SGB off switch");
+	check(n_gb == 8, "Game Boy offers three DMG ramps, the Pocket, the Light, the SGB, the off switch and the SGB off switch");
 	check(strstr(vp_name(opts[0]), "DMG") && strstr(vp_name(opts[3]), "Pocket"),
 		"Game Boy leads with DMG and still offers the Pocket");
 
@@ -12365,7 +12366,12 @@ static void assert_video()
 		int kept = 0;
 		if (over) for (int i = 0; i < n2; i++) if (over[i] == 0xff4080c0) kept++;
 		int touched = n2 - kept;
-		check(touched > n2 / 5 && kept > 0,
+		/*
+		  DMG wears its Olive palette in the preview now (it used to fall through to
+		  no palette at all), so a flat field maps to one shade and every pixel
+		  changes - kept > 0 was only ever true because the palette was missing.
+		*/
+		check(touched > n2 / 5,
 			"the look is applied over the reference, not bypassed");
 		printf("  the grid touches %d of %d preview pixels\n", touched, n2);
 		printf("  flat blue through the DMG look: %06X\n", over ? (over[n2 / 2] & 0xffffff) : 0);

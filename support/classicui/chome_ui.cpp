@@ -5098,6 +5098,17 @@ static const uint32_t *ref_zoom(const char *path, int w, int h)
 	return buf;
 }
 
+/*
+  The Display tiles wrap to a second row past six looks - Dinofly's call
+  (2026-10-26) once the Game Boy class reached eight. A count rather than a
+  width test, so the grid and therefore up/down mean the same thing at every
+  profile; the second row takes the remainder.
+*/
+static int disp_per_row(int n)
+{
+	return (n > 6) ? (n + 1) / 2 : n;
+}
+
 static void draw_display_screen(const chome_profile *p)
 {
 	int s = p->ts_ui;
@@ -5123,9 +5134,11 @@ static void draw_display_screen(const chome_profile *p)
 	  different screen per system. They only shrink when a class genuinely offers
 	  more than fit.
 	*/
+	int per_row = disp_per_row(n);
+	int nrows = (n + per_row - 1) / per_row;
 	int tw = 70 * s;   // wide enough that "COMPOSITE" fits its label budget at every profile
 	int th = (tw * 3) / 4;
-	int fit = (pw - pad * 2 - gap * (n - 1)) / n;
+	int fit = (pw - pad * 2 - gap * (per_row - 1)) / per_row;
 	if (tw > fit) { tw = fit < 24 ? 24 : fit; th = (tw * 3) / 4; }
 
 	int h_title = 10 * s + 6;          // draw_panel_ex's own title bar
@@ -5134,6 +5147,7 @@ static void draw_display_screen(const chome_profile *p)
 	// Two lines: "GAME BOY POCKET" does not fit a small tile on one, and a name
 	// with letters missing is worse than a second line under every tile.
 	int h_label = 2 * (10 * tiny) + tiny;
+	int h_tiles = nrows * (th + h_label) + (nrows - 1) * 2 * s;
 
 	/*
 	  The big preview takes whatever height the rest leaves, at 4:3 - derived, like
@@ -5142,12 +5156,12 @@ static void draw_display_screen(const chome_profile *p)
 	  from, their names.
 	*/
 	int ph_max = (p->h * 94) / 100;
-	int bh_big = ph_max - (h_title + pad + h_header + 6 * s + h_blurb + 4 * s + th + h_label + pad);
+	int bh_big = ph_max - (h_title + pad + h_header + 6 * s + h_blurb + 4 * s + h_tiles + pad);
 	int bw_big = (bh_big * 4) / 3;
 	if (bw_big > pw - pad * 2) { bw_big = pw - pad * 2; bh_big = (bw_big * 3) / 4; }
 	if (bh_big < th) { bh_big = th; bw_big = (bh_big * 4) / 3; }
 
-	int ph = h_title + pad + h_header + bh_big + 6 * s + h_blurb + 4 * s + th + h_label + pad;
+	int ph = h_title + pad + h_header + bh_big + 6 * s + h_blurb + 4 * s + h_tiles + pad;
 
 	panel_box b = draw_panel_ex(p, pw, ph, "Display");
 
@@ -5217,13 +5231,16 @@ static void draw_display_screen(const chome_profile *p)
 		}
 	}
 
-	int tile_y = blurb_y + h_blurb + 4 * s;
-	int total = tw * n + gap * (n - 1);
-	int tx = b.x + (b.w - total) / 2;
+	int tiles_y = blurb_y + h_blurb + 4 * s;
 
 	for (int i = 0; i < n; i++)
 	{
-		int x = tx + i * (tw + gap);
+		// Each row centred on its own count, so a short second row sits in the middle.
+		int row = i / per_row, col = i % per_row;
+		int in_row = (row == nrows - 1) ? n - row * per_row : per_row;
+		int total = tw * in_row + gap * (in_row - 1);
+		int x = b.x + (b.w - total) / 2 + col * (tw + gap);
+		int tile_y = tiles_y + row * (th + h_label + 2 * s);
 		int on = (i == look_row);
 
 		// Same order as the big preview above, and for the same reason.
@@ -12226,9 +12243,23 @@ static void move_v(int dir)
 		break;
 	}
 
+	/*
+	  Between the two rows of tiles, same column. From the last column of a full
+	  top row down to a shorter bottom row lands on its last tile rather than
+	  refusing, the way a grid of icons does.
+	*/
 	case SCR_DISPLAY:
-		nudge();               // one row of tiles: nothing above or below
+	{
+		int opts[VP_MAX_OPTIONS];
+		int nn = vp_options_for(disp_class(), opts);
+		int per_row = disp_per_row(nn);
+		int next = look_row + dir * per_row;
+		if (dir > 0 && next >= nn && look_row / per_row < (nn - 1) / per_row) next = nn - 1;
+		if (next < 0 || next >= nn) { nudge(); break; }
+		look_row = next;
+		mark_dirty();
 		break;
+	}
 
 	/*
 	  Both cheats lists. Moving disarms the forget, the way it does on every other screen
