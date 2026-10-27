@@ -58,6 +58,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from simulate_look import (read_png, write_png, load_filter, load_mask, apply_mask,
                            ascal_1d, synth_sharp)
+from gba_colorshade import apply_modify_colors
 from simulate_pipeline import (load_gbp, apply_palette, load_gamma, apply_gamma,
                                letterbox)
 import look_review
@@ -90,7 +91,9 @@ SKIP_IDS = {'sgb', 'none-sgb'}
 
 # core-side options the renderer DOES honour; everything else is reported.
 SIMULATED_OPTS = {'Custom Palette': 'the .gbp is applied as the palette',
-                  'Scale': 'integer scale is how the frame is rendered'}
+                  'Scale': 'integer scale is how the frame is rendered',
+                  'Modify Colors': 'gba_colorshade.py, the core\'s own tables, over a raw frame',
+                  'GBC Colors': 'Corrected is what routes the frame through the .lut'}
 
 
 # ---------------------------------------------------------------- the looks --
@@ -291,6 +294,11 @@ def render_look(look, gen_dir, src_rows, scale):
         files['lut'] = {'path': os.path.relpath(lut, gen_dir), 'md5': md5(lut)}
         stock = load_lut(os.path.join(os.path.dirname(lut), 'ClassicHome GBC Corrected.lut'))
         rows = apply_lut(rows, invert_lut(stock), load_lut(lut))
+    elif look.cls == 'gba':
+        # The corpus GBA frames are raw (Modify Colors=Off); a profile is the core's
+        # own arithmetic over them.
+        mc = dict(p.split('=', 1) for p in (look.core_colour or '').split(';') if '=' in p)
+        rows = apply_modify_colors(rows, mc.get('Modify Colors', 'Off'))
     elif look.palette_rel:
         pal = os.path.join(card, look.palette_rel)
         files['palette'] = {'path': os.path.relpath(pal, gen_dir), 'md5': md5(pal)}
