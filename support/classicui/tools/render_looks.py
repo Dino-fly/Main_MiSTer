@@ -197,7 +197,8 @@ def frames_for(look, corpus, count):
                 # A palette look re-ranks the frame's colours into four shades, so
                 # it needs a frame straight off the core with at most four. A
                 # blended or colourised capture is skipped, not mangled.
-                if look.palette_rel and len({p for r in rows for p in r}) > 4:
+                if look.palette_rel and look.palette_rel.endswith('.gbp') \
+                        and len({p for r in rows for p in r}) > 4:
                     print('  skip %s for %s: more than 4 colours' % (os.path.basename(f), look.id),
                           file=sys.stderr)
                     continue
@@ -233,6 +234,34 @@ def nearest(rows, n):
     return out
 
 
+def load_lut(path):
+    """The Game Boy core's colour LUT: 32768 (R,G,B), indexed {r5,g5,b5}."""
+    d = open(path, 'rb').read()
+    if len(d) != 32768 * 3:
+        raise SystemExit('%s: %d bytes, not a GBC LUT' % (path, len(d)))
+    return [tuple(d[i * 3:i * 3 + 3]) for i in range(32768)]
+
+def invert_lut(lut):
+    inv = {}
+    for i, c in enumerate(lut):
+        inv.setdefault(c, i)
+    return inv
+
+def apply_lut(rows, inv, lut):
+    out, miss = [], set()
+    for r in rows:
+        o = []
+        for p in r:
+            i = inv.get(tuple(p))
+            if i is None:
+                miss.add(tuple(p))
+                i = (p[0] >> 3) << 10 | (p[1] >> 3) << 5 | (p[2] >> 3)
+            o.append(lut[i])
+        out.append(o)
+    if miss:
+        print('  %d colours not produced by the stock table; top bits used' % len(miss), file=sys.stderr)
+    return out
+
 def render_look(look, gen_dir, src_rows, scale):
     """Run one look's generated files over a native frame.
 
@@ -254,7 +283,15 @@ def render_look(look, gen_dir, src_rows, scale):
 
     h, w = len(src_rows), len(src_rows[0])
     rows = src_rows
-    if look.palette_rel:
+    if look.palette_rel and look.palette_rel.endswith('.lut'):
+        # A GBC frame in the corpus was captured through the core's stock table;
+        # map it back to 15 bits through that table (generated alongside, and
+        # pinned to the core's own file by the harness), then through the look's.
+        lut = os.path.join(card, look.palette_rel)
+        files['lut'] = {'path': os.path.relpath(lut, gen_dir), 'md5': md5(lut)}
+        stock = load_lut(os.path.join(os.path.dirname(lut), 'ClassicHome GBC Corrected.lut'))
+        rows = apply_lut(rows, invert_lut(stock), load_lut(lut))
+    elif look.palette_rel:
         pal = os.path.join(card, look.palette_rel)
         files['palette'] = {'path': os.path.relpath(pal, gen_dir), 'md5': md5(pal)}
         rows = apply_palette(rows, load_gbp(pal))
