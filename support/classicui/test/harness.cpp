@@ -12123,6 +12123,7 @@ static void assert_video()
 			"P1OLM,Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer",
 			"d4P1OU,GBC Colors,Corrected,Raw",
 			"H9P1FC7,LUT,Load GBC Color LUT",
+			"d6P2O[37],GBC/GBA mode,GBC,GBA",
 			0
 		};
 		harness_set_confstr_table(gbc_core);
@@ -12154,6 +12155,7 @@ static void assert_video()
 			"GBC on GBA sends its table at the core's LUT slot");
 		check(harness_file_tx_loud() == loud, "without the \"Loading\" box");
 		check(harness_opt_val("U") == 0, "and routes colour through it (GBC Colors=Corrected)");
+		check(harness_opt_val("[37]") == 1, "and boots the cartridge as a GBA would (GBC/GBA mode=GBA)");
 
 		harness_reset_file_tx();
 		vp_set(gbsys, VC_GBC, o3[i_none]);
@@ -12165,6 +12167,7 @@ static void assert_video()
 		vp_set(gbsys, VC_GBC, o3[i_gbc]);
 		vp_apply_now(gbsys, VC_GBC);
 		check(!harness_last_file_tx()[0], "and once it is back nothing is pushed again");
+		check(harness_opt_val("[37]") == 0, "and the GBC screen puts the GBC/GBA mode back as the player had it");
 
 		/*
 		  FC7 is a remembered slot: the core reloads <core>.f7 at every boot, so a
@@ -12216,6 +12219,19 @@ static void assert_video()
 		if (col) lib_slot_target(col, 0, sp, sizeof(sp));
 		printf("  Game Gear slot 1: %s\n", sp);
 		check(strstr(sp, "savestates/GameGear/Columns") != 0, "a setname row's savestates are looked for under its setname");
+
+		// The official NGPC core's home is games/NGPC; a card whose NGP games are in
+		// another folder (the fake card's games/NGP) must re-home it, or the MGL path and
+		// boot.rom are looked for where they are not. A row needing no alias is untouched.
+		int ngp = -1, tg = -1;
+		for (int i = 0; i < lib_sys_count(); i++)
+		{
+			if (!strcmp(lib_sys(i)->id, "ngp")) ngp = i;
+			if (!strcmp(lib_sys(i)->id, "tg16")) tg = i;
+		}
+		check(ngp >= 0 && !strcmp(lib_sys(ngp)->setname, lib_sys(ngp)->dir),
+			"a core whose games folder came from an alias is re-homed onto that folder");
+		check(tg >= 0 && !lib_sys(tg)->setname[0], "and a core whose folder is its own name is not");
 	}
 
 	/*
@@ -12354,9 +12370,12 @@ static void assert_video()
 			"a look whose only colour is a scaler gamma is not offered where the scaler is bypassed");
 
 		int inert = 0;
-		const int gamma_only[] = { VC_LYNX, VC_WS, VC_WSC, VC_NGPC };
-		for (int k = 0; k < 4; k++) if (vp_options_for(gamma_only[k], o2) != 1) inert = 1;
-		check(!inert, "the same for the Lynx, both WonderSwans and the NGPC");
+		const int gamma_only[] = { VC_LYNX, VC_WS, VC_WSC };
+		for (int k = 0; k < 3; k++) if (vp_options_for(gamma_only[k], o2) != 1) inert = 1;
+		check(!inert, "the same for the Lynx and both WonderSwans");
+		// The NGPC's colour is the core's own (Saturation) since the official core, so it
+		// is not inert on a CRT: its two screens and None stay on offer.
+		check(vp_options_for(VC_NGPC, o2) == 3, "the NGPC keeps its core-coloured screens where the scaler is bypassed");
 
 		/*
 		  vga_scaler=1 with no HDMI sink: analog, and yet the scaler IS in the path,
