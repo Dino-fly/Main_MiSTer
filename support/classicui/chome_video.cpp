@@ -504,7 +504,7 @@ static const preset_def presets[] =
 	  all - "touch nothing" - so this cannot be None plus a flag; it is None with
 	  exactly one thing asked for, which is the border (and its GBC twin option).
 	*/
-	{ "none-sgb", "None with Super Game Boy", "Every effect off, with the Super Game Boy border and colours.",
+	{ "none-sgb", "None with SGB Border", "Every effect off, with the Super Game Boy border and colours.",
 	  "off", "off", "off", "off", "off", "off",
 	  "Super Game Boy=On;Super Game Boy + GBC=On", 0, 0 },
 
@@ -552,7 +552,7 @@ static const preset_def presets[] =
 	  "off", "off", "off", M_GAP_TINT, "1x", "off",
 	  "Modify Colors=Off", CO_GBA_PANEL, 0 },
 
-	{ "gba-ds", "GBA on Nintendo DS", "A GBA cartridge in a DS: backlit, cooler and brighter.",
+	{ "gba-ds", "GBA on DS", "A GBA cartridge in a Nintendo DS: backlit, cooler and brighter.",
 	  "off", "off", "off", M_GAP_DARK, "1x", "off",
 	  "Modify Colors=NDS 1.6", CO_GBA_PANEL, 0 },
 
@@ -561,10 +561,10 @@ static const preset_def presets[] =
 	  modern panel does not ghost, so Flickerblend stays off on all three: the
 	  flicker a Lynx or WonderSwan game used for extra shades showed on them too.
 	*/
-	{ "gg-mcwill", "Game Gear (McWill LCD)", "The modern replacement screen: sharp, neutral, deep blacks.",
+	{ "gg-mcwill", "Game Gear McWill", "McWill's replacement LCD: sharp, neutral, deep blacks.",
 	  "off", "off", "off", M_GAP_TINT, "1x", G_GGMCW, 0, CO_INTEGER, 0 },
 
-	{ "lynx-mcwill", "Atari Lynx (McWill LCD)", "The modern replacement screen: sharp, neutral, deep blacks.",
+	{ "lynx-mcwill", "Atari Lynx McWill", "McWill's replacement LCD: sharp, neutral, deep blacks.",
 	  "off", "off", "off", M_GAP_TINT, "1x", G_LYNXMCW,
 	  0, "Flickerblend=Off;" CO_INTEGER, 0 },
 
