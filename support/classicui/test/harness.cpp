@@ -11800,7 +11800,7 @@ static void assert_video()
 		{
 			const char *nm = vp_name(opts[i]);
 			if (!strcmp(nm, "None") || !strcmp(nm, "Sharp")) continue;
-			int is_lcd = (strstr(nm, "Game Boy") != 0 || strstr(nm, "DMG") != 0 || strstr(nm, "GBC") != 0 ||
+			int is_lcd = (strstr(nm, "Game Boy") != 0 || strstr(nm, "DMG") != 0 || strstr(nm, "GBC") != 0 || strstr(nm, "SGB") != 0 ||
 			              strstr(nm, "GBA") != 0);
 			if (is_lcd != handheld) leak = 1;
 		}
@@ -11841,7 +11841,7 @@ static void assert_video()
 		for (int i = 0; i < n_gb; i++)
 		{
 			if (!strcmp(vp_name(opts[i]), "Super Game Boy")) sgb = opts[i];
-			if (!strcmp(vp_name(opts[i]), "None with Super Game Boy")) none_sgb = opts[i];
+			if (!strcmp(vp_name(opts[i]), "None with SGB Border")) none_sgb = opts[i];
 		}
 		check(sgb >= 0, "the Super Game Boy is offered as a look of its own");
 		check(none_sgb >= 0, "and None has an SGB twin, per Dinofly's ask");
