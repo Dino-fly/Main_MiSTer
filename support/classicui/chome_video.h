@@ -47,7 +47,8 @@
 #define VC_WS       9   // WonderSwan, monochrome
 #define VC_WSC     10   // WonderSwan Color
 #define VC_NGPC    11   // Neo Geo Pocket Color
-#define VC_COUNT   12
+#define VC_NGP     12   // a mono Neo Geo Pocket cartridge (.ngp); appended, the number is in sys_key
+#define VC_COUNT   13
 
 // 1 for the handheld classes: they get LCD looks and a shell, never a CRT.
 int  vp_class_is_handheld(int vclass);

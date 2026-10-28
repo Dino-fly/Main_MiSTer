@@ -160,7 +160,7 @@ static const sys_def defaults[] =
 	// Boy core (.gbc); both are told apart by extension at launch.
 	{ "lynx",  "Atari Lynx",                    "LNX",  "_Console/AtariLynx",    "AtariLynx","lnx",         "Atari - Lynx",                                   'f', 0, 2, 0, 0, 0x2a2a2e, 0, CH_SS_YES     },
 	{ "ws",    "WonderSwan",                    "WS",   "_Console/WonderSwan",   "WonderSwan","ws,wsc",     "Bandai - WonderSwan",                            'f', 0, 2, 0, 0, 0x2f3a5a, 0, CH_SS_YES     },
-	{ "ngp",   "Neo Geo Pocket Color",          "NGP",  "_Console/NeoGeo-Pocket","NGP",     "ngp,ngc,npc",  "SNK - Neo Geo Pocket Color",                     'f', 0, 2, 0, 0, 0x20304a, 0, CH_SS_NO      },
+	{ "ngp",   "Neo Geo Pocket Color",          "NGP",  "_Console/NGPC",         "NGPC",    "ngp,ngc,npc",  "SNK - Neo Geo Pocket Color",                     'f', 0, 2, 0, 0, 0x20304a, 0, CH_SS_NO      },
 
 	{ "amiga", "Amiga",                         "AMI",  "_Computer/Minimig",     "Amiga",   "adf,hdf",      "Commodore - Amiga",                              'f', 0, 3, 1, 0, 0x2e6e63, 0, CH_SS_NO      },
 	{ "st",    "Atari ST",                      "ST",   "_Computer/AtariST",     "AtariST", "st,msa,img",   "Atari - ST",                                     's', 0, 3, 1, 0, 0x3a5e6e, 0, CH_SS_NO      },
@@ -1656,7 +1656,8 @@ static const char *const name_alias[][ALIAS_MAX] =
 	*/
 	{ "MegaCD",        "SegaCD",          "Sega CD",       0            },
 	{ "TurboGrafx16",  "TGFX16",          "PCEngine",      "PC Engine"  },
-	{ "NeoGeo-Pocket", "NeoGeoPocket",    "NGP",           0            },
+	// The official core (MiSTer-devel/NGPC_MiSTer) first; the older community builds after.
+	{ "NGPC",          "NeoGeo-Pocket",   "NeoGeoPocket",  "NGP"        },
 	{ "Atari7800",     "A7800",           0,               0            },
 	{ "ZX-Spectrum",   "Spectrum",        "ZXSpectrum",    0            },
 	{ "MSX",           "MSX1",            0,               0            },
@@ -1754,9 +1755,11 @@ static void resolve_names()
 	{
 		chome_sys *s = &systems[i];
 
+		int core_aliased = 0, dir_aliased = 0;
 		if (lib_resolve_rbf(s->rbf, sizeof(s->rbf)))
 		{
 			printf("ClassicUI: %s core is %s on this card\n", s->id, s->rbf);
+			core_aliased = 1;
 		}
 
 		if (!s->mra)
@@ -1770,7 +1773,32 @@ static void resolve_names()
 				{
 					printf("ClassicUI: %s games are in %s on this card\n", s->id, alt);
 					snprintf(s->dir, sizeof(s->dir), "%s", alt);
+					dir_aliased = 1;
 				}
+			}
+		}
+
+		/*
+		  An MGL's file path is relative to the core's home, games/<core name>. When the
+		  card's folder for this row is not the resolved core's own name - the official
+		  NGPC core (games/NGPC) on a card whose games and boot.rom live in
+		  games/NeoGeoPocket - the launch would look in a folder that is not there:
+		  measured, a blue screen and "games/NGPC/boot.rom: No such file". A setname of
+		  the folder re-homes the core onto it, and its config and savestates keep the
+		  names the card already uses.
+
+		  Only when the table's own core was found but its folder had to come from an
+		  alias: a core's home is its CONF_STR name, not its file name (TurboGrafx16's is
+		  TGFX16), so comparing those would re-home half the table. A card that renamed
+		  both halves (MegaDrive core, MegaDrive folder) is consistent and left alone.
+		*/
+		if (!s->mra && !s->setname[0] && dir_aliased && !core_aliased)
+		{
+			const char *base = strrchr(s->rbf, '/');
+			base = base ? base + 1 : s->rbf;
+			{
+				snprintf(s->setname, sizeof(s->setname), "%s", s->dir);
+				printf("ClassicUI: %s core %s is re-homed onto games/%s\n", s->id, base, s->dir);
 			}
 		}
 	}
