@@ -1255,6 +1255,7 @@ static int class_of(int sysidx, const char *path)
 	{
 		// Cores that host more than one machine are told apart by extension.
 		if (s->vclass == VC_GB && !strcasecmp(ext, "gbc")) return VC_GBC;
+		if (s->vclass == VC_GBC && !strcasecmp(ext, "gb")) return VC_GB;     // a DMG cart in games/GBC
 		if (s->vclass == VC_CONSOLE && !strcasecmp(ext, "gg")) return VC_GG;
 		if (s->vclass == VC_WS && !strcasecmp(ext, "wsc")) return VC_WSC;
 	}
@@ -1664,6 +1665,7 @@ static const struct { const char *id; const char *icon; } sysicon_alias[] =
 	{ "megacd",   "md"     },
 	{ "pcecd",    "tg16"   },
 	{ "neogeocd", "neogeo" },
+	{ "gbc",      "gb"     },     // the licensed set has no Color glyph
 };
 
 /*
@@ -4060,6 +4062,19 @@ static int wrap_text(const char *src, int px, int scale, char out[4][64], int ma
 	// The break above leaves n at maxlines when the text did not fit, and returning
 	// n + 1 there told the caller about a line that was never written - which drew
 	// whatever was in the array. Text that overflows is cut, not garnished.
+#ifdef CHOME_HOST_TEST
+	/*
+	  But not silently: a word dropped off the last line is a cut like any other, and
+	  the clip log is where the harness looks for cuts. "GBA on Nintendo DS" lost its
+	  "DS" on the Display tiles and nothing noticed. Reported as the whole text into a
+	  width it cannot fit, so the log reads like gfx_clip's own entries.
+	*/
+	if (n >= maxlines)
+	{
+		while (*p2 == ' ') p2++;
+		if (*p2) gfx_clip_at(src, scale, px * maxlines, "wrap_text");
+	}
+#endif
 	return (n < maxlines) ? n + 1 : maxlines;
 }
 
@@ -15340,7 +15355,7 @@ static int ig_open()
 				break;
 			}
 
-			if (shot_lit(ig_shot, ig_shot_w * ig_shot_h) || tries >= 3) break;
+			if (shot_lit(ig_shot, ig_shot_w * ig_shot_h) || tries >= 3) { vp_note_frame_captured(); break; }
 			usleep(50 * 1000);
 		}
 		why = screenshot_grab_why();
