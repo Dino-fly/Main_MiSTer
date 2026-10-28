@@ -3006,7 +3006,8 @@ int user_io_file_tx_a(const char* name, uint16_t index)
   into the core's picture before the scaler: the box was drawn into the frozen
   frame and stayed in the menu's look preview long after the OSD itself went away
   (4 of 8 applies, 2026-10-26). Set and cleared around the one call; nothing else
-  in the firmware touches it.
+  in the firmware touches it. Quiet also means no MenuHide() at the end, which
+  would re-enter HandleUI() - and the front-end - from inside the caller.
 */
 static int file_tx_quiet = 0;
 void user_io_file_tx_quiet(int on) { file_tx_quiet = on; }
@@ -3240,7 +3241,8 @@ int user_io_file_tx(const char* name, unsigned char index, char opensave, char m
 	printf("Done.\n");
 	printf("CRC32: %08X\n", file_crc);
 
-	user_io_write_gameid(name, file_crc);
+	// A quiet push is a look's palette or LUT, not a game: /tmp/GAMEID stays the game's.
+	if (!file_tx_quiet) user_io_write_gameid(name, file_crc);
 
 	FileClose(&f);
 
@@ -3260,7 +3262,14 @@ int user_io_file_tx(const char* name, unsigned char index, char opensave, char m
 		send_pcolchr(name, (index & 0x1F) | 0x60, 1);
 	}
 
-	ProgressMessage(0, 0, 0, 0);
+	/*
+	  Gated like the rest: ProgressMessage(0,...) is MenuHide(), which runs HandleUI(),
+	  which is Classic Home's input handling - so a quiet push made from a key press
+	  re-entered the front-end before it returned. A held key then applied the look
+	  again from inside the first apply, 156 deep, until the stack ran out (GBC LUT,
+	  2026-10-27). A quiet transfer raised nothing to take down.
+	*/
+	if (use_progress) ProgressMessage(0, 0, 0, 0);
 
 	if ((is_snes() || is_sgb()) && !load_addr)
 	{
