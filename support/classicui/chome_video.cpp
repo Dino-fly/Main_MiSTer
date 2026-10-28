@@ -229,6 +229,9 @@ static double lcd_span(const lcd_model *m, int scale)
 #define G_WS      PREFIX " WonderSwan.txt"
 #define G_WSC     PREFIX " WonderSwan Color.txt"
 #define G_NGPC    PREFIX " Neo Geo Pocket Color.txt"
+#define G_GGMCW   PREFIX " Game Gear McWill.txt"
+#define G_LYNXMCW PREFIX " Lynx McWill.txt"
+#define G_SWANC   PREFIX " SwanCrystal.txt"
 
 // Root-relative, where the Game Boy core's own palette browser looks.
 #define PAL_DIR    "games/GAMEBOY/Palettes"
@@ -552,6 +555,22 @@ static const preset_def presets[] =
 	{ "gba-ds", "GBA on Nintendo DS", "A GBA cartridge in a DS: backlit, cooler and brighter.",
 	  "off", "off", "off", M_GAP_DARK, "1x", "off",
 	  "Modify Colors=NDS 1.6", CO_GBA_PANEL, 0 },
+
+	/*
+	  The modded and late screens of the other handhelds. Appended for ABI. A fast
+	  modern panel does not ghost, so Flickerblend stays off on all three: the
+	  flicker a Lynx or WonderSwan game used for extra shades showed on them too.
+	*/
+	{ "gg-mcwill", "Game Gear (McWill LCD)", "The modern replacement screen: sharp, neutral, deep blacks.",
+	  "off", "off", "off", M_GAP_TINT, "1x", G_GGMCW, 0, CO_INTEGER, 0 },
+
+	{ "lynx-mcwill", "Atari Lynx (McWill LCD)", "The modern replacement screen: sharp, neutral, deep blacks.",
+	  "off", "off", "off", M_GAP_TINT, "1x", G_LYNXMCW,
+	  0, "Flickerblend=Off;" CO_INTEGER, 0 },
+
+	{ "swancrystal", "SwanCrystal", "Bandai's last revision: a vivid, fast TFT screen.",
+	  "off", "off", "off", M_GAP_DARK, "1x", G_SWANC,
+	  0, "Flickerblend=Off;" CO_INTEGER, 0 },
 };
 
 #define NPRESETS ((int)(sizeof(presets) / sizeof(presets[0])))
@@ -1143,7 +1162,8 @@ enum
 	P_DMG, P_POCKET, P_GBC, P_AGB001, P_AGS001, P_AGS101,
 	P_GG, P_GGMOD, P_LYNX, P_WS, P_WSC, P_NGPC, P_NONE, P_BVM,
 	P_DMG_BRIGHT, P_DMG_FADED, P_SGB, P_NONE_SGB, P_LIGHT,
-	P_GBC_AGB001, P_GBC_AGS001, P_GBC_AGS101, P_GBA_MICRO, P_GBA_DS
+	P_GBC_AGB001, P_GBC_AGS001, P_GBC_AGS101, P_GBA_MICRO, P_GBA_DS,
+	P_GG_MCWILL, P_LYNX_MCWILL, P_SWANCRYSTAL
 };
 
 /*
@@ -1181,10 +1201,10 @@ static const int opt_gb[]       = { P_DMG, P_DMG_BRIGHT, P_DMG_FADED, P_POCKET,
 static const int opt_gbc[]      = { P_GBC, P_GBC_AGB001, P_GBC_AGS001, P_GBC_AGS101,
                                     P_SGB, P_NONE, P_NONE_SGB };
 static const int opt_gba[]      = { P_AGB001, P_AGS001, P_AGS101, P_GBA_MICRO, P_GBA_DS, P_NONE };
-static const int opt_gg[]       = { P_GG, P_GGMOD, P_NONE };
-static const int opt_lynx[]     = { P_LYNX, P_NONE };
-static const int opt_ws[]       = { P_WS, P_NONE };
-static const int opt_wsc[]      = { P_WSC, P_WS, P_NONE };
+static const int opt_gg[]       = { P_GG, P_GGMOD, P_GG_MCWILL, P_NONE };
+static const int opt_lynx[]     = { P_LYNX, P_LYNX_MCWILL, P_NONE };
+static const int opt_ws[]       = { P_WS, P_SWANCRYSTAL, P_NONE };
+static const int opt_wsc[]      = { P_WSC, P_SWANCRYSTAL, P_WS, P_NONE };
 static const int opt_ngpc[]     = { P_NGPC, P_NONE };
 
 struct opt_set { const int *list; int n; };
@@ -2074,6 +2094,16 @@ static const lut_spec lut_ws     = { { 40, 38, 32 },  { 208, 202, 186 }, 0.95 };
 static const lut_spec lut_wsc    = { { 34, 32, 28 },  { 222, 214, 198 }, 0.94 };
 // Neo Geo Pocket Color: reflective pastel, gentle contrast.
 static const lut_spec lut_ngpc   = { { 38, 38, 36 },  { 226, 224, 214 }, 0.96 };
+/*
+  The replacement screens. McWill's kits put a modern VGA LCD behind the Game Gear's
+  and the Lynx's glass: neutral, deep blacks, full range - the cartridge's colour
+  more or less as drawn, with a fraction of a shade of black lift an LCD never loses.
+  The SwanCrystal (SCT-001) was Bandai's own last revision, a reflective TFT that
+  read as vivid next to the Color's STN.
+*/
+static const lut_spec lut_ggmcw  = { { 10, 10, 12 },  { 250, 250, 248 }, 1.00 };
+static const lut_spec lut_lynxmcw= { { 10, 10, 12 },  { 250, 250, 248 }, 1.00 };
+static const lut_spec lut_swanc  = { { 18, 18, 20 },  { 240, 238, 232 }, 0.98 };
 
 /*
   Game Boy palettes, written as ordinary .gbp files the core (and the classic
@@ -2393,6 +2423,9 @@ void vp_install()
 	write_gamma(G_WS, &lut_ws);
 	write_gamma(G_WSC, &lut_wsc);
 	write_gamma(G_NGPC, &lut_ngpc);
+	write_gamma(G_GGMCW, &lut_ggmcw);
+	write_gamma(G_LYNXMCW, &lut_lynxmcw);
+	write_gamma(G_SWANC, &lut_swanc);
 
 	write_gbp(&pal_dmg);
 	write_gbp(&pal_pocket);
