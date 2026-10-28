@@ -232,6 +232,7 @@ static double lcd_span(const lcd_model *m, int scale)
 #define G_GGMCW   PREFIX " Game Gear McWill.txt"
 #define G_LYNXMCW PREFIX " Lynx McWill.txt"
 #define G_SWANC   PREFIX " SwanCrystal.txt"
+#define G_NGP     PREFIX " Neo Geo Pocket.txt"
 
 // Root-relative, where the Game Boy core's own palette browser looks.
 #define PAL_DIR    "games/GAMEBOY/Palettes"
@@ -317,6 +318,17 @@ static double lcd_span(const lcd_model *m, int scale)
   value, which shows the flicker as it was drawn - nobody's panel showed that.
 */
 #define CO_GBA_PANEL     "Flickerblend=Blend;" CO_INTEGER
+
+/*
+  A GBC cartridge in a Game Boy Advance boots knowing it: the CGB boot ROM leaves
+  B=1, and games that check (Oracle of Seasons/Ages, Shantae, the GBA-aware palette
+  ports) brighten their colours for the darker screen or unlock GBA-only content.
+  "GBC/GBA mode=GBA" is the core doing exactly that. It is read at boot, so it takes
+  effect at launch - picked live, it waits for the next reset rather than reset the
+  game under the player. The core offers it with its own boot ROM or the original
+  CGB one; a custom boot ROM greys it out and the name is then skipped, as ever.
+*/
+#define CO_GBA_MODE      "GBC/GBA mode=GBA"
 
 static const preset_def presets[] =
 {
@@ -445,9 +457,16 @@ static const preset_def presets[] =
 	  F_SHADOWLT, F_SHADOWLT, "off", M_GAP_TINT, "1x", G_WSC,
 	  0, CO_NO_SHADOW ";Flickerblend=2 Frames;" CO_INTEGER, 0 },
 
-	{ "ngpc", "Neo Geo Pocket Color", "Reflective pastel colour LCD, gentle contrast.",
-	  F_SHADOWLT, F_SHADOWLT, "off", M_GAP_TINT, "1x", G_NGPC,
-	  0, CO_NO_SHADOW ";" CO_INTEGER, 0 },
+	/*
+	  Colour from the core, not from a gamma LUT, since the official NGPC core
+	  (NGPC_MiSTer, 2026-08) models the panel itself: "Saturation" is the pastel
+	  presentation (75% is its default and the real screen), "LCD Response=Panel"
+	  the optical persistence. A gamma curve on top would do the colour twice. The
+	  older community core publishes neither name and is left raw.
+	*/
+	{ "ngpc", "NGPC", "Reflective pastel colour LCD, gentle contrast.",
+	  F_SHADOWLT, F_SHADOWLT, "off", M_GAP_TINT, "1x", "off",
+	  "Saturation=75%", CO_NO_SHADOW ";LCD Response=Panel;" CO_INTEGER, 0 },
 
 	/*
 	  One switch to turn every layer of processing off: scaler filters, mask and
@@ -526,17 +545,17 @@ static const preset_def presets[] =
 	*/
 	{ "gbc-agb001", "GBC on GBA", "A Color cartridge on the original unlit GBA: dim and washed out.",
 	  F_SHADOWLT, F_SHADOWLT, "off", M_GAP_TINT, "1x", "off",
-	  "Super Game Boy=Off;GBC Colors=Corrected",
+	  "Super Game Boy=Off;GBC Colors=Corrected;" CO_GBA_MODE,
 	  "Screen Shadow=No;Frame blend=Off;" CO_INTEGER, LUT_AGB001 },
 
 	{ "gbc-ags001", "GBC on GBA SP", "On the frontlit SP: brighter, still washed out.",
 	  F_SHADOWLT, F_SHADOWLT, "off", M_GAP_TINT, "1x", "off",
-	  "Super Game Boy=Off;GBC Colors=Corrected",
+	  "Super Game Boy=Off;GBC Colors=Corrected;" CO_GBA_MODE,
 	  "Screen Shadow=No;Frame blend=Off;" CO_INTEGER, LUT_AGS001 },
 
 	{ "gbc-ags101", "GBC on SP Brighter", "On the backlit SP: the cartridge's colours almost raw.",
 	  "off", "off", "off", M_GAP_DARK, "1x", "off",
-	  "Super Game Boy=Off;GBC Colors=Corrected",
+	  "Super Game Boy=Off;GBC Colors=Corrected;" CO_GBA_MODE,
 	  CO_NO_SHADOW ";Frame blend=Off;" CO_INTEGER, LUT_AGS101 },
 
 	/*
@@ -571,6 +590,25 @@ static const preset_def presets[] =
 	{ "swancrystal", "SwanCrystal", "Bandai's last revision: a vivid, fast TFT screen.",
 	  "off", "off", "off", M_GAP_DARK, "1x", G_SWANC,
 	  0, "Flickerblend=Off;" CO_INTEGER, 0 },
+
+	/*
+	  The rest of the Neo Geo Pocket family, appended for ABI. "System" is a strap
+	  the core latches at reset, so like GBA mode it takes effect at launch: NGP is
+	  the 1998 mono console itself, NGPC runs a mono cartridge on the Color, which
+	  colourises it with the palette its BIOS was set to (B&W here, the closest to
+	  what the cartridge drew).
+	*/
+	{ "ngpc-ips", "NGPC IPS Mod", "A modern backlit IPS kit: full colour, no smear.",
+	  "off", "off", "off", M_GAP_DARK, "1x", "off",
+	  "Saturation=100%", "LCD Response=Raw;" CO_INTEGER, 0 },
+
+	{ "ngp", "Neo Geo Pocket", "The 1998 mono original: grey, reflective, soft and slow.",
+	  F_SHADOW, F_SHADOW, "off", M_GAP_LIT, "1x", G_NGP,
+	  "System=NGP", CO_NO_SHADOW ";LCD Response=Panel;" CO_INTEGER, 0 },
+
+	{ "ngp-on-ngpc", "Mono on NGPC", "A mono cartridge on the Color, in its black-and-white palette.",
+	  F_SHADOWLT, F_SHADOWLT, "off", M_GAP_TINT, "1x", "off",
+	  "System=NGPC;NGP Palette=B&W", CO_NO_SHADOW ";LCD Response=Panel;" CO_INTEGER, 0 },
 };
 
 #define NPRESETS ((int)(sizeof(presets) / sizeof(presets[0])))
@@ -1127,7 +1165,7 @@ static int look_shows_on_analog(int i)
 static const char *class_names[VC_COUNT] =
 {
 	"console", "arcade", "computer", "vga", "gb", "gbc", "gba",
-	"gg", "lynx", "ws", "wsc", "ngpc"
+	"gg", "lynx", "ws", "wsc", "ngpc", "ngp"
 };
 
 const char *vp_class_name(int c) { return (c >= 0 && c < VC_COUNT) ? class_names[c] : "console"; }
@@ -1137,13 +1175,13 @@ static const char *class_labels[VC_COUNT] =
 	"Consoles", "Arcade", "Home Computers", "VGA Monitor",
 	"Game Boy", "Game Boy Color", "Game Boy Advance",
 	"Game Gear", "Atari Lynx", "WonderSwan", "WonderSwan Color",
-	"Neo Geo Pocket Color"
+	"Neo Geo Pocket Color", "Neo Geo Pocket"
 };
 
 int vp_class_is_handheld(int c)
 {
 	return (c == VC_GB || c == VC_GBC || c == VC_GBA || c == VC_GG ||
-		c == VC_LYNX || c == VC_WS || c == VC_WSC || c == VC_NGPC) ? 1 : 0;
+		c == VC_LYNX || c == VC_WS || c == VC_WSC || c == VC_NGPC || c == VC_NGP) ? 1 : 0;
 }
 
 const char *vp_class_label(int c) { return (c >= 0 && c < VC_COUNT) ? class_labels[c] : "Consoles"; }
@@ -1163,7 +1201,7 @@ enum
 	P_GG, P_GGMOD, P_LYNX, P_WS, P_WSC, P_NGPC, P_NONE, P_BVM,
 	P_DMG_BRIGHT, P_DMG_FADED, P_SGB, P_NONE_SGB, P_LIGHT,
 	P_GBC_AGB001, P_GBC_AGS001, P_GBC_AGS101, P_GBA_MICRO, P_GBA_DS,
-	P_GG_MCWILL, P_LYNX_MCWILL, P_SWANCRYSTAL
+	P_GG_MCWILL, P_LYNX_MCWILL, P_SWANCRYSTAL, P_NGPC_IPS, P_NGP, P_NGP_ON_NGPC
 };
 
 /*
@@ -1205,7 +1243,8 @@ static const int opt_gg[]       = { P_GG, P_GGMOD, P_GG_MCWILL, P_NONE };
 static const int opt_lynx[]     = { P_LYNX, P_LYNX_MCWILL, P_NONE };
 static const int opt_ws[]       = { P_WS, P_SWANCRYSTAL, P_NONE };
 static const int opt_wsc[]      = { P_WSC, P_SWANCRYSTAL, P_WS, P_NONE };
-static const int opt_ngpc[]     = { P_NGPC, P_NONE };
+static const int opt_ngpc[]     = { P_NGPC, P_NGPC_IPS, P_NONE };
+static const int opt_ngp[]      = { P_NGP, P_NGP_ON_NGPC, P_NONE };
 
 struct opt_set { const int *list; int n; };
 
@@ -1225,6 +1264,7 @@ static opt_set options_of(int vclass)
 	case VC_WS:       r.list = opt_ws;       r.n = (int)(sizeof(opt_ws) / sizeof(int)); break;
 	case VC_WSC:      r.list = opt_wsc;      r.n = (int)(sizeof(opt_wsc) / sizeof(int)); break;
 	case VC_NGPC:     r.list = opt_ngpc;     r.n = (int)(sizeof(opt_ngpc) / sizeof(int)); break;
+	case VC_NGP:      r.list = opt_ngp;      r.n = (int)(sizeof(opt_ngp) / sizeof(int)); break;
 	default:          r.list = opt_console;  r.n = (int)(sizeof(opt_console) / sizeof(int)); break;
 	}
 	return r;
@@ -2104,6 +2144,8 @@ static const lut_spec lut_ngpc   = { { 38, 38, 36 },  { 226, 224, 214 }, 0.96 };
 static const lut_spec lut_ggmcw  = { { 10, 10, 12 },  { 250, 250, 248 }, 1.00 };
 static const lut_spec lut_lynxmcw= { { 10, 10, 12 },  { 250, 250, 248 }, 1.00 };
 static const lut_spec lut_swanc  = { { 18, 18, 20 },  { 240, 238, 232 }, 0.98 };
+// The mono Neo Geo Pocket: reflective, a neutral grey with a faint green, narrow range.
+static const lut_spec lut_ngp    = { { 44, 46, 40 },  { 200, 204, 190 }, 0.95 };
 
 /*
   Game Boy palettes, written as ordinary .gbp files the core (and the classic
@@ -2426,6 +2468,7 @@ void vp_install()
 	write_gamma(G_GGMCW, &lut_ggmcw);
 	write_gamma(G_LYNXMCW, &lut_lynxmcw);
 	write_gamma(G_SWANC, &lut_swanc);
+	write_gamma(G_NGP, &lut_ngp);
 
 	write_gbp(&pal_dmg);
 	write_gbp(&pal_pocket);

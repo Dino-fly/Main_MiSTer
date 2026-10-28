@@ -1258,6 +1258,7 @@ static int class_of(int sysidx, const char *path)
 		if (s->vclass == VC_GBC && !strcasecmp(ext, "gb")) return VC_GB;     // a DMG cart in games/GBC
 		if (s->vclass == VC_CONSOLE && !strcasecmp(ext, "gg")) return VC_GG;
 		if (s->vclass == VC_WS && !strcasecmp(ext, "wsc")) return VC_WSC;
+		if (s->vclass == VC_NGPC && !strcasecmp(ext, "ngp")) return VC_NGP;
 	}
 
 	return s->vclass;
