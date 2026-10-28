@@ -602,7 +602,7 @@ static const preset_def presets[] =
 	  "off", "off", "off", M_GAP_DARK, "1x", "off",
 	  "Saturation=100%", "LCD Response=Raw;" CO_INTEGER, 0 },
 
-	{ "ngp", "Neo Geo Pocket", "The 1998 mono original: a grey reflective screen, soft and slow.",
+	{ "ngp", "Neo Geo Pocket", "The 1998 mono original: grey, reflective, soft and slow.",
 	  F_SHADOW, F_SHADOW, "off", M_GAP_LIT, "1x", G_NGP,
 	  "System=NGP", CO_NO_SHADOW ";LCD Response=Panel;" CO_INTEGER, 0 },
 
