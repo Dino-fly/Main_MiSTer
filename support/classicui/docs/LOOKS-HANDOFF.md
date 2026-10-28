@@ -40,7 +40,7 @@ His standing calls, all still in force:
 | Game Gear: stock, Backlit Mod, McWill | approved (sim) |
 | Lynx: stock, McWill | approved (sim) |
 | WonderSwan / Color: WS, WSC, SwanCrystal | approved (sim) |
-| NGPC: NGPC, NGPC IPS Mod; NGP (mono class): Neo Geo Pocket, Mono on NGPC | NGPC shown live as review #9, the rest not yet captured |
+| NGPC: NGPC, NGPC IPS Mod; NGP (mono class): Neo Geo Pocket, Mono on NGPC | NGPC approved live (#9); IPS captured live (#10); mono looks not yet captured |
 | CRT: Sharp, PVM RGB, PVM S-Video, Composite, PAL TV, BVM RGB, VGA | phase 3, not started |
 | computers | phase 4, not started |
 
@@ -53,15 +53,23 @@ Branches: `classic-ui` has everything through the GBC/GBA/mod-screen work (merge
 
 1. **Push `classic-ui`** once Dinofly sets the marker (`approve-once push`); then
    merge `classicui-handhelds2` (after review #9 and the NGP captures) and push again.
-2. **NGP family on device**: capture NGPC IPS Mod, then a mono cart (KOF R-1 is mono)
+2. **NGP family on device**: capture a mono cart (KOF R-1 is mono)
    under Neo Geo Pocket and Mono on NGPC. `System` is a reset-time strap: these need a
    relaunch, not a live apply. Show each as a review; the renderer cannot simulate the
    core's own Saturation/Panel/System, so use real HDMI captures for these.
 3. **GBA mode on device**: launch a GBA-aware GBC game (Oracle of Seasons/Ages,
    Shantae) under GBC on GBA; confirm `GBC/GBA mode = GBA` in the log and a brighter
    palette than under the GBC look.
-4. **NGP row savestates** are `CH_SS_NO` in the systems table, but the official core
-   has save states (`SS32000000:800000`). Measure on the card and update.
+4. **Official NGPC core, savestates**: the row is `CH_SS_NO`, yet the front-end drove a
+   suspend on menu open ("save state -> slot 4 via [42]") and the card then held only
+   `..._1.ss`; restoring that "slot 4" froze the game on a dim frame. The core's own
+   layout is `d7O[46:45],Savestate Slot` - check what the front-end's generic savestate
+   path assumes against NGPC.sv, measure, and set the row's CH_SS_* from that.
+   Re-homing points this core at savestates/NeoGeoPocket, which the old community core
+   wrote too: states from that core must not be offered to this one.
+4b. **Official NGPC core, live switch**: NGPC -> NGPC IPS Mod applied live once left the
+   picture white until relaunch (LCD Response Panel -> Raw plus Saturation 75 -> 100 at
+   once). Seen once, not yet reproduced; the same look from a launch is fine.
 5. **Harness gap**: the clip log only sees Display screens the harness draws (GB,
    GBC, GBA, console). Render every handheld class's Display screen there so a tile
    name that wraps past two lines fails the cut-text check ("Neo Geo Pocket Color"
