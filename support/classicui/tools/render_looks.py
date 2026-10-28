@@ -75,7 +75,8 @@ SCREENS = {'1080p': (1920, 1080), '720p': (1280, 720)}
 # are rendered at whatever scale THAT size gets; this table is only what the
 # fallback test frame is fitted to, so the 10x Lynx and 7x NGP paths still run.
 NATIVE = {'gb': (160, 144), 'gbc': (160, 144), 'gg': (160, 144), 'gba': (240, 160),
-          'lynx': (160, 102), 'ws': (224, 144), 'wsc': (224, 144), 'ngpc': (160, 152)}
+          'lynx': (160, 102), 'ws': (224, 144), 'wsc': (224, 144), 'ngpc': (160, 152),
+          'ngp': (160, 152)}
 
 # Corpus directory names to try per class, first hit wins.
 CORPUS_NAMES = {
@@ -83,6 +84,8 @@ CORPUS_NAMES = {
     'gba': ['gba', 'gameboyadvance'], 'gg': ['gg', 'gamegear', 'game gear'],
     'lynx': ['lynx', 'atarilynx'], 'ws': ['ws', 'wonderswan'],
     'wsc': ['wsc', 'wonderswancolor'], 'ngpc': ['ngpc', 'neogeopocketcolor', 'ngp'],
+    # Mono carts: no native mono frame in the corpus yet, so the NGPC frames stand in.
+    'ngp': ['ngp-mono', 'ngpc', 'ngp'],
 }
 
 # Not handheld panels: the Super Game Boy is a Super Nintendo on a television
