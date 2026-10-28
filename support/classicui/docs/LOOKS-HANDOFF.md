@@ -40,23 +40,19 @@ His standing calls, all still in force:
 | Game Gear: stock, Backlit Mod, McWill | approved (sim) |
 | Lynx: stock, McWill | approved (sim) |
 | WonderSwan / Color: WS, WSC, SwanCrystal | approved (sim) |
-| NGPC: NGPC, NGPC IPS Mod; NGP (mono class): Neo Geo Pocket, Mono on NGPC | NGPC approved live (#9); IPS captured live (#10); mono looks not yet captured |
+| NGPC: NGPC, NGPC IPS Mod; NGP (mono class): Neo Geo Pocket, Mono on NGPC | approved, all four captured live on the official core (#9-#11) |
 | CRT: Sharp, PVM RGB, PVM S-Video, Composite, PAL TV, BVM RGB, VGA | phase 3, not started |
 | computers | phase 4, not started |
 
-Branches: `classic-ui` has everything through the GBC/GBA/mod-screen work (merge
-5bd5299e); **classic-ui is not pushed yet** - a push needs Dinofly's
-`approve-once push`. The NGP/GBA-mode work is on `classicui-handhelds2` (worktree
-`../Main_MiSTer-looks`), not merged.
+Branches: `classic-ui` carries all the handheld work (the NGP/GBA-mode merge of
+`classicui-handhelds2` on 2026-10-28); 5bd5299e is pushed to the fork, anything after
+it needs Dinofly's `approve-once push`. The working worktree is `../Main_MiSTer-looks`;
+start phase 3 on a new branch off `classic-ui` there.
 
 ## Todo
 
-1. **Push `classic-ui`** once Dinofly sets the marker (`approve-once push`); then
-   merge `classicui-handhelds2` (after review #9 and the NGP captures) and push again.
-2. **NGP family on device**: capture a mono cart (KOF R-1 is mono)
-   under Neo Geo Pocket and Mono on NGPC. `System` is a reset-time strap: these need a
-   relaunch, not a live apply. Show each as a review; the renderer cannot simulate the
-   core's own Saturation/Panel/System, so use real HDMI captures for these.
+1. **Push `classic-ui`** past 5bd5299e once Dinofly sets the marker (`approve-once push`).
+2. (done 2026-10-28) NGP family captured live and approved.
 3. **GBA mode on device**: launch a GBA-aware GBC game (Oracle of Seasons/Ages,
    Shantae) under GBC on GBA; confirm `GBC/GBA mode = GBA` in the log and a brighter
    palette than under the GBC look.
