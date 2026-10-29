@@ -25854,6 +25854,49 @@ static int gen_looks(const char *dir)
 	return 0;
 }
 
+/*
+  The "ui" test commands (chome_test_ui): what the device scripts lean on to reach a
+  shelf, a game and a look without arrow keys. Every answer is one line a script
+  parses, so the checks read that line - and the state it claims is the state there.
+*/
+static void assert_ui_commands()
+{
+	printf("\n== ui test commands ==\n");
+
+	check(chome_test_ui("sys snes") && strstr(chome_test_ui_last(), "sys=snes"),
+		"ui sys finds a system by its id and opens its shelf");
+	check(strstr(chome_test_ui_last(), "screen=0") != 0, "and leaves the shelf on screen");
+	check(chome_test_ui("sys Super Nintendo") && strstr(chome_test_ui_last(), "sys=snes"),
+		"...and by its full name");
+	check(!chome_test_ui("sys no such machine") && strstr(chome_test_ui_last(), "FAILED"),
+		"a system that is not there fails and says so");
+
+	check(chome_test_ui("game metroid") && strstr(chome_test_ui_last(), "title=\"Super Metroid"),
+		"ui game finds a game by part of its title, in any case");
+	check(chome_test_ui("game Super Mario World") && strstr(chome_test_ui_last(), "title=\"Super Mario World"),
+		"...and by the whole of it");
+	check(!chome_test_ui("game Sonic") && strstr(chome_test_ui_last(), "FAILED"),
+		"a game not on this shelf fails and says so");
+
+	check(!chome_test_ui("look no such look") && strstr(chome_test_ui_last(), "it has: \""),
+		"an unknown look fails and lists the ones the class has");
+	char want[64] = {};
+	const char *q = strstr(chome_test_ui_last(), "it has: \"");
+	if (q) { q += 9; size_t n = strcspn(q, "\""); if (n < sizeof(want)) memcpy(want, q, n); }
+	char cmd[96], expect[96];
+	snprintf(cmd, sizeof(cmd), "look %s", want);
+	snprintf(expect, sizeof(expect), "look=\"%s\"", want);
+	check(want[0] && chome_test_ui(cmd) && strstr(chome_test_ui_last(), expect),
+		"ui look sets one of them by name, and the state line reports it");
+
+	check(chome_test_ui("display") && strstr(chome_test_ui_last(), "screen=4"),
+		"ui display opens the Display screen");
+	check(chome_test_ui("home") && strstr(chome_test_ui_last(), "screen=0"),
+		"ui home closes it again");
+	check(!chome_test_ui("frobnicate") && strstr(chome_test_ui_last(), "FAILED unknown"),
+		"an unknown verb fails and names the ones there are");
+}
+
 int main()
 {
 	printf("Classic Home host harness\n\n");
@@ -29529,6 +29572,8 @@ int main()
 	// Last, because it changes text rendering globally. Anything measuring a width after
 	// this runs would be measuring whatever tracking the section left behind.
 	assert_typography();
+
+	assert_ui_commands();
 
 	printf("\n== presents ==\n");
 	printf("  page flips: %d\n", harness_present_count());
