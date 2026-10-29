@@ -121,6 +121,16 @@ int chome_test_ss_save(int slot);
 int chome_test_core_opt(const char *spec);
 
 /*
+  "ui <verb> [arg]": place the front-end by name - a system's shelf, a game on it, a
+  look, the Display screen, a launch - and answer with one "ui <verb> -> ok|FAILED"
+  line. Test access: keyinj drops and repeats keys, so reaching a point by arrows
+  meant photographing every press. See chome_ui.cpp for the verbs.
+*/
+int chome_test_ui(const char *cmd);
+// ...and its last answer, the line it printed without the prefix.
+const char *chome_test_ui_last();
+
+/*
   Press the menu button. Test access, like the three above it: the in-game menu is the
   one screen whose cost only shows over a paused game - a second of stalled frames is
   the whole picture wobbling there and invisible everywhere else - so measuring it has

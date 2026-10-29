@@ -35,7 +35,7 @@ His standing calls, all still in force:
 | family | status |
 |---|---|
 | Game Boy: DMG (Olive), DMG Bright, DMG Faded, Pocket, Light, SGB, None, None with SGB Border | approved, on device |
-| GBC: GBC, GBC on GBA / GBA SP / SP Brighter (+ GBA mode), SGB, None, None with SGB Border | approved; GBA mode untested on device |
+| GBC: GBC, GBC on GBA / GBA SP / SP Brighter (+ GBA mode), SGB, None, None with SGB Border | approved; GBA mode confirmed on device (Oracle of Seasons) |
 | GBA: GBA, GBA SP, SP Brighter, Game Boy Micro, GBA on DS, None (all Flickerblend=Blend) | approved; options confirmed on the card's core |
 | Game Gear: stock, Backlit Mod, McWill | approved (sim) |
 | Lynx: stock, McWill | approved (sim) |
@@ -53,9 +53,11 @@ start phase 3 on a new branch off `classic-ui` there.
 
 1. **Push `classic-ui`** past 5bd5299e once Dinofly sets the marker (`approve-once push`).
 2. (done 2026-10-28) NGP family captured live and approved.
-3. **GBA mode on device**: launch a GBA-aware GBC game (Oracle of Seasons/Ages,
-   Shantae) under GBC on GBA; confirm `GBC/GBA mode = GBA` in the log and a brighter
-   palette than under the GBC look.
+3. (done 2026-10-29) GBA mode on device. Under None, GBA mode alone brightens Oracle of
+   Seasons' intro by ~+30/255 in red (the game's GBA palettes). Under GBC on GBA the
+   look sets it after the ROM upload, yet the frame is byte-identical to a launch with
+   GBA mode already in GBC.CFG - it lands before the game checks. Captures
+   `gbc-oracle-none-hdmi.png`, `gbc-oracle-on-gba-gbamode-hdmi.png` (firmware 5b9d1e48).
 4. **Official NGPC core, savestates**: the row is `CH_SS_NO`, yet the front-end drove a
    suspend on menu open ("save state -> slot 4 via [42]") and the card then held only
    `..._1.ss`; restoring that "slot 4" froze the game on a dim frame. The core's own
@@ -132,6 +134,13 @@ programmable after the mask.
 
 ## Tools
 
+- `.claude/scripts/mister-ui` - place the front-end by name instead of by arrow keys:
+  `mister-ui goto gbc "Oracle of Seasons"`, `look "GBC on GBA"`, `display`, `launch`
+  (waits for the core), `menu` (waits for the shelf), `state`. Each prints the
+  firmware's one-line answer (`ui <verb> -> ok screen= sys= sel= title= look=`) and
+  exits non-zero on FAILED, so a script needs no picture to know where it is.
+  It is the `ui` command in /dev/MiSTer_cmd (chome_test_ui). It proves nothing about
+  the key or pad paths; capture when the picture is the point.
 - `test/run.sh` - the host harness (thousands of checks); `test/looks.sh` - the
   firmware's own generated look files through the bit-exact model plus metrics.
 - `tools/render_looks.py --generate --only id,id --out DIR --corpus tools/corpus` -
