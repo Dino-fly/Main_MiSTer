@@ -1,3 +1,4 @@
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14748,6 +14749,186 @@ int chome_test_ss_save(int slot)
 	int r = ss_do_save(slot);
 	printf("ClassicUI: ss_save %d via MiSTer_cmd -> %s\n", slot, r ? "pulsed" : "no hooks");
 	return r;
+}
+
+/*
+  Driving the front-end by name - `echo "ui sys gbc" > /dev/MiSTer_cmd`.
+
+  Test access, for the same reason as the hooks above: reaching one game's Display
+  screen by arrow keys is thirty presses through a virtual keyboard that drops and
+  repeats them, and every press has to be photographed to learn where the cursor
+  landed. These place the front-end's state directly and say what they did, so a
+  script reads one line instead of a picture. They move to a point; they prove
+  nothing about the key or pad paths that normally get there.
+
+  Every command answers with exactly one "ClassicUI: ui <verb> -> ok ..." or
+  "-> FAILED ..." line, which is what .claude/scripts/mister-ui waits for.
+*/
+static char ui_last[512];
+
+// One answer per command: printed for the script, kept for the harness.
+static void ui_say(const char *fmt, ...)
+{
+	va_list ap;
+	va_start(ap, fmt);
+	vsnprintf(ui_last, sizeof(ui_last), fmt, ap);
+	va_end(ap);
+	printf("ClassicUI: %s\n", ui_last);
+}
+
+const char *chome_test_ui_last() { return ui_last; }
+
+// What a card is called: a game by its item's title, a folder by its label.
+static const char *ui_entry_name(const chome_entry *e)
+{
+	if (!e) return "";
+	if (e->kind == ENT_GAME && lib_item(e->game)) return lib_item(e->game)->title;
+	return e->label;
+}
+
+static void ui_state_line(const char *verb)
+{
+	const chome_entry *e = cur_entry();
+	const chome_sys *vs = (viewsys >= 0) ? lib_sys(viewsys) : 0;
+	chome_item *lit = disp_target();
+	int vclass = disp_class();
+	ui_say("ui %s -> ok screen=%d active=%d ingame=%d view=%d sys=%s sel=%d/%d title=\"%s\" look=\"%s\"",
+		verb, screen, active, ig_active, view, vs ? vs->id : "-", sel, lib_view_count(),
+		ui_entry_name(e), vp_name(vp_effective(lit ? lit->sysidx : -1, vclass)));
+}
+
+// A system by its id ("gbc"), else by its name, exactly and then as a part of one.
+static int ui_find_sys(const char *want)
+{
+	for (int i = 0; i < lib_sys_count(); i++)
+		if (!strcasecmp(lib_sys(i)->id, want)) return i;
+	for (int i = 0; i < lib_sys_count(); i++)
+		if (!strcasecmp(lib_sys(i)->name, want)) return i;
+	for (int i = 0; i < lib_sys_count(); i++)
+		if (strcasestr(lib_sys(i)->name, want)) return i;
+	return -1;
+}
+
+int chome_test_ui(const char *cmd)
+{
+	char verb[16] = {};
+	const char *arg = cmd;
+	int vl = 0;
+	while (*arg && *arg != ' ' && vl < (int)sizeof(verb) - 1) verb[vl++] = *arg++;
+	while (*arg == ' ') arg++;
+
+	if (!strcmp(verb, "state"))
+	{
+		ui_state_line(verb);
+		return 1;
+	}
+
+	// Close whatever is open over the shelf: Display, the bar, Options.
+	if (!strcmp(verb, "home"))
+	{
+		go_screen(SCR_HOME);
+		ui_state_line(verb);
+		return 1;
+	}
+
+	// The shelf of one system, entered from the root as the Systems card would.
+	if (!strcmp(verb, "sys"))
+	{
+		int s = ui_find_sys(arg);
+		if (s < 0) { ui_say("ui sys -> FAILED no system matches \"%s\"", arg); return 0; }
+		navdepth = 0;
+		view = VIEW_ROOT;
+		viewsys = -1;
+		view_rebuild(0);
+		nav_push(VIEW_SYS, s);
+		go_screen(SCR_HOME);
+		ui_state_line(verb);
+		return 1;
+	}
+
+	// A game on the shelf on show: an exact title first, else the first that contains it.
+	if (!strcmp(verb, "game"))
+	{
+		int hit = -1;
+		for (int pass = 0; pass < 2 && hit < 0; pass++)
+			for (int i = 0; i < lib_view_count() && hit < 0; i++)
+			{
+				const chome_entry *e = lib_view_entry(i);
+				if (!e || e->kind != ENT_GAME) continue;
+				const char *t = ui_entry_name(e);
+				if (pass ? strcasestr(t, arg) != 0 : !strcasecmp(t, arg)) hit = i;
+			}
+		if (hit < 0) { ui_say("ui game -> FAILED no game on this shelf matches \"%s\"", arg); return 0; }
+		sel = hit;
+		selF = sel;
+		sel_commit();
+		go_screen(SCR_HOME);
+		mark_dirty();
+		ui_state_line(verb);
+		return 1;
+	}
+
+	// The Display screen for the selected game (or the running one), as the bar opens it.
+	if (!strcmp(verb, "display"))
+	{
+		if (!active) { ui_say("ui display -> FAILED the front-end is not on screen (send \"menu\")"); return 0; }
+		chome_item *lit = disp_target();
+		int vclass = disp_class();
+		int cur = vp_effective(lit ? lit->sysidx : -1, vclass);
+		int opts[VP_MAX_OPTIONS];
+		int n = vp_options_for(vclass, opts);
+		look_row = 0;
+		for (int i = 0; i < n; i++) if (opts[i] == cur) { look_row = i; break; }
+		go_screen(SCR_DISPLAY);
+		ui_state_line(verb);
+		return 1;
+	}
+
+	/*
+	  Choose a look by name for the selected game's class - what Enter on its tile does,
+	  including the live apply when that game is the one running.
+	*/
+	if (!strcmp(verb, "look"))
+	{
+		chome_item *lit = disp_target();
+		if (!lit) { ui_say("ui look -> FAILED no game selected"); return 0; }
+		int vclass = disp_class();
+		int opts[VP_MAX_OPTIONS];
+		int n = vp_options_for(vclass, opts);
+		int row = -1;
+		for (int i = 0; i < n && row < 0; i++) if (!strcasecmp(vp_name(opts[i]), arg)) row = i;
+		if (row < 0)
+		{
+			char have[300] = {};
+			for (int i = 0; i < n; i++)
+				snprintf(have + strlen(have), sizeof(have) - strlen(have), " \"%s\"", vp_name(opts[i]));
+			ui_say("ui look -> FAILED class %s has no look \"%s\"; it has:%s", vp_class_label(vclass), arg, have);
+			return 0;
+		}
+		vp_set(lit->sysidx, vclass, opts[row]);
+		if (ig_active) vp_apply_now(lit->sysidx, vclass);
+		look_row = row;
+		printf("ClassicUI: %s (%s) now uses look \"%s\"\n",
+			lib_sys(lit->sysidx) ? lib_sys(lit->sysidx)->name : "?",
+			vp_class_label(vclass), vp_name(opts[row]));
+		mark_dirty();
+		ui_state_line(verb);
+		return 1;
+	}
+
+	// Start the selected game, as Enter on the shelf does.
+	if (!strcmp(verb, "launch"))
+	{
+		if (!active) { ui_say("ui launch -> FAILED the front-end is not on screen"); return 0; }
+		if (!cur_game()) { ui_say("ui launch -> FAILED the selection is not a game"); return 0; }
+		go_screen(SCR_HOME);
+		ui_state_line(verb);
+		accept();
+		return 1;
+	}
+
+	ui_say("ui %s -> FAILED unknown; try state, home, sys, game, display, look, launch", verb);
+	return 0;
 }
 
 

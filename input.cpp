@@ -6626,6 +6626,11 @@ int input_test(int getchar)
 					{
 						chome_test_core_opt(cmd + 9);
 					}
+					// Place the front-end by name - `echo "ui sys gbc" > /dev/MiSTer_cmd`.
+					else if (!strncmp(cmd, "ui ", 3))
+					{
+						chome_test_ui(cmd + 3);
+					}
 					// Press the menu button - `echo "menu" > /dev/MiSTer_cmd`.
 					else if (!strcmp(cmd, "menu"))
 					{
