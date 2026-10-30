@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Render every handheld look from a native frame, through the files the FIRMWARE
+Render every look from a native frame, through the files the FIRMWARE
 generated - not through a Python restatement of them.
 
 Why it exists: the lookshots were hand-drawn sketches (gen_lookshots.py), and the
@@ -42,6 +42,15 @@ Usage
   --720        also render 1280x720 into <look-id>/720p/
   --lookshots  write DIR/<id>.png, 320x240 macro crops in gen_lookshots.py's
                format, from the model, plus DIR/model-render.json marking them
+  --dist       the distribution's Filters/, Shadow_Masks/ and Gamma/ (a copy of
+               /media/fat's), for the presets that name its files rather than ours:
+               PVM RGB and Composite. Default $CHOME_DIST, else tools/dist.
+
+The television classes (console, arcade, computer, vga) span many cores, so each
+of their looks renders the first N frames of EVERY system in its corpus list. Their
+geometry is the device's: vscale_mode=1 (the largest integer height) and a 4:3
+width from that height, so the horizontal scale is not an integer. The handheld
+metrics do not apply to them; meta.json carries the scanline swing instead.
 
 Writes, per look:
   <out>/<look-id>/screen.png        1920x1080, the picture letterboxed
@@ -68,6 +77,9 @@ GEN_DEFAULT = os.path.join(CLASSIC, 'test', 'out', 'looks-gen')
 CORPUS_DEFAULT = os.path.join(HERE, 'corpus')
 FRAMES = os.path.join(CLASSIC, 'test', 'frames')
 DEVICE_IMG = os.path.join(CLASSIC, 'docs', 'img', 'device')
+DIST_DEFAULT = os.environ.get('CHOME_DIST') or os.path.join(HERE, 'dist')
+# The card's directory for each kind of file the presets name.
+DIST_SUBDIRS = {'filters': 'Filters', 'shadow_masks': 'Shadow_Masks', 'gamma': 'Gamma'}
 
 SCREENS = {'1080p': (1920, 1080), '720p': (1280, 720)}
 
@@ -86,7 +98,15 @@ CORPUS_NAMES = {
     'wsc': ['wsc', 'wonderswancolor'], 'ngpc': ['ngpc', 'neogeopocketcolor', 'ngp'],
     # Mono carts: no native mono frame in the corpus yet, so the NGPC frames stand in.
     'ngp': ['ngp-mono', 'ngpc', 'ngp'],
+    # Television classes: every directory that exists is used, not the first hit.
+    # No computer or 31 kHz frames yet, so the consoles stand in (the note says so).
+    'console': ['snes', 'genesis', 'nes', 'psx', 'tg16'],
+    'arcade': ['arcade'],
+    'computer': ['computer', 'snes', 'genesis', 'nes', 'psx', 'tg16'],
+    'vga': ['vga', 'psx'],
 }
+CRT_CLASSES = {'console', 'arcade', 'computer', 'vga'}
+ASPECT = 4 / 3
 
 # Not handheld panels: the Super Game Boy is a Super Nintendo on a television
 # (CRT treatment, border canvas) and is judged with the CRT looks.
@@ -193,6 +213,17 @@ def fallback_path(look):
 def frames_for(look, corpus, count):
     """[(name, rows, source-note)] for a look: corpus first, else the test frame."""
     names = CORPUS_NAMES.get(look.cls, [look.cls])
+    if look.cls in CRT_CLASSES:
+        out = []
+        for n in names:
+            for f in sorted(glob.glob(os.path.join(corpus, n, '*.png')))[:count]:
+                w, h, px = read_png(f)
+                out.append(('%s-%s' % (n, os.path.splitext(os.path.basename(f))[0]),
+                            to_rows(w, h, px), 'corpus/%s/%s' % (n, os.path.basename(f))))
+            # A stand-in list ends at its first system with frames.
+            if out and look.cls in ('computer', 'vga'):
+                break
+        return out
     for n in names:
         files = sorted(glob.glob(os.path.join(corpus, n, '*.png')))
         if files:
@@ -230,14 +261,26 @@ def scale_for(w, h, screen):
     return max(1, min(screen[1] // h, screen[0] // w))
 
 
+def picture_for(look, w, h, screen):
+    """(width, height, vertical scale) of the picture on screen.
+
+    Handhelds run integer on both axes (CO_INTEGER). A television class runs at
+    the device's vscale_mode=1, the largest integer height (video.cpp
+    video_scaling_adjust), and the core's 4:3 at that height, rounded to a pixel.
+    """
+    if look.cls not in CRT_CLASSES:
+        n = scale_for(w, h, screen)
+        return w * n, h * n, n
+    n = max(1, screen[1] // h)
+    return min(screen[0], int(round(h * n * ASPECT))), h * n, n
+
+
 # ------------------------------------------------------------------ render --
 
-def nearest(rows, n):
-    out = []
-    for r in rows:
-        big = [p for p in r for _ in range(n)]
-        out.extend([big] * n)
-    return out
+def nearest(rows, dw, dh):
+    sh, sw = len(rows), len(rows[0])
+    xs = [x * sw // dw for x in range(dw)]
+    return [[rows[y * sh // dh][x] for x in xs] for y in range(dh)]
 
 
 def load_lut(path):
@@ -268,12 +311,14 @@ def apply_lut(rows, inv, lut):
         print('  %d colours not produced by the stock table; top bits used' % len(miss), file=sys.stderr)
     return out
 
-def render_look(look, gen_dir, src_rows, scale):
+def render_look(look, gen_dir, src_rows, scale, dw=None, dh=None, dist=DIST_DEFAULT):
     """Run one look's generated files over a native frame.
 
     Returns a dict: out (scale-sized rows), src (the frame after palette and
     gamma, i.e. what reaches the scaler), nearest (that frame unfiltered), card,
     preset, files (role -> {path, md5}), mask (the loaded cells or None).
+    scale picks the generated card; dw x dh is the picture (default scale x the
+    frame on both axes).
     """
     card = card_for(gen_dir, scale)
     pre = read_preset(card, look)
@@ -281,11 +326,17 @@ def render_look(look, gen_dir, src_rows, scale):
 
     def use(role, sub, name):
         p = os.path.join(card, sub, name)
-        if not os.path.exists(p):
-            raise SystemExit("%s: preset names %s %r but the harness did not generate it"
-                             % (look.id, role, name))
-        files[role] = {'path': os.path.relpath(p, gen_dir), 'md5': md5(p)}
-        return p
+        if os.path.exists(p):
+            files[role] = {'path': os.path.relpath(p, gen_dir), 'md5': md5(p)}
+            return p
+        # Not ours: the distribution's own file, which the firmware never writes.
+        d = os.path.join(dist, DIST_SUBDIRS[sub], name)
+        if not os.path.exists(d):
+            raise SystemExit("%s: preset names %s %r, which the harness did not generate "
+                             "and %s does not hold (copy it off the card, see --dist)"
+                             % (look.id, role, name, dist))
+        files[role] = {'path': 'dist/%s/%s' % (DIST_SUBDIRS[sub], name), 'md5': md5(d)}
+        return d
 
     h, w = len(src_rows), len(src_rows[0])
     rows = src_rows
@@ -317,7 +368,7 @@ def render_look(look, gen_dir, src_rows, scale):
 
     # No look turns a core's own scanline option on, so the sfilter never applies.
     ht, vt = axis_taps(flt('hfilter'), flt('vfilter'))
-    dw, dh = w * scale, h * scale
+    dw, dh = dw or w * scale, dh or h * scale
     rows = ascal_1d(post, w, dw, ht, 0)
     cols = [list(c) for c in zip(*rows)]
     cols = ascal_1d(cols, h, dh, vt, 0)
@@ -331,8 +382,27 @@ def render_look(look, gen_dir, src_rows, scale):
         rows = apply_mask(rows, cells, pre.get('maskmode', '1x') == '2x')
     files['preset'] = {'path': os.path.relpath(os.path.join(card, look.preset_rel), gen_dir),
                        'md5': md5(os.path.join(card, look.preset_rel))}
-    return {'out': rows, 'src': post, 'nearest': nearest(post, scale), 'card': card,
+    return {'out': rows, 'src': post, 'nearest': nearest(post, dw, dh), 'card': card,
             'preset': pre, 'files': files, 'cells': cells, 'scale': scale}
+
+
+def scanline_swing(r):
+    """Median, over source lines, of the spread in mean output-row luma (0-255)
+    inside one line: how deep the scanlines cut. Measured on the device as 23-31
+    for the console looks on the Genesis 240p suite (LOOKS-HANDOFF Todo 7); 0 is
+    no scanlines at all. Lines too dark to carry a scanline are left out."""
+    out, src = r['out'], r['src']
+    sh, dh = len(src), len(out)
+    per = dh // sh
+    spreads = []
+    for y in range(sh):
+        if max(max(p) for p in src[y]) < 64:
+            continue
+        means = [sum(sum(p) for p in out[y * per + k]) / (3 * len(out[0])) for k in range(per)]
+        spreads.append(max(means) - min(means))
+    spreads.sort()
+    return {'status': 'info', 'lines': len(spreads),
+            'median': round(spreads[len(spreads) // 2], 1) if spreads else None}
 
 
 def flatten(rows, w, h, screen):
@@ -388,7 +458,7 @@ def main():
     if '-h' in args or '--help' in args:
         print(__doc__); return 0
     opt = {'--out': 'looks-out', '--looks-dir': GEN_DEFAULT, '--corpus': CORPUS_DEFAULT,
-           '--only': '', '--frames': '1', '--lookshots': ''}
+           '--only': '', '--frames': '1', '--lookshots': '', '--dist': DIST_DEFAULT}
     flags, i = set(), 0
     while i < len(args):
         if args[i] in opt:
@@ -426,25 +496,32 @@ def main():
             frames = frames_for(lk, opt['--corpus'], count)
             sub = base if res == '1080p' else os.path.join(base, '720p')
             os.makedirs(sub, exist_ok=True)
+            if not frames:
+                print('%-12s %-5s %s  no corpus frames, skipped' % (lk.dirname, lk.cls, res),
+                      file=sys.stderr)
+                failed += 1
+                continue
             for fi, (fname, rows, note) in enumerate(frames):
                 h, w = len(rows), len(rows[0])
-                n = scale_for(w, h, SCREENS[res])
-                r = render_look(lk, gen, rows, n)
+                pw, ph, n = picture_for(lk, w, h, SCREENS[res])
+                r = render_look(lk, gen, rows, n, pw, ph, opt['--dist'])
                 png = 'screen.png' if fi == 0 else 'screen-%s.png' % fname
-                px = flatten(r['out'], w * n, h * n, SCREENS[res])
+                px = flatten(r['out'], pw, ph, SCREENS[res])
                 write_png(os.path.join(sub, png), SCREENS[res][0], SCREENS[res][1], px)
                 entry = {'scale': n, 'frame': fname, 'source': note, 'native': [w, h],
-                         'picture': [w * n, h * n], 'screen': png,
+                         'picture': [pw, ph], 'screen': png,
                          'files': r['files']}
                 if fi == 0 and res == '1080p':
                     px_arr = bytearray(px)
                     # The zoom patch is ~96x54 output px; put it on the busiest edges.
                     spot = busy_spot(r['src'], n, 96, 54)
-                    zc = ((SCREENS[res][0] - w * n) // 2 + spot[0] * n + 48,
-                          (SCREENS[res][1] - h * n) // 2 + spot[1] * n + 27)
+                    zc = ((SCREENS[res][0] - pw) // 2 + spot[0] * pw // w + 48,
+                          (SCREENS[res][1] - ph) // 2 + spot[1] * n + 27)
                     entry['review'] = look_review.make_views(
                         px_arr, SCREENS[res][0], SCREENS[res][1], sub, zoom_center=zc)
-                if metrics:
+                if lk.cls in CRT_CLASSES:
+                    entry['metrics'] = {'scanline_swing': scanline_swing(r)}
+                elif metrics:
                     entry['metrics'] = metrics.evaluate(lk, r, gen)
                     failed += metrics.count_fail(entry['metrics'])
                 meta['renders'].setdefault(res, []).append(entry)
@@ -456,6 +533,9 @@ def main():
                     shots[lk.id] = dict(info, scale=n, frame=fname, source=note,
                                         files=r['files'])
                 print('%-12s %-5s %s %dx  %s' % (lk.dirname, lk.cls, res, n, png), flush=True)
+                if lk.cls in CRT_CLASSES:
+                    print('  %s %dx%d  scanline swing %s' % (fname, pw, ph,
+                          entry['metrics']['scanline_swing']['median']), flush=True)
         with open(os.path.join(base, 'meta.json'), 'w') as f:
             json.dump(meta, f, indent=1)
 

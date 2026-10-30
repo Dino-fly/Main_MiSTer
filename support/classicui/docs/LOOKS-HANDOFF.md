@@ -103,9 +103,15 @@ start phase 3 on a new branch off `classic-ui` there.
      vfilter off = the hfilter, sfilter only while the core's `Scandoubler Fx` is on (our
      presets write `sfilter=off`, so a player's core scanlines cannot override a look).
      All 185 handheld renders byte-identical before/after.
-   - **Still missing for CRT work:** a console corpus (native frames: SNES, Genesis, NES,
-     PSX 240p, TG16, an arcade core) and render_looks.py support for the CRT classes
-     (it needs the distribution's filter pack for PVM RGB).
+   - **CRT renders (2026-10-30, branch classicui-crt-renders):** console corpus in
+     tools/corpus (SNES 512x224 with every column doubled, Genesis 320x224, NES 256x224,
+     PSX 405x240 and 352x240 (width includes blanking), arcade Rastan 320x240; no TG16
+     games on the card). render_looks.py draws console/arcade/computer/vga over every
+     system in the class, at the device's vscale_mode=1 geometry (integer height, 4:3
+     width: 1195x896 for 224 lines), and reports a scanline swing instead of the
+     handheld metrics. Distribution files the presets name live in tools/dist. Not
+     simulated: the core halves (Composite Blend, NES Budget TV), interlace.
+     Handheld renders byte-identical before/after. Sent to Dinofly as review #1.
    - **What a CRT look can drive in the core** (CONF_STRs read 2026-10-30, exact names):
      `Composite Blend` Off/On/Adaptive (Genesis, MegaCD, S32X; Saturn Off/On);
      `Composite Filter` Off/Budget TV/Premium TV (NES; hides Scandoubler Fx) and Off/On
