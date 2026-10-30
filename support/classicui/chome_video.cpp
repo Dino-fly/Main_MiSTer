@@ -1274,7 +1274,9 @@ int vp_output_is_lowres()
   A panel look: one that simulates the physical LCD, and therefore the only kind
   an analog display has to be protected from. Derived from core_struct rather
   than from a flag of its own so the two cannot drift apart - a look that
-  simulates a panel has panel options, and the CRT looks have none.
+  simulates a panel has panel options, and the CRT looks have none. The mono
+  tubes join it through `tube`: no panel options, but the same split of a
+  colour that reaches any display and a structure that needs a high-res one.
 */
 static int look_is_panel(const preset_def *d)
 {
