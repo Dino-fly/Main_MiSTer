@@ -58,13 +58,34 @@ start phase 3 on a new branch off `classic-ui` there.
    look sets it after the ROM upload, yet the frame is byte-identical to a launch with
    GBA mode already in GBC.CFG - it lands before the game checks. Captures
    `gbc-oracle-none-hdmi.png`, `gbc-oracle-on-gba-gbamode-hdmi.png` (firmware 5b9d1e48).
-4. **Official NGPC core, savestates**: the row is `CH_SS_NO`, yet the front-end drove a
-   suspend on menu open ("save state -> slot 4 via [42]") and the card then held only
-   `..._1.ss`; restoring that "slot 4" froze the game on a dim frame. The core's own
-   layout is `d7O[46:45],Savestate Slot` - check what the front-end's generic savestate
-   path assumes against NGPC.sv, measure, and set the row's CH_SS_* from that.
-   Re-homing points this core at savestates/NeoGeoPocket, which the old community core
-   wrote too: states from that core must not be offered to this one.
+4. **Official NGPC core, savestates** - DONE 2026-10-30 (branch `classicui-ngpc-ss`,
+   firmware 18f49ed1). Row is now `CH_SS_YES`.
+
+   **Cause (measured).** The save entries are `d7` - gated on menumask bit 7, `allow_ss` -
+   and the core's `savestate_ui` drops a request made while the gate is shut: its save/load
+   edge detector only runs inside `if (allow_ss)`. On Sonic Pocket Adventure the gate is
+   shut at the instant the menu opens, so the hold-still pulse went nowhere: no file, and
+   the restore on the way out loaded whatever slot 4 (or the core's slot) held before - the
+   dim frozen frame. KOF R-1 was never affected: its gate is open at menu open (it mounts
+   no cart save, which points at the overlay's flash autosave on the `OSD_STATUS` rising
+   edge - read from the source, not measured).
+   The handoff's earlier theory (a slot restored from NGPC.CFG at load) was wrong for this
+   symptom: the card has no NGPC/NeoGeoPocket .CFG at all, and the baseline wrote `_4.ss`
+   on KOF. The slot step-through it led to is kept - it is correct for a CFG slot, cheap,
+   and harmless - with its comment corrected.
+
+   **Fix.** `ss_scan_hooks()` records the save entry's D/d gate; `ss_do_save/load` refuse
+   (one read, no wait) while it is shut; `freeze_engage()` defers the hold-still save and
+   `freeze_due_poll()` (from `chome_pend_poll`, every frame) fires it when the gate opens,
+   bounded at 30 s; `freeze_release()` skips the restore if the save never went. A
+   *blocking* wait does not work: blocked 20 s, the gate never opened - the core needs the
+   main loop to finish whatever shut it. Unblocked, it opened 28 ms later.
+   Harness: `assert_savestate_gate` (20 checks). Device: Sonic suspend -> `_4.ss` written
+   28 ms after menu open, resume into a running game; KOF unchanged. Captures
+   `ngpc-sonic-*-{5b9d1e48,18f49ed1}.png`, `ngpc-kof-resumed-*.png`.
+   Still open: a player-chosen "save here" copies the held state and waits 8 s for it - a
+   deferral longer than that would make it give up (not seen: 28 ms measured). States from
+   the old community core share savestates/NeoGeoPocket and must not be offered to this one.
 4b. **Official NGPC core, live switch**: NGPC -> NGPC IPS Mod applied live once left the
    picture white until relaunch (LCD Response Panel -> Raw plus Saturation 75 -> 100 at
    once). Seen once, not yet reproduced; the same look from a launch is fine.
