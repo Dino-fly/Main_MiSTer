@@ -4073,11 +4073,13 @@ static int wrap_text(const char *src, int px, int scale, char out[4][64], int ma
 	  "DS" on the Display tiles and nothing noticed. Reported as the whole text into a
 	  width it cannot fit, so the log reads like gfx_clip's own entries.
 	*/
-	if (n >= maxlines)
-	{
-		while (*p2 == ' ') p2++;
-		if (*p2) gfx_clip_at(src, scale, px * maxlines, "wrap_text");
-	}
+	/*
+	  n reaches maxlines only through the break, which only a word that did not fit
+	  takes - and that word has already been stepped over, so "is anything left?"
+	  missed exactly the case of the LAST word not fitting: "None with SGB Border"
+	  lost "Border" on the 240p Display tiles with the log saying nothing.
+	*/
+	if (n >= maxlines) gfx_clip_at(src, scale, px * maxlines, "wrap_text");
 #endif
 	return (n < maxlines) ? n + 1 : maxlines;
 }
@@ -5211,7 +5213,8 @@ static void draw_display_screen(const chome_profile *p)
 
 	panel_box b = draw_panel_ex(p, pw, ph, "Display");
 
-	int in_use = vp_effective(sysidx, vclass);
+	// On a tube a television look is shown by the look standing in for it.
+	int in_use = vp_on_output(vp_effective(sysidx, vclass));
 
 	// Which hardware these looks belong to.
 	char hdr[64];
