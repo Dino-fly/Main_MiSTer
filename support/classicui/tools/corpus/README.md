@@ -50,3 +50,16 @@ Notes:
 7. Console/arcade rows added 2026-10-30 on firmware md5 c1a58ec7020a305f794757a3a793ef21 (classicui-crt-renders, code identical to classic-ui 6a711afa). The Consoles class has no None look; "Sharp" (no filtering, no core options, none scanned or set) was used instead, and the screenshot is pre-scaler regardless. Core options were decoded from the core's CONF_STR (firmware log, "get cfgstring") against the saved config/<core>.CFG status words, not read off the OSD; the arcade core has no .CFG so shows defaults.
 8. Native size is the frame as the firmware writes it. SNES is always 512 wide (every column doubled in these frames; a hi-res game would use the full width). PSX width follows the game's mode (405 and 352 here, including blanking), so it varies per title; both frames are 240 lines (240p, not 480i). Genesis here is 320x224 (a 256-wide game was not captured). NES 256x224.
 9. Not captured: TurboGrafx-16 (no games on the card; games/TGFX16 is empty, TGFX16-CD has only the BIOS). Core default options that are not neutral for a CRT corpus: SNES Pseudo Transparency Blend, PSX Dithering On, NES Video Dijitter Enabled; none were changed by hand.
+
+## computers/ (2026-10-30, firmware bbff6824, branch classicui-computer-looks)
+
+Native frames from `screenshot`, one per look, taken right after `ui look <name>` in
+game: a phosphor look's colour is the core's own option, so each look has its own
+frame. Every frame is a boot, BASIC or monitor screen (placeholder disks, no games).
+
+| file | core | screen | colours | size |
+|---|---|---|---|---|
+| apple2-{composite,green,amber,white,sharp}.png | Apple-II | Apple //e monitor prompt; Display=Color/Green/Amber/B&W set by the look | 2 | 568x192 |
+| amiga-{colour-monitor,pal-tv,sharp}.png | Minimig | Minimig boot text (AmigaVision hdf, Kickstart) | 2 | 1280x286 |
+| c64-{pal-tv,composite,pvm-svideo,sharp}.png | C64 | BASIC screen under a scrolling text flood (animates) | 2 | 382x270 |
+| spec-{pal-tv,composite,pvm-svideo,sharp}.png | ZX-Spectrum | boot screen, empty tape | 7 | 344x284 |

@@ -81,3 +81,13 @@ class is chosen from the core name so they need not name it):
 3. Black-and-white-on-a-TV machines (Galaksija, Homelab, ORAO, UK101, JR100, Apple-I,
    Apogee, Specialist): **TV or mono**.
 4. MSX: **TV plus a Colour Monitor look** (MSX1 on a TV, MSX2 on SCART RGB).
+
+## Review log
+
+| # | look | frame | verdict |
+|---|---|---|---|
+| 1 | Green Screen | Apple II monitor prompt, core Display=Green (device), sim 1080p | looks good (2026-10-30) |
+| 2 | Colour Monitor | Minimig boot text (device), sim 1080p | looks good (2026-10-30) |
+| 3 | Amber Screen | Apple II monitor prompt, core Display=Amber (device), sim 1080p | looks good (2026-10-30) |
+| 4 | White Screen | Apple II monitor prompt, core Display=B&W (device), sim 1080p | looks good (2026-10-30) |
+| 5 | Paper White | Apple II B&W frame standing in for a Mac (no Mac/ST frame yet), sim 1080p | looks good (2026-10-30); a real Mac/ST frame is still owed |

@@ -41,8 +41,8 @@ His standing calls, all still in force:
 | Lynx: stock, McWill | approved (sim) |
 | WonderSwan / Color: WS, WSC, SwanCrystal | approved (sim) |
 | NGPC: NGPC, NGPC IPS Mod; NGP (mono class): Neo Geo Pocket, Mono on NGPC | approved, all four captured live on the official core (#9-#11) |
-| CRT: Sharp, PVM RGB, PVM S-Video, Composite, PAL TV, BVM RGB, VGA | phase 3, not started |
-| computers | phase 4, not started |
+| CRT: Sharp, PVM RGB, PVM S-Video, Composite, PAL TV, BVM RGB, Arcade CRT, VGA | done; device-confirmed on Genesis, SNES, PSX 480i |
+| computers: Colour Monitor, Green/Amber/White Screen, Paper White by era display (docs/COMPUTER-LOOKS.md) | approved (sim from device frames); Apple II core options confirmed on device; CPC, PET, ST, Mac not run |
 
 Branches: `classic-ui` carries all the handheld work (the NGP/GBA-mode merge of
 `classicui-handhelds2` on 2026-10-28); 5bd5299e is pushed to the fork, anything after
@@ -65,9 +65,12 @@ start phase 3 on a new branch off `classic-ui` there.
    core options.
 7. **Phase 3, TV/arcade looks** (branch `classicui-crt-looks`). The dongle is unreliable
    for 1 px structure (see below); validate scanline depth against the simulator.
-   - **Next:** a 480i check on the device (PSX/Saturn/N64: a CRT look shows no
-     scanlines and the preset's ifilter is in force). The ifilter line is written
-     (chome_video.cpp vp_install) and read (video.cpp); only the device is unverified.
+   - **480i confirmed on the device (2026-10-30, c1a58ec7):** PSX Wip3out, whose BIOS
+     logos run 704x508i/478i before the game drops to 240p. With PVM RGB the saved
+     PSX_scaler.cfg holds GS_Sharpness_050 in the ilace slot with mode 1; on the
+     dongle the row-to-row luma ripple is 0.03-0.14 at 480i (Sharp 0.14-0.48: no
+     scanlines) and 17-22 at 240p in the same run (Sharp 0.1-0.6). Captures
+     `crt-{pvmrgb,sharp}-psx480i-*`, `crt-pvmrgb-psx240p-*`. Saturn/N64 not run.
    - **CRT renders (merged 403f8a51, Dinofly approved reviews #1-3):** console corpus in
      tools/corpus (SNES 512x224 with every column doubled, Genesis 320x224, NES 256x224,
      PSX 405x240/352x240 incl. blanking, arcade Rastan 320x240; no TG16 games on the card).
