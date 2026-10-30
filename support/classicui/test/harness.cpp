@@ -11841,7 +11841,7 @@ static void assert_video()
 		for (int i = 0; i < n_gb; i++)
 		{
 			if (!strcmp(vp_name(opts[i]), "SGB PVM RGB")) sgb = opts[i];
-			if (!strcmp(vp_name(opts[i]), "None with SGB Border")) none_sgb = opts[i];
+			if (!strcmp(vp_name(opts[i]), "Super Game Boy")) none_sgb = opts[i];
 		}
 		check(sgb >= 0, "the Super Game Boy is offered as a look of its own");
 		check(none_sgb >= 0, "and None has an SGB twin, per Dinofly's ask");
@@ -12390,10 +12390,52 @@ static void assert_video()
 
 		// A CRT with the scaler bypassed: direct_video, or the analog takeover.
 		harness_set_scaler_visible(0);
-		check(vp_options_for(VC_GB, o2) == gb_hdmi, "every Game Boy screen is still offered on a CRT");
+		/*
+		  Dinofly, 2026-10-30: emulating a CRT on a CRT means nothing, and a filter
+		  that needs a high-resolution output is not offered on a tube at all. What
+		  stays is what reaches one: a handheld's palette or colour, the SGB border,
+		  and the off switch.
+		*/
+		int n_gb_an = vp_options_for(VC_GB, o2);
+		int sgb_tv = 0, sgb_border = 0;
+		for (int i = 0; i < n_gb_an; i++)
+		{
+			if (!strcmp(vp_name(o2[i]), "Super Game Boy")) sgb_border = 1;
+			else if (strstr(vp_name(o2[i]), "SGB")) sgb_tv = 1;
+		}
+		check(n_gb_an == gb_hdmi - 4, "every Game Boy screen is still offered on a CRT, the SGB televisions are not");
+		check(sgb_border && !sgb_tv, "the SGB stays on a tube as its border alone");
 		check(vp_options_for(VC_GBA, o2) == 6, "so are the GBA screens and the off switch");
-		check(vp_options_for(VC_GBC, o2) == 10, "and the GBC screens and its SGB looks");
-		check(vp_options_for(VC_CONSOLE, o2) == 5, "and the CRT classes are untouched by any of this");
+		check(vp_options_for(VC_GBC, o2) == 6, "and the GBC screens, None and the SGB border");
+		{
+			int tv = 0;
+			const int crt_classes[] = { VC_CONSOLE, VC_ARCADE, VC_COMPUTER, VC_VGA };
+			for (int k = 0; k < 4; k++)
+				if (vp_options_for(crt_classes[k], o2) != 1 || strcmp(vp_name(o2[0]), "Sharp")) tv = 1;
+			check(!tv, "no CRT look is offered on a CRT: those classes keep only Sharp");
+		}
+
+		// A television stored as the choice plays its stand-in there, and itself on HDMI.
+		{
+			int con[VP_MAX_OPTIONS], gbl[VP_MAX_OPTIONS];
+			harness_set_scaler_visible(1);
+			int nc = vp_options_for(VC_CONSOLE, con);
+			int ng = vp_options_for(VC_GB, gbl);
+			int self = 1;
+			for (int i = 0; i < nc; i++) if (vp_on_output(con[i]) != con[i]) self = 0;
+			for (int i = 0; i < ng; i++) if (vp_on_output(gbl[i]) != gbl[i]) self = 0;
+			check(self, "on HDMI every look plays as itself");
+			harness_set_scaler_visible(0);
+			int bad = 0;
+			for (int i = 0; i < nc; i++)
+				if (strcmp(vp_name(vp_on_output(con[i])), "Sharp")) bad = 1;
+			for (int i = 0; i < ng; i++)
+			{
+				const char *nm = vp_name(gbl[i]);
+				if (strstr(nm, "SGB") && strcmp(vp_name(vp_on_output(gbl[i])), "Super Game Boy")) bad = 1;
+			}
+			check(!bad, "on a tube a CRT look plays as Sharp and an SGB television as its border");
+		}
 
 		int gg_an = vp_options_for(VC_GG, o2);
 		printf("  Game Gear with the scaler bypassed: %d look(s), first is %s\n",
