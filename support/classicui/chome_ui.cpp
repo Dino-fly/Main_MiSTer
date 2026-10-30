@@ -47,6 +47,7 @@
 #include "../../osd.h"
 #include "../../video.h"
 #include "../../hardware.h"
+#include "../../spi.h"
 #include "../../file_io.h"
 #include "../../charrom.h"
 #include "../../cheats.h"
@@ -79,6 +80,7 @@ static int ig_bg_pic_w = 0, ig_bg_pic_h = 0, ig_bg_pic_x = 0, ig_bg_pic_y = 0;
 static int ig_paused = 0;                    // the core is actually halted
 static int ig_frozen = 0;                    // held still by a state instead of a pause
 static unsigned long ig_freeze_at = 0;       // wall clock when it was, so a stale state is not mistaken for it
+static unsigned long ig_freeze_due = 0;      // the hold-still save is waiting for the core's gate, until then
 
 /*
   A save the player has asked for that is waiting on the core to write the held state.
@@ -13530,6 +13532,15 @@ struct ss_hooks
 	int  slot_count;
 
 	/*
+	  The D/d prefix in front of the save entry: the core greys it out while it cannot take
+	  a state, and some cores also *ignore* a request in that window rather than queue it.
+	  gate_bit is the menumask bit (-1 for an ungated entry); gate_open_when_set is 1 for
+	  'd' (usable while the bit is set) and 0 for 'D'.
+	*/
+	int  gate_bit;
+	int  gate_open_when_set;
+
+	/*
 	  Pause. There is no pause command in MiSTer: sys_top drives osd_status into the
 	  core as OSD_STATUS (emu_ports.vh), and a core pauses on it only when its own
 	  "Pause when OSD is open" option is On - an option that ships Off. So pausing
@@ -13576,6 +13587,7 @@ static void ss_copy_opt(const char *p, char *out, int len)
 static void ss_scan_hooks()
 {
 	memset(&ss_hk, 0, sizeof(ss_hk));
+	ss_hk.gate_bit = -1;
 	ss_hk_valid = 1;
 
 	// A terse "Slot" is only believed as a last resort - see the slot branch below.
@@ -13593,9 +13605,19 @@ static void ss_scan_hooks()
 		  never found - the real one reads "P3OQ,Pause when OSD is open,Off,On",
 		  and without this it parses as an entry of unknown type "P".
 		*/
+		int gate = -1, gate_set = 0;
 		while (strlen(p) > 2 &&
 		       (p[0] == 'H' || p[0] == 'D' || p[0] == 'h' || p[0] == 'd' ||
-		        (p[0] == 'P' && p[1] >= '0' && p[1] <= '9'))) p += 2;
+		        (p[0] == 'P' && p[1] >= '0' && p[1] <= '9')))
+		{
+			if ((p[0] == 'D' || p[0] == 'd') && gate < 0)
+			{
+				char m[2] = { p[1], 0 };
+				gate = (int)user_io_hd_mask(m);
+				gate_set = (p[0] == 'd');
+			}
+			p += 2;
+		}
 		if (!p[0]) continue;
 
 		char label[128] = {};
@@ -13612,6 +13634,8 @@ static void ss_scan_hooks()
 			ss_copy_opt(p + 1, ss_hk.save_opt, sizeof(ss_hk.save_opt));
 			ss_hk.save_ex = ex;
 			ss_hk.found_save = 1;
+			ss_hk.gate_bit = gate;
+			ss_hk.gate_open_when_set = gate_set;
 		}
 		else if (momentary && !ss_hk.found_load &&
 			(label_has(label, "restore state") || label_has(label, "load state")))
@@ -13716,13 +13740,14 @@ static void ss_scan_hooks()
 		ss_hk.found_slot = 1;
 	}
 
-	printf("ClassicUI: core hooks - sdcard:%s save:%s load:%s slot:%s(%d) pause:%s%s\n",
+	printf("ClassicUI: core hooks - sdcard:%s save:%s load:%s slot:%s(%d) pause:%s%s gate:%c%d\n",
 		ss_hk.found_sd ? ss_hk.sd_opt : "-",
 		ss_hk.found_save ? ss_hk.save_opt : "-",
 		ss_hk.found_load ? ss_hk.load_opt : "-",
 		ss_hk.found_slot ? ss_hk.slot_opt : "-", ss_hk.slot_count,
 		ss_hk.found_pause ? ss_hk.pause_opt : "-",
-		ss_hk.found_pause ? (ss_hk.pause_is_option ? " (option)" : " (pulse)") : "");
+		ss_hk.found_pause ? (ss_hk.pause_is_option ? " (option)" : " (pulse)") : "",
+		ss_hk.gate_bit < 0 ? '-' : (ss_hk.gate_open_when_set ? 'd' : 'D'), ss_hk.gate_bit);
 }
 
 static const ss_hooks *ss_get()
@@ -13738,11 +13763,54 @@ static void ss_pulse(const char *opt, int ex)
 	user_io_status_set(opt, 0, ex);
 }
 
+/*
+  Is the core's own "a state can be taken now" gate open?
+
+  The generic OSD greys a gated entry out, so a player can never fire it while it is shut;
+  we write the status bits directly and could. The official NGPC core (d7, allow_ss) drops
+  such a request silently - its edge detector only runs while the gate is open. Measured on
+  Sonic Pocket Adventure (NGPC_20260824): the gate is open while the game plays and shut at
+  the moment this menu opens, so the hold-still save went out into nothing and the
+  restore loaded whatever the slot held from before. KOF R-1, with no cart save mounted,
+  was not affected - which points at the cart overlay's flash autosave, started by the
+  OSD_STATUS this menu raises (read from the core's source, not measured).
+
+  One read, never a wait. Waiting here starves the main loop, and the core needs that loop
+  to finish whatever shut the gate: blocked for 20 s it never opened, while the same menu
+  left to run had it open again 28 ms later. A request that finds the gate shut is
+  deferred by the caller instead - see freeze_engage().
+*/
+#define SS_GATE_DEFER_MS 30000
+static int ss_gate_open()
+{
+	const ss_hooks *h = ss_get();
+	if (h->gate_bit < 0) return 1;
+
+	int set = (spi_uio_cmd16(UIO_GET_OSDMASK, 0) >> h->gate_bit) & 1;
+	return set == h->gate_open_when_set;
+}
+
 static int ss_select_slot(int slot)
 {
 	const ss_hooks *h = ss_get();
 	if (!h->found_slot) return (slot == 0);          // single-slot core
 	if (slot < 0 || slot >= h->slot_count) return 0;
+
+	/*
+	  A core can act on a slot *change* rather than on the value. The official NGPC
+	  core's savestate_ui records status[46:45] every clock but only selects on a
+	  change while allow_ss is up, so a change made while it is down is lost for good:
+	  the core stays on its slot while the status word (and the OSD) say another, and
+	  writing the same value again changes nothing on the wire. ss_gate_open() keeps
+	  our own selections out of that window, but a slot loaded from the core's config
+	  at boot - before there is a cart - still falls into it (read from the source;
+	  not seen on the device, which has no NGPC config).
+
+	  So when the word already holds the slot, step through another value first. Each
+	  write is its own SPI transfer, microseconds apart, so the core sees both edges.
+	*/
+	if (h->slot_count > 1 && user_io_status_get(h->slot_opt, h->slot_ex) == (uint32_t)slot)
+		user_io_status_set(h->slot_opt, (uint32_t)(slot ? 0 : 1), h->slot_ex);
 
 	user_io_status_set(h->slot_opt, (uint32_t)slot, h->slot_ex);
 	return 1;
@@ -14076,15 +14144,64 @@ static int freeze_engage()
 
 	if (!ss_can_save() || !ss_can_load()) return 0;
 
+	/*
+	  A core can refuse a state for a while after the menu opens (see ss_gate_open) - so
+	  rather than send a pulse it would drop, wait for it in chome_pend_poll(). Engaged
+	  either way: the restore on the way out is only sent if the save really went.
+	*/
+	if (!ss_gate_open())
+	{
+		ig_freeze_due = GetTimer(SS_GATE_DEFER_MS);
+		printf("ClassicUI: no pause in this core, and it is not taking a state yet - waiting\n");
+		return 1;
+	}
+
 	if (!ss_do_save(susp_slot())) return 0;
 
 	printf("ClassicUI: no pause in this core, holding it still with a state\n");
 	return 1;
 }
 
+/*
+  The deferred half of freeze_engage(), once a frame. Dropped if the menu has closed or
+  the hold was let go in the meantime (a slot restored, say) - a save fired after that
+  would land in the middle of the game.
+*/
+static void freeze_due_poll()
+{
+	if (!ig_freeze_due) return;
+
+	if (!ig_active || !ig_frozen) { ig_freeze_due = 0; return; }
+
+	if (ss_gate_open())
+	{
+		unsigned long waited = SS_GATE_DEFER_MS - (ig_freeze_due - GetTimer(0));
+		ig_freeze_due = 0;
+		if (ss_do_save(susp_slot()))
+		{
+			ig_freeze_at = (unsigned long)time(0);
+			printf("ClassicUI: holding it still with a state, %lu ms after the menu opened\n", waited);
+			return;
+		}
+	}
+	else if (!CheckTimer(ig_freeze_due)) return;
+	else printf("ClassicUI: the core never took a state in %d ms - not holding it still\n", SS_GATE_DEFER_MS);
+
+	ig_freeze_due = 0;
+	ig_frozen = 0;
+}
+
 static void freeze_release(int engaged)
 {
 	if (!engaged) return;
+
+	// The save never went, so there is no moment to go back to.
+	if (ig_freeze_due)
+	{
+		ig_freeze_due = 0;
+		printf("ClassicUI: the held state was never taken - the game carries on from here\n");
+		return;
+	}
 
 	if (ss_do_load(susp_slot())) printf("ClassicUI: put the game back where it was\n");
 	else printf("ClassicUI: could not put the game back\n");
@@ -14429,6 +14546,8 @@ static void draw_running_warning(const chome_profile *p)
 // still open or not.
 void chome_pend_poll()
 {
+	freeze_due_poll();
+
 	if (pend_slot < 0) return;
 
 	struct stat st;
@@ -14631,6 +14750,7 @@ static int ss_do_save(int slot)
 	// Say which half is missing: a silent no-op here is impossible to tell from a
 	// core that simply has no savestates.
 	if (!h->found_save) { printf("ClassicUI: this core declares no save-state entry\n"); return 0; }
+	if (!ss_gate_open()) { printf("ClassicUI: the core's savestate gate is shut - save not sent\n"); return 0; }
 	if (!ss_select_slot(slot)) { printf("ClassicUI: cannot select slot %d\n", slot + 1); return 0; }
 
 	// Armed here rather than at the four suspend and freeze call sites, so a slot the
@@ -14685,7 +14805,9 @@ static int ss_do_save(int slot)
 static int ss_do_load(int slot)
 {
 	const ss_hooks *h = ss_get();
-	if (!h->found_load || !ss_select_slot(slot)) return 0;
+	if (!h->found_load) return 0;
+	if (!ss_gate_open()) { printf("ClassicUI: the core's savestate gate is shut - restore not sent\n"); return 0; }
+	if (!ss_select_slot(slot)) return 0;
 
 	/*
 	  Quiet for any slot this front-end drives, not just the reserved one.
@@ -14706,6 +14828,7 @@ static int ss_do_load(int slot)
 // See chome.h: the /dev/MiSTer_cmd door into the restore above, for tests.
 int chome_test_ss_load(int slot)
 {
+	ss_hk_valid = 0;          // the core may have changed since the last scan
 	int r = ss_do_load(slot);
 	printf("ClassicUI: ss_load %d via MiSTer_cmd -> %s\n", slot, r ? "pulsed" : "no hooks");
 	return r;
@@ -14746,6 +14869,7 @@ int chome_test_core_opt(const char *spec)
 
 int chome_test_ss_save(int slot)
 {
+	ss_hk_valid = 0;          // the core may have changed since the last scan
 	int r = ss_do_save(slot);
 	printf("ClassicUI: ss_save %d via MiSTer_cmd -> %s\n", slot, r ? "pulsed" : "no hooks");
 	return r;

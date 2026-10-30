@@ -160,7 +160,9 @@ static const sys_def defaults[] =
 	// Boy core (.gbc); both are told apart by extension at launch.
 	{ "lynx",  "Atari Lynx",                    "LNX",  "_Console/AtariLynx",    "AtariLynx","lnx",         "Atari - Lynx",                                   'f', 0, 2, 0, 0, 0x2a2a2e, 0, CH_SS_YES     },
 	{ "ws",    "WonderSwan",                    "WS",   "_Console/WonderSwan",   "WonderSwan","ws,wsc",     "Bandai - WonderSwan",                            'f', 0, 2, 0, 0, 0x2f3a5a, 0, CH_SS_YES     },
-	{ "ngp",   "Neo Geo Pocket Color",          "NGP",  "_Console/NGPC",         "NGPC",    "ngp,ngc,npc",  "SNK - Neo Geo Pocket Color",                     'f', 0, 2, 0, 0, 0x20304a, 0, CH_SS_NO      },
+	// Measured 2026-10-30 on NGPC_20260824: suspend and resume on KOF R-1 and Sonic Pocket
+	// Adventure. It was NO while the hold-still save was fired into its shut d7 gate.
+	{ "ngp",   "Neo Geo Pocket Color",          "NGP",  "_Console/NGPC",         "NGPC",    "ngp,ngc,npc",  "SNK - Neo Geo Pocket Color",                     'f', 0, 2, 0, 0, 0x20304a, 0, CH_SS_YES     },
 
 	{ "amiga", "Amiga",                         "AMI",  "_Computer/Minimig",     "Amiga",   "adf,hdf",      "Commodore - Amiga",                              'f', 0, 3, 1, 0, 0x2e6e63, 0, CH_SS_NO      },
 	{ "st",    "Atari ST",                      "ST",   "_Computer/AtariST",     "AtariST", "st,msa,img",   "Atari - ST",                                     's', 0, 3, 1, 0, 0x3a5e6e, 0, CH_SS_NO      },
