@@ -61,9 +61,8 @@ start phase 3 on a new branch off `classic-ui` there.
    GBC, GBA, console). Render every handheld class's Display screen there so a tile
    name that wraps past two lines fails the cut-text check ("Neo Geo Pocket Color"
    lost "Color" on the device and nothing caught it).
-6. **Phase 1 leftovers before CRT**: the adaptive scaler filters in the model (read
-   ascal.vhd's adaptive path), the `sfilter` rule, and an explicit `look_is_panel`
-   field before CRT looks carry core options.
+6. **Phase 1 leftover**: an explicit `look_is_panel` field, now that CRT looks carry
+   core options.
 7. **Phase 3, TV/arcade looks** (branch `classicui-crt-looks`). The dongle is unreliable
    for 1 px structure (see below); validate scanline depth against the simulator.
    - **Next:** confirm the approved renders on the device (dongle captures of each
