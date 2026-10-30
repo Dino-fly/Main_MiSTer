@@ -15,6 +15,8 @@ void harness_set_scaler_visible(int v);
 // which is the only way to model vga_scaler=1 with no HDMI sink - a scaler that is
 // visible AND analog. See the note in stubs.cpp.
 void harness_set_hdmi_connected(int v);
+// The output mode's active lines (video_mode_height); 1080 by default.
+void harness_set_mode_height(int h);
 void harness_set_menu_core(int v);
 void harness_set_core_name(const char *n);
 void harness_set_input_pad(int v);

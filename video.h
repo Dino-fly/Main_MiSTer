@@ -78,6 +78,8 @@ int video_hdmi_connected();
 
 // 1 when the scaler's output is what the user sees, so filters/masks/gamma apply.
 int video_scaler_is_visible();
+// Active lines of the output mode the scaler drives (0 before a mode is set).
+int video_mode_height();
 
 // Menu-core framebuffer access for alternative front-ends (support/classicui).
 // n is 1 or 2: the menu background double-buffer pair.
