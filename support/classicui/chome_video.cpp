@@ -223,6 +223,7 @@ static double lcd_span(const lcd_model *m, int scale)
 #define F_GRIDSH  PREFIX " LCD Grid Shadow.txt"
 #define M_GRILLE  PREFIX " Grille.txt"
 #define M_MATRIX  PREFIX " Dot Matrix.txt"
+#define M_SLOT    PREFIX " Slot Mask.txt"
 #define G_GG      PREFIX " Game Gear.txt"
 #define G_GGMOD   PREFIX " Game Gear Backlit.txt"
 #define G_LYNX    PREFIX " Lynx.txt"
@@ -330,8 +331,39 @@ static double lcd_span(const lcd_model *m, int scale)
 */
 #define CO_GBA_MODE      "GBC/GBA mode=GBA"
 
+/*
+  The console televisions' scaler halves, so the Super Game Boy rows wear exactly
+  what the Super Nintendo class wears and the two cannot drift apart.
+*/
+#define CRT_PVM_RGB "Upscaling - Recommended/GS_Sharpness_050.txt", \
+	"Scanlines - Adaptive/SLA_Dk_030_Br_070.txt", "off", \
+	"Simple (Monochrome)/Aperture Grille (No Scanlines) (1968).txt", "1x", "Pure_Gamma/gamma_110.txt"
+#define CRT_BVM     F_SHARP, F_SCANDP, F_SCANDP, M_GRILLE, "1x", "off"
+#define CRT_SVIDEO  F_SOFT, F_SCAN, F_SCAN, M_GRILLE, "1x", "off"
+#define CRT_COMPOSITE F_SOFT, F_SCAN, F_SCAN, "Simple (Monochrome)/Sony PVM (Generic) (~1980).txt", "1x", "off"
+
+/*
+  The adaptor's core half. Custom Palette=Off so the SGB's own colours show, not
+  one of our panel ramps; the panel structure the GB core would otherwise draw
+  (shadow, frame blend, integer scale for a grid) is switched off because the
+  picture is a television's.
+*/
+#define CO_COMPOSITE "Composite Blend=On;Composite Filter=Budget TV;Composite Filter=On"
+#define CO_SGB      "Super Game Boy=On;Super Game Boy + GBC=On;Custom Palette=Off"
+#define CO_SGB_CRT  CO_NO_SHADOW ";Frame blend=Off;" CO_INTEGER
+
 static const preset_def presets[] =
 {
+	/*
+	  Where a CRT look's scanlines go: the VFILTER. video.cpp's set_vfilter() only
+	  lets the sfilter replace it while the core raises its own scanline flag
+	  (Scandoubler Fx at a CRT setting, VGA_SL), which no look sets and which is
+	  off by default - so until 2026-10-30 every look below that carried its
+	  scanlines in the sfilter alone drew none on HDMI. They sit in both slots
+	  now: the vfilter is what shows, and the sfilter copy means a player's own
+	  core scanline setting changes nothing. The Super Game Boy row still has
+	  the old shape; it was approved as seen, so that is Dinofly's call.
+	*/
 	{ "sharp", "Sharp", "No filtering. Square pixels, nothing added.",
 	  "off", "off", "off", "off", "off", "off", 0, 0, 0 },
 
@@ -343,12 +375,7 @@ static const preset_def presets[] =
 	  one come from captures, not the model.
 	*/
 	{ "pvm-rgb", "PVM RGB", "Sony PVM: adaptive scanlines, aperture grille, warm gamma.",
-	  "Upscaling - Recommended/GS_Sharpness_050.txt",
-	  "Scanlines - Adaptive/SLA_Dk_030_Br_070.txt",
-	  "off",
-	  "Simple (Monochrome)/Aperture Grille (No Scanlines) (1968).txt",
-	  "1x",
-	  "Pure_Gamma/gamma_110.txt", 0, 0, 0 },
+	  CRT_PVM_RGB, 0, 0, 0 },
 
 	/*
 	  Short names on purpose: five tiles share a row on the console class since
@@ -356,7 +383,7 @@ static const preset_def presets[] =
 	  gate is the arbiter. The blurb carries the longer story.
 	*/
 	{ "pvm-svideo", "S-Video", "Slight horizontal bleed, scanlines: a console on a good PVM over S-Video.",
-	  F_SOFT, F_SHARP, F_SCAN, M_GRILLE, "1x", "off", 0, 0, 0 },
+	  CRT_SVIDEO, 0, 0, 0 },
 
 	/*
 	  The distribution's own Sony PVM mask at 1x, on Dinofly's call, in place of our
@@ -364,13 +391,22 @@ static const preset_def presets[] =
 	  at 1080p is a coarser stripe than any tube ever had, and the 1x PVM mask is the
 	  structure he wants under the blur. Same file the PVM look uses for its grille
 	  family, so the two reads as one set.
+
+	  Where the core simulates the signal itself, it does: the Sega cores blend the
+	  dither a composite cable merged, the NES core draws its NTSC artefacts, the
+	  7800 its smear. That is a property of the cable, not of the screen, so it is
+	  core_colour and reaches an analog display too. With the core doing the signal
+	  the horizontal blur drops from Blurry to Soft, or the Sega and NES pictures
+	  would be smeared twice (Dinofly, 2026-10-30); a core with no such option gets
+	  the lighter blur alone. "Composite Filter" is Off/Budget TV/Premium TV on the
+	  NES and Off/On on the 7800 - each core takes the value it has and skips the
+	  other.
 	*/
 	{ "composite", "Composite", "Soft and blurry, as an RF or composite hookup looked.",
-	  F_BLURRY, F_SOFT, F_SCAN,
-	  "Simple (Monochrome)/Sony PVM (Generic) (~1980).txt", "1x", "off", 0, 0, 0 },
+	  CRT_COMPOSITE, CO_COMPOSITE, 0, 0 },
 
 	{ "pal-tv", "PAL TV", "Softer still with lighter scanlines. Home computers on a telly.",
-	  F_SOFT, F_SOFT, F_SCANLT, M_GRILLE, "2x", "off", 0, 0, 0 },
+	  F_SOFT, F_SCANLT, F_SCANLT, M_GRILLE, "2x", "off", 0, 0, 0 },
 
 	{ "vga", "VGA Monitor", "Clean and slightly smoothed. No scanlines: a 31 kHz monitor had none.",
 	  F_SOFT, F_SOFT, "off", "off", "off", "off", 0, 0, 0 },
@@ -482,7 +518,7 @@ static const preset_def presets[] =
 
 	// Appended after None for the same ABI reason None sits where it does.
 	{ "bvm-rgb", "BVM RGB", "Reference broadcast monitor: razor sharp, deep scanlines.",
-	  F_SHARP, F_SHARP, F_SCANDP, M_GRILLE, "1x", "off", 0, 0, 0 },
+	  CRT_BVM, 0, 0, 0 },
 
 	/*
 	  Two more DMG ramps, appended rather than slotted in beside "dmg": the stored
@@ -513,10 +549,17 @@ static const preset_def presets[] =
 	  and will not infer it. On a DMG cartridge the option does nothing, and a core
 	  too old to publish it skips the name.
 	*/
-	{ "sgb", "Super Game Boy", "The SNES adaptor on a CRT: its border and colours, scanlines and grille.",
-	  F_SHARP, F_SHARP, F_SCAN, M_GRILLE, "1x", "off",
-	  "Super Game Boy=On;Super Game Boy + GBC=On;Custom Palette=Off",
-	  CO_NO_SHADOW ";Frame blend=Off;" CO_INTEGER, 0 },
+	/*
+	  Since 2026-10-30 the adaptor offers every television the Super Nintendo class
+	  does (Dinofly: "it was running on" one), so this row is now its PVM RGB - the
+	  console default - and the BVM, S-Video and Composite rows are appended at the
+	  end of the table. Same index, so a player who had picked "Super Game Boy"
+	  keeps the adaptor and lands on the nearest television. The old row's
+	  scanlines were in the sfilter alone and never drew on HDMI (see the note
+	  above "sharp"); taking the console look's scaler half whole fixes that too.
+	*/
+	{ "sgb", "SGB PVM RGB", "The SNES adaptor on a Sony PVM: its border and colours, adaptive scanlines.",
+	  CRT_PVM_RGB, CO_SGB, CO_SGB_CRT, 0 },
 
 	/*
 	  None, with the adaptor on. None itself deliberately carries no core half at
@@ -609,6 +652,28 @@ static const preset_def presets[] =
 	{ "ngp-on-ngpc", "Mono on NGPC", "A mono cartridge on the Color, in its black-and-white palette.",
 	  F_SHADOWLT, F_SHADOWLT, "off", M_GAP_TINT, "1x", "off",
 	  "System=NGPC;NGP Palette=B&W", CO_NO_SHADOW ";LCD Response=Panel;" CO_INTEGER, 0 },
+
+	/*
+	  A cabinet's own tube, in place of S-Video for the arcade class: arcade monitors
+	  took RGB straight off the board, so a cable look had no business there
+	  (Dinofly, 2026-10-30). A low-resolution 15 kHz set - Wells-Gardner, Nanao,
+	  Hantarex - with a slot mask rather than a PVM's grille, a wider and softer
+	  beam, and the scanlines of a 240-line raster on a 19-inch face.
+	*/
+	{ "arcade-crt", "Arcade CRT", "A cabinet's low-res tube: slot mask, soft beam, clear scanlines.",
+	  F_SOFT, F_SCAN, F_SCAN, M_SLOT, "1x", "off", 0, 0, 0 },
+
+	/*
+	  The rest of the Super Nintendo's televisions for the adaptor - see the "sgb"
+	  row. No composite core option: the Game Boy core has none, and the SNES
+	  core's picture is not what is running.
+	*/
+	{ "sgb-bvm", "SGB BVM RGB", "The SNES adaptor on a broadcast monitor: razor sharp, deep scanlines.",
+	  CRT_BVM, CO_SGB, CO_SGB_CRT, 0 },
+	{ "sgb-svideo", "SGB S-Video", "The SNES adaptor over S-Video: slight bleed, scanlines.",
+	  CRT_SVIDEO, CO_SGB, CO_SGB_CRT, 0 },
+	{ "sgb-composite", "SGB Composite", "The SNES adaptor over composite: soft, blurry, scanlines.",
+	  CRT_COMPOSITE, CO_SGB, CO_SGB_CRT, 0 },
 };
 
 #define NPRESETS ((int)(sizeof(presets) / sizeof(presets[0])))
@@ -1201,7 +1266,8 @@ enum
 	P_GG, P_GGMOD, P_LYNX, P_WS, P_WSC, P_NGPC, P_NONE, P_BVM,
 	P_DMG_BRIGHT, P_DMG_FADED, P_SGB, P_NONE_SGB, P_LIGHT,
 	P_GBC_AGB001, P_GBC_AGS001, P_GBC_AGS101, P_GBA_MICRO, P_GBA_DS,
-	P_GG_MCWILL, P_LYNX_MCWILL, P_SWANCRYSTAL, P_NGPC_IPS, P_NGP, P_NGP_ON_NGPC
+	P_GG_MCWILL, P_LYNX_MCWILL, P_SWANCRYSTAL, P_NGPC_IPS, P_NGP, P_NGP_ON_NGPC,
+	P_ARCADE_CRT, P_SGB_BVM, P_SGB_SVIDEO, P_SGB_COMPOSITE
 };
 
 /*
@@ -1210,7 +1276,8 @@ enum
 
   - Consoles reached a TV by RGB, S-Video or composite depending on your luck, so
     all three plus an unfiltered escape hatch.
-  - Arcade monitors were direct RGB; composite never entered the picture.
+  - Arcade monitors were direct RGB; composite never entered the picture, and nor
+    did S-Video, so the third arcade look is the cabinet's own tube.
   - 15 kHz home computers lived on televisions, not monitors.
   - 31 kHz VGA had no visible scanline gaps at all, so no CRT looks belong here.
   - A DMG cartridge in this UI means the original hardware or a Pocket: both grey
@@ -1231,13 +1298,15 @@ enum
   comes back it will be through the GB core's own GBC colour LUT slot (FC7).
 */
 static const int opt_console[]  = { P_PVM_RGB, P_BVM, P_PVM_SVIDEO, P_COMPOSITE, P_SHARP };
-static const int opt_arcade[]   = { P_PVM_RGB, P_BVM, P_PVM_SVIDEO, P_SHARP };
+static const int opt_arcade[]   = { P_PVM_RGB, P_BVM, P_ARCADE_CRT, P_SHARP };
 static const int opt_computer[] = { P_PAL_TV, P_COMPOSITE, P_PVM_SVIDEO, P_SHARP };
 static const int opt_vga[]      = { P_VGA, P_SHARP };
-static const int opt_gb[]       = { P_DMG, P_DMG_BRIGHT, P_DMG_FADED, P_POCKET,
-                                    P_LIGHT, P_SGB, P_NONE, P_NONE_SGB };
+static const int opt_gb[]       = { P_DMG, P_DMG_BRIGHT, P_DMG_FADED, P_POCKET, P_LIGHT,
+                                    P_SGB, P_SGB_BVM, P_SGB_SVIDEO, P_SGB_COMPOSITE,
+                                    P_NONE, P_NONE_SGB };
 static const int opt_gbc[]      = { P_GBC, P_GBC_AGB001, P_GBC_AGS001, P_GBC_AGS101,
-                                    P_SGB, P_NONE, P_NONE_SGB };
+                                    P_SGB, P_SGB_BVM, P_SGB_SVIDEO, P_SGB_COMPOSITE,
+                                    P_NONE, P_NONE_SGB };
 static const int opt_gba[]      = { P_AGB001, P_AGS001, P_AGS101, P_GBA_MICRO, P_GBA_DS, P_NONE };
 static const int opt_gg[]       = { P_GG, P_GGMOD, P_GG_MCWILL, P_NONE };
 static const int opt_lynx[]     = { P_LYNX, P_LYNX_MCWILL, P_NONE };
@@ -2067,6 +2136,16 @@ static void write_mask(const char *name, int kind)
 		gb_addf(&g, "3,1\n");
 		gb_addf(&g, "1,2,4\n");
 	}
+	else if (kind == 2)
+	{
+		// Slot mask: two triads, the slot break in each falling on alternate
+		// rows, so the dark bars stagger like the brickwork of a real one.
+		gb_addf(&g, "6,4\n");
+		gb_addf(&g, "1,2,4,1,2,4\n");
+		gb_addf(&g, "1,2,4,0,0,0\n");
+		gb_addf(&g, "1,2,4,1,2,4\n");
+		gb_addf(&g, "0,0,0,1,2,4\n");
+	}
 	else
 	{
 		// LCD pixel grid: a black gutter on two sides of each cell.
@@ -2418,6 +2497,13 @@ static void write_preset(const preset_def *d, int crt)
 	if (d->hfilter)  gb_addf(&g, "hfilter=%s\n", crt ? off : d->hfilter);
 	if (d->vfilter)  gb_addf(&g, "vfilter=%s\n", crt ? off : d->vfilter);
 	if (d->sfilter)  gb_addf(&g, "sfilter=%s\n", crt ? off : d->sfilter);
+	/*
+	  An interlaced source (PSX, Saturn, N64 at 480i) takes its vertical filter from
+	  ifilter, not vfilter. Left unwritten, a look would wear whatever the player last
+	  set there; the look's horizontal filter is what a tube at 480i showed - its
+	  sharpness, and no scanlines, because the fields interleave over the gaps.
+	*/
+	if (d->hfilter)  gb_addf(&g, "ifilter=%s\n", crt ? off : d->hfilter);
 	if (d->mask)     gb_addf(&g, "mask=%s\n", crt ? off : d->mask);
 	if (d->maskmode) gb_addf(&g, "maskmode=%s\n", crt ? off : d->maskmode);
 	if (d->gamma)    gb_addf(&g, "gamma=%s\n", d->gamma);
@@ -2458,6 +2544,7 @@ void vp_install()
 
 	write_mask(M_GRILLE, 0);
 	write_mask(M_MATRIX, 1);
+	write_mask(M_SLOT, 2);
 
 	write_gamma(G_GG, &lut_gg);
 	write_gamma(G_GGMOD, &lut_ggmod);
