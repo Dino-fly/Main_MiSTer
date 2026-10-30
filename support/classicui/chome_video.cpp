@@ -91,6 +91,13 @@ struct preset_def
 	  border and the adaptor's colours. Such a look is not offered there at all.
 	*/
 	const char *analog_as;
+	/*
+	  1 = a picture of a mono tube: its scanlines and glow are for a high-resolution
+	  output, like a panel's grid, while its phosphor colour comes from the core and
+	  reaches any display. So on analog it plays its colour-only (CRT) preset, the
+	  way a handheld palette does, instead of standing aside like a CRT look.
+	*/
+	int tube;
 };
 
 #define F_SHARP   PREFIX " Sharp.txt"
@@ -357,7 +364,28 @@ static double lcd_span(const lcd_model *m, int scale)
   (shadow, frame blend, integer scale for a grid) is switched off because the
   picture is a television's.
 */
-#define CO_COMPOSITE "Composite Blend=On;Composite Filter=Budget TV;Composite Filter=On"
+#define CO_COMPOSITE "Composite Blend=On;Composite Filter=Budget TV;Composite Filter=On;" CO_ARTIFACT
+
+/*
+  A computer's composite colour is the core's too: NTSC artifact colour on the
+  CoCo, Atari 800, Apple II and CGA, the C128 VDC's composite palette.
+*/
+#define CO_ARTIFACT "Artifact=Enable;Artifact Type=MESS;NTSC artifacting=Yes;Composite video=On;" \
+	"Lo-Res Text=Composite;VDC Palette=Composite;Video=Color Composite;" \
+	"Display=Color;Display=Full Color;Display=Color TV"
+
+/*
+  The phosphor options, by every name the computer cores give them
+  (docs/confstr/computers-2026-10-30.md). The C128 needs its VDC palette on
+  Monochrome before the mono colour means anything.
+*/
+#define CO_COLOUR_MON "Display=Color;Display=Full Color;Display=Color(GA);Display=RGB Monitor;VDC Palette=Default"
+#define CO_GREEN "Display=Green;Display=Monitor /// Green;Screen Color=Green;Screen Color=Green CRT;" \
+	"Text color=Green;Display color=Green;VDC Palette=Monochrome;VDC Mono Colour=Green"
+#define CO_AMBER "Display=Amber;Screen Color=Amber;Screen Color=Amber CRT;" \
+	"Text color=Amber;Display color=Amber;VDC Palette=Monochrome;VDC Mono Colour=Amber"
+#define CO_WHITE "Display=White;Display=B&W;Screen Color=White;Screen Color=Paper White;" \
+	"Text color=White;Display color=White;VDC Palette=Monochrome;VDC Mono Colour=White"
 #define CO_SGB      "Super Game Boy=On;Super Game Boy + GBC=On;Custom Palette=Off"
 #define CO_SGB_CRT  CO_NO_SHADOW ";Frame blend=Off;" CO_INTEGER
 
@@ -685,6 +713,34 @@ static const preset_def presets[] =
 	  CRT_SVIDEO, CO_SGB, CO_SGB_CRT, 0, "none-sgb" },
 	{ "sgb-composite", "SGB Composite", "The SNES adaptor over composite: soft, blurry, scanlines.",
 	  CRT_COMPOSITE, CO_SGB, CO_SGB_CRT, 0, "none-sgb" },
+
+	/*
+	  Computer monitors (phase 4, docs/COMPUTER-LOOKS.md). A home computer's own
+	  colour monitor - 1084S, SC1224, CTM644 - was a coarser, softer tube than a
+	  PVM, with a slot or dot mask, so it is a look of its own rather than the PVM
+	  one. On a core that offers mono and colour it also sets the colour side back.
+	*/
+	{ "colour-monitor", "Colour Monitor", "A home computer's own RGB monitor: softer than a PVM, slot mask, scanlines.",
+	  F_SOFT, F_SCAN, F_SCAN, M_SLOT, "1x", "off", CO_COLOUR_MON, 0, 0, "sharp" },
+
+	/*
+	  Mono monitors had no mask - one continuous phosphor - so these are scanlines
+	  and a soft beam only. The phosphor colour cannot be a scaler gamma LUT (it
+	  cannot turn a colour picture into luma), so it is the core's own option; the
+	  names differ per core and each core takes the one it has.
+	*/
+	{ "green", "Green Screen", "Green phosphor monitor: no mask, soft beam, scanlines.",
+	  F_SOFT, F_SCAN, F_SCAN, "off", 0, "off", CO_GREEN, 0, 0, 0, 1 },
+	{ "amber", "Amber Screen", "Amber phosphor monitor: no mask, soft beam, scanlines.",
+	  F_SOFT, F_SCAN, F_SCAN, "off", 0, "off", CO_AMBER, 0, 0, 0, 1 },
+	{ "white", "White Screen", "White phosphor monitor: no mask, soft beam, scanlines.",
+	  F_SOFT, F_SCAN, F_SCAN, "off", 0, "off", CO_WHITE, 0, 0, 0, 1 },
+	/*
+	  A compact Mac's or a Lisa's built-in tube: 342-400 lines on a 9-12 inch
+	  screen at 60-72 Hz, too fine for visible scanline gaps.
+	*/
+	{ "paper-white", "Paper White", "A built-in high-resolution mono screen: crisp, no visible scanlines.",
+	  F_SOFT, F_SOFT, "off", "off", 0, "off", CO_WHITE, 0, 0, 0, 1 },
 };
 
 #define NPRESETS ((int)(sizeof(presets) / sizeof(presets[0])))
@@ -1222,7 +1278,7 @@ int vp_output_is_lowres()
 */
 static int look_is_panel(const preset_def *d)
 {
-	return d->core_struct ? 1 : 0;
+	return (d->core_struct || d->tube) ? 1 : 0;
 }
 
 /*
@@ -1259,7 +1315,9 @@ static int look_shows_on_analog(int i)
 static const char *class_names[VC_COUNT] =
 {
 	"console", "arcade", "computer", "vga", "gb", "gbc", "gba",
-	"gg", "lynx", "ws", "wsc", "ngpc", "ngp"
+	"gg", "lynx", "ws", "wsc", "ngpc", "ngp",
+	"rgbmon", "mono-green", "mono-white", "colour-mono", "tv-mono", "hires-mono",
+	"atari-st", "msx", "white-green", "no-look"
 };
 
 const char *vp_class_name(int c) { return (c >= 0 && c < VC_COUNT) ? class_names[c] : "console"; }
@@ -1269,7 +1327,10 @@ static const char *class_labels[VC_COUNT] =
 	"Consoles", "Arcade", "Home Computers", "VGA Monitor",
 	"Game Boy", "Game Boy Color", "Game Boy Advance",
 	"Game Gear", "Atari Lynx", "WonderSwan", "WonderSwan Color",
-	"Neo Geo Pocket Color", "Neo Geo Pocket"
+	"Neo Geo Pocket Color", "Neo Geo Pocket",
+	"Colour Monitor", "Green Screen", "Mono Monitor", "Colour or Mono Monitor",
+	"TV or Mono Monitor", "Built-in Mono Screen", "Atari ST", "MSX",
+	"Mono Monitor", "Computers"
 };
 
 int vp_class_is_handheld(int c)
@@ -1296,7 +1357,8 @@ enum
 	P_DMG_BRIGHT, P_DMG_FADED, P_SGB, P_NONE_SGB, P_LIGHT,
 	P_GBC_AGB001, P_GBC_AGS001, P_GBC_AGS101, P_GBA_MICRO, P_GBA_DS,
 	P_GG_MCWILL, P_LYNX_MCWILL, P_SWANCRYSTAL, P_NGPC_IPS, P_NGP, P_NGP_ON_NGPC,
-	P_ARCADE_CRT, P_SGB_BVM, P_SGB_SVIDEO, P_SGB_COMPOSITE
+	P_ARCADE_CRT, P_SGB_BVM, P_SGB_SVIDEO, P_SGB_COMPOSITE,
+	P_COLOUR_MON, P_GREEN, P_AMBER, P_WHITE, P_PAPER_WHITE
 };
 
 /*
@@ -1330,6 +1392,16 @@ static const int opt_console[]  = { P_PVM_RGB, P_BVM, P_PVM_SVIDEO, P_COMPOSITE,
 static const int opt_arcade[]   = { P_PVM_RGB, P_BVM, P_ARCADE_CRT, P_SHARP };
 static const int opt_computer[] = { P_PAL_TV, P_COMPOSITE, P_PVM_SVIDEO, P_SHARP };
 static const int opt_vga[]      = { P_VGA, P_SHARP };
+static const int opt_rgbmon[]   = { P_COLOUR_MON, P_PAL_TV, P_SHARP };
+static const int opt_mono_g[]   = { P_GREEN, P_AMBER, P_WHITE, P_SHARP };
+static const int opt_mono_w[]   = { P_WHITE, P_GREEN, P_AMBER, P_SHARP };
+static const int opt_col_mono[] = { P_COLOUR_MON, P_GREEN, P_AMBER, P_WHITE, P_SHARP };
+static const int opt_tv_mono[]  = { P_COMPOSITE, P_GREEN, P_AMBER, P_WHITE, P_SHARP };
+static const int opt_hires[]    = { P_PAPER_WHITE, P_SHARP };
+static const int opt_st[]       = { P_COLOUR_MON, P_PAL_TV, P_PAPER_WHITE, P_SHARP };
+static const int opt_msx[]      = { P_PAL_TV, P_COMPOSITE, P_PVM_SVIDEO, P_COLOUR_MON, P_SHARP };
+static const int opt_white_g[]  = { P_WHITE, P_GREEN, P_SHARP };
+static const int opt_no_look[]  = { P_SHARP };
 static const int opt_gb[]       = { P_DMG, P_DMG_BRIGHT, P_DMG_FADED, P_POCKET, P_LIGHT,
                                     P_SGB, P_SGB_BVM, P_SGB_SVIDEO, P_SGB_COMPOSITE,
                                     P_NONE, P_NONE_SGB };
@@ -1363,6 +1435,16 @@ static opt_set options_of(int vclass)
 	case VC_WSC:      r.list = opt_wsc;      r.n = (int)(sizeof(opt_wsc) / sizeof(int)); break;
 	case VC_NGPC:     r.list = opt_ngpc;     r.n = (int)(sizeof(opt_ngpc) / sizeof(int)); break;
 	case VC_NGP:      r.list = opt_ngp;      r.n = (int)(sizeof(opt_ngp) / sizeof(int)); break;
+	case VC_RGBMON:      r.list = opt_rgbmon;   r.n = (int)(sizeof(opt_rgbmon) / sizeof(int)); break;
+	case VC_MONO_GREEN:  r.list = opt_mono_g;   r.n = (int)(sizeof(opt_mono_g) / sizeof(int)); break;
+	case VC_MONO_WHITE:  r.list = opt_mono_w;   r.n = (int)(sizeof(opt_mono_w) / sizeof(int)); break;
+	case VC_COLOUR_MONO: r.list = opt_col_mono; r.n = (int)(sizeof(opt_col_mono) / sizeof(int)); break;
+	case VC_TV_MONO:     r.list = opt_tv_mono;  r.n = (int)(sizeof(opt_tv_mono) / sizeof(int)); break;
+	case VC_HIRES_MONO:  r.list = opt_hires;    r.n = (int)(sizeof(opt_hires) / sizeof(int)); break;
+	case VC_ATARI_ST:    r.list = opt_st;       r.n = (int)(sizeof(opt_st) / sizeof(int)); break;
+	case VC_MSX:         r.list = opt_msx;      r.n = (int)(sizeof(opt_msx) / sizeof(int)); break;
+	case VC_WHITE_GREEN: r.list = opt_white_g;  r.n = (int)(sizeof(opt_white_g) / sizeof(int)); break;
+	case VC_NO_LOOK:     r.list = opt_no_look;  r.n = (int)(sizeof(opt_no_look) / sizeof(int)); break;
 	default:          r.list = opt_console;  r.n = (int)(sizeof(opt_console) / sizeof(int)); break;
 	}
 	return r;

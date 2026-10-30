@@ -12414,6 +12414,18 @@ static void assert_video()
 				if (vp_options_for(crt_classes[k], o2) != 1 || strcmp(vp_name(o2[0]), "Sharp")) tv = 1;
 			check(!tv, "no CRT look is offered on a CRT: those classes keep only Sharp");
 		}
+		{
+			// A mono tube's phosphor is the core's, so it reaches a tube; its scanlines do not.
+			int mono = vp_options_for(VC_MONO_GREEN, o2) == 4 && !strcmp(vp_name(o2[0]), "Green Screen");
+			int both = vp_options_for(VC_COLOUR_MONO, o2) == 4 && !strcmp(vp_name(o2[0]), "Green Screen");
+			int rgb = vp_options_for(VC_RGBMON, o2) == 1;
+			int keep = 1;
+			for (int i = 0; i < vp_options_for(VC_TV_MONO, o2); i++)
+				if (vp_on_output(o2[i]) != o2[i]) keep = 0;
+			check(mono && both, "the phosphor looks stay on a tube, the colour monitor does not");
+			check(rgb, "a colour-monitor computer keeps only Sharp on a tube");
+			check(keep, "a phosphor look plays as itself on a tube, not as a stand-in");
+		}
 
 		// A television stored as the choice plays its stand-in there, and itself on HDMI.
 		{
@@ -12591,6 +12603,26 @@ static void assert_video()
 	check(ao >= 0 && lib_sys(ao)->vclass == VC_VGA, "ao486 classed as VGA");
 	check(arc >= 0 && lib_sys(arc)->vclass == VC_ARCADE, "arcade classed as arcade");
 	check(c64 >= 0 && lib_sys(c64)->vclass == VC_COMPUTER, "C64 classed as a 15 kHz computer");
+
+	// Computers by the display each machine was sold with (docs/COMPUTER-LOOKS.md).
+	{
+		const struct { const char *id; int vclass; const char *what; } era[] =
+		{
+			{ "amiga",  VC_RGBMON,      "Amiga on its colour monitor" },
+			{ "st",     VC_ATARI_ST,    "Atari ST on SC1224 or SM124" },
+			{ "cpc",    VC_COLOUR_MONO, "CPC on CTM644 or GT65" },
+			{ "apple2", VC_TV_MONO,     "Apple II on a TV or a Monitor II" },
+			{ "msx",    VC_MSX,         "MSX on a TV or SCART RGB" },
+			{ "spec",   VC_COMPUTER,    "Spectrum on a TV" },
+		};
+		for (size_t k = 0; k < sizeof(era) / sizeof(era[0]); k++)
+		{
+			int got = -1;
+			for (int i = 0; i < lib_sys_count(); i++)
+				if (!strcmp(lib_sys(i)->id, era[k].id)) got = lib_sys(i)->vclass;
+			check(got == era[k].vclass, era[k].what);
+		}
+	}
 
 	// A user choice must override the default and persist, within the class.
 	{

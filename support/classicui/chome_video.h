@@ -48,7 +48,22 @@
 #define VC_WSC     10   // WonderSwan Color
 #define VC_NGPC    11   // Neo Geo Pocket Color
 #define VC_NGP     12   // a mono Neo Geo Pocket cartridge (.ngp); appended, the number is in sys_key
-#define VC_COUNT   13
+/*
+  Computers by what each machine was plugged into in its era (Dinofly, 2026-10-30):
+  VC_COMPUTER above is the television, VC_VGA the 31 kHz monitor. The machine to
+  class table is vclass_for() in chome_lib.cpp; docs/COMPUTER-LOOKS.md has the why.
+*/
+#define VC_RGBMON      13   // 15 kHz colour monitor (1084S, SC1224, Microvitec)
+#define VC_MONO_GREEN  14   // bundled green-screen monitor
+#define VC_MONO_WHITE  15   // bundled white phosphor monitor
+#define VC_COLOUR_MONO 16   // a colour monitor or a mono one, bought separately
+#define VC_TV_MONO     17   // a television or a cheap mono monitor
+#define VC_HIRES_MONO  18   // built-in high-resolution paper-white tube (compact Mac, Lisa)
+#define VC_ATARI_ST    19   // SC1224 colour or SM124 high-res mono
+#define VC_MSX         20   // MSX1 on a television, MSX2 on SCART RGB
+#define VC_WHITE_GREEN 21   // a mono monitor whose core offers only white and green
+#define VC_NO_LOOK     22   // no picture any look can draw (front panel, point-plot CRT)
+#define VC_COUNT       23
 
 // 1 for the handheld classes: they get LCD looks and a shell, never a CRT.
 int  vp_class_is_handheld(int vclass);
