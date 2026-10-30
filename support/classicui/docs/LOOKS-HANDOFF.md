@@ -96,9 +96,38 @@ start phase 3 on a new branch off `classic-ui` there.
 6. **Phase 1 leftovers before CRT**: the adaptive scaler filters in the model (read
    ascal.vhd's adaptive path), the `sfilter` rule, and an explicit `look_is_panel`
    field before CRT looks carry core options.
-7. **Phase 3, TV/arcade looks**: start with what the consumer-CRT set should be and
-   which exceptions exist (arcade monitors, PAL machines). The dongle is unreliable for
-   1 px structure (see below); validate scanline depth against the simulator.
+7. **Phase 3, TV/arcade looks** (branch `classicui-crt-looks`). The dongle is unreliable
+   for 1 px structure (see below); validate scanline depth against the simulator.
+   - **Done 2026-10-30 (f5a204c2):** the model now runs adaptive filters (PVM RGB's
+     scanlines) and the firmware's per-axis rules: hfilter off = nearest on both axes,
+     vfilter off = the hfilter, sfilter only while the core's `Scandoubler Fx` is on (our
+     presets write `sfilter=off`, so a player's core scanlines cannot override a look).
+     All 185 handheld renders byte-identical before/after.
+   - **Still missing for CRT work:** a console corpus (native frames: SNES, Genesis, NES,
+     PSX 240p, TG16, an arcade core) and render_looks.py support for the CRT classes
+     (it needs the distribution's filter pack for PVM RGB).
+   - **What a CRT look can drive in the core** (CONF_STRs read 2026-10-30, exact names):
+     `Composite Blend` Off/On/Adaptive (Genesis, MegaCD, S32X; Saturn Off/On);
+     `Composite Filter` Off/Budget TV/Premium TV (NES; hides Scandoubler Fx) and Off/On
+     (Atari7800, with Smear/AGC/Comb); N64 `Video Out` Original(VI)/Clean HDMI plus the
+     VI chain; SNES `Pseudo Transparency`; PSX `Dithering`. No signal option at all: SMS,
+     TG16, NeoGeo, Coleco, Intellivision, the arcade template. A look can list both
+     `Composite Filter=Budget TV;Composite Filter=On`: a value an option lacks is skipped.
+   - **480i:** set_vfilter uses the interlace filter (else the hfilter) vertically for an
+     interlaced source, and our presets write no `ifilter` line - so on PSX/Saturn/N64
+     480i a CRT look loses its scanlines (right) and inherits whatever ifilter the
+     player had (wrong: should be written).
+   - **Dinofly's calls (2026-10-30):** Composite drives the core signal options
+     (`Composite Blend=On;Composite Filter=Budget TV;Composite Filter=On`) with the
+     scaler hblur lowered Blurry -> Soft; arcade swaps S-Video for a new **Arcade CRT**
+     look (slot mask, appended as P_ARCADE_CRT); no PAL exception for consoles (SCART was
+     RGB); every preset writes `ifilter=` its hfilter. Vectrex later, as its own class.
+   - **Bug found and fixed on the branch:** S-Video, Composite, PAL TV and BVM carried
+     their scanlines in the sfilter slot only, which set_vfilter ignores unless the core's
+     Scandoubler Fx is at a CRT setting - so on HDMI they drew no scanlines at all (only
+     PVM RGB, whose scanlines are its vfilter, had any). Moved to vfilter (+ sfilter copy).
+     **The Super Game Boy look has the same shape and was left alone: it was approved as
+     seen, without scanlines - ask Dinofly.** Not yet confirmed on the device.
 8. **Phase 4, computers** grouped by era output; **phase 5** ship; **phase 6** the
    shadowmask RTL patch - possibly unnecessary now that `SUB_BLEND` is 0, re-check
    every panel first.
