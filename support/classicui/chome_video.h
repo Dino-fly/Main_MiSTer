@@ -22,7 +22,7 @@
   What a look does divides into colour and structure, and the division is data,
   not a special case: the palette and the colour correction are one column of the
   preset table, the pixel grid, the drop shadow and the panel's ghosting another.
-  On an analog display only the colour half is applied - see vp_output_is_analog()
+  On an analog display only the colour half is applied - see vp_output_is_lowres()
   below, and the table's own note about why.
 
   Previews are illustrations rendered in software from the same parameters, not
@@ -109,7 +109,7 @@ int  vp_options_for(int vclass, int *out);
   question of whether the scaler output reaches a screen at all: with vga_scaler
   the scaler is in the path and pointed straight down a VGA cable at a tube.
 */
-int  vp_output_is_analog();
+int  vp_output_is_lowres();
 
 /*
   Notice an output change under a running game and re-evaluate the look for it.

@@ -12311,7 +12311,7 @@ static void assert_video()
 		harness_set_opt("LM", 1);          // Scale = V-Integer
 
 		harness_set_scaler_visible(1);
-		check(vp_output_is_analog() == 0, "an attached HDMI sink is not an analog display");
+		check(vp_output_is_lowres() == 0, "an attached HDMI sink is not an analog display");
 
 		vp_options_for(VC_GB, o2);
 		vp_set(gbsys, VC_GB, o2[0]);                     // DMG
@@ -12323,7 +12323,7 @@ static void assert_video()
 
 		// The HDMI cable comes out and a CRT is all that is left.
 		harness_set_scaler_visible(0);
-		check(vp_output_is_analog() == 1, "no HDMI sink reads as an analog display");
+		check(vp_output_is_lowres() == 1, "no HDMI sink reads as an analog display");
 		harness_reset_file_tx();
 		vp_output_poll();
 
@@ -12458,10 +12458,43 @@ static void assert_video()
 		*/
 		harness_set_scaler_visible(1);
 		harness_set_hdmi_connected(0);
-		check(vp_output_is_analog() == 1, "vga_scaler with no HDMI sink is still an analog display");
+		harness_set_mode_height(480);
+		check(vp_output_is_lowres() == 1, "vga_scaler at 480p with no HDMI sink is a low-resolution display");
 		check(vp_options_for(VC_GG, o2) == gg_hdmi,
 			"where the scaler does reach the CRT, the gamma looks are offered again");
+		check(vp_options_for(VC_CONSOLE, o2) == 1, "but no CRT look at 480p");
 
+		/*
+		  Dinofly, 2026-10-30: CRT looks depend on the output resolution, and
+		  vga_scaler at 720p or better is fine. 719 lines is not; 720 and 1024 are.
+		*/
+		int con_hdmi;
+		{
+			harness_set_hdmi_connected(-2);
+			int t[VP_MAX_OPTIONS];
+			con_hdmi = vp_options_for(VC_CONSOLE, t);
+			harness_set_hdmi_connected(0);
+		}
+		harness_set_mode_height(719);
+		check(vp_output_is_lowres() == 1, "vga_scaler at 719 lines is still low resolution");
+		harness_set_mode_height(720);
+		check(vp_output_is_lowres() == 0, "vga_scaler at 720 lines is a high-resolution display");
+		check(vp_options_for(VC_CONSOLE, o2) == con_hdmi, "and offers every console look, CRT ones included");
+		check(vp_options_for(VC_GB, o2) == gb_hdmi, "and every Game Boy look, the SGB televisions included");
+		harness_set_mode_height(1024);
+		check(vp_output_is_lowres() == 0, "so is a 1280x1024 VGA monitor");
+
+		// direct_video never goes through the scaler, whatever the mode says.
+		cfg.direct_video = 1;
+		check(vp_output_is_lowres() == 1, "direct_video is low resolution at any mode height");
+		cfg.direct_video = 0;
+
+		// HDMI is never low resolution, even at 480p.
+		harness_set_hdmi_connected(-2);
+		harness_set_mode_height(480);
+		check(vp_output_is_lowres() == 0, "HDMI at 480p keeps every look");
+
+		harness_set_mode_height(1080);
 		harness_set_hdmi_connected(-2);          // back to following the scaler
 		harness_set_scaler_visible(1);
 	}
