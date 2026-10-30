@@ -90,7 +90,7 @@ CORPUS_NAMES = {
 
 # Not handheld panels: the Super Game Boy is a Super Nintendo on a television
 # (CRT treatment, border canvas) and is judged with the CRT looks.
-SKIP_IDS = {'sgb', 'none-sgb'}
+SKIP_IDS = {'sgb', 'sgb-bvm', 'sgb-svideo', 'sgb-composite', 'none-sgb'}
 
 # core-side options the renderer DOES honour; everything else is reported.
 SIMULATED_OPTS = {'Custom Palette': 'the .gbp is applied as the palette',

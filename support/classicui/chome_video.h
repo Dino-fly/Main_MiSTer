@@ -91,7 +91,7 @@ const char *vp_mask_of(int i);
   offered and then found to do nothing. So the count is also the answer to "is
   there a choice worth showing here", which is what the menu bar asks it.
 */
-#define VP_MAX_OPTIONS 8
+#define VP_MAX_OPTIONS 12
 int  vp_options_for(int vclass, int *out);
 
 /*

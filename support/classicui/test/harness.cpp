@@ -11825,7 +11825,7 @@ static void assert_video()
 	}
 
 	int n_gb = vp_options_for(VC_GB, opts);
-	check(n_gb == 8, "Game Boy offers three DMG ramps, the Pocket, the Light, the SGB, the off switch and the SGB off switch");
+	check(n_gb == 11, "Game Boy offers three DMG ramps, the Pocket, the Light, the SGB on four televisions, the off switch and the SGB off switch");
 	check(strstr(vp_name(opts[0]), "DMG") && strstr(vp_name(opts[3]), "Pocket"),
 		"Game Boy leads with DMG and still offers the Pocket");
 
@@ -11840,7 +11840,7 @@ static void assert_video()
 		int sgb = -1, none_sgb = -1;
 		for (int i = 0; i < n_gb; i++)
 		{
-			if (!strcmp(vp_name(opts[i]), "Super Game Boy")) sgb = opts[i];
+			if (!strcmp(vp_name(opts[i]), "SGB PVM RGB")) sgb = opts[i];
 			if (!strcmp(vp_name(opts[i]), "None with SGB Border")) none_sgb = opts[i];
 		}
 		check(sgb >= 0, "the Super Game Boy is offered as a look of its own");
@@ -11892,6 +11892,38 @@ static void assert_video()
 		}
 		check(has_sgb, "a GBC cartridge can take the SGB look, which asks for SGB + GBC");
 		check(has_none_sgb, "and the None SGB twin, likewise");
+
+		/*
+		  Dinofly, 2026-10-30: the adaptor ran on a Super Nintendo, so it offers every
+		  television the console class does. Each console look but the off switch needs
+		  an SGB row with the same scaler half, in the GB and the GBC list both, and
+		  each of those rows turns the adaptor on.
+		*/
+		int con[VP_MAX_OPTIONS];
+		int ncon = vp_options_for(VC_CONSOLE, con);
+		for (int cls = VC_GB; cls <= VC_GBC; cls++)
+		{
+			int l[VP_MAX_OPTIONS];
+			int nl = vp_options_for(cls, l);
+			for (int i = 0; i < ncon; i++)
+			{
+				if (!strcmp(vp_name(con[i]), "Sharp")) continue;
+				int twin = 0;
+				for (int j = 0; j < nl; j++)
+				{
+					const char *c = vp_core_colour(l[j]);
+					if (!c || !strstr(c, "Super Game Boy=On")) continue;
+					const char *h1 = vp_hfilter_of(l[j]), *h2 = vp_hfilter_of(con[i]);
+					const char *m1 = vp_mask_of(l[j]), *m2 = vp_mask_of(con[i]);
+					if (h1 && h2 && m1 && m2 && !strcmp(h1, h2) && !strcmp(m1, m2) &&
+					    strstr(vp_name(l[j]), "SGB")) twin = 1;
+				}
+				char what[160];
+				snprintf(what, sizeof(what), "%s: the SGB is offered on the console's %s",
+					vp_class_label(cls), vp_name(con[i]));
+				check(twin, what);
+			}
+		}
 	}
 
 	/*
@@ -11916,7 +11948,7 @@ static void assert_video()
 	}
 
 	int n_gbc = vp_options_for(VC_GBC, opts);
-	check(n_gbc == 7, "GBC offers its screen, the three GBA screens, the SGB, the off switch and the SGB off switch");
+	check(n_gbc == 10, "GBC offers its screen, the three GBA screens, the SGB on four televisions, the off switch and the SGB off switch");
 	check(strstr(vp_name(opts[0]), "Color") != 0, "GBC defaults to the GBC screen");
 	{
 		int on_gba = 0;
@@ -12360,7 +12392,7 @@ static void assert_video()
 		harness_set_scaler_visible(0);
 		check(vp_options_for(VC_GB, o2) == gb_hdmi, "every Game Boy screen is still offered on a CRT");
 		check(vp_options_for(VC_GBA, o2) == 6, "so are the GBA screens and the off switch");
-		check(vp_options_for(VC_GBC, o2) == 7, "and the GBC screens and its SGB looks");
+		check(vp_options_for(VC_GBC, o2) == 10, "and the GBC screens and its SGB looks");
 		check(vp_options_for(VC_CONSOLE, o2) == 5, "and the CRT classes are untouched by any of this");
 
 		int gg_an = vp_options_for(VC_GG, o2);

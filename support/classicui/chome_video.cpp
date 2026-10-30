@@ -331,6 +331,27 @@ static double lcd_span(const lcd_model *m, int scale)
 */
 #define CO_GBA_MODE      "GBC/GBA mode=GBA"
 
+/*
+  The console televisions' scaler halves, so the Super Game Boy rows wear exactly
+  what the Super Nintendo class wears and the two cannot drift apart.
+*/
+#define CRT_PVM_RGB "Upscaling - Recommended/GS_Sharpness_050.txt", \
+	"Scanlines - Adaptive/SLA_Dk_030_Br_070.txt", "off", \
+	"Simple (Monochrome)/Aperture Grille (No Scanlines) (1968).txt", "1x", "Pure_Gamma/gamma_110.txt"
+#define CRT_BVM     F_SHARP, F_SCANDP, F_SCANDP, M_GRILLE, "1x", "off"
+#define CRT_SVIDEO  F_SOFT, F_SCAN, F_SCAN, M_GRILLE, "1x", "off"
+#define CRT_COMPOSITE F_SOFT, F_SCAN, F_SCAN, "Simple (Monochrome)/Sony PVM (Generic) (~1980).txt", "1x", "off"
+
+/*
+  The adaptor's core half. Custom Palette=Off so the SGB's own colours show, not
+  one of our panel ramps; the panel structure the GB core would otherwise draw
+  (shadow, frame blend, integer scale for a grid) is switched off because the
+  picture is a television's.
+*/
+#define CO_COMPOSITE "Composite Blend=On;Composite Filter=Budget TV;Composite Filter=On"
+#define CO_SGB      "Super Game Boy=On;Super Game Boy + GBC=On;Custom Palette=Off"
+#define CO_SGB_CRT  CO_NO_SHADOW ";Frame blend=Off;" CO_INTEGER
+
 static const preset_def presets[] =
 {
 	/*
@@ -354,12 +375,7 @@ static const preset_def presets[] =
 	  one come from captures, not the model.
 	*/
 	{ "pvm-rgb", "PVM RGB", "Sony PVM: adaptive scanlines, aperture grille, warm gamma.",
-	  "Upscaling - Recommended/GS_Sharpness_050.txt",
-	  "Scanlines - Adaptive/SLA_Dk_030_Br_070.txt",
-	  "off",
-	  "Simple (Monochrome)/Aperture Grille (No Scanlines) (1968).txt",
-	  "1x",
-	  "Pure_Gamma/gamma_110.txt", 0, 0, 0 },
+	  CRT_PVM_RGB, 0, 0, 0 },
 
 	/*
 	  Short names on purpose: five tiles share a row on the console class since
@@ -367,7 +383,7 @@ static const preset_def presets[] =
 	  gate is the arbiter. The blurb carries the longer story.
 	*/
 	{ "pvm-svideo", "S-Video", "Slight horizontal bleed, scanlines: a console on a good PVM over S-Video.",
-	  F_SOFT, F_SCAN, F_SCAN, M_GRILLE, "1x", "off", 0, 0, 0 },
+	  CRT_SVIDEO, 0, 0, 0 },
 
 	/*
 	  The distribution's own Sony PVM mask at 1x, on Dinofly's call, in place of our
@@ -387,9 +403,7 @@ static const preset_def presets[] =
 	  other.
 	*/
 	{ "composite", "Composite", "Soft and blurry, as an RF or composite hookup looked.",
-	  F_SOFT, F_SCAN, F_SCAN,
-	  "Simple (Monochrome)/Sony PVM (Generic) (~1980).txt", "1x", "off",
-	  "Composite Blend=On;Composite Filter=Budget TV;Composite Filter=On", 0, 0 },
+	  CRT_COMPOSITE, CO_COMPOSITE, 0, 0 },
 
 	{ "pal-tv", "PAL TV", "Softer still with lighter scanlines. Home computers on a telly.",
 	  F_SOFT, F_SCANLT, F_SCANLT, M_GRILLE, "2x", "off", 0, 0, 0 },
@@ -504,7 +518,7 @@ static const preset_def presets[] =
 
 	// Appended after None for the same ABI reason None sits where it does.
 	{ "bvm-rgb", "BVM RGB", "Reference broadcast monitor: razor sharp, deep scanlines.",
-	  F_SHARP, F_SCANDP, F_SCANDP, M_GRILLE, "1x", "off", 0, 0, 0 },
+	  CRT_BVM, 0, 0, 0 },
 
 	/*
 	  Two more DMG ramps, appended rather than slotted in beside "dmg": the stored
@@ -535,10 +549,17 @@ static const preset_def presets[] =
 	  and will not infer it. On a DMG cartridge the option does nothing, and a core
 	  too old to publish it skips the name.
 	*/
-	{ "sgb", "Super Game Boy", "The SNES adaptor on a CRT: its border and colours, scanlines and grille.",
-	  F_SHARP, F_SHARP, F_SCAN, M_GRILLE, "1x", "off",
-	  "Super Game Boy=On;Super Game Boy + GBC=On;Custom Palette=Off",
-	  CO_NO_SHADOW ";Frame blend=Off;" CO_INTEGER, 0 },
+	/*
+	  Since 2026-10-30 the adaptor offers every television the Super Nintendo class
+	  does (Dinofly: "it was running on" one), so this row is now its PVM RGB - the
+	  console default - and the BVM, S-Video and Composite rows are appended at the
+	  end of the table. Same index, so a player who had picked "Super Game Boy"
+	  keeps the adaptor and lands on the nearest television. The old row's
+	  scanlines were in the sfilter alone and never drew on HDMI (see the note
+	  above "sharp"); taking the console look's scaler half whole fixes that too.
+	*/
+	{ "sgb", "SGB PVM RGB", "The SNES adaptor on a Sony PVM: its border and colours, adaptive scanlines.",
+	  CRT_PVM_RGB, CO_SGB, CO_SGB_CRT, 0 },
 
 	/*
 	  None, with the adaptor on. None itself deliberately carries no core half at
@@ -641,6 +662,18 @@ static const preset_def presets[] =
 	*/
 	{ "arcade-crt", "Arcade CRT", "A cabinet's low-res tube: slot mask, soft beam, clear scanlines.",
 	  F_SOFT, F_SCAN, F_SCAN, M_SLOT, "1x", "off", 0, 0, 0 },
+
+	/*
+	  The rest of the Super Nintendo's televisions for the adaptor - see the "sgb"
+	  row. No composite core option: the Game Boy core has none, and the SNES
+	  core's picture is not what is running.
+	*/
+	{ "sgb-bvm", "SGB BVM RGB", "The SNES adaptor on a broadcast monitor: razor sharp, deep scanlines.",
+	  CRT_BVM, CO_SGB, CO_SGB_CRT, 0 },
+	{ "sgb-svideo", "SGB S-Video", "The SNES adaptor over S-Video: slight bleed, scanlines.",
+	  CRT_SVIDEO, CO_SGB, CO_SGB_CRT, 0 },
+	{ "sgb-composite", "SGB Composite", "The SNES adaptor over composite: soft, blurry, scanlines.",
+	  CRT_COMPOSITE, CO_SGB, CO_SGB_CRT, 0 },
 };
 
 #define NPRESETS ((int)(sizeof(presets) / sizeof(presets[0])))
@@ -1234,7 +1267,7 @@ enum
 	P_DMG_BRIGHT, P_DMG_FADED, P_SGB, P_NONE_SGB, P_LIGHT,
 	P_GBC_AGB001, P_GBC_AGS001, P_GBC_AGS101, P_GBA_MICRO, P_GBA_DS,
 	P_GG_MCWILL, P_LYNX_MCWILL, P_SWANCRYSTAL, P_NGPC_IPS, P_NGP, P_NGP_ON_NGPC,
-	P_ARCADE_CRT
+	P_ARCADE_CRT, P_SGB_BVM, P_SGB_SVIDEO, P_SGB_COMPOSITE
 };
 
 /*
@@ -1268,10 +1301,12 @@ static const int opt_console[]  = { P_PVM_RGB, P_BVM, P_PVM_SVIDEO, P_COMPOSITE,
 static const int opt_arcade[]   = { P_PVM_RGB, P_BVM, P_ARCADE_CRT, P_SHARP };
 static const int opt_computer[] = { P_PAL_TV, P_COMPOSITE, P_PVM_SVIDEO, P_SHARP };
 static const int opt_vga[]      = { P_VGA, P_SHARP };
-static const int opt_gb[]       = { P_DMG, P_DMG_BRIGHT, P_DMG_FADED, P_POCKET,
-                                    P_LIGHT, P_SGB, P_NONE, P_NONE_SGB };
+static const int opt_gb[]       = { P_DMG, P_DMG_BRIGHT, P_DMG_FADED, P_POCKET, P_LIGHT,
+                                    P_SGB, P_SGB_BVM, P_SGB_SVIDEO, P_SGB_COMPOSITE,
+                                    P_NONE, P_NONE_SGB };
 static const int opt_gbc[]      = { P_GBC, P_GBC_AGB001, P_GBC_AGS001, P_GBC_AGS101,
-                                    P_SGB, P_NONE, P_NONE_SGB };
+                                    P_SGB, P_SGB_BVM, P_SGB_SVIDEO, P_SGB_COMPOSITE,
+                                    P_NONE, P_NONE_SGB };
 static const int opt_gba[]      = { P_AGB001, P_AGS001, P_AGS101, P_GBA_MICRO, P_GBA_DS, P_NONE };
 static const int opt_gg[]       = { P_GG, P_GGMOD, P_GG_MCWILL, P_NONE };
 static const int opt_lynx[]     = { P_LYNX, P_LYNX_MCWILL, P_NONE };

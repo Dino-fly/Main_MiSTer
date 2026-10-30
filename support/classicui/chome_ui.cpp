@@ -5128,6 +5128,27 @@ static int disp_per_row(int n)
 	return (n > 6) ? (n + 1) / 2 : n;
 }
 
+/*
+  At 240p the only class that reaches this screen is a handheld on a tube (see
+  mb_visible), and since the Super Game Boy took every console television the
+  Game Boy offers eleven looks: two rows of six left tiles 47px wide, and
+  "COMPOSITE" and "S-VIDEO" lost letters. Three rows of tiles do not fit 240
+  lines, so past eight looks the tiles drop their pictures and become names,
+  three to a row - the big preview above still shows the look under the cursor,
+  and a 47px thumbnail was too small to judge a filter by anyway. Three, not
+  four: four leave 70px, which is "COMPOSITE" at the default tracking and cut at
+  any wider setting a player can choose.
+*/
+static int disp_names_only(const chome_profile *p, int n)
+{
+	return (p->id == PROF_LO && n > 8) ? 1 : 0;
+}
+
+static int disp_grid_per_row(const chome_profile *p, int n)
+{
+	return disp_names_only(p, n) ? 3 : disp_per_row(n);
+}
+
 static void draw_display_screen(const chome_profile *p)
 {
 	int s = p->ts_ui;
@@ -5153,12 +5174,16 @@ static void draw_display_screen(const chome_profile *p)
 	  different screen per system. They only shrink when a class genuinely offers
 	  more than fit.
 	*/
-	int per_row = disp_per_row(n);
+	int names_only = disp_names_only(p, n);
+	int per_row = disp_grid_per_row(p, n);
 	int nrows = (n + per_row - 1) / per_row;
 	int tw = 70 * s;   // wide enough that "COMPOSITE" fits its label budget at every profile
 	int th = (tw * 3) / 4;
-	int fit = (pw - pad * 2 - gap * (per_row - 1)) / per_row;
+	// Name tiles have no picture to keep clear of the panel edge, so a 2px inset.
+	int inset = names_only ? 2 * s : pad;
+	int fit = (pw - inset * 2 - gap * (per_row - 1)) / per_row;
 	if (tw > fit) { tw = fit < 24 ? 24 : fit; th = (tw * 3) / 4; }
+	if (names_only) { tw = fit; th = 0; }    // a name grows to its share of the row
 
 	int h_title = 10 * s + 6;          // draw_panel_ex's own title bar
 	int h_header = 13 * tiny;
@@ -5166,7 +5191,9 @@ static void draw_display_screen(const chome_profile *p)
 	// Two lines: "GAME BOY POCKET" does not fit a small tile on one, and a name
 	// with letters missing is worse than a second line under every tile.
 	int h_label = 2 * (10 * tiny) + tiny;
-	int h_tiles = nrows * (th + h_label) + (nrows - 1) * 2 * s;
+	// Name tiles are framed boxes, so their rows need room for the focus ring.
+	int row_gap = names_only ? 4 * s + 3 : 2 * s;
+	int h_tiles = nrows * (th + h_label) + (nrows - 1) * row_gap;
 
 	/*
 	  The big preview takes whatever height the rest leaves, at 4:3 - derived, like
@@ -5259,8 +5286,30 @@ static void draw_display_screen(const chome_profile *p)
 		int in_row = (row == nrows - 1) ? n - row * per_row : per_row;
 		int total = tw * in_row + gap * (in_row - 1);
 		int x = b.x + (b.w - total) / 2 + col * (tw + gap);
-		int tile_y = tiles_y + row * (th + h_label + 2 * s);
+		int tile_y = tiles_y + row * (th + h_label + row_gap);
 		int on = (i == look_row);
+
+		if (names_only)
+		{
+			// The same two marks as a picture tile, drawn round the name instead.
+			gfx_frame_rect(x - 1, tile_y - 1, tw + 2, h_label + 2,
+				opts[i] == in_use ? COL_WHITE : COL_INK, opts[i] == in_use ? 2 : 1);
+			if (on) gfx_frame_rect(x - 3, tile_y - 3, tw + 6, h_label + 6, COL_FOCUS, 2);
+
+			char lines[4][64];
+			// The frame is drawn outside the tile, so the name may use all of tw.
+			int nl = wrap_text(vp_name(opts[i]), tw, tiny, lines, 2);
+			int ly = tile_y + (h_label - nl * 10 * tiny) / 2 + 1;
+			for (int l = 0; l < nl; l++)
+			{
+				char up[64];
+				snprintf(up, sizeof(up), "%s", lines[l]);
+				gfx_shout(up);
+				gfx_text_c(gfx_clip(up, tiny, tw), x + tw / 2, ly + l * 10 * tiny, tiny,
+					on ? COL_WHITE : COL_INK, 0);
+			}
+			continue;
+		}
 
 		// Same order as the big preview above, and for the same reason.
 		const uint32_t *img = 0;
@@ -12271,7 +12320,7 @@ static void move_v(int dir)
 	{
 		int opts[VP_MAX_OPTIONS];
 		int nn = vp_options_for(disp_class(), opts);
-		int per_row = disp_per_row(nn);
+		int per_row = disp_grid_per_row(theme_get(), nn);
 		int next = look_row + dir * per_row;
 		if (dir > 0 && next >= nn && look_row / per_row < (nn - 1) / per_row) next = nn - 1;
 		if (next < 0 || next >= nn) { nudge(); break; }
