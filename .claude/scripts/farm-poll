@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# farm-poll - one read-only snapshot of the Quartus build farm, or a blocking wait for change.
+#
+#   farm-poll [--dir DIR] [--wait SECONDS] [--interval SECONDS] [--failures]
+#
+# Prints ONE state line: TSV result counts, running driver processes, built .rbf
+# count, newest log. With --wait it re-polls every --interval (default 60 s) and returns
+# as soon as the line changes (CHANGED), or at the deadline (UNCHANGED/TIMEOUT), so a
+# watching agent spends one tool call per wait instead of one per tail.
+# --failures lists BUILD_FAIL cores with the last line of each log. Never writes, never
+# signals a process.
+set -euo pipefail
+DIR="$HOME/workspace/snac-build"; WAIT=0; INTERVAL=60; FAILURES=0
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--dir) DIR="$2"; shift ;;
+	--wait) WAIT="$2"; shift ;;
+	--interval) INTERVAL="$2"; shift ;;
+	--failures) FAILURES=1 ;;
+	-h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+	*) echo "unknown option $1" >&2; exit 2 ;;
+	esac
+	shift
+done
+[ -d "$DIR" ] || { echo "no farm dir $DIR"; exit 2; }
+
+snapshot() {
+	local counts running rbf newest
+	counts=$(cat "$DIR"/builds*.tsv 2>/dev/null | awk -F'\t' 'NR>1 && $1!="core"{c[$5]++} END{for(k in c) printf "%s=%d ", k, c[k]}')
+	running=$(ps -axo command | grep -cE '^(bash |sh |/bin/bash )?[^ ]*(build_via_windows|build_batch|build_core|chain[0-9]*)\.sh' || true)
+	rbf=$(find "$DIR/cores" -name '*.rbf' 2>/dev/null | wc -l | tr -d ' ')
+	newest=$(ls -t "$DIR"/logs/*.log 2>/dev/null | head -1)
+	[ -n "$newest" ] && newest="$(basename "$newest")@$(date -r "$newest" +%H:%M:%S)" || newest=none
+	echo "results: ${counts:-none} running=$running rbf=$rbf newest_log=$newest"
+}
+
+if [ "$FAILURES" = 1 ]; then
+	awk -F'\t' '$5=="BUILD_FAIL"{print $1}' "$DIR"/builds*.tsv 2>/dev/null | sort -u | while read -r c; do
+		l="$DIR/logs/$c.log"; [ -f "$l" ] && printf '%s: %s\n' "$c" "$(tail -n 1 "$l" | cut -c1-160)" || echo "$c: (no log)"
+	done
+	exit 0
+fi
+
+FIRST=$(snapshot)
+if [ "$WAIT" -le 0 ]; then echo "$FIRST"; exit 0; fi
+DEADLINE=$(( $(date +%s) + WAIT ))
+while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+	sleep "$INTERVAL"
+	NOW=$(snapshot)
+	if [ "$NOW" != "$FIRST" ]; then echo "$NOW CHANGED"; exit 0; fi
+done
+echo "$FIRST UNCHANGED/TIMEOUT"

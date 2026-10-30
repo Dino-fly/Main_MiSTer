@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# mister-capture - photograph the device's screen without being fooled by it.
+#
+#   mister-capture <name> [-o out.png] [--core] [--tools-src DIR] [--keep] [--dry-run]
+#
+# Front-end on screen (default): pushes a static ARM fbgrab to /tmp on the device
+# (cross-compiled on demand into ~/.config/classicui/tools/), reads the geometry from
+# the firmware's own log line `video: mode now WxH, fb N at wxh`, grabs BOTH buffers
+# twice one second apart, md5s all four on the device, pulls them and writes PNGs on
+# the Mac. Identical grabs a second apart mean a dead screen, not an ignored key.
+# A core on screen (--core): asks the firmware for `screenshot scaled` instead.
+# Temporary tools and raw frames are removed from the device afterwards.
+#
+# Output: <out>.png (the buffer the log names, second grab), <out>-fbM.png (the other
+# buffer), <out>.meta (geometry, md5s, firmware md5, date). Exit 0 on a live capture,
+# 4 when every grab was byte-identical (static screen), 1 on error.
+set -euo pipefail
+. "$(dirname "$0")/lib.sh"
+
+NAME=""; OUT=""; CORE=0; KEEP=0; DRY=0
+TOOLS_SRC="$HOME/workspace/Main_MiSTer-ui/support/classicui/tools"
+while [ $# -gt 0 ]; do
+	case "$1" in
+	-o) OUT="$2"; shift ;;
+	--core) CORE=1 ;;
+	--keep) KEEP=1 ;;
+	--dry-run) DRY=1 ;;
+	--tools-src) TOOLS_SRC="$2"; shift ;;
+	-h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+	-*) die "unknown option $1" 2 ;;
+	*) NAME="$1" ;;
+	esac
+	shift
+done
+[ -n "$NAME" ] || die "usage: mister-capture <name>" 2
+NAME=${NAME%.png}
+mkdir -p "$CLASSICUI_CFG/captures" "$CLASSICUI_CFG/tools"
+OUT=${OUT:-$CLASSICUI_CFG/captures/$NAME.png}; OUT=${OUT%.png}
+need_mister
+FBGRAB="$CLASSICUI_CFG/tools/fbgrab"
+
+ensure_fbgrab() {
+	[ -x "$FBGRAB" ] && return 0
+	[ -f "$TOOLS_SRC/fbgrab.c" ] || die "no fbgrab.c in $TOOLS_SRC (--tools-src)"
+	docker image inspect "$BUILD_IMAGE" >/dev/null 2>&1 || die "build image missing - run mister-build once (or docker build it)"
+	docker run --rm --platform linux/amd64 -v "$TOOLS_SRC:/src:ro" -v "$TOOLCHAIN:/tc:ro" -v "$CLASSICUI_CFG/tools:/out" "$BUILD_IMAGE" \
+		bash -c 'export PATH=/tc/bin:$PATH; arm-none-linux-gnueabihf-gcc -O1 -static -o /out/fbgrab /src/fbgrab.c && [ ! -f /src/keyinj.c ] || arm-none-linux-gnueabihf-gcc -O1 -static -o /out/keyinj /src/keyinj.c' >/dev/null
+	[ -x "$FBGRAB" ] || die "fbgrab cross-compile failed"
+}
+
+# BGRA raw -> RGB PNG, pure python (no PIL). $1 raw $2 w $3 h $4 out.png
+raw_to_png() {
+	python3 -I - "$1" "$2" "$3" "$4" <<'PY'
+import struct, sys, zlib
+raw, w, h, out = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
+buf = open(raw, 'rb').read()
+rows = bytearray()
+for y in range(h):
+    line = buf[y*w*4:(y+1)*w*4]
+    rgb = bytearray(w*3)
+    rgb[0::3] = line[2::4]; rgb[1::3] = line[1::4]; rgb[2::3] = line[0::4]
+    rows += b'\0' + rgb
+def chunk(t, d): return struct.pack('>I', len(d)) + t + d + struct.pack('>I', zlib.crc32(t + d) & 0xffffffff)
+open(out, 'wb').write(b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(bytes(rows))) + chunk(b'IEND', b''))
+PY
+}
+
+if [ "$DRY" = 1 ]; then
+	echo "would: ensure $FBGRAB (cross-compile from $TOOLS_SRC if missing); scp to ${MISTER_HOST}:/tmp/fbgrab"
+	echo "would: geometry from 'video: mode now' in /tmp/debug.txt (fallback /sys/module/MiSTer_fb/parameters); grab fb1+fb2 twice, md5sum; pull; PNG -> $OUT.png"
+	echo "would: rm /tmp/fbgrab /tmp/cap_* on the device"
+	exit 0
+fi
+
+FW_MD5=$(mister_ssh "md5sum /media/fat/MiSTer | cut -c1-32") || die "device unreachable at $MISTER_HOST"
+
+if [ "$CORE" = 1 ]; then
+	mister_ssh "rm -f /media/fat/screenshots/$NAME.png; echo 'screenshot scaled $NAME.png' > /dev/MiSTer_cmd; sleep 2; test -f /media/fat/screenshots/$NAME.png" || die "firmware wrote no screenshot (is a core on screen, menu closed?)"
+	mister_scp_from "/media/fat/screenshots/$NAME.png" "$OUT.png"
+	printf 'source=core screenshot scaled\nfirmware_md5=%s\ndate=%s\n' "$FW_MD5" "$(date -u +%FT%TZ)" > "$OUT.meta"
+	echo "CAPTURE OK $OUT.png (core screenshot, firmware md5=$FW_MD5)"; exit 0
+fi
+
+ensure_fbgrab
+mister_scp "$FBGRAB" /tmp/fbgrab
+GEO=$(mister_ssh 'chmod +x /tmp/fbgrab; L=$(grep "video: mode now" /tmp/debug.txt 2>/dev/null | tail -1); if [ -n "$L" ]; then echo "$L" | sed -E "s/.*mode now ([0-9]+)x([0-9]+), fb ([0-9]+) at ([0-9]+)x([0-9]+).*/log \1 \2 \3 \4 \5/"; else P=/sys/module/MiSTer_fb/parameters; echo "sys $(cat $P/width) $(cat $P/height) 1 $(cat $P/width) $(cat $P/height)"; fi')
+read -r SRC MW MH FB W H <<<"$GEO"
+[[ "$W" =~ ^[0-9]+$ && "$H" =~ ^[0-9]+$ ]] || die "could not read geometry: '$GEO'"
+STRIDE=$((MW * 4)); OTHER=$(( FB == 1 ? 2 : 1 ))
+
+SUMS=$(mister_ssh "cd /tmp && ./fbgrab cap_a.$FB $FB $W $H $STRIDE >/dev/null && ./fbgrab cap_a.$OTHER $OTHER $W $H $STRIDE >/dev/null && sleep 1 && ./fbgrab cap_b.$FB $FB $W $H $STRIDE >/dev/null && ./fbgrab cap_b.$OTHER $OTHER $W $H $STRIDE >/dev/null && md5sum cap_a.$FB cap_a.$OTHER cap_b.$FB cap_b.$OTHER")
+TMP=$(mktemp -d)
+for f in "cap_a.$FB" "cap_a.$OTHER" "cap_b.$FB" "cap_b.$OTHER"; do mister_scp_from "/tmp/$f" "$TMP/$f"; done
+[ "$KEEP" = 1 ] || mister_ssh "rm -f /tmp/fbgrab /tmp/cap_a.* /tmp/cap_b.*"
+
+raw_to_png "$TMP/cap_b.$FB" "$W" "$H" "$OUT.png"
+raw_to_png "$TMP/cap_b.$OTHER" "$W" "$H" "$OUT-fb$OTHER.png"
+rm -rf "$TMP"
+{
+	printf 'geometry_source=%s\nmode=%sx%s\nfb=%s at %sx%s stride=%s\nfirmware_md5=%s\ndate=%s\n' "$SRC" "$MW" "$MH" "$FB" "$W" "$H" "$STRIDE" "$FW_MD5" "$(date -u +%FT%TZ)"
+	echo "$SUMS" | sed 's/^/md5 /'
+} > "$OUT.meta"
+
+A1=$(echo "$SUMS" | awk 'NR==1{print $1}'); B1=$(echo "$SUMS" | awk 'NR==3{print $1}')
+A2=$(echo "$SUMS" | awk 'NR==2{print $1}'); B2=$(echo "$SUMS" | awk 'NR==4{print $1}')
+LIVE=""; [ "$A1" != "$B1" ] && LIVE="fb$FB"; [ "$A2" != "$B2" ] && LIVE="$LIVE fb$OTHER"
+if [ -z "$LIVE" ]; then
+	echo "CAPTURE STATIC $OUT.png: all four grabs identical (fb$FB $A1, fb$OTHER $A2) - screen not changing; distrust before reading it. firmware md5=$FW_MD5"; exit 4
+fi
+echo "CAPTURE OK $OUT.png fb$FB ${W}x${H} (mode ${MW}x${MH}, $SRC) live:$LIVE firmware md5=$FW_MD5 meta=$OUT.meta"

@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# mister-harness - run the Classic Home host harness in a worktree; print one verdict line.
+#
+#   mister-harness <worktree> [--looks] [--dry-run]
+#
+# Runs support/classicui/test/run.sh (or test/looks.sh with --looks) with its thousands
+# of lines going to ~/.config/classicui/logs/, and prints only:
+#   HARNESS OK|FAIL <worktree> checks=N failures=M took=Ss log=<file>
+# plus, on failure, the first 20 lines mentioning FAIL. Run it with run_in_background
+# and read the verdict when it returns; never tail the log into the transcript.
+# Exit 0 only when the harness exited 0 and reported 0 failures.
+set -euo pipefail
+. "$(dirname "$0")/lib.sh"
+
+WT=""; LOOKS=0; DRY=0
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--looks) LOOKS=1 ;;
+	--dry-run) DRY=1 ;;
+	-h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+	-*) die "unknown option $1" 2 ;;
+	*) WT="$1" ;;
+	esac
+	shift
+done
+[ -n "$WT" ] || die "usage: mister-harness <worktree>" 2
+WT=$(cd "$WT" 2>/dev/null && pwd -P) || die "no such directory: $1" 2
+SCRIPT="$WT/support/classicui/test/run.sh"; [ "$LOOKS" = 1 ] && SCRIPT="$WT/support/classicui/test/looks.sh"
+[ -f "$SCRIPT" ] || die "$SCRIPT missing" 2
+mkdir -p "$CLASSICUI_CFG/logs"
+LOG="$CLASSICUI_CFG/logs/harness-$(basename "$WT")-$(date +%Y%m%d-%H%M%S).log"
+
+if [ "$DRY" = 1 ]; then echo "would run: bash $SCRIPT > $LOG 2>&1; then parse 'N checks, M failures'"; exit 0; fi
+
+T0=$(date +%s); rc=0
+bash "$SCRIPT" > "$LOG" 2>&1 || rc=$?
+TOOK=$(( $(date +%s) - T0 ))
+SUM=$(grep -a -E '^[0-9]+ checks, [0-9]+ failures' "$LOG" | tail -1 || true)
+CHECKS=$(sed -nE 's/^([0-9]+) checks.*/\1/p' <<<"$SUM"); FAILS=$(sed -nE 's/.*, ([0-9]+) failures.*/\1/p' <<<"$SUM")
+LINE="$WT checks=${CHECKS:-?} failures=${FAILS:-?} took=${TOOK}s log=$LOG"
+if [ "$rc" = 0 ] && [ "${FAILS:-1}" = 0 ]; then echo "HARNESS OK $LINE"; exit 0; fi
+echo "HARNESS FAIL (exit $rc) $LINE"
+grep -a -n -E 'FAIL|error:|Error' "$LOG" | head -20 | sed 's/^/  | /'
+[ -n "$SUM" ] || tail -n 5 "$LOG" | sed 's/^/  | /'
+exit 1

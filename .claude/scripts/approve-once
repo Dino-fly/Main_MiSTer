@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# approve-once - a human authorises exactly one guarded action for the Bash hook.
+#
+#   approve-once gh|push|force-push      set the marker (consumed by the next matching command)
+#   approve-once --clear                 remove all markers
+#   approve-once --status                list markers
+#
+# The hook (.claude/hooks/guard-bash.sh) blocks `gh issue/pr/discussion/release` writes,
+# `git push` and force pushes unless the matching marker exists; it deletes the marker
+# as it lets the command through. Pushes to `origin` (MiSTer-devel) are never allowed.
+set -euo pipefail
+CFG="${CLASSICUI_CFG:-$HOME/.config/classicui}"
+mkdir -p "$CFG"
+case "${1:-}" in
+gh|push|force-push) (umask 077; date +%s > "$CFG/allow-once.$1"); echo "one-time allow set for '$1' (consumed by the next matching command)" ;;
+--clear) rm -f "$CFG"/allow-once.*; echo "markers cleared" ;;
+--status) ls "$CFG"/allow-once.* 2>/dev/null | sed 's|.*/allow-once\.|allowed once: |' || echo "no markers" ;;
+*) sed -n '2,10p' "$0"; exit 2 ;;
+esac
