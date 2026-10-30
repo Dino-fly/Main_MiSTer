@@ -24,12 +24,15 @@ echo
 TTY=""
 [ -t 0 ] && TTY="-t"
 
-docker run --rm -i $TTY -p "$PORT":8099 -v "$REPO":/mister -w /mister ubuntu:20.04 bash -c '
+# Prebuilt image (harness-image.sh): g++, imlib2 and curl - curl is what the art
+# fetcher forks; without it covers stay on the fallback card. Named container so a
+# stopped run is removed.
+. "$REPO/support/classicui/test/harness-image.sh"
+ensure_harness_image
+harness_container "chome-play-$$"
+
+docker run --rm --name "$HARNESS_CONTAINER" -i $TTY -p "$PORT":8099 -v "$REPO":/mister -w /mister "$HARNESS_IMAGE" bash -c '
 set -euo pipefail
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq >/dev/null
-# curl is what the art fetcher forks: without it covers stay on the fallback card.
-apt-get install -qq -y g++ libimlib2-dev curl ca-certificates >/dev/null
 
 mkdir -p /tmp/harness
 g++ -std=gnu++14 -O2 -Wall -Wextra -Wno-unused-parameter -Wno-format-truncation \

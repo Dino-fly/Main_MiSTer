@@ -7,12 +7,12 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 OUTDIR="${1:-/tmp/chome_strip_out}"
 mkdir -p "$OUTDIR"
+. "$REPO/support/classicui/test/harness-image.sh"   # prebuilt image, named container
+ensure_harness_image
+harness_container "chome-filmstrip-$$"
 
-docker run --rm -v "$REPO":/mister -v "$OUTDIR":/out -w /mister ubuntu:20.04 bash -c '
+docker run --rm --name "$HARNESS_CONTAINER" -v "$REPO":/mister -v "$OUTDIR":/out -w /mister "$HARNESS_IMAGE" bash -c '
 set -euo pipefail
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq >/dev/null
-apt-get install -qq -y gcc g++ libimlib2-dev >/dev/null
 
 mkdir -p /tmp/harness
 gcc -std=gnu99 -O1 -g -I. -c sxmlc.c -o /tmp/harness/sxmlc.o
