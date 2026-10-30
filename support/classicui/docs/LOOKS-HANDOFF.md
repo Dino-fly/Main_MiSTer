@@ -126,8 +126,16 @@ start phase 3 on a new branch off `classic-ui` there.
      their scanlines in the sfilter slot only, which set_vfilter ignores unless the core's
      Scandoubler Fx is at a CRT setting - so on HDMI they drew no scanlines at all (only
      PVM RGB, whose scanlines are its vfilter, had any). Moved to vfilter (+ sfilter copy).
-     **The Super Game Boy look has the same shape and was left alone: it was approved as
-     seen, without scanlines - ask Dinofly.** Not yet confirmed on the device.
+     Device-confirmed (Genesis 240p suite, dongle): zero row variation before, a 23-31
+     level scanline swing after (`docs/img/device/crt-*`).
+   - **Super Game Boy (Dinofly 2026-10-30):** it ran on a Super Nintendo, so it offers
+     every console television - SGB PVM RGB (the old "sgb" index), SGB BVM RGB, SGB
+     S-Video, SGB Composite - plus None with SGB Border. Shared CRT_* macros keep the
+     scaler halves identical to the console's. 11 GB looks: at 240p the tiles become
+     names, three to a row. On device the adaptor switches on and off correctly, but no
+     border showed on Link's Awakening (open: try an SGB-enhanced game).
+   - **Merged into classic-ui 99666636.** Next round: a console corpus and CRT renders
+     for the look-review pane.
 8. **Phase 4, computers** grouped by era output; **phase 5** ship; **phase 6** the
    shadowmask RTL patch - possibly unnecessary now that `SUB_BLEND` is 0, re-check
    every panel first.
