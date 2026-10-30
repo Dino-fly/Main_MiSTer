@@ -68,14 +68,6 @@ start phase 3 on a new branch off `classic-ui` there.
    - **Next:** a 480i check on the device (PSX/Saturn/N64: a CRT look shows no
      scanlines and the preset's ifilter is in force). The ifilter line is written
      (chome_video.cpp vp_install) and read (video.cpp); only the device is unverified.
-   - **Device-confirmed (2026-10-30, c1a58ec7, Dinofly review #1):** all five console
-     looks on Sonic 2 and ALttP title screens, `docs/img/device/crt-*-c1a58ec7.png`
-     (2560x1440, 6x). Measured against a model render of the device's own Sharp frame
-     (native pixels sampled back out of it) with one swing script over the 1792x1344
-     picture box, the device swing is 0.73-1.03x the model (Genesis ~20% low,
-     animating title; SNES 0.85-1.03), same ordering. Genesis Composite set Composite
-     Blend=On; SNES has none and skipped it. render_looks.py has no 1440p screen: the
-     comparison overrode SCREENS['1080p'] = (2560, 1440) from a wrapper.
    - **CRT renders (merged 403f8a51, Dinofly approved reviews #1-3):** console corpus in
      tools/corpus (SNES 512x224 with every column doubled, Genesis 320x224, NES 256x224,
      PSX 405x240/352x240 incl. blanking, arcade Rastan 320x240; no TG16 games on the card).
@@ -213,6 +205,9 @@ programmable after the mask.
   left/right wrap. When a dialog stops responding, `echo "load_core /media/fat/menu.rbf"
   > /dev/MiSTer_cmd` gets back to the shelf.
 - Every device test keeps its captures in `docs/img/device/` with the firmware md5.
+- **Scanline depth on the device:** compare a dongle frame with a model render of the
+  device's own Sharp frame (native pixels sampled back out), one swing script over the
+  picture box; console CRT looks read 0.73-1.03x the model (`crt-*-c1a58ec7.png`, 6x).
 
 ## People and rules
 
