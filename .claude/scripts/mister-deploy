@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# mister-deploy - put a built firmware on the device, verified, restartable, reversible.
+#
+#   mister-deploy <path/to/bin/MiSTer> [--stage-only] [--dry-run]
+#
+# 1. stage to /media/fat/MiSTer.new and compare md5 with the local file
+# 2. keep a dated rollback copy /media/fat/MiSTer.pre-YYYYMMDD-HHMM
+# 3. write the md5-verified marker (the Bash hook needs it before anything may land on /media/fat/MiSTer)
+# 4. restart: `killall MiSTer; mv MiSTer.new MiSTer; setsid ./MiSTer &` - the only kill this
+#    script ever issues is `killall MiSTer` on the device, by literal name
+# 5. verify: md5 of /media/fat/MiSTer, exactly one MiSTer with ppid 1 (a child with the
+#    parent's pid is the disc helper and is normal)
+# If the restart cannot be performed (harness refusal, ssh error) the script stops at step 3
+# and prints the one-liner for a human. --stage-only stops there by design.
+set -euo pipefail
+. "$(dirname "$0")/lib.sh"
+
+BIN=""; STAGE_ONLY=0; DRY=0
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--stage-only) STAGE_ONLY=1 ;;
+	--dry-run) DRY=1 ;;
+	-h|--help) sed -n '2,16p' "$0"; exit 0 ;;
+	-*) die "unknown option $1" 2 ;;
+	*) BIN="$1" ;;
+	esac
+	shift
+done
+[ -n "$BIN" ] && [ -f "$BIN" ] || die "usage: mister-deploy <path/to/bin/MiSTer>" 2
+file -b "$BIN" | grep -q ARM || die "$BIN is not an ARM ELF" 2
+need_mister
+LOCAL_MD5=$(local_md5 "$BIN")
+STAMP=$(date +%Y%m%d-%H%M)
+ROLLBACK="/media/fat/MiSTer.pre-$STAMP"
+RESTART='cd /media/fat && killall MiSTer; sleep 1; mv MiSTer.new MiSTer && sync; setsid ./MiSTer >/dev/null 2>&1 </dev/null & exit 0'
+ONE_LINER="ssh -n ${MISTER_USER}@${MISTER_HOST} '$RESTART'"
+
+pid_shape() {  # prints e.g. "1234(ppid 1) 1240(ppid 1234)"; empty when not running
+	mister_ssh 'for p in $(pidof MiSTer); do printf "%s(ppid %s) " "$p" "$(awk "{print \$4}" /proc/$p/stat)"; done; echo' | tr -s ' '
+}
+
+if [ "$DRY" = 1 ]; then
+	echo "would: scp $BIN -> ${MISTER_HOST}:/media/fat/MiSTer.new; md5sum compare to $LOCAL_MD5; cp /media/fat/MiSTer $ROLLBACK"
+	echo "would: write $MD5_MARKER; then restart with: $ONE_LINER"
+	echo "would: verify md5 + pidof/ppid shape"
+	exit 0
+fi
+
+BEFORE=$(mister_ssh "md5sum /media/fat/MiSTer | cut -c1-32") || die "device unreachable at $MISTER_HOST (mister-find --sweep)"
+[ "$BEFORE" != "$LOCAL_MD5" ] || { echo "DEPLOY NOOP: device already runs md5=$LOCAL_MD5"; exit 0; }
+mister_ssh "cp -p /media/fat/MiSTer $ROLLBACK"
+mister_scp "$BIN" /media/fat/MiSTer.new
+REMOTE=$(mister_ssh "md5sum /media/fat/MiSTer.new | cut -c1-32")
+if [ "$REMOTE" != "$LOCAL_MD5" ]; then
+	mister_ssh "rm -f /media/fat/MiSTer.new"
+	die "staged md5 $REMOTE != local $LOCAL_MD5 - removed MiSTer.new"
+fi
+(umask 077; printf '%s %s %s\n' "$LOCAL_MD5" "$MISTER_HOST" "$(date +%s)" > "$MD5_MARKER")
+echo "staged  /media/fat/MiSTer.new md5=$LOCAL_MD5 verified; rollback=$ROLLBACK; previous md5=$BEFORE"
+
+if [ "$STAGE_ONLY" = 1 ]; then
+	echo "STAGED - restart by hand:"; echo "  $ONE_LINER"; exit 0
+fi
+
+# The restart ssh can hang if the child inherits the channel; run it detached and wait.
+set +e
+ssh "${SSH_OPTS[@]}" "${MISTER_USER}@${MISTER_HOST}" "$RESTART" 2> >(pq_filter >&2) &
+SSH_PID=$!
+for _ in $(seq 1 20); do kill -0 "$SSH_PID" 2>/dev/null || break; sleep 1; done
+if kill -0 "$SSH_PID" 2>/dev/null; then kill "$SSH_PID" 2>/dev/null; fi
+wait "$SSH_PID" 2>/dev/null; RRC=$?
+set -e
+if [ "$RRC" != 0 ] && [ "$RRC" != 143 ]; then
+	echo "RESTART NOT PERFORMED (ssh exit $RRC). Binary is staged and verified. Run:"; echo "  $ONE_LINER"; exit 3
+fi
+
+sleep 3
+AFTER=$(mister_ssh "md5sum /media/fat/MiSTer | cut -c1-32; test -e /media/fat/MiSTer.new && echo NEW_STILL_THERE; true" | tr '\n' ' ')
+SHAPE=$(pid_shape)
+PARENTS=$(grep -o 'ppid 1)' <<<"$SHAPE" | wc -l | tr -d ' ')
+if [[ "$AFTER" != "$LOCAL_MD5 "* ]] || [[ "$AFTER" == *NEW_STILL_THERE* ]]; then
+	echo "DEPLOY FAIL: on-device md5/state '$AFTER' (expected $LOCAL_MD5); pids: ${SHAPE:-none}. Rollback: ssh ${MISTER_USER}@${MISTER_HOST} 'cd /media/fat && killall MiSTer; cp $ROLLBACK MiSTer; setsid ./MiSTer >/dev/null 2>&1 </dev/null &'"; exit 1
+fi
+if [ "$PARENTS" != 1 ]; then
+	echo "DEPLOY FAIL: firmware process shape wrong: ${SHAPE:-not running} (need exactly one ppid 1). One-liner: $ONE_LINER"; exit 1
+fi
+echo "DEPLOY OK host=$MISTER_HOST md5=$LOCAL_MD5 pids=$SHAPE rollback=$ROLLBACK"

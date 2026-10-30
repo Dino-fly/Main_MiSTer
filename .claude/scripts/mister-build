@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# mister-build - cross-compile the firmware in a worktree, the verified way.
+#
+#   mister-build <worktree> [--jobs N] [--allow-no-creds] [--dry-run]
+#
+# amd64 container (the official gcc 10.2 toolchain is an x86_64 ELF), toolchain mounted
+# read-only from the main checkout, ScreenScraper env file mounted so the credentials
+# are baked in, `make clean` first (incremental make leaves objects on an old struct
+# layout). Success is an explicit marker in the log, not a pipe's exit code.
+#
+# Verdict line: BUILD OK|FAIL <worktree> md5=... size=... stale_objects=N devid=present|ABSENT|unknown log=...
+# Exit 0 only when the binary is ARM, fresh, has 0 stale objects and the devid is present.
+set -euo pipefail
+. "$(dirname "$0")/lib.sh"
+
+WT=""; JOBS=""; DRY=0; NOCREDS=0
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--jobs) JOBS="$2"; shift ;;
+	--allow-no-creds) NOCREDS=1 ;;
+	--dry-run) DRY=1 ;;
+	-h|--help) sed -n '2,13p' "$0"; exit 0 ;;
+	-*) die "unknown option $1" 2 ;;
+	*) WT="$1" ;;
+	esac
+	shift
+done
+[ -n "$WT" ] || die "usage: mister-build <worktree>" 2
+WT=$(cd "$WT" 2>/dev/null && pwd -P) || die "no such directory: $1" 2
+[ "$WT" != "$MAIN_REPO" ] || die "refusing: $MAIN_REPO is the main checkout, make clean is forbidden there - build in a worktree" 2
+[ -f "$WT/Makefile" ] || die "$WT has no Makefile" 2
+[ -d "$TOOLCHAIN/bin" ] || die "toolchain missing at $TOOLCHAIN" 2
+
+if [ -f "$SS_ENV_FILE" ]; then
+	SS_MOUNT=(-v "$SS_ENV_FILE:/ss.env:ro"); SS_ARG="SS_ENV=/ss.env"
+elif [ "$NOCREDS" = 1 ]; then
+	SS_MOUNT=(); SS_ARG=""; echo "warning: no $SS_ENV_FILE - building WITHOUT scraper credentials" >&2
+else
+	die "$SS_ENV_FILE missing: the binary would silently lose its ScreenScraper credentials (--allow-no-creds to override)" 2
+fi
+
+JOBS=${JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || echo 4)}
+mkdir -p "$CLASSICUI_CFG/logs"
+LOG="$CLASSICUI_CFG/logs/build-$(basename "$WT")-$(date +%Y%m%d-%H%M%S).log"
+
+# Image: ubuntu:20.04 (glibc 2.31 = the device's) plus make. Built once, reused.
+ensure_image() {
+	docker image inspect "$BUILD_IMAGE" >/dev/null 2>&1 && return 0
+	printf 'FROM ubuntu:20.04\nRUN apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends make file && rm -rf /var/lib/apt/lists/*\n' \
+		| docker build --platform linux/amd64 -q -t "$BUILD_IMAGE" - >/dev/null
+}
+
+INNER="export PATH=/tc/bin:\$PATH; make clean >/dev/null 2>&1; make $SS_ARG -j$JOBS && echo MISTER_BUILD_OK"
+# ${SS_MOUNT[@]+...}: an empty array under set -u is "unbound" on macOS bash 3.2, which
+# made --allow-no-creds exit 1 before running anything (found by test-scripts.sh).
+CMD=(docker run --rm --platform linux/amd64 -v "$WT:/mister" -v "$TOOLCHAIN:/tc:ro" ${SS_MOUNT[@]+"${SS_MOUNT[@]}"} -w /mister "$BUILD_IMAGE" bash -c "$INNER")
+
+if [ "$DRY" = 1 ]; then
+	echo "would run: ${CMD[*]}"
+	echo "then check: ARM ELF, bin/MiSTer newer than start, stale objects (find bin -name '*.o' ! -newer cfg.h), devid via stdin grep -a, md5"
+	echo "log: $LOG"
+	exit 0
+fi
+
+ensure_image
+STAMP=$(mktemp); touch "$STAMP"
+rc=0
+"${CMD[@]}" > "$LOG" 2>&1 || rc=$?
+BIN="$WT/bin/MiSTer"
+
+fail() { echo "BUILD FAIL $WT: $1 log=$LOG"; tail -n 15 "$LOG" | sed 's/^/  | /'; rm -f "$STAMP"; exit 1; }
+[ "$rc" = 0 ] && grep -q '^MISTER_BUILD_OK$' "$LOG" || fail "make exited $rc / no success marker"
+[ -f "$BIN" ] || fail "bin/MiSTer missing"
+[ -n "$(find "$BIN" -newer "$STAMP")" ] || fail "bin/MiSTer not rebuilt"
+file -b "$BIN" | grep -q 'ARM' || fail "bin/MiSTer is not an ARM ELF"
+rm -f "$STAMP"
+
+STALE=$(find "$WT/bin" -name '*.o' ! -newer "$WT/cfg.h" | wc -l | tr -d ' ')
+
+# devid check: the value goes to grep on STDIN, never into argv, never into this log.
+DEVID_STATE=unknown
+if [ -f "$SS_ENV_FILE" ]; then
+	if [ -n "$(sed -n 's/^SS_DEVID=//p' "$SS_ENV_FILE" | head -1 | tr -d '"')" ]; then
+		if sed -n 's/^SS_DEVID=//p' "$SS_ENV_FILE" | head -1 | tr -d '"' | grep -q -a -F -f - "$BIN"; then DEVID_STATE=present; else DEVID_STATE=ABSENT; fi
+	fi
+fi
+
+MD5=$(local_md5 "$BIN"); SIZE=$(stat -f %z "$BIN")
+LINE="$WT md5=$MD5 size=$SIZE stale_objects=$STALE devid=$DEVID_STATE log=$LOG"
+if [ "$STALE" != 0 ] || [ "$DEVID_STATE" = ABSENT ]; then echo "BUILD FAIL $LINE"; exit 1; fi
+echo "BUILD OK $LINE"
