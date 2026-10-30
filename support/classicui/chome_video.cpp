@@ -1170,7 +1170,17 @@ const char *vp_mask_of(int i)     { return (i >= 0 && i < NPRESETS) ? presets[i]
 /* --------------------------------------------- which output are we on? ---- */
 
 /*
-  Is the picture on an analog display, and only there?
+  Is the picture on a low-resolution display - a tube the looks' filters cannot be
+  drawn on?
+
+  Since 2026-10-30 that is "an analog display, unless the scaler drives it at 720
+  lines or more" (Dinofly: CRT looks depend on the output resolution; vga_scaler at
+  720p or better is fine). A 31 kHz monitor fed 1280x1024 by vga_scaler resolves
+  scanlines and a grille the way an HDMI panel does; a TV on direct_video or the
+  takeover, or vga_scaler at 480p, does not. HDMI is never low resolution here:
+  at 480p over HDMI the grids (3x for a Game Boy) and 2x scanlines still land.
+
+  The rest of this note is how "analog" is told, which is unchanged.
 
   The test is video_hdmi_connected() == 0: no HDMI sink attached. Nothing else is
   needed, and nothing else would be honest. All three analog routings put the
@@ -1197,9 +1207,11 @@ const char *vp_mask_of(int i)     { return (i >= 0 && i < NPRESETS) ? presets[i]
   bar, for a handheld class only, and vp_output_poll() only while a look owns
   core options) both check something cheaper first.
 */
-int vp_output_is_analog()
+int vp_output_is_lowres()
 {
-	return (video_hdmi_connected() == 0) ? 1 : 0;
+	if (video_hdmi_connected() != 0) return 0;
+	if (video_scaler_is_visible() && video_mode_height() >= 720) return 0;
+	return 1;
 }
 
 /*
@@ -1372,7 +1384,7 @@ static opt_set options_of(int vclass)
 int vp_options_for(int vclass, int *out)
 {
 	opt_set o = options_of(vclass);
-	int analog = vp_output_is_analog();
+	int analog = vp_output_is_lowres();
 
 	int n = 0;
 	for (int i = 0; i < o.n && n < VP_MAX_OPTIONS; i++)
@@ -2600,7 +2612,7 @@ int vp_available(int i)
 	// On an analog display a panel look is the CRT twin, which needs neither the
 	// grid filter nor a mask - so asking for them would refuse a look that is
 	// perfectly usable there.
-	int crt = vp_output_is_analog() && look_is_panel(d);
+	int crt = vp_output_is_lowres() && look_is_panel(d);
 
 	char rel[1024];
 	preset_rel(d, crt, rel, sizeof(rel));
@@ -2773,7 +2785,7 @@ static int for_output(int i, int analog)
 	return i;
 }
 
-int vp_on_output(int i) { return for_output(i, vp_output_is_analog()); }
+int vp_on_output(int i) { return for_output(i, vp_output_is_lowres()); }
 
 static int vp_preset_path_for(int i, int analog, char *out, int len)
 {
@@ -3052,7 +3064,7 @@ static void vp_restore_lut()
 static void vp_apply_core_side(int i, int with_palette)
 {
 	if (i < 0 || i >= NPRESETS) return;
-	int analog = vp_output_is_analog();
+	int analog = vp_output_is_lowres();
 	const preset_def *d = &presets[for_output(i, analog)];
 
 	// Leaving a LUT look: the player's own table goes back before anything else happens.
@@ -3263,7 +3275,7 @@ int vp_apply_now(int sysidx, int vclass_hint)
 	vp_grid_for_now();
 
 	char path[1024];
-	int analog = vp_output_is_analog();
+	int analog = vp_output_is_lowres();
 
 	printf("ClassicUI: applying video look \"%s\" to the running core%s\n",
 		presets[i].name, analog ? " (analog display)" : "");
@@ -3312,7 +3324,7 @@ void vp_apply_pending()
 		for (int i = 0; i < NPRESETS; i++)
 		{
 			if (strcmp(presets[i].id, look)) continue;
-			if (!vp_preset_path_for(i, vp_output_is_analog(), path, sizeof(path))) path[0] = 0;
+			if (!vp_preset_path_for(i, vp_output_is_lowres(), path, sizeof(path))) path[0] = 0;
 			break;
 		}
 		if (!path[0]) return;
@@ -3343,7 +3355,7 @@ void vp_apply_pending()
 				// Parked for the output seen here, so vp_output_poll() does not
 				// mistake "not applied yet" for "the output changed" and play the
 				// core half early - the very interleaving the note above forbids.
-				vp_applied_analog = vp_output_is_analog();
+				vp_applied_analog = vp_output_is_lowres();
 				break;
 			}
 	}
@@ -3392,7 +3404,7 @@ void vp_output_poll()
 		}
 	}
 
-	int analog = vp_output_is_analog();
+	int analog = vp_output_is_lowres();
 	if (analog == vp_applied_analog) return;
 
 	printf("ClassicUI: video output is now %s - re-evaluating look \"%s\"\n",
