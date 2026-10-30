@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# mister-log - read the firmware log (/tmp/debug.txt on the device) without pasting it.
+#
+#   mister-log mark                         print a marker (the log's current length)
+#   mister-log since <mark> [-g RE] [-n N]  lines written after the marker (grep RE, at most N, default 40)
+#   mister-log count <RE> [--since MARK]    how many lines match (whole log, or after the marker)
+#   mister-log wait <RE> [--since MARK] [--timeout S]   block until a matching line appears; print it
+#   mister-log tail [N]                     the last N lines (default 20)
+#   [--dry-run]
+#
+# A core change restarts the firmware and rewrites the log from line 1, so a marker
+# larger than the log now means "from the start", never "nothing happened". Output is
+# capped on purpose: the transcript is the expensive place. Read-only; nothing on the
+# device is written. Exit 0 found/ok, 1 nothing matched (count 0, wait timed out), 2 usage.
+set -euo pipefail
+. "$(dirname "$0")/lib.sh"
+
+LOG=/tmp/debug.txt
+VERB="${1:-}"; [ $# -gt 0 ] && shift
+MARK=0; RE=""; N=""; TIMEOUT=20; DRY=0; POS=()
+while [ $# -gt 0 ]; do
+	case "$1" in
+	-g) RE="$2"; shift ;;
+	-n) N="$2"; shift ;;
+	--since) MARK="$2"; shift ;;
+	--timeout) TIMEOUT="$2"; shift ;;
+	--dry-run) DRY=1 ;;
+	-h|--help) sed -n '2,15p' "$0"; exit 0 ;;
+	-*) die "unknown option $1" 2 ;;
+	*) POS+=("$1") ;;
+	esac
+	shift
+done
+[ -n "$VERB" ] || { sed -n '2,15p' "$0"; exit 2; }
+case "$VERB" in -h|--help) sed -n '2,15p' "$0"; exit 0 ;; esac
+need_mister
+
+# remote: lines after $1 (0 = all), restart-aware; stdout only
+after_mark() {  # $1 mark
+	mister_ssh "n=\$(wc -l < $LOG 2>/dev/null || echo 0); s=$1; [ \$n -lt \$s ] && s=0; tail -n +\$((s+1)) $LOG 2>/dev/null; true" </dev/null
+}
+grep_or_cat() { if [ -n "$RE" ]; then grep -a -E -- "$RE" || true; else cat; fi; }
+
+if [ "$DRY" = 1 ]; then echo "would: ssh ${MISTER_USER}@${MISTER_HOST} and read $LOG ($VERB ${POS[*]:-} since=$MARK re='$RE')"; exit 0; fi
+
+case "$VERB" in
+mark)
+	mister_ssh "wc -l < $LOG 2>/dev/null || echo 0" </dev/null | tr -d ' ' ;;
+since)
+	[ ${#POS[@]} -ge 1 ] || die "usage: mister-log since <mark>" 2
+	MARK="${POS[0]}"; N=${N:-40}
+	OUT=$(after_mark "$MARK" | grep_or_cat)
+	TOTAL=$(printf '%s' "$OUT" | grep -c '' || true)
+	printf '%s\n' "$OUT" | sed '/^$/d' | tail -n "$N"
+	[ "$TOTAL" -gt "$N" ] && echo "... ($TOTAL lines matched, last $N shown; -n to widen)"
+	[ "$TOTAL" -gt 0 ] || { echo "(no lines since mark $MARK${RE:+ matching $RE})"; exit 1; } ;;
+count)
+	[ ${#POS[@]} -ge 1 ] || die "usage: mister-log count <RE>" 2
+	C=$(after_mark "$MARK" | grep -a -c -E -- "${POS[0]}" || true)
+	echo "${C:-0}"; [ "${C:-0}" -gt 0 ] ;;
+wait)
+	[ ${#POS[@]} -ge 1 ] || die "usage: mister-log wait <RE>" 2
+	t0=$(date +%s)
+	while [ $(( $(date +%s) - t0 )) -lt "$TIMEOUT" ]; do
+		L=$(after_mark "$MARK" | grep -a -E -- "${POS[0]}" | tail -1 || true)
+		[ -n "$L" ] && { echo "$L"; exit 0; }
+		sleep 0.5
+	done
+	echo "no line matching '${POS[0]}' after mark $MARK within ${TIMEOUT}s (pidof MiSTer if the firmware may be gone)" >&2; exit 1 ;;
+tail)
+	mister_ssh "tail -n ${POS[0]:-20} $LOG 2>/dev/null; true" </dev/null ;;
+*)
+	die "unknown verb $VERB (see --help)" 2 ;;
+esac

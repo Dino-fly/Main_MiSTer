@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# mister-find - verify (or rediscover) the MiSTer and the Windows build box.
+#
+#   mister-find [--write] [--sweep] [--quiet]
+#
+# Reads ~/.config/classicui/devices.env (MISTER_HOST, WINBOX_HOST, WINBOX_USER,
+# WINBOX_FP) and verifies each target by evidence, not by address:
+#   MiSTer : port 21 open (its FTP server) AND `uname -a` over key-auth ssh says MiSTer
+#   Winbox : the ed25519 host-key fingerprint equals WINBOX_FP
+# With --sweep, a target that fails is looked for again: the MiSTer among the ARP
+# table's hosts with port 21 open (key-only ssh, never a password, nothing written to
+# known_hosts), the PC via its mDNS name. --write stores a verified new address.
+#
+# Exit 0 both verified, 1 one of them missing, 2 neither. One line per device.
+set -euo pipefail
+. "$(dirname "$0")/lib.sh"
+
+WRITE=0; SWEEP=0
+for a in "$@"; do
+	case "$a" in
+	--write) WRITE=1 ;;
+	--sweep) SWEEP=1 ;;
+	--quiet) ;;
+	-h|--help) sed -n '2,15p' "$0"; exit 0 ;;
+	*) die "unknown option $a" 2 ;;
+	esac
+done
+load_devices
+
+SWEEP_SSH=(-n -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no)
+
+is_mister() {  # $1 = host
+	port_open "$1" 21 || return 1
+	local u
+	u=$(ssh "${SWEEP_SSH[@]}" "root@$1" uname -a 2>/dev/null | pq_filter) || return 1
+	[[ "$u" == *MiSTer* ]]
+}
+
+arp_hosts() { arp -an | awk -F'[()]' '/incomplete/{next} {print $2}' | grep -E '^192\.168\.|^10\.|^172\.(1[6-9]|2[0-9]|3[01])\.' | grep -v '\.255$' || true; }
+
+fingerprint() {  # $1 = host -> SHA256:... of its ed25519 key, empty if unreachable
+	ssh-keyscan -t ed25519 -T 3 "$1" 2>/dev/null | ssh-keygen -lf - 2>/dev/null | awk '{print $2}' | head -1
+}
+
+resolve_name() {  # mDNS/DNS name -> IPv4, empty if none
+	dscacheutil -q host -a name "$1" 2>/dev/null | awk '/^ip_address/{print $2; exit}'
+}
+
+update_env() {  # key value
+	local tmp; tmp=$(mktemp)
+	if [ -f "$DEVICES_ENV" ] && grep -q "^$1=" "$DEVICES_ENV"; then
+		sed "s|^$1=.*|$1=$2|" "$DEVICES_ENV" > "$tmp"
+	else
+		{ [ -f "$DEVICES_ENV" ] && cat "$DEVICES_ENV"; echo "$1=$2"; } > "$tmp"
+	fi
+	(umask 077; cat "$tmp" > "$DEVICES_ENV"); rm -f "$tmp"
+}
+
+rc=0
+
+# --- MiSTer ------------------------------------------------------------------
+m_ok=0
+if [ -n "$MISTER_HOST" ] && is_mister "$MISTER_HOST"; then
+	echo "mister  $MISTER_HOST  ok (port 21 + uname)"; m_ok=1
+elif [ "$SWEEP" = 1 ]; then
+	for ip in $(arp_hosts); do
+		[ "$ip" = "$MISTER_HOST" ] && continue
+		if is_mister "$ip"; then
+			echo "mister  $ip  FOUND by sweep (was '${MISTER_HOST:-unset}')"
+			[ "$WRITE" = 1 ] && update_env MISTER_HOST "$ip"
+			m_ok=1; break
+		fi
+	done
+fi
+if [ "$m_ok" = 0 ]; then
+	echo "mister  ${MISTER_HOST:-unset}  NOT ANSWERING - is it switched on? (sweep: $SWEEP)"; rc=$((rc+1))
+fi
+
+# --- Windows build box ---------------------------------------------------------
+w_ok=0
+check_winbox() {  # $1 = host
+	local fp; fp=$(fingerprint "$1")
+	[ -n "$fp" ] || return 1
+	if [ -n "$WINBOX_FP" ]; then [ "$fp" = "$WINBOX_FP" ]; else echo "winbox  $1  reachable, WINBOX_FP unset - fingerprint $fp (set it to pin the host)"; return 2; fi
+}
+if [ -n "$WINBOX_HOST" ] && check_winbox "$WINBOX_HOST"; then
+	echo "winbox  $WINBOX_HOST  ok (host key matches)"; w_ok=1
+elif [ "$SWEEP" = 1 ]; then
+	ip=$(resolve_name "${WINBOX_NAME:-vinniepc.local}")
+	if [ -n "$ip" ] && [ "$ip" != "$WINBOX_HOST" ] && check_winbox "$ip"; then
+		echo "winbox  $ip  FOUND by name (was '${WINBOX_HOST:-unset}')"
+		[ "$WRITE" = 1 ] && update_env WINBOX_HOST "$ip"
+		w_ok=1
+	fi
+fi
+if [ "$w_ok" = 0 ]; then
+	echo "winbox  ${WINBOX_HOST:-unset}  NOT VERIFIED (host key mismatch or unreachable)"; rc=$((rc+1))
+fi
+
+[ "$rc" = 0 ] && echo "VERDICT: both devices verified" || echo "VERDICT: $rc device(s) not verified"
+exit "$rc"

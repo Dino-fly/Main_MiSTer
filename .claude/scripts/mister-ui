@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# mister-ui - put the ClassicUI front-end somewhere by name, and read back where it is.
+#
+#   mister-ui sys <id|name>           a system's shelf             (mister-ui sys gbc)
+#   mister-ui game <title or part>    a game on the shelf on show  (mister-ui game "Oracle of Seasons")
+#   mister-ui goto <sys> [<game>]     both of the above in one
+#   mister-ui look <name>             the selected game's class gets this look (applied live in-game)
+#   mister-ui display | home | state  open Display / close overlays / report
+#   mister-ui launch                  start the selected game, wait for its core
+#   mister-ui menu                    back to the menu core, wait for the front-end
+#   mister-ui key <up|down|left|right|enter|esc|tab|menu>   one firmware-injected press
+#   [--timeout S] [--dry-run]
+#
+# Every ui verb sends `ui <verb> <arg>` to /dev/MiSTer_cmd and waits for the firmware's
+# one-line answer "ClassicUI: ui <verb> -> ok|FAILED ..." in /tmp/debug.txt, which it
+# prints. Exit 0 ok, 1 FAILED, 3 no answer (old firmware, or the process is gone -
+# check `pidof MiSTer`). These place state directly: they say nothing about whether
+# the keyboard or pad path to the same point works.
+set -euo pipefail
+. "$(dirname "$0")/lib.sh"
+
+TIMEOUT=10; DRY=0; ARGS=()
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--timeout) TIMEOUT="$2"; shift ;;
+	--dry-run) DRY=1 ;;
+	-h|--help) sed -n '2,18p' "$0"; exit 0 ;;
+	*) ARGS+=("$1") ;;
+	esac
+	shift
+done
+[ ${#ARGS[@]} -ge 1 ] || die "usage: mister-ui <verb> [arg] (see --help)" 2
+VERB="${ARGS[0]}"; ARG="${ARGS[*]:1}"
+need_mister
+
+# Write one line into the command FIFO. Single-quoted for the remote shell, with each
+# ' spelled '\'' - not piped over stdin, because SSH_OPTS carries -n and drops it.
+send_cmd() {
+	if [ "$DRY" = 1 ]; then echo "would send: $1"; return 0; fi
+	local q=${1//\'/\'\\\'\'}
+	mister_ssh "printf '%s\\n' '$q' > /dev/MiSTer_cmd" </dev/null
+}
+
+# --dry-run must not touch the device: under set -e/pipefail a failed ssh here would
+# end the script before "would send" is printed (the mister-deploy class of exit).
+log_lines() { [ "$DRY" = 1 ] && { echo 0; return 0; }; mister_ssh 'wc -l < /tmp/debug.txt 2>/dev/null || echo 0' </dev/null | tr -d ' '; }
+
+# $1 verb, $2 the log length before sending. Prints the answer; 0 ok, 1 FAILED, 3 none.
+wait_answer() {
+	[ "$DRY" = 1 ] && return 0
+	local verb="$1" before="$2" t0 line
+	t0=$(date +%s)
+	while [ $(( $(date +%s) - t0 )) -lt "$TIMEOUT" ]; do
+		# A core change restarts the firmware and rewrites the log from line 1.
+		line=$(mister_ssh "n=\$(wc -l < /tmp/debug.txt); s=$before; [ \$n -lt \$s ] && s=0; tail -n +\$((s+1)) /tmp/debug.txt | grep -a 'ClassicUI: ui $verb -> ' | tail -1" </dev/null || true)
+		if [ -n "$line" ]; then
+			echo "${line#ClassicUI: }"
+			case "$line" in *"-> ok"*) return 0 ;; *) return 1 ;; esac
+		fi
+		sleep 0.4
+	done
+	echo "no answer to 'ui $verb' in ${TIMEOUT}s - firmware without the ui command, or not running (pidof MiSTer)" >&2
+	return 3
+}
+
+ui() {
+	local verb="$1" arg="${2:-}" before
+	before=$(log_lines)
+	send_cmd "ui $verb${arg:+ $arg}"
+	wait_answer "$verb" "$before"
+}
+
+corename() { mister_ssh 'cat /tmp/CORENAME 2>/dev/null' </dev/null; }
+
+case "$VERB" in
+state|home|display|sys|game|look)
+	ui "$VERB" "$ARG" ;;
+goto)
+	[ ${#ARGS[@]} -ge 2 ] || die "usage: mister-ui goto <sys> [<game>]" 2
+	ui sys "${ARGS[1]}"
+	[ ${#ARGS[@]} -ge 3 ] && ui game "${ARGS[*]:2}"
+	exit 0 ;;
+launch)
+	ui launch || exit $?
+	[ "$DRY" = 1 ] && exit 0
+	t0=$(date +%s)
+	while [ $(( $(date +%s) - t0 )) -lt 40 ]; do
+		c=$(corename)
+		[ -n "$c" ] && [ "$c" != "MENU" ] && { echo "core $c up after $(( $(date +%s) - t0 ))s"; exit 0; }
+		sleep 1
+	done
+	echo "the core never came up (CORENAME still MENU after 40s)" >&2; exit 1 ;;
+menu)
+	send_cmd "load_core /media/fat/menu.rbf"
+	[ "$DRY" = 1 ] && exit 0
+	t0=$(date +%s)
+	while [ $(( $(date +%s) - t0 )) -lt 40 ]; do
+		sleep 2
+		[ "$(corename)" = "MENU" ] || continue
+		# Up only once it answers: the library scan runs before the shelf takes input.
+		TIMEOUT=4
+		if out=$(ui state 2>/dev/null) && [[ "$out" == *"active=1"* ]]; then echo "$out"; exit 0; fi
+	done
+	echo "the front-end did not come back within 40s - pidof MiSTer" >&2; exit 3 ;;
+key)
+	send_cmd "key $ARG"; exit 0 ;;
+*)
+	die "unknown verb $VERB (see --help)" 2 ;;
+esac

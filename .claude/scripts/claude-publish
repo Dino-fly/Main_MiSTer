@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# claude-publish - copy the committable part of the live .claude/ into a worktree, after a
+# leak scan, and stage it there for a commit.
+#
+#   claude-publish <worktree> [--dry-run]
+#   claude-publish --unlink <worktree>     replace a worktree's old .claude symlinks, so
+#                                          checking out or merging classic-ui can write the
+#                                          tracked files there
+#
+# The live copy is the main checkout's .claude/ (every session runs its hooks from there,
+# via $HOME paths in settings.json). The worktree should be on a branch off classic-ui;
+# commit there and merge --no-ff as usual.
+#
+# Published: agents/ hooks/ rules/ scripts/ skills/ settings.json WORKFLOW.md
+# Never published: settings.local.json, worktrees/, ROADMAP.md, DONE.md, *.bak, caches.
+#
+# The leak scan refuses on: an absolute home path, a LAN address, an e-mail address, or any
+# pattern in ~/.config/classicui/private-words (one extended regex per line, case-
+# insensitive; that file is outside every repository and is never printed). Exit 0 staged,
+# 1 refused, 2 usage.
+set -euo pipefail
+. "$(dirname "$0")/lib.sh"
+SRC="$MAIN_REPO/.claude"
+DIRS="agents hooks rules scripts skills"
+FILES="settings.json WORKFLOW.md"
+WORDS="$CLASSICUI_CFG/private-words"
+
+usage() { sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
+[ "${1:-}" = "--help" ] && usage 0
+[ $# -ge 1 ] || usage
+
+if [ "$1" = "--unlink" ]; then
+	WT="${2:?worktree}"; n=0
+	for l in "$WT"/.claude/*; do
+		[ -L "$l" ] || continue
+		rm "$l"; n=$((n+1))
+	done
+	echo "UNLINKED $n symlink(s) in $WT/.claude"
+	exit 0
+fi
+
+WT="$1"; DRY=0; [ "${2:-}" = "--dry-run" ] && DRY=1
+[ -d "$WT" ] || { echo "no such worktree: $WT"; exit 2; }
+[ "$(cd "$WT" && pwd -P)" != "$(cd "$MAIN_REPO" && pwd -P)" ] || { echo "refused: publish into a worktree, never the main checkout"; exit 2; }
+
+# ---- what would be published --------------------------------------------------------
+LIST=$(cd "$SRC" && { for d in $DIRS; do [ -d "$d" ] && find "$d" -type f; done; for f in $FILES; do [ -f "$f" ] && echo "$f"; done; } \
+	| grep -vE '(^|/)(__pycache__|\.DS_Store)|\.bak$|\.pyc$' | sort)
+
+# ---- leak scan --------------------------------------------------------------------------
+GENERIC='/(Users|home)/[a-z][a-z0-9_-]*/|\b(192\.168|10\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01]))\.[0-9]+\.[0-9]+\b|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[a-z]{2,}'
+hits=0
+while IFS= read -r f; do
+	if grep -qE "$GENERIC" "$SRC/$f"; then
+		echo "LEAK generic pattern in .claude/$f: $(grep -nE "$GENERIC" "$SRC/$f" | head -1 | cut -d: -f1 | sed 's/^/line /')"
+		hits=$((hits+1))
+	fi
+	if [ -s "$WORDS" ] && grep -qiEf "$WORDS" "$SRC/$f"; then
+		echo "LEAK private word in .claude/$f: $(grep -niEf "$WORDS" "$SRC/$f" | head -1 | cut -d: -f1 | sed 's/^/line /')"
+		hits=$((hits+1))
+	fi
+done <<<"$LIST"
+[ -s "$WORDS" ] || echo "note: $WORDS is missing or empty - only the generic patterns were checked"
+[ "$hits" = 0 ] || { echo "PUBLISH REFUSED: $hits leak(s); fix them in $SRC and rerun"; exit 1; }
+
+n=$(grep -c . <<<"$LIST")
+if [ "$DRY" = 1 ]; then
+	echo "would publish $n files from $SRC into $WT/.claude:"; sed 's/^/  /' <<<"$LIST"
+	exit 0
+fi
+
+# ---- copy and stage ---------------------------------------------------------------------
+for l in "$WT"/.claude/*; do [ -L "$l" ] && rm "$l"; done
+mkdir -p "$WT/.claude"
+for d in $DIRS; do
+	[ -d "$SRC/$d" ] || continue
+	rm -rf "${WT:?}/.claude/$d"
+done
+while IFS= read -r f; do
+	mkdir -p "$WT/.claude/$(dirname "$f")"
+	cp -p "$SRC/$f" "$WT/.claude/$f"
+done <<<"$LIST"
+# .claude is in .git/info/exclude (shared by every worktree), hence -f
+( cd "$WT" && git add -f -A -- $(for d in $DIRS; do echo ".claude/$d"; done) $(for f in $FILES; do echo ".claude/$f"; done) )
+echo "PUBLISH STAGED $n files in $WT; review with: git -C $WT diff --cached --stat"

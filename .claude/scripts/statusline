@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# statusline - what the orchestrator needs to see every turn: context used, cache state, cost.
+# Fed the statusLine JSON on stdin (code.claude.com/docs/en/statusline). Prints one line:
+#   Opus | ctx 42% | cache warm 1h hit 0.91 | $1.23 | 38m | classic-ui
+# ctx >= 60% is the cue to finish the task and run /wrap-up; "cache COLD" after a long
+# wait means the next turn re-writes the whole prefix.
+IN=$(cat)
+command -v jq >/dev/null 2>&1 || { echo "statusline: jq missing"; exit 0; }
+j() { printf '%s' "$IN" | jq -r "$1" 2>/dev/null; }
+MODEL=$(j '.model.display_name // "?"')
+CTX=$(j '.context_window.used_percentage // empty'); CTX=${CTX:-?}
+WARM=$(j 'if .prompt_cache.warm == null then "" else (.prompt_cache.warm|tostring) end'); TTL=$(j '.prompt_cache.ttl // empty'); HIT=$(j '.prompt_cache.hit_ratio // empty')
+CAUSE=$(j '.prompt_cache.last_miss_cause.causes[0] // empty')
+COST=$(j '.cost.total_cost_usd // 0' | awk '{printf "$%.2f", $1}')
+MIN=$(j '.cost.total_duration_ms // 0' | awk '{printf "%dm", $1/60000}')
+DIR=$(j '.workspace.current_dir // empty'); BR=""
+[ -n "$DIR" ] && BR=$(git -C "$DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+case "$WARM" in true) C="cache warm ${TTL}${HIT:+ hit $HIT}" ;; false) C="cache COLD${CAUSE:+ ($CAUSE)}" ;; *) C="cache ?" ;; esac
+CTXMARK=""; [[ "$CTX" =~ ^[0-9]+$ ]] && [ "$CTX" -ge 60 ] && CTXMARK=" WRAP-UP SOON"
+echo "$MODEL | ctx ${CTX}%${CTXMARK} | $C | $COST | $MIN${BR:+ | $BR}"
