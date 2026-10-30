@@ -117,9 +117,17 @@ start phase 3 on a new branch off `classic-ui` there.
      interlaced source, and our presets write no `ifilter` line - so on PSX/Saturn/N64
      480i a CRT look loses its scanlines (right) and inherits whatever ifilter the
      player had (wrong: should be written).
-   - **Proposal, put to Dinofly 2026-10-30, not yet answered:** Composite drives the core composite
-     options; arcade swaps S-Video for an arcade-monitor look; no PAL exception for
-     consoles (SCART was RGB); Vectrex later as its own class.
+   - **Dinofly's calls (2026-10-30):** Composite drives the core signal options
+     (`Composite Blend=On;Composite Filter=Budget TV;Composite Filter=On`) with the
+     scaler hblur lowered Blurry -> Soft; arcade swaps S-Video for a new **Arcade CRT**
+     look (slot mask, appended as P_ARCADE_CRT); no PAL exception for consoles (SCART was
+     RGB); every preset writes `ifilter=` its hfilter. Vectrex later, as its own class.
+   - **Bug found and fixed on the branch:** S-Video, Composite, PAL TV and BVM carried
+     their scanlines in the sfilter slot only, which set_vfilter ignores unless the core's
+     Scandoubler Fx is at a CRT setting - so on HDMI they drew no scanlines at all (only
+     PVM RGB, whose scanlines are its vfilter, had any). Moved to vfilter (+ sfilter copy).
+     **The Super Game Boy look has the same shape and was left alone: it was approved as
+     seen, without scanlines - ask Dinofly.** Not yet confirmed on the device.
 8. **Phase 4, computers** grouped by era output; **phase 5** ship; **phase 6** the
    shadowmask RTL patch - possibly unnecessary now that `SUB_BLEND` is 0, re-check
    every panel first.
