@@ -51,41 +51,9 @@ start phase 3 on a new branch off `classic-ui` there.
 
 ## Todo
 
-1. **Push `classic-ui`** past 5bd5299e once Dinofly sets the marker (`approve-once push`).
-2. (done 2026-10-28) NGP family captured live and approved.
-3. (done 2026-10-29) GBA mode on device. Under None, GBA mode alone brightens Oracle of
-   Seasons' intro by ~+30/255 in red (the game's GBA palettes). Under GBC on GBA the
-   look sets it after the ROM upload, yet the frame is byte-identical to a launch with
-   GBA mode already in GBC.CFG - it lands before the game checks. Captures
-   `gbc-oracle-none-hdmi.png`, `gbc-oracle-on-gba-gbamode-hdmi.png` (firmware 5b9d1e48).
-4. **Official NGPC core, savestates** - DONE 2026-10-30 (branch `classicui-ngpc-ss`,
-   firmware 18f49ed1). Row is now `CH_SS_YES`.
-
-   **Cause (measured).** The save entries are `d7` - gated on menumask bit 7, `allow_ss` -
-   and the core's `savestate_ui` drops a request made while the gate is shut: its save/load
-   edge detector only runs inside `if (allow_ss)`. On Sonic Pocket Adventure the gate is
-   shut at the instant the menu opens, so the hold-still pulse went nowhere: no file, and
-   the restore on the way out loaded whatever slot 4 (or the core's slot) held before - the
-   dim frozen frame. KOF R-1 was never affected: its gate is open at menu open (it mounts
-   no cart save, which points at the overlay's flash autosave on the `OSD_STATUS` rising
-   edge - read from the source, not measured).
-   The handoff's earlier theory (a slot restored from NGPC.CFG at load) was wrong for this
-   symptom: the card has no NGPC/NeoGeoPocket .CFG at all, and the baseline wrote `_4.ss`
-   on KOF. The slot step-through it led to is kept - it is correct for a CFG slot, cheap,
-   and harmless - with its comment corrected.
-
-   **Fix.** `ss_scan_hooks()` records the save entry's D/d gate; `ss_do_save/load` refuse
-   (one read, no wait) while it is shut; `freeze_engage()` defers the hold-still save and
-   `freeze_due_poll()` (from `chome_pend_poll`, every frame) fires it when the gate opens,
-   bounded at 30 s; `freeze_release()` skips the restore if the save never went. A
-   *blocking* wait does not work: blocked 20 s, the gate never opened - the core needs the
-   main loop to finish whatever shut it. Unblocked, it opened 28 ms later.
-   Harness: `assert_savestate_gate` (20 checks). Device: Sonic suspend -> `_4.ss` written
-   28 ms after menu open, resume into a running game; KOF unchanged. Captures
-   `ngpc-sonic-*-{5b9d1e48,18f49ed1}.png`, `ngpc-kof-resumed-*.png`.
-   Still open: a player-chosen "save here" copies the held state and waits 8 s for it - a
-   deferral longer than that would make it give up (not seen: 28 ms measured). States from
-   the old community core share savestates/NeoGeoPocket and must not be offered to this one.
+4. **Official NGPC core, savestates** (fixed 18f49ed1; cause and fix in git log): a
+   player's "save here" waits 8 s for a deferred save; states from the old community
+   core share savestates/NeoGeoPocket and must not be offered to this one.
 4b. **Official NGPC core, live switch**: NGPC -> NGPC IPS Mod applied live once left the
    picture white until relaunch (LCD Response Panel -> Raw plus Saturation 75 -> 100 at
    once). Seen once, not yet reproduced; the same look from a launch is fine.
@@ -98,20 +66,15 @@ start phase 3 on a new branch off `classic-ui` there.
    field before CRT looks carry core options.
 7. **Phase 3, TV/arcade looks** (branch `classicui-crt-looks`). The dongle is unreliable
    for 1 px structure (see below); validate scanline depth against the simulator.
-   - **Done 2026-10-30 (f5a204c2):** the model now runs adaptive filters (PVM RGB's
-     scanlines) and the firmware's per-axis rules: hfilter off = nearest on both axes,
-     vfilter off = the hfilter, sfilter only while the core's `Scandoubler Fx` is on (our
-     presets write `sfilter=off`, so a player's core scanlines cannot override a look).
-     All 185 handheld renders byte-identical before/after.
-   - **CRT renders (2026-10-30, branch classicui-crt-renders):** console corpus in
+   - **Next:** confirm the approved renders on the device (dongle captures of each
+     console look on Genesis and SNES, scanline swing vs the model), then the 480i ifilter.
+   - **CRT renders (merged 403f8a51, Dinofly approved reviews #1-3):** console corpus in
      tools/corpus (SNES 512x224 with every column doubled, Genesis 320x224, NES 256x224,
-     PSX 405x240 and 352x240 (width includes blanking), arcade Rastan 320x240; no TG16
-     games on the card). render_looks.py draws console/arcade/computer/vga over every
-     system in the class, at the device's vscale_mode=1 geometry (integer height, 4:3
-     width: 1195x896 for 224 lines), and reports a scanline swing instead of the
-     handheld metrics. Distribution files the presets name live in tools/dist. Not
-     simulated: the core halves (Composite Blend, NES Budget TV), interlace.
-     Handheld renders byte-identical before/after. Sent to Dinofly as review #1.
+     PSX 405x240/352x240 incl. blanking, arcade Rastan 320x240; no TG16 games on the card).
+     render_looks.py renders the TV classes at vscale_mode=1 geometry (integer height, 4:3
+     width: 1195x896 for 224 lines) with a scanline-swing metric; distribution files the
+     presets name live in tools/dist. Not simulated: core halves (Composite Blend, NES
+     Budget TV), interlace.
    - **What a CRT look can drive in the core** (CONF_STRs read 2026-10-30, exact names):
      `Composite Blend` Off/On/Adaptive (Genesis, MegaCD, S32X; Saturn Off/On);
      `Composite Filter` Off/Budget TV/Premium TV (NES; hides Scandoubler Fx) and Off/On
@@ -128,12 +91,8 @@ start phase 3 on a new branch off `classic-ui` there.
      scaler hblur lowered Blurry -> Soft; arcade swaps S-Video for a new **Arcade CRT**
      look (slot mask, appended as P_ARCADE_CRT); no PAL exception for consoles (SCART was
      RGB); every preset writes `ifilter=` its hfilter. Vectrex later, as its own class.
-   - **Bug found and fixed on the branch:** S-Video, Composite, PAL TV and BVM carried
-     their scanlines in the sfilter slot only, which set_vfilter ignores unless the core's
-     Scandoubler Fx is at a CRT setting - so on HDMI they drew no scanlines at all (only
-     PVM RGB, whose scanlines are its vfilter, had any). Moved to vfilter (+ sfilter copy).
-     Device-confirmed (Genesis 240p suite, dongle): zero row variation before, a 23-31
-     level scanline swing after (`docs/img/device/crt-*`).
+   - CRT scanlines live in the vfilter (+ sfilter copy): set_vfilter ignores the sfilter
+     unless the core's Scandoubler Fx is on. Device swing 23-31 levels (`docs/img/device/crt-*`).
    - **Super Game Boy (Dinofly 2026-10-30):** it ran on a Super Nintendo, so it offers
      every console television - SGB PVM RGB (the old "sgb" index), SGB BVM RGB, SGB
      S-Video, SGB Composite - plus the adaptor alone (none-sgb, renamed "Super Game Boy"
@@ -151,8 +110,6 @@ start phase 3 on a new branch off `classic-ui` there.
      vp_output_is_lowres(): analog, unless vga_scaler drives it at >= 720 lines (then
      every look, CRT ones included - Dinofly). HDMI is never low-res. Harness only - the
      device has HDMI attached, so the analog path was not exercised there.
-   - **Merged into classic-ui 99666636.** Next round: a console corpus and CRT renders
-     for the look-review pane.
 8. **Phase 4, computers** grouped by era output; **phase 5** ship; **phase 6** the
    shadowmask RTL patch - possibly unnecessary now that `SUB_BLEND` is 0, re-check
    every panel first.
