@@ -25897,6 +25897,96 @@ static void assert_ui_commands()
 		"an unknown verb fails and names the ones there are");
 }
 
+/*
+  The official NGPC core gates its savestate entries on menumask bit 7 (allow_ss) and drops a
+  request sent while the gate is shut - not queued, gone. Measured on the device: the gate is
+  shut for seconds after the menu opens on Sonic Pocket Adventure, the hold-still pulse went
+  out, and no state was written. So a gated request is never fired blind, and the hold-still
+  save waits for the gate frame by frame - never in a loop, which starves the very main loop
+  the core needs to open it again.
+*/
+static void assert_savestate_gate()
+{
+	printf("\n== a savestate gate the core can shut ==\n");
+
+	static const char *ngpc_core[] =
+	{
+		"NGPC",
+		"FS1,NGPNGCNPC,Load Cartridge",
+		"d7O[46:45],Savestate Slot,1,2,3,4",
+		"d7R[42],Save State (Alt-F1..F4)",
+		"d7R[43],Restore State (F1..F4)",
+		0
+	};
+
+	{
+		FILE *f = fopen("/tmp/classicui_current", "wt");
+		if (f) { fprintf(f, "gb\nTetris (World).gb\n"); fclose(f); }
+	}
+
+	harness_set_menu_core(0);
+	harness_set_fb_supported(1);
+	harness_set_fb(1280, 720);
+	gfx_shutdown();
+	theme_update(1280, 720, 1);
+	chome_handle(0);
+	if (chome_ingame_active()) press(KEY_MENU, 14);
+	frame(6);
+
+	harness_set_confstr_table(ngpc_core);
+
+	harness_set_osd_mask(0x0080);              // allow_ss up
+	harness_reset_status();
+	check(chome_test_ss_save(3) == 1, "with the gate open the save is sent");
+	check(harness_pulses_on("[42]") == 1, "as one pulse on the save entry");
+	check(harness_opt_val("[46:45]") == 3, "into the slot asked for");
+
+	harness_set_osd_mask(0x0000);              // allow_ss down
+	harness_reset_status();
+	unsigned long t0 = harness_now();
+	check(chome_test_ss_save(2) == 0, "with the gate shut the save is refused");
+	check(harness_now() - t0 < 100, "at once, without spinning on the gate");
+	check(harness_pulses_on("[42]") == 0, "and nothing is pulsed into a core that would drop it");
+	check(harness_opt_val("[46:45]") == 3, "nor the slot moved while the core would not see it");
+	check(chome_test_ss_load(2) == 0, "a restore is held to the same gate");
+	check(harness_pulses_on("[43]") == 0, "and is not sent either");
+
+	// The menu opens while the gate is shut, and it opens a few frames later.
+	harness_reset_status();
+	press(KEY_MENU, 20);
+	check(chome_ingame_active(), "the menu opens with the gate shut");
+	check(harness_pulses_on("[42]") == 0, "and does not fire the hold-still save into it");
+
+	harness_set_osd_mask(0x0080);
+	frame(4);
+	check(harness_pulses_on("[42]") == 1, "the save goes the moment the gate opens");
+	check(harness_opt_val("[46:45]") == 3, "into the suspend slot");
+
+	press(KEY_MENU, 16);
+	frame(8);
+	check(!chome_ingame_active(), "the menu closes");
+	check(harness_pulses_on("[43]") == 1, "and the held moment is put back");
+
+	// And when the gate never opens while the menu is up.
+	harness_set_osd_mask(0x0000);
+	harness_reset_status();
+	press(KEY_MENU, 20);
+	check(chome_ingame_active(), "the menu opens again with the gate shut");
+	press(KEY_MENU, 16);
+	frame(8);
+	check(!chome_ingame_active(), "and closes before it ever opens");
+	check(harness_pulses_on("[42]") == 0, "no save was sent");
+	check(harness_pulses_on("[43]") == 0, "so no restore is sent over the running game");
+
+	harness_set_osd_mask(0x0080);
+	frame(4);
+	check(harness_pulses_on("[42]") == 0, "nor a save once the gate opens after the menu has gone");
+
+	harness_set_osd_mask(0x0000);
+	harness_set_confstr(1);
+	harness_set_menu_core(1);
+}
+
 int main()
 {
 	printf("Classic Home host harness\n\n");
@@ -29574,6 +29664,8 @@ int main()
 	assert_typography();
 
 	assert_ui_commands();
+
+	assert_savestate_gate();
 
 	printf("\n== presents ==\n");
 	printf("  page flips: %d\n", harness_present_count());
