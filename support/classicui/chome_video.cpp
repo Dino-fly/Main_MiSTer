@@ -82,6 +82,15 @@ struct preset_def
 	const char *core_colour;  // 0 = nothing, else "Name=Value;Name=Value". Any output.
 	const char *core_struct;  // the LCD's own structure. Never on an analog display.
 	const char *palette;      // 0 = none, else root-relative .gbp path
+	/*
+	  The id of the look that stands in for this one on an analog display, 0 = this
+	  one applies there as it is. Every television look has one: emulating a CRT on a
+	  CRT means nothing, and their filters only exist for a high-resolution output
+	  (Dinofly, 2026-10-30). The CRT looks give way to Sharp; the Super Game Boy's
+	  televisions to Super Game Boy (none-sgb), which keeps what does reach a tube - the
+	  border and the adaptor's colours. Such a look is not offered there at all.
+	*/
+	const char *analog_as;
 };
 
 #define F_SHARP   PREFIX " Sharp.txt"
@@ -375,7 +384,7 @@ static const preset_def presets[] =
 	  one come from captures, not the model.
 	*/
 	{ "pvm-rgb", "PVM RGB", "Sony PVM: adaptive scanlines, aperture grille, warm gamma.",
-	  CRT_PVM_RGB, 0, 0, 0 },
+	  CRT_PVM_RGB, 0, 0, 0, "sharp" },
 
 	/*
 	  Short names on purpose: five tiles share a row on the console class since
@@ -383,7 +392,7 @@ static const preset_def presets[] =
 	  gate is the arbiter. The blurb carries the longer story.
 	*/
 	{ "pvm-svideo", "S-Video", "Slight horizontal bleed, scanlines: a console on a good PVM over S-Video.",
-	  CRT_SVIDEO, 0, 0, 0 },
+	  CRT_SVIDEO, 0, 0, 0, "sharp" },
 
 	/*
 	  The distribution's own Sony PVM mask at 1x, on Dinofly's call, in place of our
@@ -403,13 +412,13 @@ static const preset_def presets[] =
 	  other.
 	*/
 	{ "composite", "Composite", "Soft and blurry, as an RF or composite hookup looked.",
-	  CRT_COMPOSITE, CO_COMPOSITE, 0, 0 },
+	  CRT_COMPOSITE, CO_COMPOSITE, 0, 0, "sharp" },
 
 	{ "pal-tv", "PAL TV", "Softer still with lighter scanlines. Home computers on a telly.",
-	  F_SOFT, F_SCANLT, F_SCANLT, M_GRILLE, "2x", "off", 0, 0, 0 },
+	  F_SOFT, F_SCANLT, F_SCANLT, M_GRILLE, "2x", "off", 0, 0, 0, "sharp" },
 
 	{ "vga", "VGA Monitor", "Clean and slightly smoothed. No scanlines: a 31 kHz monitor had none.",
-	  F_SOFT, F_SOFT, "off", "off", "off", "off", 0, 0, 0 },
+	  F_SOFT, F_SOFT, "off", "off", "off", "off", 0, 0, 0, "sharp" },
 
 	/*
 	  The Game Boy family. Colour comes from a real .gbp through the core's own
@@ -518,7 +527,7 @@ static const preset_def presets[] =
 
 	// Appended after None for the same ABI reason None sits where it does.
 	{ "bvm-rgb", "BVM RGB", "Reference broadcast monitor: razor sharp, deep scanlines.",
-	  CRT_BVM, 0, 0, 0 },
+	  CRT_BVM, 0, 0, 0, "sharp" },
 
 	/*
 	  Two more DMG ramps, appended rather than slotted in beside "dmg": the stored
@@ -559,14 +568,16 @@ static const preset_def presets[] =
 	  above "sharp"); taking the console look's scaler half whole fixes that too.
 	*/
 	{ "sgb", "SGB PVM RGB", "The SNES adaptor on a Sony PVM: its border and colours, adaptive scanlines.",
-	  CRT_PVM_RGB, CO_SGB, CO_SGB_CRT, 0 },
+	  CRT_PVM_RGB, CO_SGB, CO_SGB_CRT, 0, "none-sgb" },
 
 	/*
 	  None, with the adaptor on. None itself deliberately carries no core half at
 	  all - "touch nothing" - so this cannot be None plus a flag; it is None with
 	  exactly one thing asked for, which is the border (and its GBC twin option).
 	*/
-	{ "none-sgb", "None with SGB Border", "Every effect off, with the Super Game Boy border and colours.",
+	// Was "None with SGB Border": three lines of label at every profile, so "Border"
+	// was never on screen. The plain name came free when "sgb" became SGB PVM RGB.
+	{ "none-sgb", "Super Game Boy", "The adaptor alone: its border and colours, every filter off.",
 	  "off", "off", "off", "off", "off", "off",
 	  "Super Game Boy=On;Super Game Boy + GBC=On", 0, 0 },
 
@@ -661,7 +672,7 @@ static const preset_def presets[] =
 	  beam, and the scanlines of a 240-line raster on a 19-inch face.
 	*/
 	{ "arcade-crt", "Arcade CRT", "A cabinet's low-res tube: slot mask, soft beam, clear scanlines.",
-	  F_SOFT, F_SCAN, F_SCAN, M_SLOT, "1x", "off", 0, 0, 0 },
+	  F_SOFT, F_SCAN, F_SCAN, M_SLOT, "1x", "off", 0, 0, 0, "sharp" },
 
 	/*
 	  The rest of the Super Nintendo's televisions for the adaptor - see the "sgb"
@@ -669,11 +680,11 @@ static const preset_def presets[] =
 	  core's picture is not what is running.
 	*/
 	{ "sgb-bvm", "SGB BVM RGB", "The SNES adaptor on a broadcast monitor: razor sharp, deep scanlines.",
-	  CRT_BVM, CO_SGB, CO_SGB_CRT, 0 },
+	  CRT_BVM, CO_SGB, CO_SGB_CRT, 0, "none-sgb" },
 	{ "sgb-svideo", "SGB S-Video", "The SNES adaptor over S-Video: slight bleed, scanlines.",
-	  CRT_SVIDEO, CO_SGB, CO_SGB_CRT, 0 },
+	  CRT_SVIDEO, CO_SGB, CO_SGB_CRT, 0, "none-sgb" },
 	{ "sgb-composite", "SGB Composite", "The SNES adaptor over composite: soft, blurry, scanlines.",
-	  CRT_COMPOSITE, CO_SGB, CO_SGB_CRT, 0 },
+	  CRT_COMPOSITE, CO_SGB, CO_SGB_CRT, 0, "none-sgb" },
 };
 
 #define NPRESETS ((int)(sizeof(presets) / sizeof(presets[0])))
@@ -1212,15 +1223,21 @@ static int look_is_panel(const preset_def *d)
   Lynx, WonderSwan and NGPC looks, whose entire colour work is a LUT, are real on
   a vga_scaler CRT and inert on direct_video or the takeover.
 
-  Non-panel looks (the CRT presets, Sharp, None) are not filtered at all: they
-  are unchanged by this whole mechanism, and offering someone a look with no
-  processing in it is never wasted.
+  The television looks (every CRT preset, and the Super Game Boy on each SNES
+  television) are never offered on an analog display: that display IS the tube,
+  and their filters only exist for a high-resolution output (Dinofly,
+  2026-10-30). Each names a stand-in in analog_as - Sharp, or None with SGB
+  Border - which plays instead if one is the stored choice. The off switches
+  (Sharp, None) always show: a look with no processing in it is never wasted.
+  A class left with only its off switch drops the Display entry altogether, so
+  on a tube Display is a handheld screen: palettes, colour, the SGB border.
 */
 static int look_shows_on_analog(int i)
 {
 	const preset_def *d = &presets[i];
 
-	if (!look_is_panel(d)) return 1;
+	if (d->analog_as) return 0;               // a television: something else stands in
+	if (!look_is_panel(d)) return 1;          // the off switches
 	if (d->core_colour || d->palette) return 1;
 	if (d->gamma && strcasecmp(d->gamma, "off") && video_scaler_is_visible()) return 1;
 
@@ -2742,9 +2759,26 @@ int vp_preset_path(int i, char *out, int len)
   which is the whole fault being fixed here - and vp_install() writes the twin on
   every boot, so the only way to be here is a card somebody has taken files off.
 */
+/*
+  The look actually played for a choice on this output: the choice itself, or on
+  an analog display the look named by its analog_as. The stored choice and the
+  running look stay the player's, so plugging the HDMI cable back in brings the
+  television back rather than leaving its stand-in behind.
+*/
+static int for_output(int i, int analog)
+{
+	if (i < 0 || i >= NPRESETS || !analog || !presets[i].analog_as) return i;
+	for (int j = 0; j < NPRESETS; j++)
+		if (!strcmp(presets[j].id, presets[i].analog_as)) return j;
+	return i;
+}
+
+int vp_on_output(int i) { return for_output(i, vp_output_is_analog()); }
+
 static int vp_preset_path_for(int i, int analog, char *out, int len)
 {
 	if (i < 0 || i >= NPRESETS) return 0;
+	i = for_output(i, analog);
 
 	int crt = analog && look_is_panel(&presets[i]);
 
@@ -3018,7 +3052,8 @@ static void vp_restore_lut()
 static void vp_apply_core_side(int i, int with_palette)
 {
 	if (i < 0 || i >= NPRESETS) return;
-	const preset_def *d = &presets[i];
+	int analog = vp_output_is_analog();
+	const preset_def *d = &presets[for_output(i, analog)];
 
 	// Leaving a LUT look: the player's own table goes back before anything else happens.
 	if (lut_ours && with_palette && !is_lut(d->palette))
@@ -3031,14 +3066,18 @@ static void vp_apply_core_side(int i, int with_palette)
 	{
 		// A look with no core half still undoes the one it replaces.
 		vp_restore_originals();
-		vp_running_look = -1;
-		vp_applied_analog = -1;
+		/*
+		  A stand-in is watched all the same: what it stands in for may have a core
+		  half (SGB PVM RGB does) or a scaler half the HDMI output wants back.
+		*/
+		int watch = presets[i].analog_as && analog;
+		vp_running_look = watch ? i : -1;
+		vp_applied_analog = watch ? analog : -1;
 		return;
 	}
 
 	if (core_opts_scan() <= 0) return;
 
-	int analog = vp_output_is_analog();
 	vp_running_look = i;
 	vp_applied_analog = analog;
 

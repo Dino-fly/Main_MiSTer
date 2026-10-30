@@ -130,10 +130,19 @@ start phase 3 on a new branch off `classic-ui` there.
      level scanline swing after (`docs/img/device/crt-*`).
    - **Super Game Boy (Dinofly 2026-10-30):** it ran on a Super Nintendo, so it offers
      every console television - SGB PVM RGB (the old "sgb" index), SGB BVM RGB, SGB
-     S-Video, SGB Composite - plus None with SGB Border. Shared CRT_* macros keep the
+     S-Video, SGB Composite - plus the adaptor alone (none-sgb, renamed "Super Game Boy"
+     2026-10-30: "None with SGB Border" lost "Border" at every profile). Shared CRT_* macros keep the
      scaler halves identical to the console's. 11 GB looks: at 240p the tiles become
      names, three to a row. On device the adaptor switches on and off correctly, but no
      border showed on Link's Awakening (open: try an SGB-enhanced game).
+   - **Analog output (Dinofly 2026-10-30):** a CRT shows no CRT emulation and no LCD
+     structure - only what reaches a tube: handheld palettes/colour, the SGB border, the
+     off switch. Every television look carries `analog_as` (CRT looks -> Sharp, SGB
+     televisions -> none-sgb); it is not listed on analog, and a stored choice plays its
+     stand-in there via for_output() inside vp_preset_path_for/vp_apply_core_side, so the
+     choice itself is never rewritten. Console/arcade/computer/VGA classes are left with
+     Sharp alone, so Display drops off the bar for them on a tube. Harness only - the
+     device has HDMI attached, so the analog path was not exercised there.
    - **Merged into classic-ui 99666636.** Next round: a console corpus and CRT renders
      for the look-review pane.
 8. **Phase 4, computers** grouped by era output; **phase 5** ship; **phase 6** the
