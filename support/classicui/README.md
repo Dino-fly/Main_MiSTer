@@ -629,9 +629,11 @@ special case in the apply.
 | Colour | The `.gbp` palette, `GBC Colors`, `Modify Colors`, and the gamma LUTs for the panels whose cores offer no colour work | Any output. A Game Boy on a CRT wants DMG green as much as one on HDMI |
 | Structure | The pixel grid, `Screen Shadow`, `Frame blend` / `Flickerblend`, and the HV-integer `Scale` that exists only to keep the grid's cells equal | The scaler path only. On a real tube a simulated LCD structure is not a simulation of anything, it is damage |
 
-The test is `vp_output_is_analog()`: **no HDMI sink attached**, so whatever the
+The test is `vp_output_is_lowres()`: **no HDMI sink attached**, so whatever the
 routing - `direct_video`, `vga_scaler`, or the front-end's own takeover - a
-television or a CRT is what the player is looking at. It is deliberately not
+television or a CRT is what the player is looking at; **unless** `vga_scaler`
+drives it at 720 lines or more, which is a high-resolution monitor and gets every
+look, the CRT ones included. It is deliberately not
 `video_scaler_is_visible()`, which answers the different question of whether the
 scaler output reaches a screen: with `vga_scaler=1` the scaler is very much in the
 path and pointing down a VGA cable at a tube, which is the one setup where the grid

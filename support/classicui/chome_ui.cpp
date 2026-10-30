@@ -719,7 +719,7 @@ static int mb_visible(int i)
 	  gamma LUT that is not in the path. An entry leading to one immovable row
 	  would be the same lie in a different place.
 	*/
-	if (vp_class_is_handheld(disp_class()) && vp_output_is_analog() &&
+	if (vp_class_is_handheld(disp_class()) && vp_output_is_lowres() &&
 	    vp_options_for(disp_class(), 0) >= 2) return 1;
 
 	// Nothing in Display applies when the scaler is bypassed.

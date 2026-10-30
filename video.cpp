@@ -4016,6 +4016,11 @@ int video_hdmi_connected()
     - without vga_scaler the analog port gets raw (scandoubled) core video, so if
       nothing is on HDMI either, the scaler output goes nowhere visible.
 */
+int video_mode_height()
+{
+	return v_cur.item[5];
+}
+
 int video_scaler_is_visible()
 {
 	if (cfg.direct_video) return 0;

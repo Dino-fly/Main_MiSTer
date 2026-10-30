@@ -431,6 +431,11 @@ int video_hdmi_connected() { return (hdmi_connected == HDMI_FOLLOW) ? scaler_vis
   is attached), which is what the analog section drives directly.
 */
 int video_scaler_is_visible() { return cfg.direct_video ? 0 : scaler_visible; }
+
+// The output mode's lines: 1080 unless a test models a smaller mode.
+static int mode_height = 1080;
+void harness_set_mode_height(int h) { mode_height = h; }
+int video_mode_height() { return mode_height; }
 void video_menu_bg(int, int) {}
 
 /*
