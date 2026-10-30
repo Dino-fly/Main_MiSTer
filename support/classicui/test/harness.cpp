@@ -11807,6 +11807,39 @@ static void assert_video()
 	}
 	check(!leak, "LCD looks only on handhelds, CRT looks only on everything else");
 
+	/*
+	  Phase 6 was a shadowmask.sv patch gating substrate cells - the one mask element that
+	  ADDS light - out of the picture border. With SUB_BLEND 0 no mask writes one, so the
+	  patch (and the core rebuild it would need) is not needed. This keeps it that way: a
+	  substrate cell in any generated mask means the border leak is back.
+	*/
+	{
+		int masks = 0, sub = 0;
+		DIR *dd = opendir(ROOT "/shadow_masks");
+		struct dirent *de;
+		while (dd && (de = readdir(dd)))
+		{
+			if (strncmp(de->d_name, "ClassicHome", 11)) continue;
+			char mp[1024];
+			snprintf(mp, sizeof(mp), "%s/shadow_masks/%s", ROOT, de->d_name);
+			FILE *mf = fopen(mp, "rt");
+			if (!mf) continue;
+			masks++;
+			char ln[512];
+			while (fgets(ln, sizeof(ln), mf))
+			{
+				if (ln[0] == '#' || ln[0] == 'v') continue;
+				if (!strchr(ln, ',') || strlen(ln) < 6) continue;       // the "6,6" size line
+				for (char *t = strtok(ln, ", \r\n"); t; t = strtok(0, ", \r\n"))
+					if (strtol(t, 0, 16) & 0x800) sub++;
+			}
+			fclose(mf);
+		}
+		if (dd) closedir(dd);
+		printf("  %d generated masks, %d substrate cells\n", masks, sub);
+		check(masks > 0 && sub == 0, "no generated mask carries a substrate cell, so nothing adds light to the border");
+	}
+
 	// Dinofly's rule: every single system offers one entry with no processing.
 	{
 		int missing = 0;

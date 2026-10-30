@@ -57,12 +57,14 @@ start phase 3 on a new branch off `classic-ui` there.
 4b. **Official NGPC core, live switch**: NGPC -> NGPC IPS Mod applied live once left the
    picture white until relaunch (LCD Response Panel -> Raw plus Saturation 75 -> 100 at
    once). Seen once, not yet reproduced; the same look from a launch is fine.
-5. **Harness gap**: the clip log only sees Display screens the harness draws (GB,
-   GBC, GBA, console). Render every handheld class's Display screen there so a tile
-   name that wraps past two lines fails the cut-text check ("Neo Geo Pocket Color"
-   lost "Color" on the device and nothing caught it).
-6. **Phase 1 leftover**: an explicit `look_is_panel` field, now that CRT looks carry
-   core options.
+5. **Harness gap - DONE 2026-10-31 (54dc6409):** sweep_screens() forces every class with a
+   choice through chome_test_force_class() and draws its Display screen at hd and sd; a
+   dropped word reaches the clip log through wrap_text(). 22 classes, no cut.
+6. **Phase 1 leftover - CLOSED 2026-10-31:** the worry was CRT looks carrying core options
+   being read as panels. They carry `core_colour` (Composite's signal options), never
+   `core_struct`, so look_is_panel() still means "has an LCD structure"; the mono tubes,
+   which need the same colour-only treatment on analog without being panels, say so with
+   the explicit `tube` field (phase 4). No further field needed.
 7. **Phase 3, TV/arcade looks** (branch `classicui-crt-looks`). The dongle is unreliable
    for 1 px structure (see below); validate scanline depth against the simulator.
    - **480i confirmed on the device (2026-10-30, c1a58ec7):** PSX Wip3out, whose BIOS
@@ -113,12 +115,19 @@ start phase 3 on a new branch off `classic-ui` there.
      vp_output_is_lowres(): analog, unless vga_scaler drives it at >= 720 lines (then
      every look, CRT ones included - Dinofly). HDMI is never low-res. Harness only - the
      device has HDMI attached, so the analog path was not exercised there.
-8. **Phase 4, computers** grouped by era output; **phase 5** ship; **phase 6** the
-   shadowmask RTL patch - possibly unnecessary now that `SUB_BLEND` is 0, re-check
-   every panel first.
-9. Small, known, not urgent: the in-game "None" tile previews the *captured* frame,
-   which already carries the running look's core colour; the firmware restarted under
-   a running core believes the core holds the player's own LUT.
+8. **Phase 4, computers** - looks approved, branch `classicui-computer-looks`
+   (docs/COMPUTER-LOOKS.md); CPC device check owed. **Phase 5** ship. **Phase 6 - CLOSED
+   2026-10-31:** every generated mask at 2x-10x (108 files, 3843 cells) has no substrate
+   cell, the only element that adds light, so nothing can leak into the border and the
+   shadowmask.sv patch is not needed; a harness check keeps it so.
+9. Small, known, not urgent - two separate things:
+   a. the in-game "None" tile previews the *captured* frame, which already carries the
+      running look's core colour. Only the GB colour LUT is exactly reversible (it is,
+      for LUT looks); GBA Modify Colors and NGPC Saturation are not. Owner's call.
+   b. a firmware restarted under a running GB core believes the core holds the player's
+      own LUT. A /tmp state file would fix it only if a core reload (which restores the
+      player's .f7) can be told from a bare firmware restart - device-only behaviour,
+      measure before writing it.
 
 ## How the pipeline works (what a look can and cannot do)
 
