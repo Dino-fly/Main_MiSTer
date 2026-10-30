@@ -114,6 +114,8 @@ def load_gamma(path):
         if not line:
             continue
         p = line.split(',')
+        if len(p) == 1:
+            p = p * 3                  # video.cpp setGamma: one value is all three channels
         if len(p) == 3:
             lut.append(tuple(max(0, min(255, int(v))) for v in p))
     if len(lut) != 256:

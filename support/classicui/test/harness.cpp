@@ -25868,7 +25868,7 @@ static void assert_no_row_is_hidden()
 */
 static int gen_looks(const char *dir)
 {
-	printf("generating handheld look files into %s\n", dir);
+	printf("generating look files into %s\n", dir);
 	harness_set_fb_state(0);
 	mkpath(dir);
 
@@ -25922,7 +25922,9 @@ static int gen_looks(const char *dir)
 
 	for (int c = 0; c < VC_COUNT; c++)
 	{
-		if (!vp_class_is_handheld(c)) continue;
+		// Every class, the televisions too: render_looks.py draws them over console
+		// frames. Applied against the Game Boy CONF_STR, a CRT look's core options
+		// are simply skipped; the manifest records them from the table regardless.
 		int opts[VP_MAX_OPTIONS];
 		int n = vp_options_for(c, opts);
 		for (int k = 0; k < n; k++)
