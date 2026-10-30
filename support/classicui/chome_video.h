@@ -130,6 +130,8 @@ int  vp_default_for(int vclass);
   Game Boy core remember different screens.
 */
 int  vp_effective(int sysidx, int vclass);
+// The look that plays for choice i on the current output (see analog_as in chome_video.cpp).
+int  vp_on_output(int i);
 void vp_set(int sysidx, int vclass, int preset);
 
 // Records the look to apply once the next core has booted, and applies it there.
