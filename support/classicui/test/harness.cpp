@@ -25687,6 +25687,8 @@ static void assert_uniform_wrap()
       plan, and the sentence that is only drawn when there is no plan - the one this task
       started from - had never been composed by anything.
 */
+void chome_test_force_class(int vclass);
+
 static void sweep_screens()
 {
 	const int was_prof = cfg.classicui_profile;
@@ -25743,6 +25745,31 @@ static void sweep_screens()
 			dump(nm);
 			press(KEY_ESC, 10);
 			press(KEY_RIGHT, 6);
+		}
+
+		/*
+		  Every class's Display screen, not only the shelf's own: each class has its own
+		  tile names, and "Neo Geo Pocket Color" lost "Color" on the device with nothing
+		  here to see it. 240p has no Display entry, so only hd and sd draw them.
+		*/
+		if (canv[c].display)
+		{
+			for (int vc = 0; vc < VC_COUNT; vc++)
+			{
+				if (vp_options_for(vc, 0) < 2) continue;
+				chome_test_force_class(vc);
+				if (!chome_test_ui("display")) { chome_test_force_class(-1); continue; }
+				frame(6);
+				char nm[64];
+				snprintf(nm, sizeof(nm), "clipsweep-%s-display-%s", canv[c].name, vp_class_name(vc));
+				dump(nm);
+				chome_test_ui("home");
+				frame(4);
+			}
+			chome_test_force_class(-1);
+			chome_leave();
+			press(KEY_MENU, 20);
+			frame(8);
 		}
 
 		/*

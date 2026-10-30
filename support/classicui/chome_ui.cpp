@@ -1394,10 +1394,24 @@ static chome_item *disp_target()
 	return cur_game();
 }
 
+#ifdef CHOME_HOST_TEST
+/*
+  The harness draws every class's Display screen through here, so a tile name that only
+  one class has ("Neo Geo Pocket Color", "Colour Monitor") is measured by the clipped-copy
+  guard too. The card in the harness carries one shelf of each kind at most; this stands
+  in for the rest.
+*/
+static int test_force_class = -1;
+void chome_test_force_class(int vclass) { test_force_class = vclass; }
+#endif
+
 static int disp_class()
 {
 	chome_item *it = disp_target();
 	if (!it) return VC_CONSOLE;
+#ifdef CHOME_HOST_TEST
+	if (test_force_class >= 0) return test_force_class;
+#endif
 	return class_of(it->sysidx, it->path);
 }
 
