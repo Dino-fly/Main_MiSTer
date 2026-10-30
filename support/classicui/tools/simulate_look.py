@@ -48,7 +48,17 @@ What is NOT certified:
   * Axis order: CONFIRMED H then V - ascal's horizontal stage consumes the
     input line (o_hpix0 <= hpix_v) and the vertical stage reads the H-scaled
     line buffers (o_vpixq), so this script's order is the RTL's.
-  * sfilter (the scanline vfilter) and adaptive filters are not modelled.
+  * Adaptive filters (ascal.vhd PolyFetch): the file carries two phase sets,
+    and per output pixel the taps are lerped between them by the luminance of
+    the NEAREST source pixel on that axis - max(R,G,B), not a weighted luma -
+    as (a*(256-lum) + b*lum) >> 1 into 3.15. The hardware has one adaptive
+    phase memory, so only one axis can be adaptive; video.cpp sends the
+    horizontal one when both are. On the vertical axis the lum pixel is an
+    H-scaled line, which falls out of running H before V.
+  * Which file each axis gets (video.cpp set_vfilter, sys_top's FLTNUM): see
+    axis_taps(). The surprises are that hfilter=off switches polyphase off on
+    BOTH axes, that vfilter=off reuses the horizontal taps, and that sfilter
+    only replaces the vfilter while the core's own scanline option is on.
 
 Usage (old form still works):
   simulate_look.py in.png out.png scale [dmg|pocket|bgb|none] [grid|gridshadow|sharp]
@@ -132,21 +142,47 @@ def to_hw_phases(taps):
     for t in taps: out += [t]*dup
     return out
 
+class AdaptiveTaps(list):
+    """The dark phase set, as a plain tap list, with the bright set in .bright."""
+    bright = None
+
 def load_filter(path):
     """A real filter file, quantised the way read_video_filter() does."""
-    scale, taps = 2, []
+    scale, taps, adaptive = 2, [], False
     for line in open(path):
         line = line.strip()
         if not taps and line.lower() == '10bit': scale = 1; continue
-        if not taps and line.lower() == 'adaptive':
-            raise SystemExit("adaptive filters are not modelled")
+        if not taps and line.lower() == 'adaptive': adaptive = True; continue
         parts = line.split(',')
         if len(parts) == 4:
             try: v = [int(p) for p in parts]
             except ValueError: continue
             taps.append([x*scale for x in v])
+    if adaptive:
+        half = len(taps) // 2
+        out = AdaptiveTaps(to_hw_phases(taps[:half]))
+        out.bright = to_hw_phases(taps[half:])
+        return out
     if len(taps) == 32: taps = taps[:16]     # legacy 16-phase pairs
     return to_hw_phases(taps)
+
+def axis_taps(hfilter, vfilter, sfilter=None, core_scanlines=False):
+    """(horizontal, vertical) taps from a preset's file names, by the firmware's rules.
+
+    'off' (or None) means the preset left that filter off. Interlaced sources
+    (VFILTER_ILACE) are not modelled - no corpus frame is interlaced.
+    """
+    def on(v): return v and v.lower() not in ('off', 'same')
+    if not on(hfilter):
+        nn = synth_sharp()               # FLTNUM 0: ascal mode 000 on both axes
+        return nn, nn
+    ht = load_filter(hfilter)
+    if core_scanlines and on(sfilter): vt = load_filter(sfilter)
+    elif on(vfilter): vt = load_filter(vfilter)
+    else: vt = ht
+    if getattr(ht, 'bright', None) and getattr(vt, 'bright', None):
+        vt = list(vt)                    # one adaptive memory, and H is sent
+    return ht, vt
 
 def synth_grid(shadow, scale=0):
     """chome_video.cpp write_filter_grid, tap for tap, including its integer commit.
@@ -233,6 +269,7 @@ def bound(v):
 
 def ascal_1d(rows, sw, dw, hw_taps, phase_bias):
     """One axis of ascal's polyphase, bit-exact per the notes at the top."""
+    bright = getattr(hw_taps, 'bright', None)
     plan = []
     for x in range(dw):
         u = (x+0.5)*sw/dw - 0.5
@@ -240,12 +277,16 @@ def ascal_1d(rows, sw, dw, hw_taps, phase_bias):
         ph = (int((u-i)*HW_PHASES) + phase_bias) % HW_PHASES
         c = [t << 7 for t in hw_taps[ph]]          # poly_cvt: 2.8 -> 3.15
         idx = [min(max(i-1+t,0),sw-1) for t in range(4)]
-        plan.append((idx, c))
+        near = idx[2] if ph >= HW_PHASES // 2 else idx[1]   # the frac's top bit
+        plan.append((idx, c, near, hw_taps[ph], bright[ph] if bright else None))
     out = []
     for row in rows:
         orow = []
-        for idx, c in plan:
+        for idx, c, near, a, b in plan:
             px = [row[j] for j in idx]
+            if b:
+                lum = max(row[near])                # poly_lum: the maximum channel
+                c = [(ta*(256-lum) + tb*lum) >> 1 for ta, tb in zip(a, b)]   # poly_lerp
             o = []
             for k in range(3):
                 pair0 = c[0]*px[0][k] + c[1]*px[1][k]     # 4.23

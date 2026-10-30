@@ -57,7 +57,7 @@ import sys, os, json, glob, math, hashlib, subprocess, itertools
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from simulate_look import (read_png, write_png, load_filter, load_mask, apply_mask,
-                           ascal_1d, synth_sharp)
+                           ascal_1d, synth_sharp, axis_taps)
 from gba_colorshade import apply_modify_colors
 from simulate_pipeline import (load_gbp, apply_palette, load_gamma, apply_gamma,
                                letterbox)
@@ -311,11 +311,12 @@ def render_look(look, gen_dir, src_rows, scale):
         rows = apply_gamma(rows, load_gamma(use('gamma', 'gamma', g)))
     post = rows
 
-    def taps(role, key):
+    def flt(key):
         v = pre.get(key, 'off')
-        return load_filter(use(role, 'filters', v)) if v != 'off' else synth_sharp()
+        return use(key, 'filters', v) if v.lower() not in ('off', 'same') else None
 
-    ht, vt = taps('hfilter', 'hfilter'), taps('vfilter', 'vfilter')
+    # No look turns a core's own scanline option on, so the sfilter never applies.
+    ht, vt = axis_taps(flt('hfilter'), flt('vfilter'))
     dw, dh = w * scale, h * scale
     rows = ascal_1d(post, w, dw, ht, 0)
     cols = [list(c) for c in zip(*rows)]

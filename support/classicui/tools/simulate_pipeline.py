@@ -40,7 +40,10 @@ Usage:
     --palette F.gbp     16-byte .gbp (4 RGB triples); source is luma-ranked to 4
     --gamma FILE        256 lines of "r,g,b", applied before the scaler
     --filter FILE       ascal coefficients, both axes
-    --hfilter/--vfilter per-axis, overriding --filter
+    --hfilter/--vfilter per-axis, overriding --filter. Adaptive files are modelled.
+                        hfilter off = nearest on both axes; vfilter off = the hfilter
+    --sfilter FILE      the scanline vfilter; used only with --core-scanlines 1
+                        (the core's own scanline option on), as on hardware
     --mask FILE         shadow mask, applied after the scaler
     --maskmode 1x|2x
     --screen WxH        letterbox the result into a screen (default: none)
@@ -58,7 +61,7 @@ Usage:
 """
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from simulate_look import (read_png, write_png, load_filter, load_mask,
+from simulate_look import (read_png, write_png, load_filter, load_mask, axis_taps,
                            apply_mask, ascal_1d, synth_grid, synth_sharp, PHASES)
 
 KR, KG, KB = 0.2126, 0.7152, 0.0722
@@ -351,8 +354,7 @@ def main():
             flags.get('shadow-file', 'shadow_filter.txt'), n, mix, dim, wid)
     hf = flags.get('hfilter', flags.get('filter'))
     vf = flags.get('vfilter', flags.get('filter'))
-    ht = load_filter(hf) if hf and hf != 'off' else synth_sharp()
-    vt = load_filter(vf) if vf and vf != 'off' else synth_sharp()
+    ht, vt = axis_taps(hf, vf, flags.get('sfilter'), 'core-scanlines' in flags)
     dw, dh = w * scale, h * scale
     rows = ascal_1d(rows, w, dw, ht, 0)
     cols = [list(c) for c in zip(*rows)]
