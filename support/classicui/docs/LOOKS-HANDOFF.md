@@ -141,7 +141,9 @@ start phase 3 on a new branch off `classic-ui` there.
      televisions -> none-sgb); it is not listed on analog, and a stored choice plays its
      stand-in there via for_output() inside vp_preset_path_for/vp_apply_core_side, so the
      choice itself is never rewritten. Console/arcade/computer/VGA classes are left with
-     Sharp alone, so Display drops off the bar for them on a tube. Harness only - the
+     Sharp alone, so Display drops off the bar for them on a tube. "A tube" means
+     vp_output_is_lowres(): analog, unless vga_scaler drives it at >= 720 lines (then
+     every look, CRT ones included - Dinofly). HDMI is never low-res. Harness only - the
      device has HDMI attached, so the analog path was not exercised there.
    - **Merged into classic-ui 99666636.** Next round: a console corpus and CRT renders
      for the look-review pane.
