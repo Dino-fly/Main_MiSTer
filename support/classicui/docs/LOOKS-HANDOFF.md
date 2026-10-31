@@ -51,13 +51,21 @@ start phase 3 on a new branch off `classic-ui` there.
 
 ## Todo
 
-4b. **Official NGPC core, live switch**: NGPC -> NGPC IPS Mod applied live once left the
-   picture white until relaunch (LCD Response Panel -> Raw plus Saturation 75 -> 100 at
-   once). Seen once, not yet reproduced; the same look from a launch is fine.
-7. **SGB border**: applied live on Link's Awakening the adaptor switched on but no
-   border showed. Try an SGB-enhanced game from a fresh launch before calling it a bug.
+4b. **Official NGPC core, live switch**: the white picture after NGPC -> NGPC IPS Mod live
+   (seen once) did not reproduce 2026-10-31 (130c465b, Sonic Pocket Adventure): 0/3 live
+   switches, fresh launch fine. Keep an eye out; no action.
+7. **SGB border - cause found, fix owed** (device 2026-10-31, 130c465b, Donkey Kong (SGB
+   Enhanced)): fresh launches with either SGB look garble the border (red fill, scrambled
+   tiles) about 2 in 3, clean 1 in 3, whatever the look or Custom Palette. With
+   `Super Game Boy=On` already in GAMEBOY.CFG at boot: 12/12 clean; original CFG back:
+   2/3 garbled. The core half of a launch look is parked until the MGL launch is over
+   (vp_apply_pending, for the palette/boot1.rom interleave), so SGB is switched on after
+   the game has started. A live switch never shows a border (no reset). Likely the same
+   for other options a game reads only at boot (GBC/GBA mode, NGP System). Fix shape
+   proposed: reset the core once after the launch core half when a boot-read option
+   changed. Live switch: owner's call. Captures: scratchpad sgb2/, sgb3/ of that session.
 8. **Phase 4, computers** - looks approved, branch `classicui-computer-looks`
-   (docs/COMPUTER-LOOKS.md); CPC device check owed. **Phase 5** ship.
+   (docs/COMPUTER-LOOKS.md); CPC confirmed on the device 2026-10-31 (ed88bc7f). **Phase 5** ship.
 9. Small, known, not urgent - two separate things:
    a. the in-game "None" tile previews the *captured* frame, which already carries the
       running look's core colour. Only the GB colour LUT is exactly reversible (it is,
@@ -65,7 +73,9 @@ start phase 3 on a new branch off `classic-ui` there.
    b. a firmware restarted under a running GB core believes the core holds the player's
       own LUT. A /tmp state file would fix it only if a core reload (which restores the
       player's .f7) can be told from a bare firmware restart - device-only behaviour,
-      measure before writing it.
+      measure before writing it. 2026-10-31: no GAMEBOY.f7/GBC.f7 exists on the owner's
+      card, so the player's table is the stock one and the question cannot be measured
+      without planting a temporary .f7.
 
 ## CRT looks (phase 3, merged 4d9ae1b6; device-confirmed Genesis, SNES, PSX 480i)
 
