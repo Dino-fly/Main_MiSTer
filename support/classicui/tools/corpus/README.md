@@ -63,3 +63,4 @@ frame. Every frame is a boot, BASIC or monitor screen (placeholder disks, no gam
 | amiga-{colour-monitor,pal-tv,sharp}.png | Minimig | Minimig boot text (AmigaVision hdf, Kickstart) | 2 | 1280x286 |
 | c64-{pal-tv,composite,pvm-svideo,sharp}.png | C64 | BASIC screen under a scrolling text flood (animates) | 2 | 382x270 |
 | spec-{pal-tv,composite,pvm-svideo,sharp}.png | ZX-Spectrum | boot screen, empty tape | 7 | 344x284 |
+| cpc-{colour-monitor,green,amber,white,sharp}.png | Amstrad | Gryzor title screen (static); Display=Color(GA)/Green/Amber/White set by the look, Sharp puts it back to colour | many | 768x273 |

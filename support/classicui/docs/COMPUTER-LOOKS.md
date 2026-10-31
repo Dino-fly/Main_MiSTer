@@ -19,7 +19,7 @@ Existing class numbers 2 and 3 keep their meaning; the rest are appended (13+).
 | 2 | TV computer | RF / composite into a television | PAL TV, Composite, S-Video, Sharp |
 | 13 | Colour monitor | 15 kHz RGB monitor (1084S, SC1224, CTM644, Microvitec) | Colour Monitor, TV, Sharp |
 | 14 | Mono monitor | built-in or bundled phosphor monitor | Green, Amber, Paper White, Sharp |
-| 15 | Colour or mono monitor | either, bought separately | Colour Monitor, Green, Amber, Sharp |
+| 15 | Colour or mono monitor | either, bought separately | Colour Monitor, Green, Amber, White, Sharp |
 | 16 | TV or mono monitor | a TV, or a cheap mono monitor | Composite, Green, Amber, Sharp |
 | 17 | Hi-res mono | 9-12" paper-white built-in, 60-72 Hz | Paper White (no scanlines), Sharp |
 | 3 | 31 kHz monitor | VGA / workstation | VGA, Sharp |
@@ -47,7 +47,7 @@ On the shelf by default:
 | Atari ST | Colour monitor | SC1224 colour; SM124 mono needs the hi-res mode (open question) |
 | C64 | TV computer | TV, or the 1702 via luma/chroma = S-Video look |
 | ZX Spectrum | TV computer | RF only |
-| Amstrad CPC | Colour or mono | CTM644 colour or GT65 green; core `Display` has Green/Amber |
+| Amstrad CPC | Colour or mono | CTM644 colour or GT65 green; core `Display` has Color(GA)/Color(ASIC)/Green/Amber/Cyan/White |
 | MSX | TV computer | MSX1 on a TV; MSX2 SCART RGB covered by S-Video/Sharp (open) |
 | PC / DOS | 31 kHz | VGA |
 | Apple II | TV or mono | colour TV / composite, Monitor II green, amber; core `Display` |
