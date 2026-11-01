@@ -51,33 +51,28 @@ start phase 3 on a new branch off `classic-ui` there.
 
 ## Todo
 
-4b. **Official NGPC core, live switch**: the white picture after NGPC -> NGPC IPS Mod live
-   (seen once) did not reproduce 2026-10-31 (130c465b, Sonic Pocket Adventure): 0/3 live
-   switches, fresh launch fine. Keep an eye out; no action.
-7. **SGB resume blanks the game area for 15-25 s** (2026-11-01, 2fa5f8f9): a suspend point
-   resumed under an SGB look shows a correct border and a black game area until about
-   +25-40 s, 8/8; the baseline (130c465b, no reset) is worse - 1/6 black, 5/6 scrambled
-   tiles still at +40 s. Likely the core's savestate does not carry the SGB side (mask,
-   border VRAM) - unproven, core-side. Captures: scratchpad fix2/ of that session.
-   (The garbled SGB border at launch is FIXED: a look that moves an option the game reads
-   only at boot resets the core once after the launch half - 12/12 + 3/3 clean, see
-   vp_boot_opts_snapshot. Not watched: an OSD "save settings" in the 1-3 s before the
-   look step re-asserts the parked look early and hides the change - rare, old symptom.)
-8. **Phase 4, computers** - looks approved, branch `classicui-computer-looks`
-   (docs/COMPUTER-LOOKS.md); CPC confirmed on the device 2026-10-31 (ed88bc7f). **Phase 5** ship.
-9. Small, known, not urgent - two separate things:
-   a. the in-game "None" tile previews the *captured* frame, which already carries the
-      running look's core colour. Only the GB colour LUT is exactly reversible (it is,
-      for LUT looks); GBA Modify Colors and NGPC Saturation are not. Owner's call.
-   b. a firmware restarted under a running GB core believes the core holds the player's
-      own LUT. A /tmp state file would fix it only if a core reload (which restores the
-      player's .f7) can be told from a bare firmware restart - device-only behaviour,
-      measure before writing it. 2026-10-31: no GAMEBOY.f7/GBC.f7 exists on the owner's
-      card, so the player's table is the stock one and the question cannot be measured
-      without planting a temporary .f7. Code + device (planted GBC.f7, removed): parse_config()
-      re-sends <core>.f7 at EVERY firmware start, core reload and bare restart alike, so the
-      two cannot be told apart that way - and need not be: with a .f7 the belief is right
-      either way. Only without one does a bare restart leave a look's LUT in the core.
+Shipped in classic-home-v7-beta (2026-11-01, firmware 2fa5f8f9): phases 0-4 and the
+boot-read reset. Open:
+
+1. **SGB resume blanks the game area for 15-25 s** (2fa5f8f9, Donkey Kong): correct border,
+   black game area until +25-40 s, 8/8; baseline 130c465b worse (1/6 black, 5/6 scrambled
+   tiles at +40 s). Guess, unproven: the core's savestate lacks the SGB side (mask, border
+   VRAM) - core-side. Release notes list it as a known issue.
+2. **Owner's call**: the in-game "None" tile previews the captured frame, which already
+   carries the running look's core colour (GBA Modify Colors, NGPC Saturation are not
+   reversible; the GB LUT is).
+3. A bare firmware restart under a running GB core with NO <core>.f7 leaves a look's LUT
+   in the core while the firmware believes stock. Fix if wanted: a /tmp marker "a look's
+   LUT is in" -> push the stock table at start (correct after a core reload too).
+
+## Boot-read options and the .f7 (2026-11-01)
+
+- The launch look's core half lands ~1 s after the MGL ends, past the game's boot. Options
+  a game reads once (Super Game Boy, GBC/GBA mode, NGP System) therefore get one status[0]
+  reset when the look moved them (vp_boot_opts_snapshot/changed, chome_core_poll); resume
+  waits for that step plus RESUME_DELAY_MS. Before: SGB border garbled ~2 launches in 3.
+- parse_config() re-sends <core>.f7 at every firmware start (core reload and bare restart
+  alike). The GBC system's core name is GBC. NGPC IPS live white: 0/3, not reproduced.
 
 ## CRT looks (phase 3, merged 4d9ae1b6; device-confirmed Genesis, SNES, PSX 480i)
 
