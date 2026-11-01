@@ -105,7 +105,14 @@ CORPUS_NAMES = {
     'computer': ['computer', 'snes', 'genesis', 'nes', 'psx', 'tg16'],
     'vga': ['vga', 'psx'],
 }
-CRT_CLASSES = {'console', 'arcade', 'computer', 'vga'}
+# Phase 4's computer classes are tubes too. Their frames come from the device run
+# (corpus/computers/<core>-<look>.png): a phosphor look's colour is the core's, so
+# each look has its own frame and the caller hands it over in a <class>/ directory.
+COMPUTER_CLASSES = ['rgbmon', 'mono-green', 'mono-white', 'colour-mono', 'tv-mono',
+                    'hires-mono', 'atari-st', 'msx', 'white-green', 'no-look']
+for _c in COMPUTER_CLASSES:
+    CORPUS_NAMES[_c] = [_c, 'computer']
+CRT_CLASSES = {'console', 'arcade', 'computer', 'vga'} | set(COMPUTER_CLASSES)
 ASPECT = 4 / 3
 
 # Not handheld panels: the Super Game Boy is a Super Nintendo on a television
@@ -221,7 +228,7 @@ def frames_for(look, corpus, count):
                 out.append(('%s-%s' % (n, os.path.splitext(os.path.basename(f))[0]),
                             to_rows(w, h, px), 'corpus/%s/%s' % (n, os.path.basename(f))))
             # A stand-in list ends at its first system with frames.
-            if out and look.cls in ('computer', 'vga'):
+            if out and (look.cls in ('computer', 'vga') or look.cls in COMPUTER_CLASSES):
                 break
         return out
     for n in names:

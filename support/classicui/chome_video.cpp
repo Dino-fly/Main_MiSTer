@@ -91,6 +91,13 @@ struct preset_def
 	  border and the adaptor's colours. Such a look is not offered there at all.
 	*/
 	const char *analog_as;
+	/*
+	  1 = a picture of a mono tube: its scanlines and glow are for a high-resolution
+	  output, like a panel's grid, while its phosphor colour comes from the core and
+	  reaches any display. So on analog it plays its colour-only (CRT) preset, the
+	  way a handheld palette does, instead of standing aside like a CRT look.
+	*/
+	int tube;
 };
 
 #define F_SHARP   PREFIX " Sharp.txt"
@@ -357,7 +364,28 @@ static double lcd_span(const lcd_model *m, int scale)
   (shadow, frame blend, integer scale for a grid) is switched off because the
   picture is a television's.
 */
-#define CO_COMPOSITE "Composite Blend=On;Composite Filter=Budget TV;Composite Filter=On"
+#define CO_COMPOSITE "Composite Blend=On;Composite Filter=Budget TV;Composite Filter=On;" CO_ARTIFACT
+
+/*
+  A computer's composite colour is the core's too: NTSC artifact colour on the
+  CoCo, Atari 800, Apple II and CGA, the C128 VDC's composite palette.
+*/
+#define CO_ARTIFACT "Artifact=Enable;Artifact Type=MESS;NTSC artifacting=Yes;Composite video=On;" \
+	"Lo-Res Text=Composite;VDC Palette=Composite;Video=Color Composite;" \
+	"Display=Color;Display=Full Color;Display=Color TV"
+
+/*
+  The phosphor options, by every name the computer cores give them
+  (docs/confstr/computers-2026-10-30.md). The C128 needs its VDC palette on
+  Monochrome before the mono colour means anything.
+*/
+#define CO_COLOUR_MON "Display=Color;Display=Full Color;Display=Color(GA);Display=RGB Monitor;VDC Palette=Default"
+#define CO_GREEN "Display=Green;Display=Monitor /// Green;Screen Color=Green;Screen Color=Green CRT;" \
+	"Text color=Green;Display color=Green;VDC Palette=Monochrome;VDC Mono Colour=Green"
+#define CO_AMBER "Display=Amber;Screen Color=Amber;Screen Color=Amber CRT;" \
+	"Text color=Amber;Display color=Amber;VDC Palette=Monochrome;VDC Mono Colour=Amber"
+#define CO_WHITE "Display=White;Display=B&W;Screen Color=White;Screen Color=Paper White;" \
+	"Text color=White;Display color=White;VDC Palette=Monochrome;VDC Mono Colour=White"
 #define CO_SGB      "Super Game Boy=On;Super Game Boy + GBC=On;Custom Palette=Off"
 #define CO_SGB_CRT  CO_NO_SHADOW ";Frame blend=Off;" CO_INTEGER
 
@@ -685,6 +713,34 @@ static const preset_def presets[] =
 	  CRT_SVIDEO, CO_SGB, CO_SGB_CRT, 0, "none-sgb" },
 	{ "sgb-composite", "SGB Composite", "The SNES adaptor over composite: soft, blurry, scanlines.",
 	  CRT_COMPOSITE, CO_SGB, CO_SGB_CRT, 0, "none-sgb" },
+
+	/*
+	  Computer monitors (phase 4, docs/COMPUTER-LOOKS.md). A home computer's own
+	  colour monitor - 1084S, SC1224, CTM644 - was a coarser, softer tube than a
+	  PVM, with a slot or dot mask, so it is a look of its own rather than the PVM
+	  one. On a core that offers mono and colour it also sets the colour side back.
+	*/
+	{ "colour-monitor", "Colour Monitor", "A home computer's own RGB monitor: softer than a PVM, slot mask, scanlines.",
+	  F_SOFT, F_SCAN, F_SCAN, M_SLOT, "1x", "off", CO_COLOUR_MON, 0, 0, "sharp" },
+
+	/*
+	  Mono monitors had no mask - one continuous phosphor - so these are scanlines
+	  and a soft beam only. The phosphor colour cannot be a scaler gamma LUT (it
+	  cannot turn a colour picture into luma), so it is the core's own option; the
+	  names differ per core and each core takes the one it has.
+	*/
+	{ "green", "Green Screen", "Green phosphor monitor: no mask, soft beam, scanlines.",
+	  F_SOFT, F_SCAN, F_SCAN, "off", 0, "off", CO_GREEN, 0, 0, 0, 1 },
+	{ "amber", "Amber Screen", "Amber phosphor monitor: no mask, soft beam, scanlines.",
+	  F_SOFT, F_SCAN, F_SCAN, "off", 0, "off", CO_AMBER, 0, 0, 0, 1 },
+	{ "white", "White Screen", "White phosphor monitor: no mask, soft beam, scanlines.",
+	  F_SOFT, F_SCAN, F_SCAN, "off", 0, "off", CO_WHITE, 0, 0, 0, 1 },
+	/*
+	  A compact Mac's or a Lisa's built-in tube: 342-400 lines on a 9-12 inch
+	  screen at 60-72 Hz, too fine for visible scanline gaps.
+	*/
+	{ "paper-white", "Paper White", "A built-in high-resolution mono screen: crisp, no visible scanlines.",
+	  F_SOFT, F_SOFT, "off", "off", 0, "off", CO_WHITE, 0, 0, 0, 1 },
 };
 
 #define NPRESETS ((int)(sizeof(presets) / sizeof(presets[0])))
@@ -1218,11 +1274,13 @@ int vp_output_is_lowres()
   A panel look: one that simulates the physical LCD, and therefore the only kind
   an analog display has to be protected from. Derived from core_struct rather
   than from a flag of its own so the two cannot drift apart - a look that
-  simulates a panel has panel options, and the CRT looks have none.
+  simulates a panel has panel options, and the CRT looks have none. The mono
+  tubes join it through `tube`: no panel options, but the same split of a
+  colour that reaches any display and a structure that needs a high-res one.
 */
 static int look_is_panel(const preset_def *d)
 {
-	return d->core_struct ? 1 : 0;
+	return (d->core_struct || d->tube) ? 1 : 0;
 }
 
 /*
@@ -1259,7 +1317,9 @@ static int look_shows_on_analog(int i)
 static const char *class_names[VC_COUNT] =
 {
 	"console", "arcade", "computer", "vga", "gb", "gbc", "gba",
-	"gg", "lynx", "ws", "wsc", "ngpc", "ngp"
+	"gg", "lynx", "ws", "wsc", "ngpc", "ngp",
+	"rgbmon", "mono-green", "mono-white", "colour-mono", "tv-mono", "hires-mono",
+	"atari-st", "msx", "white-green", "no-look"
 };
 
 const char *vp_class_name(int c) { return (c >= 0 && c < VC_COUNT) ? class_names[c] : "console"; }
@@ -1269,7 +1329,10 @@ static const char *class_labels[VC_COUNT] =
 	"Consoles", "Arcade", "Home Computers", "VGA Monitor",
 	"Game Boy", "Game Boy Color", "Game Boy Advance",
 	"Game Gear", "Atari Lynx", "WonderSwan", "WonderSwan Color",
-	"Neo Geo Pocket Color", "Neo Geo Pocket"
+	"Neo Geo Pocket Color", "Neo Geo Pocket",
+	"Colour Monitor", "Green Screen", "Mono Monitor", "Colour or Mono Monitor",
+	"TV or Mono Monitor", "Built-in Mono Screen", "Atari ST", "MSX",
+	"Mono Monitor", "Computers"
 };
 
 int vp_class_is_handheld(int c)
@@ -1296,7 +1359,8 @@ enum
 	P_DMG_BRIGHT, P_DMG_FADED, P_SGB, P_NONE_SGB, P_LIGHT,
 	P_GBC_AGB001, P_GBC_AGS001, P_GBC_AGS101, P_GBA_MICRO, P_GBA_DS,
 	P_GG_MCWILL, P_LYNX_MCWILL, P_SWANCRYSTAL, P_NGPC_IPS, P_NGP, P_NGP_ON_NGPC,
-	P_ARCADE_CRT, P_SGB_BVM, P_SGB_SVIDEO, P_SGB_COMPOSITE
+	P_ARCADE_CRT, P_SGB_BVM, P_SGB_SVIDEO, P_SGB_COMPOSITE,
+	P_COLOUR_MON, P_GREEN, P_AMBER, P_WHITE, P_PAPER_WHITE
 };
 
 /*
@@ -1330,6 +1394,16 @@ static const int opt_console[]  = { P_PVM_RGB, P_BVM, P_PVM_SVIDEO, P_COMPOSITE,
 static const int opt_arcade[]   = { P_PVM_RGB, P_BVM, P_ARCADE_CRT, P_SHARP };
 static const int opt_computer[] = { P_PAL_TV, P_COMPOSITE, P_PVM_SVIDEO, P_SHARP };
 static const int opt_vga[]      = { P_VGA, P_SHARP };
+static const int opt_rgbmon[]   = { P_COLOUR_MON, P_PAL_TV, P_SHARP };
+static const int opt_mono_g[]   = { P_GREEN, P_AMBER, P_WHITE, P_SHARP };
+static const int opt_mono_w[]   = { P_WHITE, P_GREEN, P_AMBER, P_SHARP };
+static const int opt_col_mono[] = { P_COLOUR_MON, P_GREEN, P_AMBER, P_WHITE, P_SHARP };
+static const int opt_tv_mono[]  = { P_COMPOSITE, P_GREEN, P_AMBER, P_WHITE, P_SHARP };
+static const int opt_hires[]    = { P_PAPER_WHITE, P_SHARP };
+static const int opt_st[]       = { P_COLOUR_MON, P_PAL_TV, P_PAPER_WHITE, P_SHARP };
+static const int opt_msx[]      = { P_PAL_TV, P_COMPOSITE, P_PVM_SVIDEO, P_COLOUR_MON, P_SHARP };
+static const int opt_white_g[]  = { P_WHITE, P_GREEN, P_SHARP };
+static const int opt_no_look[]  = { P_SHARP };
 static const int opt_gb[]       = { P_DMG, P_DMG_BRIGHT, P_DMG_FADED, P_POCKET, P_LIGHT,
                                     P_SGB, P_SGB_BVM, P_SGB_SVIDEO, P_SGB_COMPOSITE,
                                     P_NONE, P_NONE_SGB };
@@ -1363,6 +1437,16 @@ static opt_set options_of(int vclass)
 	case VC_WSC:      r.list = opt_wsc;      r.n = (int)(sizeof(opt_wsc) / sizeof(int)); break;
 	case VC_NGPC:     r.list = opt_ngpc;     r.n = (int)(sizeof(opt_ngpc) / sizeof(int)); break;
 	case VC_NGP:      r.list = opt_ngp;      r.n = (int)(sizeof(opt_ngp) / sizeof(int)); break;
+	case VC_RGBMON:      r.list = opt_rgbmon;   r.n = (int)(sizeof(opt_rgbmon) / sizeof(int)); break;
+	case VC_MONO_GREEN:  r.list = opt_mono_g;   r.n = (int)(sizeof(opt_mono_g) / sizeof(int)); break;
+	case VC_MONO_WHITE:  r.list = opt_mono_w;   r.n = (int)(sizeof(opt_mono_w) / sizeof(int)); break;
+	case VC_COLOUR_MONO: r.list = opt_col_mono; r.n = (int)(sizeof(opt_col_mono) / sizeof(int)); break;
+	case VC_TV_MONO:     r.list = opt_tv_mono;  r.n = (int)(sizeof(opt_tv_mono) / sizeof(int)); break;
+	case VC_HIRES_MONO:  r.list = opt_hires;    r.n = (int)(sizeof(opt_hires) / sizeof(int)); break;
+	case VC_ATARI_ST:    r.list = opt_st;       r.n = (int)(sizeof(opt_st) / sizeof(int)); break;
+	case VC_MSX:         r.list = opt_msx;      r.n = (int)(sizeof(opt_msx) / sizeof(int)); break;
+	case VC_WHITE_GREEN: r.list = opt_white_g;  r.n = (int)(sizeof(opt_white_g) / sizeof(int)); break;
+	case VC_NO_LOOK:     r.list = opt_no_look;  r.n = (int)(sizeof(opt_no_look) / sizeof(int)); break;
 	default:          r.list = opt_console;  r.n = (int)(sizeof(opt_console) / sizeof(int)); break;
 	}
 	return r;
@@ -3364,6 +3448,65 @@ void vp_apply_pending()
 void vp_reapply_core_side()
 {
 	if (vp_running_look >= 0) vp_apply_core_side(vp_running_look, 1);
+}
+
+/*
+  Options a game reads once, at boot. The launch look's core half is parked until the
+  MGL is over (see vp_apply_pending), so it reaches a game that is already running -
+  harmless for a colour or a scale, wrong for these. Measured on Donkey Kong (SGB
+  Enhanced), 2026-10-31: Super Game Boy switched on after the game had started garbled
+  the border on about 2 launches in 3; with it already on in GAMEBOY.CFG, 12 of 12 were
+  clean. So the caller snapshots these before the launch half and resets the core once
+  if any of them moved - the game then boots into what the look asked for.
+
+  Only the names the running look itself sets are watched: "System" is a generic word
+  that some other core may well use for something else, and a reset nobody asked for
+  is worse than the border it would fix.
+*/
+static const char *boot_opt_names[] = {
+	"Super Game Boy", "Super Game Boy + GBC", "GBC/GBA mode", "System",
+};
+#define NBOOT_OPTS (int)(sizeof(boot_opt_names) / sizeof(boot_opt_names[0]))
+static uint32_t boot_opt_val[NBOOT_OPTS];
+static int boot_opt_have[NBOOT_OPTS];
+
+// Does this ;-separated half of a look set the option called name?
+static int opt_list_sets(const char *opts, const char *name)
+{
+	size_t n = strlen(name);
+	for (const char *p = opts; p && *p; p = strchr(p, ';'), p = p ? p + 1 : 0)
+		if (!strncmp(p, name, n) && p[n] == '=') return 1;
+	return 0;
+}
+
+void vp_boot_opts_snapshot()
+{
+	for (int i = 0; i < NBOOT_OPTS; i++) boot_opt_have[i] = 0;
+	if (vp_running_look < 0 || core_opts_scan() <= 0) return;
+
+	const preset_def *d = &presets[for_output(vp_running_look, vp_output_is_lowres())];
+	for (int i = 0; i < NBOOT_OPTS; i++)
+	{
+		if (!opt_list_sets(d->core_colour, boot_opt_names[i]) &&
+		    !opt_list_sets(d->core_struct, boot_opt_names[i])) continue;
+		char spec[12];
+		int ex = 0;
+		boot_opt_have[i] = core_opt_read_named(boot_opt_names[i], spec, sizeof(spec), &ex, &boot_opt_val[i]);
+	}
+}
+
+const char *vp_boot_opts_changed()
+{
+	for (int i = 0; i < NBOOT_OPTS; i++)
+	{
+		if (!boot_opt_have[i]) continue;
+		char spec[12];
+		int ex = 0;
+		uint32_t v = 0;
+		if (core_opt_read_named(boot_opt_names[i], spec, sizeof(spec), &ex, &v) && v != boot_opt_val[i])
+			return boot_opt_names[i];
+	}
+	return 0;
 }
 
 /*

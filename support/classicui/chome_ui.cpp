@@ -1394,10 +1394,24 @@ static chome_item *disp_target()
 	return cur_game();
 }
 
+#ifdef CHOME_HOST_TEST
+/*
+  The harness draws every class's Display screen through here, so a tile name that only
+  one class has ("Neo Geo Pocket Color", "Colour Monitor") is measured by the clipped-copy
+  guard too. The card in the harness carries one shelf of each kind at most; this stands
+  in for the rest.
+*/
+static int test_force_class = -1;
+void chome_test_force_class(int vclass) { test_force_class = vclass; }
+#endif
+
 static int disp_class()
 {
 	chome_item *it = disp_target();
 	if (!it) return VC_CONSOLE;
+#ifdef CHOME_HOST_TEST
+	if (test_force_class >= 0) return test_force_class;
+#endif
 	return class_of(it->sysidx, it->path);
 }
 
@@ -15957,15 +15971,30 @@ int chome_enabled()
   restores and drops the marker - once, whether it worked or not, so a core that
   cannot restore does not sit here retrying forever.
 */
+/*
+  Set by chome_core_poll() once the launch look's core half is in, and - when that half
+  had to reset the core - the moment the reset game has had time to come back: the
+  same RESUME_DELAY_MS a launch gets, since a reset game is back in its boot logo. A
+  state restored before a reset would be thrown away by it, so the resume waits for
+  both - but not forever: an MGL that never finishes would otherwise hold the suspend
+  point hostage, and before the look step existed it was tried at 4 s regardless.
+*/
+static int launch_look_done = 0;
+static unsigned long launch_reset_settle = 0;
+#define RESUME_LOOK_CAP_MS 15000
+
 static void resume_poll()
 {
 	static int done = 0;
 	static unsigned long due = 0;
+	static unsigned long cap = 0;
 
 	if (done) return;
 
-	if (!due) { due = GetTimer(RESUME_DELAY_MS); return; }
+	if (!due) { due = GetTimer(RESUME_DELAY_MS); cap = GetTimer(RESUME_LOOK_CAP_MS); return; }
 	if (!CheckTimer(due)) return;
+	if (!launch_look_done && !CheckTimer(cap)) return;
+	if (launch_reset_settle && !CheckTimer(launch_reset_settle)) return;
 	done = 1;
 
 	char sysid[64] = {}, relpath[CH_PATH_LEN] = {};
@@ -16015,6 +16044,7 @@ void chome_core_poll()
 			else if (CheckTimer(look_due))
 			{
 				look_done = 1;
+				vp_boot_opts_snapshot();
 				vp_reapply_core_side();
 
 				/*
@@ -16041,6 +16071,22 @@ void chome_core_poll()
 					*/
 					ch_apply_for_game(core_opts_game_key(ig_item.sysidx, ig_item.path));
 				}
+
+				/*
+				  A look that moved an option the game reads only at boot reached
+				  a game already past its boot - the Super Game Boy border came up
+				  garbled 2 launches in 3. One reset, the way the core's own OSD
+				  Reset does it, and the game boots into the options it now has.
+				  Before any resume: see launch_reset_settle.
+				*/
+				if (const char *moved = vp_boot_opts_changed())
+				{
+					printf("ClassicUI: %s changed after the game booted - resetting the core once\n", moved);
+					user_io_status_set("[0]", 1, 0);
+					user_io_status_set("[0]", 0, 0);
+					launch_reset_settle = GetTimer(RESUME_DELAY_MS);
+				}
+				launch_look_done = 1;
 			}
 		}
 		/*

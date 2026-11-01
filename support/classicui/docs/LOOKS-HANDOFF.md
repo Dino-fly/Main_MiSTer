@@ -41,8 +41,8 @@ His standing calls, all still in force:
 | Lynx: stock, McWill | approved (sim) |
 | WonderSwan / Color: WS, WSC, SwanCrystal | approved (sim) |
 | NGPC: NGPC, NGPC IPS Mod; NGP (mono class): Neo Geo Pocket, Mono on NGPC | approved, all four captured live on the official core (#9-#11) |
-| CRT: Sharp, PVM RGB, PVM S-Video, Composite, PAL TV, BVM RGB, VGA | phase 3, not started |
-| computers | phase 4, not started |
+| CRT: Sharp, PVM RGB, PVM S-Video, Composite, PAL TV, BVM RGB, Arcade CRT, VGA | done; device-confirmed on Genesis, SNES, PSX 480i |
+| computers: Colour Monitor, Green/Amber/White Screen, Paper White by era display (docs/COMPUTER-LOOKS.md) | approved (sim from device frames); Apple II core options confirmed on device; CPC, PET, ST, Mac not run |
 
 Branches: `classic-ui` carries all the handheld work (the NGP/GBA-mode merge of
 `classicui-handhelds2` on 2026-10-28); 5bd5299e is pushed to the fork, anything after
@@ -51,71 +51,91 @@ start phase 3 on a new branch off `classic-ui` there.
 
 ## Todo
 
-4. **Official NGPC core, savestates** (fixed 18f49ed1; cause and fix in git log): a
-   player's "save here" waits 8 s for a deferred save; states from the old community
-   core share savestates/NeoGeoPocket and must not be offered to this one.
-4b. **Official NGPC core, live switch**: NGPC -> NGPC IPS Mod applied live once left the
-   picture white until relaunch (LCD Response Panel -> Raw plus Saturation 75 -> 100 at
-   once). Seen once, not yet reproduced; the same look from a launch is fine.
-5. **Harness gap**: the clip log only sees Display screens the harness draws (GB,
-   GBC, GBA, console). Render every handheld class's Display screen there so a tile
-   name that wraps past two lines fails the cut-text check ("Neo Geo Pocket Color"
-   lost "Color" on the device and nothing caught it).
-6. **Phase 1 leftover**: an explicit `look_is_panel` field, now that CRT looks carry
-   core options.
-7. **Phase 3, TV/arcade looks** (branch `classicui-crt-looks`). The dongle is unreliable
-   for 1 px structure (see below); validate scanline depth against the simulator.
-   - **Next:** a 480i check on the device (PSX/Saturn/N64: a CRT look shows no
-     scanlines and the preset's ifilter is in force). The ifilter line is written
-     (chome_video.cpp vp_install) and read (video.cpp); only the device is unverified.
-   - **CRT renders (merged 403f8a51, Dinofly approved reviews #1-3):** console corpus in
-     tools/corpus (SNES 512x224 with every column doubled, Genesis 320x224, NES 256x224,
-     PSX 405x240/352x240 incl. blanking, arcade Rastan 320x240; no TG16 games on the card).
-     render_looks.py renders the TV classes at vscale_mode=1 geometry (integer height, 4:3
-     width: 1195x896 for 224 lines) with a scanline-swing metric; distribution files the
-     presets name live in tools/dist. Not simulated: core halves (Composite Blend, NES
-     Budget TV), interlace.
-   - **What a CRT look can drive in the core** (CONF_STRs read 2026-10-30, exact names):
-     `Composite Blend` Off/On/Adaptive (Genesis, MegaCD, S32X; Saturn Off/On);
-     `Composite Filter` Off/Budget TV/Premium TV (NES; hides Scandoubler Fx) and Off/On
-     (Atari7800, with Smear/AGC/Comb); N64 `Video Out` Original(VI)/Clean HDMI plus the
-     VI chain; SNES `Pseudo Transparency`; PSX `Dithering`. No signal option at all: SMS,
-     TG16, NeoGeo, Coleco, Intellivision, the arcade template. A look can list both
-     `Composite Filter=Budget TV;Composite Filter=On`: a value an option lacks is skipped.
-   - **480i:** set_vfilter uses the interlace filter (else the hfilter) vertically for an
-     interlaced source, and our presets write no `ifilter` line - so on PSX/Saturn/N64
-     480i a CRT look loses its scanlines (right) and inherits whatever ifilter the
-     player had (wrong: should be written).
-   - **Dinofly's calls (2026-10-30):** Composite drives the core signal options
-     (`Composite Blend=On;Composite Filter=Budget TV;Composite Filter=On`) with the
-     scaler hblur lowered Blurry -> Soft; arcade swaps S-Video for a new **Arcade CRT**
-     look (slot mask, appended as P_ARCADE_CRT); no PAL exception for consoles (SCART was
-     RGB); every preset writes `ifilter=` its hfilter. Vectrex later, as its own class.
-   - CRT scanlines live in the vfilter (+ sfilter copy): set_vfilter ignores the sfilter
-     unless the core's Scandoubler Fx is on. Device swing 23-31 levels (`docs/img/device/crt-*`).
-   - **Super Game Boy (Dinofly 2026-10-30):** it ran on a Super Nintendo, so it offers
-     every console television - SGB PVM RGB (the old "sgb" index), SGB BVM RGB, SGB
-     S-Video, SGB Composite - plus the adaptor alone (none-sgb, renamed "Super Game Boy"
-     2026-10-30: "None with SGB Border" lost "Border" at every profile). Shared CRT_* macros keep the
-     scaler halves identical to the console's. 11 GB looks: at 240p the tiles become
-     names, three to a row. On device the adaptor switches on and off correctly, but no
-     border showed on Link's Awakening (open: try an SGB-enhanced game).
-   - **Analog output (Dinofly 2026-10-30):** a CRT shows no CRT emulation and no LCD
-     structure - only what reaches a tube: handheld palettes/colour, the SGB border, the
-     off switch. Every television look carries `analog_as` (CRT looks -> Sharp, SGB
-     televisions -> none-sgb); it is not listed on analog, and a stored choice plays its
-     stand-in there via for_output() inside vp_preset_path_for/vp_apply_core_side, so the
-     choice itself is never rewritten. Console/arcade/computer/VGA classes are left with
-     Sharp alone, so Display drops off the bar for them on a tube. "A tube" means
-     vp_output_is_lowres(): analog, unless vga_scaler drives it at >= 720 lines (then
-     every look, CRT ones included - Dinofly). HDMI is never low-res. Harness only - the
-     device has HDMI attached, so the analog path was not exercised there.
-8. **Phase 4, computers** grouped by era output; **phase 5** ship; **phase 6** the
-   shadowmask RTL patch - possibly unnecessary now that `SUB_BLEND` is 0, re-check
-   every panel first.
-9. Small, known, not urgent: the in-game "None" tile previews the *captured* frame,
-   which already carries the running look's core colour; the firmware restarted under
-   a running core believes the core holds the player's own LUT.
+4b. **Official NGPC core, live switch**: the white picture after NGPC -> NGPC IPS Mod live
+   (seen once) did not reproduce 2026-10-31 (130c465b, Sonic Pocket Adventure): 0/3 live
+   switches, fresh launch fine. Keep an eye out; no action.
+7. **SGB resume blanks the game area for 15-25 s** (2026-11-01, 2fa5f8f9): a suspend point
+   resumed under an SGB look shows a correct border and a black game area until about
+   +25-40 s, 8/8; the baseline (130c465b, no reset) is worse - 1/6 black, 5/6 scrambled
+   tiles still at +40 s. Likely the core's savestate does not carry the SGB side (mask,
+   border VRAM) - unproven, core-side. Captures: scratchpad fix2/ of that session.
+   (The garbled SGB border at launch is FIXED: a look that moves an option the game reads
+   only at boot resets the core once after the launch half - 12/12 + 3/3 clean, see
+   vp_boot_opts_snapshot. Not watched: an OSD "save settings" in the 1-3 s before the
+   look step re-asserts the parked look early and hides the change - rare, old symptom.)
+8. **Phase 4, computers** - looks approved, branch `classicui-computer-looks`
+   (docs/COMPUTER-LOOKS.md); CPC confirmed on the device 2026-10-31 (ed88bc7f). **Phase 5** ship.
+9. Small, known, not urgent - two separate things:
+   a. the in-game "None" tile previews the *captured* frame, which already carries the
+      running look's core colour. Only the GB colour LUT is exactly reversible (it is,
+      for LUT looks); GBA Modify Colors and NGPC Saturation are not. Owner's call.
+   b. a firmware restarted under a running GB core believes the core holds the player's
+      own LUT. A /tmp state file would fix it only if a core reload (which restores the
+      player's .f7) can be told from a bare firmware restart - device-only behaviour,
+      measure before writing it. 2026-10-31: no GAMEBOY.f7/GBC.f7 exists on the owner's
+      card, so the player's table is the stock one and the question cannot be measured
+      without planting a temporary .f7. Code + device (planted GBC.f7, removed): parse_config()
+      re-sends <core>.f7 at EVERY firmware start, core reload and bare restart alike, so the
+      two cannot be told apart that way - and need not be: with a .f7 the belief is right
+      either way. Only without one does a bare restart leave a look's LUT in the core.
+
+## CRT looks (phase 3, merged 4d9ae1b6; device-confirmed Genesis, SNES, PSX 480i)
+
+for 1 px structure (see below); validate scanline depth against the simulator.
+- **480i confirmed on the device (2026-10-30, c1a58ec7):** PSX Wip3out, whose BIOS
+  logos run 704x508i/478i before the game drops to 240p. With PVM RGB the saved
+  PSX_scaler.cfg holds GS_Sharpness_050 in the ilace slot with mode 1; on the
+  dongle the row-to-row luma ripple is 0.03-0.14 at 480i (Sharp 0.14-0.48: no
+  scanlines) and 17-22 at 240p in the same run (Sharp 0.1-0.6). Captures
+  `crt-{pvmrgb,sharp}-psx480i-*`, `crt-pvmrgb-psx240p-*`. Saturn/N64 not run.
+- **CRT renders (merged 403f8a51, Dinofly approved reviews #1-3):** console corpus in
+  tools/corpus (SNES 512x224 with every column doubled, Genesis 320x224, NES 256x224,
+  PSX 405x240/352x240 incl. blanking, arcade Rastan 320x240; no TG16 games on the card).
+  render_looks.py renders the TV classes at vscale_mode=1 geometry (integer height, 4:3
+  width: 1195x896 for 224 lines) with a scanline-swing metric; distribution files the
+  presets name live in tools/dist. Not simulated: core halves (Composite Blend, NES
+  Budget TV), interlace.
+- **What a CRT look can drive in the core** (CONF_STRs read 2026-10-30, exact names):
+  `Composite Blend` Off/On/Adaptive (Genesis, MegaCD, S32X; Saturn Off/On);
+  `Composite Filter` Off/Budget TV/Premium TV (NES; hides Scandoubler Fx) and Off/On
+  (Atari7800, with Smear/AGC/Comb); N64 `Video Out` Original(VI)/Clean HDMI plus the
+  VI chain; SNES `Pseudo Transparency`; PSX `Dithering`. No signal option at all: SMS,
+  TG16, NeoGeo, Coleco, Intellivision, the arcade template. A look can list both
+  `Composite Filter=Budget TV;Composite Filter=On`: a value an option lacks is skipped.
+- **480i:** set_vfilter uses the interlace filter (else the hfilter) vertically for an
+  interlaced source, and our presets write no `ifilter` line - so on PSX/Saturn/N64
+  480i a CRT look loses its scanlines (right) and inherits whatever ifilter the
+  player had (wrong: should be written).
+- **Dinofly's calls (2026-10-30):** Composite drives the core signal options
+  (`Composite Blend=On;Composite Filter=Budget TV;Composite Filter=On`) with the
+  scaler hblur lowered Blurry -> Soft; arcade swaps S-Video for a new **Arcade CRT**
+  look (slot mask, appended as P_ARCADE_CRT); no PAL exception for consoles (SCART was
+  RGB); every preset writes `ifilter=` its hfilter. Vectrex later, as its own class.
+- CRT scanlines live in the vfilter (+ sfilter copy): set_vfilter ignores the sfilter
+  unless the core's Scandoubler Fx is on. Device swing 23-31 levels (`docs/img/device/crt-*`).
+- **Super Game Boy (Dinofly 2026-10-30):** it ran on a Super Nintendo, so it offers
+  every console television - SGB PVM RGB (the old "sgb" index), SGB BVM RGB, SGB
+  S-Video, SGB Composite - plus the adaptor alone (none-sgb, renamed "Super Game Boy"
+  2026-10-30: "None with SGB Border" lost "Border" at every profile). Shared CRT_* macros keep the
+  scaler halves identical to the console's. 11 GB looks: at 240p the tiles become
+  names, three to a row. On device the adaptor switches on and off correctly, but no
+  border showed on Link's Awakening (open: try an SGB-enhanced game).
+- **Analog output (Dinofly 2026-10-30):** a CRT shows no CRT emulation and no LCD
+  structure - only what reaches a tube: handheld palettes/colour, the SGB border, the
+  off switch. Every television look carries `analog_as` (CRT looks -> Sharp, SGB
+  televisions -> none-sgb); it is not listed on analog, and a stored choice plays its
+  stand-in there via for_output() inside vp_preset_path_for/vp_apply_core_side, so the
+  choice itself is never rewritten. Console/arcade/computer/VGA classes are left with
+  Sharp alone, so Display drops off the bar for them on a tube. "A tube" means
+  vp_output_is_lowres(): analog, unless vga_scaler drives it at >= 720 lines (then
+  every look, CRT ones included - Dinofly). HDMI is never low-res. Harness only - the
+  device has HDMI attached, so the analog path was not exercised there.
+
+## Official NGPC core
+
+- Savestates fixed 18f49ed1: NGPC save entries are d7-gated (allow_ss) and a request sent
+  while shut is dropped, so "save here" waits up to 8 s for a deferred save; states from the
+  old community core share savestates/NeoGeoPocket and must not be offered to this one.
 
 ## How the pipeline works (what a look can and cannot do)
 
@@ -135,6 +155,14 @@ programmable after the mask.
   applied on an analog output; colour is `core_colour` and applies everywhere.
 
 ## Firmware facts that cost time
+
+- **No sys/ shadowmask patch is needed** (phase 6 closed 2026-10-31): with SUB_BLEND 0 no
+  generated mask (108 files, 2x-10x) has a substrate cell, the only element that adds light,
+  so nothing leaks into the border. A harness check fails if one comes back.
+- **look_is_panel() = core_struct || tube.** CRT looks carry core_colour only; the mono
+  tubes (phase 4) are the explicit non-panel that still drops its structure on analog.
+- **Every class's Display screen is in the clipped-copy sweep** (chome_test_force_class);
+  wrap_text() logs a dropped word, so a tile name past two lines fails the harness.
 
 - **The preset table is ABI.** `classicui_video.cfg` stores raw preset indices and
   the class number is inside `sys_key`. Append presets and classes at the end; never

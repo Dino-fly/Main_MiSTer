@@ -11807,6 +11807,39 @@ static void assert_video()
 	}
 	check(!leak, "LCD looks only on handhelds, CRT looks only on everything else");
 
+	/*
+	  Phase 6 was a shadowmask.sv patch gating substrate cells - the one mask element that
+	  ADDS light - out of the picture border. With SUB_BLEND 0 no mask writes one, so the
+	  patch (and the core rebuild it would need) is not needed. This keeps it that way: a
+	  substrate cell in any generated mask means the border leak is back.
+	*/
+	{
+		int masks = 0, sub = 0;
+		DIR *dd = opendir(ROOT "/shadow_masks");
+		struct dirent *de;
+		while (dd && (de = readdir(dd)))
+		{
+			if (strncmp(de->d_name, "ClassicHome", 11)) continue;
+			char mp[1024];
+			snprintf(mp, sizeof(mp), "%s/shadow_masks/%s", ROOT, de->d_name);
+			FILE *mf = fopen(mp, "rt");
+			if (!mf) continue;
+			masks++;
+			char ln[512];
+			while (fgets(ln, sizeof(ln), mf))
+			{
+				if (ln[0] == '#' || ln[0] == 'v') continue;
+				if (!strchr(ln, ',') || strlen(ln) < 6) continue;       // the "6,6" size line
+				for (char *t = strtok(ln, ", \r\n"); t; t = strtok(0, ", \r\n"))
+					if (strtol(t, 0, 16) & 0x800) sub++;
+			}
+			fclose(mf);
+		}
+		if (dd) closedir(dd);
+		printf("  %d generated masks, %d substrate cells\n", masks, sub);
+		check(masks > 0 && sub == 0, "no generated mask carries a substrate cell, so nothing adds light to the border");
+	}
+
 	// Dinofly's rule: every single system offers one entry with no processing.
 	{
 		int missing = 0;
@@ -12414,6 +12447,18 @@ static void assert_video()
 				if (vp_options_for(crt_classes[k], o2) != 1 || strcmp(vp_name(o2[0]), "Sharp")) tv = 1;
 			check(!tv, "no CRT look is offered on a CRT: those classes keep only Sharp");
 		}
+		{
+			// A mono tube's phosphor is the core's, so it reaches a tube; its scanlines do not.
+			int mono = vp_options_for(VC_MONO_GREEN, o2) == 4 && !strcmp(vp_name(o2[0]), "Green Screen");
+			int both = vp_options_for(VC_COLOUR_MONO, o2) == 4 && !strcmp(vp_name(o2[0]), "Green Screen");
+			int rgb = vp_options_for(VC_RGBMON, o2) == 1;
+			int keep = 1;
+			for (int i = 0; i < vp_options_for(VC_TV_MONO, o2); i++)
+				if (vp_on_output(o2[i]) != o2[i]) keep = 0;
+			check(mono && both, "the phosphor looks stay on a tube, the colour monitor does not");
+			check(rgb, "a colour-monitor computer keeps only Sharp on a tube");
+			check(keep, "a phosphor look plays as itself on a tube, not as a stand-in");
+		}
 
 		// A television stored as the choice plays its stand-in there, and itself on HDMI.
 		{
@@ -12591,6 +12636,26 @@ static void assert_video()
 	check(ao >= 0 && lib_sys(ao)->vclass == VC_VGA, "ao486 classed as VGA");
 	check(arc >= 0 && lib_sys(arc)->vclass == VC_ARCADE, "arcade classed as arcade");
 	check(c64 >= 0 && lib_sys(c64)->vclass == VC_COMPUTER, "C64 classed as a 15 kHz computer");
+
+	// Computers by the display each machine was sold with (docs/COMPUTER-LOOKS.md).
+	{
+		const struct { const char *id; int vclass; const char *what; } era[] =
+		{
+			{ "amiga",  VC_RGBMON,      "Amiga on its colour monitor" },
+			{ "st",     VC_ATARI_ST,    "Atari ST on SC1224 or SM124" },
+			{ "cpc",    VC_COLOUR_MONO, "CPC on CTM644 or GT65" },
+			{ "apple2", VC_TV_MONO,     "Apple II on a TV or a Monitor II" },
+			{ "msx",    VC_MSX,         "MSX on a TV or SCART RGB" },
+			{ "spec",   VC_COMPUTER,    "Spectrum on a TV" },
+		};
+		for (size_t k = 0; k < sizeof(era) / sizeof(era[0]); k++)
+		{
+			int got = -1;
+			for (int i = 0; i < lib_sys_count(); i++)
+				if (!strcmp(lib_sys(i)->id, era[k].id)) got = lib_sys(i)->vclass;
+			check(got == era[k].vclass, era[k].what);
+		}
+	}
 
 	// A user choice must override the default and persist, within the class.
 	{
@@ -25655,6 +25720,8 @@ static void assert_uniform_wrap()
       plan, and the sentence that is only drawn when there is no plan - the one this task
       started from - had never been composed by anything.
 */
+void chome_test_force_class(int vclass);
+
 static void sweep_screens()
 {
 	const int was_prof = cfg.classicui_profile;
@@ -25711,6 +25778,31 @@ static void sweep_screens()
 			dump(nm);
 			press(KEY_ESC, 10);
 			press(KEY_RIGHT, 6);
+		}
+
+		/*
+		  Every class's Display screen, not only the shelf's own: each class has its own
+		  tile names, and "Neo Geo Pocket Color" lost "Color" on the device with nothing
+		  here to see it. 240p has no Display entry, so only hd and sd draw them.
+		*/
+		if (canv[c].display)
+		{
+			for (int vc = 0; vc < VC_COUNT; vc++)
+			{
+				if (vp_options_for(vc, 0) < 2) continue;
+				chome_test_force_class(vc);
+				if (!chome_test_ui("display")) { chome_test_force_class(-1); continue; }
+				frame(6);
+				char nm[64];
+				snprintf(nm, sizeof(nm), "clipsweep-%s-display-%s", canv[c].name, vp_class_name(vc));
+				dump(nm);
+				chome_test_ui("home");
+				frame(4);
+			}
+			chome_test_force_class(-1);
+			chome_leave();
+			press(KEY_MENU, 20);
+			frame(8);
 		}
 
 		/*

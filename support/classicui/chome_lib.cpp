@@ -175,11 +175,51 @@ static const sys_def defaults[] =
 };
 
 /*
-  Video class, from the system id. Handhelds get their own LCD looks, arcade and
-  consoles a PVM look, 15 kHz home computers a TV look, and 31 kHz machines a
-  clean one. The systems file can override this with a 13th field.
+  Computers by what each machine was plugged into in its era, keyed on the core's
+  name in _Computer (Dinofly's rule, docs/COMPUTER-LOOKS.md). A mono class is only
+  given where the core can draw the phosphor itself; a computer missing here is a
+  television machine.
 */
-static int vclass_for(const char *id, int computer, int mra)
+static const struct { const char *core; int vclass; } computer_classes[] =
+{
+	{ "Minimig", VC_RGBMON }, { "BBCMicro", VC_RGBMON }, { "AcornElectron", VC_RGBMON },
+	{ "QL", VC_RGBMON }, { "Enterprise", VC_RGBMON }, { "SAMCoupe", VC_RGBMON },
+	{ "TatungEinstein", VC_RGBMON }, { "FM-7", VC_RGBMON }, { "PC88", VC_RGBMON },
+	{ "X68000", VC_RGBMON }, { "Apple-IIgs", VC_RGBMON }, { "CoCo3", VC_RGBMON },
+	{ "ZXNext", VC_RGBMON }, { "TSConf", VC_RGBMON }, { "Archie", VC_RGBMON },
+	{ "SharpMZ", VC_RGBMON }, { "UKNC", VC_RGBMON }, { "BK0011M", VC_RGBMON },
+	{ "Amstrad-PCW", VC_MONO_GREEN },
+	{ "TRS-80", VC_MONO_WHITE }, { "Cray-XMP", VC_MONO_WHITE },
+	{ "PET2001", VC_WHITE_GREEN }, { "VT52", VC_WHITE_GREEN },
+	{ "Amstrad", VC_COLOUR_MONO }, { "PCXT", VC_COLOUR_MONO }, { "Tandy1000", VC_COLOUR_MONO },
+	{ "PCjr", VC_COLOUR_MONO }, { "PCXT-EGA", VC_COLOUR_MONO }, { "C128", VC_COLOUR_MONO },
+	{ "Apple-III", VC_COLOUR_MONO },
+	{ "Apple-II", VC_TV_MONO }, { "TK2000", VC_TV_MONO }, { "Galaksija", VC_TV_MONO },
+	{ "Homelab", VC_TV_MONO }, { "JR100", VC_TV_MONO },
+	{ "MacPlus", VC_HIRES_MONO }, { "MacSE30", VC_HIRES_MONO }, { "Apple-Lisa", VC_HIRES_MONO },
+	{ "NeXT", VC_HIRES_MONO },
+	{ "AtariST", VC_ATARI_ST }, { "MSX", VC_MSX },
+	{ "ao486", VC_VGA }, { "MacLC", VC_VGA }, { "MacIIcx", VC_VGA }, { "MacQuadra800", VC_VGA },
+	{ "NeXT-Color", VC_VGA }, { "Sun-2", VC_VGA }, { "Sun-3", VC_VGA },
+	{ "SunSparcStation20", VC_VGA }, { "SGIIndy", VC_VGA }, { "MultiComp", VC_VGA },
+	{ "Altair8800", VC_NO_LOOK }, { "EDSAC", VC_NO_LOOK }, { "PDP1", VC_NO_LOOK },
+};
+
+static int computer_class(const char *rbf)
+{
+	const char *base = strrchr(rbf, '/');
+	base = base ? base + 1 : rbf;
+	for (size_t i = 0; i < sizeof(computer_classes) / sizeof(computer_classes[0]); i++)
+		if (!strcasecmp(base, computer_classes[i].core)) return computer_classes[i].vclass;
+	return VC_COMPUTER;
+}
+
+/*
+  Video class, from the system id. Handhelds get their own LCD looks, arcade and
+  consoles a PVM look, computers the display they were sold with. The systems
+  file can override this with a 13th field.
+*/
+static int vclass_for(const char *id, const char *rbf, int computer, int mra)
 {
 	if (!strcasecmp(id, "gb")) return VC_GB;
 	if (!strcasecmp(id, "gbc")) return VC_GBC;
@@ -189,8 +229,8 @@ static int vclass_for(const char *id, int computer, int mra)
 	if (!strcasecmp(id, "ws")) return VC_WS;
 	if (!strcasecmp(id, "ngp")) return VC_NGPC;
 	if (mra || !strcasecmp(id, "neogeo")) return VC_ARCADE;
-	if (!strcasecmp(id, "ao486") || !strcasecmp(id, "x86") || !strcasecmp(id, "archie")) return VC_VGA;
-	if (computer) return VC_COMPUTER;
+	if (!strcasecmp(id, "ao486") || !strcasecmp(id, "x86")) return VC_VGA;
+	if (computer) return computer_class(rbf);
 	return VC_CONSOLE;
 }
 
@@ -213,7 +253,7 @@ static void add_sys(const sys_def *d)
 	s->mra = d->mra;
 	s->romset = d->romset;
 	s->savestates = d->savestates;
-	s->vclass = vclass_for(d->id, d->computer, d->mra);
+	s->vclass = vclass_for(d->id, d->rbf, d->computer, d->mra);
 	s->tint = 0xff000000u | d->tint;
 	if (d->setname) snprintf(s->setname, sizeof(s->setname), "%s", d->setname);
 }
