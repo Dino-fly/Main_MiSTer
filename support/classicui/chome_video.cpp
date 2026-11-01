@@ -3451,6 +3451,65 @@ void vp_reapply_core_side()
 }
 
 /*
+  Options a game reads once, at boot. The launch look's core half is parked until the
+  MGL is over (see vp_apply_pending), so it reaches a game that is already running -
+  harmless for a colour or a scale, wrong for these. Measured on Donkey Kong (SGB
+  Enhanced), 2026-10-31: Super Game Boy switched on after the game had started garbled
+  the border on about 2 launches in 3; with it already on in GAMEBOY.CFG, 12 of 12 were
+  clean. So the caller snapshots these before the launch half and resets the core once
+  if any of them moved - the game then boots into what the look asked for.
+
+  Only the names the running look itself sets are watched: "System" is a generic word
+  that some other core may well use for something else, and a reset nobody asked for
+  is worse than the border it would fix.
+*/
+static const char *boot_opt_names[] = {
+	"Super Game Boy", "Super Game Boy + GBC", "GBC/GBA mode", "System",
+};
+#define NBOOT_OPTS (int)(sizeof(boot_opt_names) / sizeof(boot_opt_names[0]))
+static uint32_t boot_opt_val[NBOOT_OPTS];
+static int boot_opt_have[NBOOT_OPTS];
+
+// Does this ;-separated half of a look set the option called name?
+static int opt_list_sets(const char *opts, const char *name)
+{
+	size_t n = strlen(name);
+	for (const char *p = opts; p && *p; p = strchr(p, ';'), p = p ? p + 1 : 0)
+		if (!strncmp(p, name, n) && p[n] == '=') return 1;
+	return 0;
+}
+
+void vp_boot_opts_snapshot()
+{
+	for (int i = 0; i < NBOOT_OPTS; i++) boot_opt_have[i] = 0;
+	if (vp_running_look < 0 || core_opts_scan() <= 0) return;
+
+	const preset_def *d = &presets[for_output(vp_running_look, vp_output_is_lowres())];
+	for (int i = 0; i < NBOOT_OPTS; i++)
+	{
+		if (!opt_list_sets(d->core_colour, boot_opt_names[i]) &&
+		    !opt_list_sets(d->core_struct, boot_opt_names[i])) continue;
+		char spec[12];
+		int ex = 0;
+		boot_opt_have[i] = core_opt_read_named(boot_opt_names[i], spec, sizeof(spec), &ex, &boot_opt_val[i]);
+	}
+}
+
+const char *vp_boot_opts_changed()
+{
+	for (int i = 0; i < NBOOT_OPTS; i++)
+	{
+		if (!boot_opt_have[i]) continue;
+		char spec[12];
+		int ex = 0;
+		uint32_t v = 0;
+		if (core_opt_read_named(boot_opt_names[i], spec, sizeof(spec), &ex, &v) && v != boot_opt_val[i])
+			return boot_opt_names[i];
+	}
+	return 0;
+}
+
+/*
   The output can change under a running game: an HDMI cable pulled or pushed in,
   or - the ordinary case - a machine that boots with no sink attached and only
   finds out once i2c is up. Whatever was set for the output before is then simply

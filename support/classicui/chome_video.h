@@ -163,6 +163,14 @@ void vp_apply_pending();
 void vp_reapply_core_side();
 
 /*
+  Options a game reads only at boot (Super Game Boy, GBC/GBA mode, NGP System).
+  Snapshot before the launch's core half, then ask which one moved, if any: the
+  caller resets the core so the game boots into it. See chome_video.cpp.
+*/
+void vp_boot_opts_snapshot();
+const char *vp_boot_opts_changed();
+
+/*
   The save shield, for user_io_status_save(): suspend puts the player's own
   pre-look values back on the live status word, resume re-asserts the look.
   Wrapped around the write, a "Save settings" from any OSD persists the

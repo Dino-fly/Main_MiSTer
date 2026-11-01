@@ -54,16 +54,15 @@ start phase 3 on a new branch off `classic-ui` there.
 4b. **Official NGPC core, live switch**: the white picture after NGPC -> NGPC IPS Mod live
    (seen once) did not reproduce 2026-10-31 (130c465b, Sonic Pocket Adventure): 0/3 live
    switches, fresh launch fine. Keep an eye out; no action.
-7. **SGB border - cause found, fix owed** (device 2026-10-31, 130c465b, Donkey Kong (SGB
-   Enhanced)): fresh launches with either SGB look garble the border (red fill, scrambled
-   tiles) about 2 in 3, clean 1 in 3, whatever the look or Custom Palette. With
-   `Super Game Boy=On` already in GAMEBOY.CFG at boot: 12/12 clean; original CFG back:
-   2/3 garbled. The core half of a launch look is parked until the MGL launch is over
-   (vp_apply_pending, for the palette/boot1.rom interleave), so SGB is switched on after
-   the game has started. A live switch never shows a border (no reset). Likely the same
-   for other options a game reads only at boot (GBC/GBA mode, NGP System). Fix shape
-   proposed: reset the core once after the launch core half when a boot-read option
-   changed. Live switch: owner's call. Captures: scratchpad sgb2/, sgb3/ of that session.
+7. **SGB resume blanks the game area for 15-25 s** (2026-11-01, 2fa5f8f9): a suspend point
+   resumed under an SGB look shows a correct border and a black game area until about
+   +25-40 s, 8/8; the baseline (130c465b, no reset) is worse - 1/6 black, 5/6 scrambled
+   tiles still at +40 s. Likely the core's savestate does not carry the SGB side (mask,
+   border VRAM) - unproven, core-side. Captures: scratchpad fix2/ of that session.
+   (The garbled SGB border at launch is FIXED: a look that moves an option the game reads
+   only at boot resets the core once after the launch half - 12/12 + 3/3 clean, see
+   vp_boot_opts_snapshot. Not watched: an OSD "save settings" in the 1-3 s before the
+   look step re-asserts the parked look early and hides the change - rare, old symptom.)
 8. **Phase 4, computers** - looks approved, branch `classicui-computer-looks`
    (docs/COMPUTER-LOOKS.md); CPC confirmed on the device 2026-10-31 (ed88bc7f). **Phase 5** ship.
 9. Small, known, not urgent - two separate things:
@@ -75,7 +74,10 @@ start phase 3 on a new branch off `classic-ui` there.
       player's .f7) can be told from a bare firmware restart - device-only behaviour,
       measure before writing it. 2026-10-31: no GAMEBOY.f7/GBC.f7 exists on the owner's
       card, so the player's table is the stock one and the question cannot be measured
-      without planting a temporary .f7.
+      without planting a temporary .f7. Code + device (planted GBC.f7, removed): parse_config()
+      re-sends <core>.f7 at EVERY firmware start, core reload and bare restart alike, so the
+      two cannot be told apart that way - and need not be: with a .f7 the belief is right
+      either way. Only without one does a bare restart leave a look's LUT in the core.
 
 ## CRT looks (phase 3, merged 4d9ae1b6; device-confirmed Genesis, SNES, PSX 480i)
 
