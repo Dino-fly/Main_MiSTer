@@ -5339,6 +5339,38 @@ static char view_initial(int i)
 	return isalpha(c) ? (char)tolower(c) : '#';
 }
 
+/*
+  The console's own menu button arrives as a release alone (menu.cpp sends KEY_F12|UPSTROKE
+  when the board's OSD button is let go), and was ignored, so its release opened the classic
+  OSD instead. It must act as the pad's button does - and a pad's press then release must
+  still count once, not twice.
+*/
+static void assert_hw_menu_button()
+{
+	printf("\n== the console's menu button, which only lets go ==\n");
+
+	enum { S_HOME = 0, S_MENUBAR = 1 };
+
+	chome_leave();
+	press(KEY_MENU, 20);
+	for (int i = 0; i < 80 && lib_scanning(); i++) frame(2);
+	frame(30);
+	check(chome_screen_id() == S_HOME, "on the shelf");
+
+	check(chome_handle(KEY_F12 | UPSTROKE) == 1, "a bare menu release is taken, not left for the classic OSD");
+	frame(8);
+	check(chome_screen_id() == S_MENUBAR, "and opens the menu bar, as the pad's button does");
+
+	chome_handle(KEY_F12 | UPSTROKE);
+	frame(8);
+	check(chome_screen_id() == S_HOME, "a second one goes back to the shelf");
+
+	press(KEY_MENU, 8);
+	check(chome_screen_id() == S_MENUBAR, "a pad's press and release still toggle once");
+	press(KEY_MENU, 8);
+	check(chome_screen_id() == S_HOME, "and once back");
+}
+
 static void assert_letter_jump()
 {
 	printf("\n== the shoulders jump by letter, not by page ==\n");
@@ -26324,6 +26356,7 @@ int main()
 	assert_partial_repaint();
 	// Directly after it, because it is the same mechanism on the other region of the screen
 	// and it starts from the state that one leaves: the shelf at 720p with an empty drive.
+	assert_hw_menu_button();
 	assert_letter_jump();
 	assert_version_deck();
 	assert_carousel_slide();

@@ -15590,6 +15590,15 @@ static void ig_build_background(const chome_profile *p)
 	free(filtered);
 }
 
+/*
+  The last key this front-end was handed and when, so the close below can say what closed
+  it. Added for a menu that opened and fell straight back to the game with no button
+  pressed (2026-11-01, not yet reproduced): the next time it happens the log names the key,
+  or shows that no key was involved at all.
+*/
+static uint32_t ig_last_key = 0;
+static unsigned long ig_last_key_at = 0;
+
 static void ig_close(int restore_video)
 {
 	if (!ig_active) return;
@@ -15664,7 +15673,8 @@ static void ig_close(int restore_video)
 		video_fb_size_request(0);
 	}
 
-	printf("ClassicUI: pause menu closed\n");
+	printf("ClassicUI: pause menu closed (last key 0x%X%s, %lu ms ago)\n", ig_last_key & ~UPSTROKE,
+		(ig_last_key & UPSTROKE) ? " release" : "", ig_last_key_at ? GetTimer(0) - ig_last_key_at : 0);
 }
 
 /*
@@ -16742,6 +16752,25 @@ int chome_test_menu()
 	return chome_test_key(KEY_MENU);
 }
 
+static int chome_handle_key(uint32_t key);
+
+/*
+  A menu button that only ever lets go.
+
+  The console's own menu button - the board's OSD button, which the SuperStation One
+  brings out on its case - reaches us as a release and nothing else: menu.cpp turns it
+  into KEY_F12|UPSTROKE when it is let go (the press is held back to tell a tap from the
+  three-second Bluetooth hold). Everything here acts on the press, so that button was
+  ignored and its release went on to open the classic OSD - the one menu the player
+  should never meet (Dinofly, 2026-11-01).
+
+  So a menu release with no press of its own in front of it is played as the press. A
+  pad's or a keyboard's button still arrives as press then release, and that release is
+  left to the logic below, which already knows when it is owed one. Nothing will follow
+  the stand-in press, so whatever it armed to swallow a release is disarmed again.
+*/
+static int menu_down = 0;
+
 int chome_handle(uint32_t key)
 {
 	if (!key && test_menu_req)
@@ -16750,6 +16779,30 @@ int chome_handle(uint32_t key)
 		test_menu_req--;
 	}
 
+	if (key) { ig_last_key = key; ig_last_key_at = GetTimer(0); }
+
+	uint32_t k = key & ~UPSTROKE;
+	if (key && cfg.classicui && (k == KEY_MENU || k == KEY_F12))
+	{
+		if (!(key & UPSTROKE)) menu_down = 1;
+		else
+		{
+			int bare = !menu_down && !eat_menu_release;
+			menu_down = 0;
+			if (bare)
+			{
+				int r = chome_handle_key(k);
+				eat_menu_release = 0;
+				return r;
+			}
+		}
+	}
+
+	return chome_handle_key(key);
+}
+
+static int chome_handle_key(uint32_t key)
+{
 	/*
 	  Keep the game's own rectangle current, whatever the look is and whether or not
 	  one is running at all. The in-game menu draws its background at that size, and
