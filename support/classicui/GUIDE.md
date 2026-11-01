@@ -40,7 +40,7 @@ are the core's own colour, so they apply on the analog output exactly as they do
 HDMI, and this is the only way to reach them. What a CRT never gets is the LCD pixel
 grid or the pixel shadow: those imitate a handheld's panel, and on a tube they are
 just damage. The list on that screen is shortened to the looks that can still show
-you a difference.
+you a difference. See [Display looks](#display-looks).
 
 ---
 
@@ -314,6 +314,92 @@ It is only offered where it would do something. `video_mode` shapes the scaler's
 output, so on `direct_video` — where the core's own timing goes straight out of the
 DAC — and on an analog-only machine without `vga_scaler=1`, the screen says so
 instead of offering you a choice that changes nothing.
+
+---
+
+## Display looks
+
+![The Display screen for a Game Boy](img/device/gb-display-two-rows.png)
+
+**Display** on the menu bar picks how a system's picture looks: which screen its games
+were made for. Each tile is a **look** — the scaler's filters, mask and gamma *together
+with the core's own picture options*, set as one and taken off as one. That second half
+is what a plain MiSTer preset cannot do: a Game Boy palette, a GBA's screen model or a
+green phosphor comes from the core itself, so it is right on every output rather than an
+approximation laid over the top.
+
+The big picture is the look under the cursor. In a game it is **your own frame**, put
+through that look at the magnification your television will really use; from the shelf
+there is no frame yet, so a stock picture stands in. The line under it says what the look
+is. **A** picks it — in a game the change happens behind the menu while you watch — and
+the choice is kept for that **system**, for every game on it. The header says which kind
+of screen the list is for, and the footer names the default once you have moved off it.
+
+Every list has a way out: **None** for a handheld, **Sharp** for anything that went to a
+tube. Both mean "add nothing" — your own core settings, untouched.
+
+### Which looks a system gets
+
+What a system is offered depends on what it was played on, not on its family:
+
+| screen | looks |
+|---|---|
+| Game Boy | DMG, DMG Bright, DMG Faded, Pocket, Light, SGB PVM RGB, SGB BVM RGB, SGB S-Video, SGB Composite, None, Super Game Boy |
+| Game Boy Color | GBC, GBC on GBA, GBC on GBA SP, GBC on SP Brighter, the same four SGB looks, None, Super Game Boy |
+| Game Boy Advance | GBA, GBA SP, GBA SP Brighter, Game Boy Micro, GBA on DS, None |
+| Neo Geo Pocket Color | NGPC, NGPC IPS Mod, None |
+| Neo Geo Pocket (mono) | Neo Geo Pocket, Mono on NGPC, None |
+| Game Gear | Game Gear, Backlit Mod, McWill, None |
+| Lynx | Lynx, McWill, None |
+| WonderSwan / Color | WS or WSC, SwanCrystal, None |
+| consoles | PVM RGB, BVM RGB, S-Video, Composite, Sharp |
+| arcade | PVM RGB, BVM RGB, Arcade CRT, Sharp |
+| computers on a TV (C64, Spectrum, VIC-20 …) | PAL TV, Composite, S-Video, Sharp |
+| computers on a colour monitor (Amiga, BBC Micro, QL …) | Colour Monitor, PAL TV, Sharp |
+| computers sold with either (Amstrad CPC) | Colour Monitor, Green Screen, Amber Screen, White Screen, Sharp |
+| a TV or a cheap mono monitor (Apple II) | Composite, Green Screen, Amber Screen, White Screen, Sharp |
+| a built-in mono monitor (PET, TRS-80 …) | Green, Amber and White Screen, Sharp |
+| a built-in hi-res mono screen (Macintosh) | Paper White, Sharp |
+| 31 kHz machines (PC, workstations) | VGA Monitor, Sharp |
+
+The Atari ST gets Colour Monitor, PAL TV and Paper White (the SM124), and MSX gets the TV
+looks plus Colour Monitor.
+
+A few looks reach further into the core than colour:
+
+- **GBC on GBA** and its two SP cousins also put the core in **GBA mode**, so a Color game
+  that checks for a GBA — Oracle of Seasons does — behaves as it did on one.
+- **Composite** uses the core's own composite blending where it has one (Genesis, Mega
+  CD, 32X, Saturn, NES, Atari 7800) rather than blurring in the scaler, and switches on
+  artifact colour on the computers that relied on it (Apple II, CoCo, Atari 800, PC).
+- The **Super Game Boy** looks switch the adaptor on, so an SGB-enhanced game shows its
+  border and its colours. A Color game gets either the border or a panel grid, never
+  both: an SGB was a Super Nintendo on a television, not a handheld.
+
+![Amstrad CPC: Green Screen](tools/corpus/computers/cpc-green.png)
+
+### Settings a game only reads when it starts
+
+Super Game Boy, GBA mode and the Neo Geo Pocket's System switch are read by a game once,
+as it starts. A look sets them a moment after the game has loaded, so when one of them
+actually changes, the core is **reset once** right after launch and the game starts
+again with it — you may see the boot logo twice. Picking such a look while a game is
+running changes the setting, but the game will not notice until it next starts.
+
+### On a CRT
+
+On the analog output a look keeps only what reaches the tube: the core's colour — a Game
+Boy palette, a phosphor colour — and nothing else. Scanlines, masks and LCD grids imitate
+a screen; on a real one they are damage, so the list is shortened to the looks that still
+make a difference. With `vga_scaler=1` at 720p or more the scaler is back in the path and
+every look is offered, as on HDMI.
+
+### What a look never does
+
+Nothing a look sets is saved into the core's own settings. A **Save settings** from the
+classic OSD while a look is on writes your values, not the look's, and **None** or
+**Sharp** puts every option a look touched back to what you had. The next launch starts
+from your configuration and applies the look again.
 
 ---
 
