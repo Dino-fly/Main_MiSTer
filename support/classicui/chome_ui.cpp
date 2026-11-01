@@ -15590,6 +15590,15 @@ static void ig_build_background(const chome_profile *p)
 	free(filtered);
 }
 
+/*
+  The last key this front-end was handed and when, so the close below can say what closed
+  it. Added for a menu that opened and fell straight back to the game with no button
+  pressed (2026-11-01, not yet reproduced): the next time it happens the log names the key,
+  or shows that no key was involved at all.
+*/
+static uint32_t ig_last_key = 0;
+static unsigned long ig_last_key_at = 0;
+
 static void ig_close(int restore_video)
 {
 	if (!ig_active) return;
@@ -15664,7 +15673,8 @@ static void ig_close(int restore_video)
 		video_fb_size_request(0);
 	}
 
-	printf("ClassicUI: pause menu closed\n");
+	printf("ClassicUI: pause menu closed (last key 0x%X%s, %lu ms ago)\n", ig_last_key & ~UPSTROKE,
+		(ig_last_key & UPSTROKE) ? " release" : "", ig_last_key_at ? GetTimer(0) - ig_last_key_at : 0);
 }
 
 /*
@@ -16769,6 +16779,8 @@ int chome_handle(uint32_t key)
 		test_menu_req--;
 	}
 
+	if (key) { ig_last_key = key; ig_last_key_at = GetTimer(0); }
+
 	uint32_t k = key & ~UPSTROKE;
 	if (key && cfg.classicui && (k == KEY_MENU || k == KEY_F12))
 	{
@@ -16791,7 +16803,6 @@ int chome_handle(uint32_t key)
 
 static int chome_handle_key(uint32_t key)
 {
-
 	/*
 	  Keep the game's own rectangle current, whatever the look is and whether or not
 	  one is running at all. The in-game menu draws its background at that size, and
