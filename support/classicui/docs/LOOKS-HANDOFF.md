@@ -64,6 +64,36 @@ boot-read reset. Open:
 3. A bare firmware restart under a running GB core with NO <core>.f7 leaves a look's LUT
    in the core while the firmware believes stock. Fix if wanted: a /tmp marker "a look's
    LUT is in" -> push the stock table at start (correct after a core reload too).
+4. **Pre-calculated look previews (Dinofly, 2026-11-01)**: the Display screen's preview should
+   be a shipped screenshot of a known game showing the look's detail, not the live
+   calculation over the player's frame. Dinofly chooses the scenes; capture each on the
+   device (native frame + the look, 1:1 crop with a lens, see classicui-artifact-screenshots
+   memory), ship them as classicui/lookshots/<id>.png, and make the shipped shot outrank the
+   live preview. Recommended scenes (games from the file server):
+
+   | look(s) | game - scene | why |
+   |---|---|---|
+   | DMG, DMG Bright, DMG Faded, Pocket, Light, None (GB) | Link's Awakening - Mabe Village | all four shades, dithering, text box |
+   | SGB PVM / BVM / S-Video / Composite, Super Game Boy | Donkey Kong (1994) - title with the cabinet border | the border is the point |
+   | GBC, GBC on GBA / GBA SP / SP Brighter | Oracle of Seasons - Horon Village | saturated palette shows the washout |
+   | GBA, GBA SP, SP Brighter, Micro, GBA on DS | Castlevania: Circle of the Moon - first castle hall | the game too dark on the unlit GBA |
+   | NGPC, NGPC IPS Mod | Sonic Pocket Adventure - Neo South Island | pastels vs full colour, smear |
+   | Neo Geo Pocket, Mono on NGPC | King of Fighters R-1 - a fight | mono grey vs B&W palette |
+   | Game Gear, Backlit Mod, McWill | Sonic the Hedgehog (GG) - Green Hills | contrast, blur on the stock LCD |
+   | Lynx, Lynx McWill | California Games - half-pipe | sky gradient, motion |
+   | WS, SwanCrystal (mono) | Klonoa: Moonlight Museum - first stage | grey ramp |
+   | WSC, SwanCrystal | Final Fantasy (WSC) - Cornelia overworld | colour LCD vs IPS |
+   | Composite, Sharp | Sonic 1 (Mega Drive) - Green Hill waterfall | dither blends to transparency only on composite |
+   | PVM RGB | Super Metroid - Crateria landing site, rain | dark gradients, adaptive scanlines |
+   | BVM RGB | Street Fighter II Turbo (SNES) - Ryu's stage | hard sprite edges, deep scanlines |
+   | S-Video | Super Mario World - Yoshi's Island 2 | slight bleed on bright colour |
+   | Arcade CRT | Metal Slug - Mission 1 | slot mask on dense arcade art |
+   | PAL TV, computer Composite / S-Video | Turrican II (C64) - world 1 | C64 palette on a TV |
+   | Colour Monitor | Shadow of the Beast (Amiga) - opening plain | 1084S on parallax and gradients |
+   | Green / Amber / White Screen | Gryzor (CPC) - title (corpus frames exist) | one picture, three phosphors |
+   | Composite on Apple II (artifact colour) | Karateka (Apple II) - first fight | artifact colour appears |
+   | Paper White | Dark Castle (Mac) - Great Hall | 1-bit art on a crisp white |
+   | VGA Monitor | The Secret of Monkey Island (DOS, VGA) - Melee Island dock | 31 kHz, no scanlines |
 
 ## Boot-read options and the .f7 (2026-11-01)
 
