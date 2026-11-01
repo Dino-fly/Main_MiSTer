@@ -2683,6 +2683,46 @@ static void draw_background(const chome_profile *p)
 }
 
 /*
+  USB storage that turns up after the shelf has already looked.
+
+  A games drive in a dock can enumerate nine seconds into the boot and mount at thirteen,
+  well after the firmware's scan (2026-11-01, Dinofly's SSD): the index cache names its
+  folders, they are missing, so the scan runs again over a card without them and the shelf
+  says NO GAMES FOUND with the drive mounted a moment later and nothing ever looking again.
+  chome_handle() watches the mount table and rescans when a /media/usbN mount appears;
+  these two say how many there are, and whether the boot is still young enough that a
+  missing drive may simply not have arrived yet.
+*/
+#define USB_WAIT_S 30
+
+static int usb_mount_count()
+{
+	FILE *f = fopen("/proc/mounts", "r");
+	if (!f) return 0;
+	char line[512];
+	int n = 0;
+	while (fgets(line, sizeof(line), f))
+	{
+		const char *mp = strchr(line, ' ');
+		if (mp && !strncmp(mp + 1, "/media/usb", 10)) n++;
+	}
+	fclose(f);
+	return n;
+}
+
+static int usb_waiting()
+{
+	double up = 0;
+	FILE *f = fopen("/proc/uptime", "r");
+	if (f)
+	{
+		if (fscanf(f, "%lf", &up) != 1) up = 0;
+		fclose(f);
+	}
+	return up > 0 && up < USB_WAIT_S && !usb_mount_count();
+}
+
+/*
   The block above the shelf: the title, the system line and, on the cards that need it, the
   file name.
 
@@ -2702,7 +2742,9 @@ static void draw_title_block(const chome_profile *p)
 
 	if (!e)
 	{
-		gfx_text_c(lib_scanning() ? "SCANNING..." : "NO GAMES FOUND", p->w / 2, p->y_title, p->ts_title, COL_WHITE, COL_SHADOW);
+		int waiting = !lib_scanning() && usb_waiting();
+		gfx_text_c(lib_scanning() ? "SCANNING..." : waiting ? "WAITING FOR USB..." : "NO GAMES FOUND",
+			p->w / 2, p->y_title, p->ts_title, COL_WHITE, COL_SHADOW);
 
 		/*
 		  The meta line under it says the same thing twice over on purpose: what to do
@@ -2719,7 +2761,13 @@ static void draw_title_block(const chome_profile *p)
 		  visibly advances even on a folder that yields no games at all, which is the
 		  case a bare item count says nothing about.
 		*/
-		if (!lib_scanning())
+		if (waiting)
+		{
+			char wm[64] = "A DRIVE MAY STILL BE STARTING";
+			gfx_shout(wm);
+			gfx_text_c(gfx_clip(wm, p->ts_ui, avail), p->w / 2, p->y_meta, p->ts_ui, COL_DIM, 0);
+		}
+		else if (!lib_scanning())
 		{
 			gfx_text_c(gfx_clip("PUT ROMS IN /MEDIA/FAT/GAMES", p->ts_ui, avail), p->w / 2, p->y_meta, p->ts_ui, COL_DIM, 0);
 		}
@@ -17663,6 +17711,41 @@ int chome_handle(uint32_t key)
 		{
 			padtest_seen = sig;
 			mark_dirty();
+		}
+	}
+
+	/*
+	  A USB drive mounting after the scan - see usb_mount_count(). Once a second, on the
+	  menu core only: a game core's session never sees a drive arrive (a dock plugged in
+	  while running resets the board), and a rescan under a running game would pull the
+	  shelf out from behind its menu. Only a new mount rescans; one going away leaves the
+	  shelf alone, since its cards then simply fail to launch, which they would anyway.
+	*/
+	if (is_menu())
+	{
+		static unsigned long usb_next = 0;
+		static int usb_seen = -1;
+		static int usb_was_waiting = -1;
+
+		if (!usb_next || CheckTimer(usb_next))
+		{
+			usb_next = GetTimer(1000);
+			int n = usb_mount_count();
+			if (usb_seen >= 0 && n > usb_seen)
+			{
+				printf("ClassicUI: USB storage mounted after the scan (%d -> %d), rescanning\n", usb_seen, n);
+				lib_rescan();
+				gl_forget();
+				art_shutdown();
+				art_init(theme_get()->sel_w, theme_get()->sel_h);
+				view_rebuild(0);
+				mark_dirty();
+			}
+			usb_seen = n;
+
+			// The empty shelf's wording changes when the wait runs out.
+			int w = usb_waiting();
+			if (w != usb_was_waiting) { usb_was_waiting = w; mark_dirty(); }
 		}
 	}
 
