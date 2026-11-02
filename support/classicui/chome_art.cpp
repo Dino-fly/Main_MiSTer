@@ -1381,6 +1381,40 @@ const uint32_t *art_thumb(const char *fullpath, int w, int h)
 	return victim->data;
 }
 
+void thumb_letterbox(const uint32_t *src, int sw, int sh, int arx, int ary, uint32_t *dst)
+{
+	const int bw = CH_THUMB_W, bh = CH_THUMB_H;
+	for (int i = 0; i < bw * bh; i++) dst[i] = 0xff000000u;
+	if (!src || sw < 1 || sh < 1) return;
+
+	// Wider than 4:1 or taller than 1:4 is no television; trust the pixels instead.
+	if (arx < 1 || ary < 1 || arx > ary * 4 || ary > arx * 4) { arx = sw; ary = sh; }
+
+	int pw, ph;
+	if ((long long)arx * bh >= (long long)ary * bw)
+	{
+		pw = bw;
+		ph = (int)(((long long)bw * ary + arx / 2) / arx);
+	}
+	else
+	{
+		ph = bh;
+		pw = (int)(((long long)bh * arx + ary / 2) / ary);
+	}
+	if (pw < 1) pw = 1;
+	if (ph < 1) ph = 1;
+	if (pw > bw) pw = bw;
+	if (ph > bh) ph = bh;
+
+	int ox = (bw - pw) / 2, oy = (bh - ph) / 2;
+	for (int y = 0; y < ph; y++)
+	{
+		const uint32_t *srow = src + (size_t)((y * sh) / ph) * sw;
+		uint32_t *drow = dst + (size_t)(oy + y) * bw + ox;
+		for (int x = 0; x < pw; x++) drow[x] = srow[(x * sw) / pw] | 0xff000000u;
+	}
+}
+
 /* ---------------------------------------------------------------- fetch --- */
 
 static void url_encode(const char *in, char *out, int len)

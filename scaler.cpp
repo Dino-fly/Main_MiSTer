@@ -29,6 +29,7 @@ const int VEC_WIDTH = 16;
 #include "lib/imlib2/Imlib2.h"
 #include "shmem.h"
 #include "file_io.h"
+#include "support/classicui/chome_art.h"
 #include "menu.h"
 
 #ifdef PROFILING
@@ -725,7 +726,21 @@ int screenshot_thumbnail(const char *fullpath, int max_w, int out_h)
     int oh = (out_h > 0) ? out_h : (int)(((long long)max_w * h) / w);
     if (oh < 1) oh = 1;
 
-    bool ok = write_screenshot(fullpath, screenshot_outputbuf, w, h, ow, oh);
+    bool ok;
+    if (out_h < 0)
+    {
+        // A Suspend Point thumbnail: the box every one of them shares - thumb_letterbox().
+        static uint32_t box[CH_THUMB_W * CH_THUMB_H];
+        thumb_letterbox((const uint32_t *)screenshot_outputbuf, w, h,
+            current_video_info.arx, current_video_info.ary, box);
+        ow = CH_THUMB_W;
+        oh = CH_THUMB_H;
+        ok = write_screenshot(fullpath, (const uint8_t *)box, ow, oh);
+    }
+    else
+    {
+        ok = write_screenshot(fullpath, screenshot_outputbuf, w, h, ow, oh);
+    }
     screenshot_pending_atomic = false;
 
     printf("thumbnail: %s %dx%d -> %dx%d %s\n", fullpath, w, h, ow, oh, ok ? "ok" : "FAILED");

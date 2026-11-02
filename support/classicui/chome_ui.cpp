@@ -14409,14 +14409,13 @@ static int ss_write_thumb(const chome_item *it, int slot)
 	if (!slot_png_path(it, slot, png, sizeof(png))) return 0;
 
 	/*
-	  256 wide at the display aspect, not at the pixel aspect - see shot_fit(). By pixel
-	  ratio a PSX frame came out 256x173 and a 240p one 256x96, both squashed.
+	  One size for every system, the picture at its display shape inside it - see
+	  thumb_letterbox(). By pixel ratio a PSX frame came out 256x173 and a 240p one
+	  256x96, both squashed; stretched to 4:3 instead, a Game Boy came out too wide.
 	*/
-	int ow = 256;
-	int oh = ow * SHOT_AR_H / SHOT_AR_W;
-	if (oh < 1) oh = 1;
-
-	if (!write_screenshot(png, (const uint8_t *)ig_shot, ig_shot_w, ig_shot_h, ow, oh)) return 0;
+	static uint32_t box[CH_THUMB_W * CH_THUMB_H];
+	thumb_letterbox(ig_shot, ig_shot_w, ig_shot_h, current_video_info.arx, current_video_info.ary, box);
+	if (!write_screenshot(png, (const uint8_t *)box, CH_THUMB_W, CH_THUMB_H, 0, 0)) return 0;
 
 	art_forget(png);        // the tile is looking at the moment we just replaced
 	return 1;
