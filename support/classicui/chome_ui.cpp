@@ -5089,7 +5089,7 @@ static void draw_suspend(const chome_profile *p)
 			*/
 			const uint32_t *shot = 0;
 			char tp[1024];
-			if (it && lib_slot_thumb(it, i, tp, sizeof(tp))) shot = art_thumb(tp, tw, th);
+			if (it && lib_slot_thumb(it, i, tp, sizeof(tp))) shot = art_slot_thumb(tp, tw, th, class_of(it->sysidx, it->path) == VC_CONSOLE);
 
 			if (shot) gfx_blit(shot, tw, th, x, ty, tw, th);
 			else gfx_fill(x, ty, tw, th, COL_BG);
@@ -5112,7 +5112,7 @@ static void draw_suspend(const chome_profile *p)
 			// (process_ss -> screenshot_thumbnail). Fall back to the cover.
 			const uint32_t *shot = 0;
 			char tp[1024];
-			if (it && lib_slot_thumb(it, i, tp, sizeof(tp))) shot = art_thumb(tp, tw, th);
+			if (it && lib_slot_thumb(it, i, tp, sizeof(tp))) shot = art_slot_thumb(tp, tw, th, class_of(it->sysidx, it->path) == VC_CONSOLE);
 
 			if (shot) gfx_blit(shot, tw, th, x, ty, tw, th);
 			else if (art) gfx_blit(art, aw, ah, x, ty, tw, th);
@@ -14409,13 +14409,15 @@ static int ss_write_thumb(const chome_item *it, int slot)
 	if (!slot_png_path(it, slot, png, sizeof(png))) return 0;
 
 	/*
-	  One size for every system, the picture at its display shape inside it - see
-	  thumb_letterbox(). By pixel ratio a PSX frame came out 256x173 and a 240p one
+	  The frame at its own size where it fits, else at its display shape - see
+	  thumb_picture(). By pixel ratio a PSX frame came out 256x173 and a 240p one
 	  256x96, both squashed; stretched to 4:3 instead, a Game Boy came out too wide.
 	*/
 	static uint32_t box[CH_THUMB_W * CH_THUMB_H];
-	thumb_letterbox(ig_shot, ig_shot_w, ig_shot_h, current_video_info.arx, current_video_info.ary, box);
-	if (!write_screenshot(png, (const uint8_t *)box, CH_THUMB_W, CH_THUMB_H, 0, 0)) return 0;
+	int ow, oh;
+	if (!thumb_picture(ig_shot, ig_shot_w, ig_shot_h, current_video_info.arx, current_video_info.ary, box, &ow, &oh))
+		return 0;
+	if (!write_screenshot(png, (const uint8_t *)box, ow, oh, 0, 0)) return 0;
 
 	art_forget(png);        // the tile is looking at the moment we just replaced
 	return 1;

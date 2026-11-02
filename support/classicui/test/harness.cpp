@@ -2465,63 +2465,140 @@ static void assert_slots()
 	check(lib_slot_thumb(sm, 0, tp, sizeof(tp)), "slot 1 thumbnail path resolves");
 	check(art_thumb(tp, 200, 150) != 0, "slot 1 thumbnail decodes");
 
+	check(art_slot_thumb(tp, 200, 150, 1) != 0, "slot 1 thumbnail decodes for the strip");
+
 	/*
-	  Every Suspend Point thumbnail is one box, the picture at its display shape inside
-	  it: thumb_letterbox(). Measured by where the picture's edges land.
+	  Suspend Point thumbnails, the file half: thumb_picture() keeps a frame that fits at its
+	  own size, and scales the rest to their display shape. Measured by the size it writes.
 	*/
 	{
-		static uint32_t src[512 * 224], box[CH_THUMB_W * CH_THUMB_H];
-		for (int i = 0; i < 512 * 224; i++) src[i] = 0xff00ff00u;
-		struct { int sw, sh, arx, ary, pw, ph; const char *what; } t[] =
+		static uint32_t src[640 * 480], box[CH_THUMB_W * CH_THUMB_H];
+		for (int i = 0; i < 640 * 480; i++) src[i] = 0xff00ff00u;
+		struct { int sw, sh, arx, ary, ow, oh; const char *what; } t[] =
 		{
-			{ 160, 144, 10,  9, 267, 240, "a Game Boy keeps its 10:9 panel, bars left and right" },
-			{ 512, 224,  4,  3, 320, 240, "a SNES frame of doubled columns fills the 4:3 box" },
-			{ 320, 240,  3,  4, 180, 240, "a vertical arcade game stands up in the box" },
-			{ 240, 160,  0,  0, 320, 213, "a core that reports no aspect keeps its pixel shape" },
+			{ 160, 144, 10,  9, 160, 144, "a Game Boy frame is kept at its own size" },
+			{ 256, 224,  4,  3, 256, 224, "a NES frame is kept at its own size, 8:7 close enough to 4:3" },
+			{ 160, 102, 80, 51, 160, 102, "a Lynx frame is kept at its own size" },
+			{ 160, 192,  4,  3, 320, 240, "an Atari 2600's tall pixels are scaled to 4:3" },
+			{ 512, 224,  4,  3, 320, 240, "a SNES frame of doubled columns is scaled to 4:3" },
+			{ 320, 240,  3,  4, 180, 240, "a vertical arcade game is scaled to stand up" },
+			{ 640, 480,  4,  3, 320, 240, "a 640x480 frame shrinks into the box" },
+			{ 240, 160,  0,  0, 240, 160, "a core that reports no aspect keeps its pixel shape" },
 		};
 		for (size_t k = 0; k < sizeof(t) / sizeof(t[0]); k++)
 		{
-			thumb_letterbox(src, t[k].sw, t[k].sh, t[k].arx, t[k].ary, box);
-			int pw = 0, ph = 0;
-			for (int x = 0; x < CH_THUMB_W; x++) if (box[(CH_THUMB_H / 2) * CH_THUMB_W + x] == 0xff00ff00u) pw++;
-			for (int y = 0; y < CH_THUMB_H; y++) if (box[y * CH_THUMB_W + CH_THUMB_W / 2] == 0xff00ff00u) ph++;
-			int ok = (pw == t[k].pw && ph == t[k].ph && box[0] == 0xff000000u) ||
-				(pw == t[k].pw && ph == t[k].ph && t[k].pw == CH_THUMB_W && t[k].ph == CH_THUMB_H);
+			int ow = 0, oh = 0;
+			int ok = thumb_picture(src, t[k].sw, t[k].sh, t[k].arx, t[k].ary, box, &ow, &oh) &&
+				ow == t[k].ow && oh == t[k].oh;
 			if (!ok) printf("  thumb %dx%d %d:%d -> %dx%d, want %dx%d\n", t[k].sw, t[k].sh,
-				t[k].arx, t[k].ary, pw, ph, t[k].pw, t[k].ph);
+				t[k].arx, t[k].ary, ow, oh, t[k].ow, t[k].oh);
 			check(ok, t[k].what);
 		}
 
+		int ow, oh, moved = 0;
+		for (int i = 0; i < 256 * 224; i++) src[i] = 0xff000000u | (uint32_t)(i * 2654435761u >> 8);
+		thumb_picture(src, 256, 224, 4, 3, box, &ow, &oh);
+		for (int i = 0; i < 256 * 224; i++) if (box[i] != src[i]) moved++;
+		check(moved == 0, "a frame kept at its own size is copied pixel for pixel");
+
 		/*
-		  No row is lost, growing or shrinking: a 4:3 frame of one-pixel white lines at
-		  every phase of the period nearest neighbour would drop one in - a NES frame (224
-		  lines, grown to 240) and a PAL one (288 lines, shrunk to 240, one row in six) -
-		  must show each line in the thumbnail, and a flat colour must stay that colour.
+		  No row is lost: a PAL frame (288 lines into 240, one row in six for nearest
+		  neighbour) of one-pixel white lines at every phase must show each line, and an
+		  Atari 2600 frame grown 192 -> 240 must show each line with hard edges only.
 		*/
-		const int lines[2] = { 224, 288 }, period[2] = { 7, 6 };
+		const int widths[2] = { 256, 160 }, lines[2] = { 288, 192 }, period[2] = { 6, 5 };
 		for (int f = 0; f < 2; f++)
 		{
-			int sh = lines[f], per = period[f], lost = 0;
+			int sw = widths[f], sh = lines[f], per = period[f], lost = 0, soft = 0;
 			for (int phase = 0; phase < per; phase++)
 			{
-				for (int i = 0; i < 256 * sh; i++) src[i] = ((i / 256) % per == phase) ? 0xffffffffu : 0xff000000u;
-				thumb_letterbox(src, 256, sh, 4, 3, box);
+				for (int i = 0; i < sw * sh; i++) src[i] = ((i / sw) % per == phase) ? 0xffffffffu : 0xff000000u;
+				thumb_picture(src, sw, sh, 4, 3, box, &ow, &oh);
 				for (int sy = phase; sy < sh; sy += per)
 				{
-					int dy = sy * CH_THUMB_H / sh, lit = 0;
+					int dy = sy * oh / sh, lit = 0;
 					for (int y = dy - 1; y <= dy + 1; y++)
-						if (y >= 0 && y < CH_THUMB_H && (box[y * CH_THUMB_W + CH_THUMB_W / 2] & 0xff) >= 0x60) lit = 1;
+						if (y >= 0 && y < oh && (box[y * ow + ow / 2] & 0xff) >= 0x60) lit = 1;
 					if (!lit) lost++;
 				}
+				if (f) for (int i = 0; i < ow * oh; i++) if ((box[i] & 0xffffff) && (box[i] & 0xffffff) != 0xffffff) soft++;
 			}
-			if (lost) printf("  thumb: %d of %d one-pixel lines lost, %d -> %d lines\n", lost, sh, sh, CH_THUMB_H);
-			check(lost == 0, f ? "shrinking a frame into the thumbnail drops no row"
-				: "growing a NES frame into the thumbnail drops no row");
+			if (lost) printf("  thumb: %d of %d one-pixel lines lost, %d -> %d lines\n", lost, sh, sh, oh);
+			check(lost == 0, f ? "growing a frame into the thumbnail drops no row"
+				: "shrinking a frame into the thumbnail drops no row");
+			if (f) check(soft == 0, "growing is nearest neighbour: no blended rows");
 		}
 
 		for (int i = 0; i < 256 * 288; i++) src[i] = 0xff3080c0u;
-		thumb_letterbox(src, 256, 288, 4, 3, box);
-		check(box[100 * CH_THUMB_W + 100] == 0xff3080c0u, "a flat colour survives the averaging unchanged");
+		thumb_picture(src, 256, 288, 4, 3, box, &ow, &oh);
+		check(box[100 * ow + 100] == 0xff3080c0u, "a flat colour survives the averaging unchanged");
+	}
+
+	/*
+	  The drawing half: thumb_compose() into the strip's 484x363 tile (1080p).
+	*/
+	{
+		static uint32_t src[256 * 240], dst[500 * 460];
+		const int W = 484, H = 363;
+		for (int i = 0; i < 256 * 240; i++) src[i] = 0xff000000u | (uint32_t)(i * 2654435761u >> 8) | 0x010101u;
+
+		// Twice or more by a whole number: every source pixel a k x k block.
+		struct { int pw, ph, k; const char *what; } t[] =
+		{
+			{ 160, 144, 2, "a Game Boy is drawn at exactly 2x" },
+			{ 160, 102, 3, "a Lynx is drawn at exactly 3x" },
+		};
+		for (size_t n = 0; n < sizeof(t) / sizeof(t[0]); n++)
+		{
+			int k = t[n].k, pw = t[n].pw, ph = t[n].ph, bad = 0;
+			int ox = (W - pw * k) / 2, oy = (H - ph * k) / 2;
+			thumb_compose(src, pw, ph, W, H, 0, dst);
+			for (int y = 0; y < ph * k; y++)
+				for (int x = 0; x < pw * k; x++)
+					if (dst[(oy + y) * W + ox + x] != src[(y / k) * pw + x / k]) bad++;
+			if (dst[0] != 0xff000000u) bad++;
+			check(bad == 0, t[n].what);
+		}
+
+		// Under 2x: a NES fills the 4:3 tile by nearest neighbour, every row there, no black.
+		thumb_compose(src, 256, 224, W, H, 1, dst);
+		static unsigned char seen[224];
+		memset(seen, 0, sizeof(seen));
+		int black = 0;
+		for (int y = 0; y < H; y++)
+			for (int sy = 0; sy < 224; sy++)
+				if (dst[y * W + W / 2] == src[sy * 256 + 128]) seen[sy] = 1;
+		for (int i = 0; i < W * H; i++) if (dst[i] == 0xff000000u) black++;
+		int missing = 0;
+		for (int sy = 0; sy < 224; sy++) if (!seen[sy]) missing++;
+		check(missing == 0 && black == 0, "a NES frame fills the tile, every row of it there");
+
+		// A console whose overscan border, cropped, lets 2x fit: 256x240 into 500x460.
+		thumb_compose(src, 256, 240, 500, 460, 1, dst);
+		int bad = 0;
+		for (int y = 0; y < 448; y++)
+			for (int x = 0; x < 480; x++)
+				if (dst[(6 + y) * 500 + 10 + x] != src[(8 + y / 2) * 256 + 8 + x / 2]) bad++;
+		check(bad == 0, "a console's overscan is cropped when that lets 2x fit");
+		thumb_compose(src, 256, 240, 500, 460, 0, dst);
+		check(dst[0] != 0xff000000u, "a handheld or computer is never cropped: it fills instead");
+
+		// A picture of another shape keeps it: a vertical game, bars left and right.
+		thumb_compose(src, 180, 240, W, H, 0, dst);
+		check(dst[H / 2 * W] == 0xff000000u && dst[H / 2 * W + W / 2] != 0xff000000u,
+			"a vertical game keeps its shape in the tile");
+
+		// Shrinking averages: a 320x240 picture of lines into a 160x120 tile loses none.
+		static uint32_t big[320 * 240];
+		int lost = 0;
+		for (int phase = 0; phase < 2; phase++)
+		{
+			for (int i = 0; i < 320 * 240; i++) big[i] = ((i / 320) % 4 == phase) ? 0xffffffffu : 0xff000000u;
+			thumb_compose(big, 320, 240, 160, 120, 0, dst);
+			for (int sy = phase; sy < 240; sy += 4)
+				if ((dst[(sy / 2) * 160 + 80] & 0xff) < 0x60) lost++;
+		}
+		check(lost == 0, "a picture shrunk into a small tile drops no row");
 	}
 	check(lib_slot_thumb(sm, 1, tp, sizeof(tp)) && art_thumb(tp, 200, 150) == 0,
 		"slot 2 has no thumbnail and degrades quietly");

@@ -1245,6 +1245,7 @@ struct thumb_slot
 {
 	char path[512];
 	int w, h;
+	int mode;                         // 0 cover-style fit, 1 slot thumbnail, 2 a console's slot thumbnail
 	int failed;
 	uint32_t stamp;
 	unsigned long mtime;              // of the file that was decoded, so a rewrite is seen
@@ -1316,7 +1317,9 @@ void art_forget(const char *fullpath)
 	}
 }
 
-const uint32_t *art_thumb(const char *fullpath, int w, int h)
+static uint32_t *decode_slot(const char *path, int w, int h, int console);
+
+static const uint32_t *thumb_get(const char *fullpath, int w, int h, int mode)
 {
 	if (!fullpath || !*fullpath || w < 1 || h < 1) return 0;
 
@@ -1329,7 +1332,7 @@ const uint32_t *art_thumb(const char *fullpath, int w, int h)
 	for (int i = 0; i < THUMB_CACHE; i++)
 	{
 		thumb_slot *t = &thumbs[i];
-		if (!strcmp(t->path, fullpath) && t->w == w && t->h == h)
+		if (!strcmp(t->path, fullpath) && t->w == w && t->h == h && t->mode == mode)
 		{
 			if (t->mtime == mtime && t->size == size)
 			{
@@ -1349,6 +1352,7 @@ const uint32_t *art_thumb(const char *fullpath, int w, int h)
 	snprintf(victim->path, sizeof(victim->path), "%s", fullpath);
 	victim->w = w;
 	victim->h = h;
+	victim->mode = mode;
 	victim->stamp = ++thumb_clock;
 	victim->mtime = mtime;
 	victim->size = size;
@@ -1357,6 +1361,13 @@ const uint32_t *art_thumb(const char *fullpath, int w, int h)
 	{
 		victim->failed = 1;
 		return 0;
+	}
+
+	if (mode)
+	{
+		victim->data = decode_slot(fullpath, w, h, mode == 2);
+		if (!victim->data) victim->failed = 1;
+		return victim->data;
 	}
 
 	art_slot tmp = {};
@@ -1381,13 +1392,19 @@ const uint32_t *art_thumb(const char *fullpath, int w, int h)
 	return victim->data;
 }
 
+const uint32_t *art_thumb(const char *fullpath, int w, int h)
+{
+	return thumb_get(fullpath, w, h, 0);
+}
+
 /*
   Which source pixels make up destination pixel d along one axis of sn -> dn, and how much
   of it each covers. Shrinking, every source pixel lands in the average of the ones it
   overlaps: picking one in every few instead dropped a row in seven of a 224-line NES
   frame and took a stroke out of nearly every letter of its status bar. Growing (or
-  equal), nearest neighbour: no pixel is lost that way and the edges stay hard.
-  Weights are in units where the whole destination pixel is wsum.
+  equal), nearest neighbour: averaging there only blurs, and Dinofly would rather see a
+  pixel come out a row thicker than see it soft. Weights are in units where the whole
+  destination pixel is wsum.
 */
 struct thumb_span { int i0, n, wsum; int w[16]; };
 
@@ -1413,47 +1430,33 @@ static void thumb_span_of(int d, int dn, int sn, thumb_span *s)
 	}
 }
 
-void thumb_letterbox(const uint32_t *src, int sw, int sh, int arx, int ary, uint32_t *dst)
+// src (sw x sh, rows sstride apart) into dst (dw x dh, rows dstride apart), by the spans above.
+static void thumb_resample(const uint32_t *src, int sw, int sh, int sstride,
+	uint32_t *dst, int dw, int dh, int dstride)
 {
-	const int bw = CH_THUMB_W, bh = CH_THUMB_H;
-	for (int i = 0; i < bw * bh; i++) dst[i] = 0xff000000u;
-	if (!src || sw < 1 || sh < 1) return;
-
-	// Wider than 4:1 or taller than 1:4 is no television; trust the pixels instead.
-	if (arx < 1 || ary < 1 || arx > ary * 4 || ary > arx * 4) { arx = sw; ary = sh; }
-
-	int pw, ph;
-	if ((long long)arx * bh >= (long long)ary * bw)
+	static thumb_span *xs = 0;
+	static int xs_n = 0;
+	if (dw > xs_n)
 	{
-		pw = bw;
-		ph = (int)(((long long)bw * ary + arx / 2) / arx);
+		thumb_span *n = (thumb_span *)realloc(xs, sizeof(thumb_span) * dw);
+		if (!n) return;
+		xs = n;
+		xs_n = dw;
 	}
-	else
-	{
-		ph = bh;
-		pw = (int)(((long long)bh * arx + ary / 2) / ary);
-	}
-	if (pw < 1) pw = 1;
-	if (ph < 1) ph = 1;
-	if (pw > bw) pw = bw;
-	if (ph > bh) ph = bh;
+	for (int x = 0; x < dw; x++) thumb_span_of(x, dw, sw, &xs[x]);
 
-	int ox = (bw - pw) / 2, oy = (bh - ph) / 2;
-	static thumb_span xs[CH_THUMB_W];
-	for (int x = 0; x < pw; x++) thumb_span_of(x, pw, sw, &xs[x]);
-
-	for (int y = 0; y < ph; y++)
+	for (int y = 0; y < dh; y++)
 	{
 		thumb_span ys;
-		thumb_span_of(y, ph, sh, &ys);
-		uint32_t *drow = dst + (size_t)(oy + y) * bw + ox;
-		for (int x = 0; x < pw; x++)
+		thumb_span_of(y, dh, sh, &ys);
+		uint32_t *drow = dst + (size_t)y * dstride;
+		for (int x = 0; x < dw; x++)
 		{
 			const thumb_span *sx = &xs[x];
 			uint64_t r = 0, g = 0, b = 0;
 			for (int j = 0; j < ys.n; j++)
 			{
-				const uint32_t *p = src + (size_t)(ys.i0 + j) * sw + sx->i0;
+				const uint32_t *p = src + (size_t)(ys.i0 + j) * sstride + sx->i0;
 				uint32_t rr = 0, gg = 0, bb = 0;
 				for (int i = 0; i < sx->n; i++)
 				{
@@ -1472,6 +1475,127 @@ void thumb_letterbox(const uint32_t *src, int sw, int sh, int arx, int ary, uint
 			drow[x] = 0xff000000u | (uint32_t)(r << 16 | g << 8 | b);
 		}
 	}
+}
+
+int thumb_picture(const uint32_t *src, int sw, int sh, int arx, int ary, uint32_t *dst, int *ow, int *oh)
+{
+	const int bw = CH_THUMB_W, bh = CH_THUMB_H;
+	*ow = *oh = 0;
+	if (!src || !dst || sw < 1 || sh < 1) return 0;
+
+	// Wider than 4:1 or taller than 1:4 is no television; trust the pixels instead.
+	if (arx < 1 || ary < 1 || arx > ary * 4 || ary > arx * 4) { arx = sw; ary = sh; }
+
+	// The picture at its display shape, as large as the box allows.
+	int pw, ph;
+	if ((long long)arx * bh >= (long long)ary * bw)
+	{
+		pw = bw;
+		ph = (int)(((long long)bw * ary + arx / 2) / arx);
+	}
+	else
+	{
+		ph = bh;
+		pw = (int)(((long long)bh * arx + ary / 2) / ary);
+	}
+	if (pw < 1) pw = 1;
+	if (ph < 1) ph = 1;
+	if (pw > bw) pw = bw;
+	if (ph > bh) ph = bh;
+
+	/*
+	  A frame that fits is kept at its own size, pixel for pixel - the strip scales it by
+	  a whole number where it can (thumb_compose()). Scaled here only when something has to
+	  shrink, or when the frame's pixel shape is more than a fifth off its display shape:
+	  an Atari 2600's tall pixels or a vertical game's turned frame kept as they are would
+	  be the wrong picture, where a NES's 8:7 against 4:3 is close enough.
+	*/
+	long long native = (long long)sw * ph, shown = (long long)sh * pw;
+	int fits = sw <= bw && sh <= bh;
+	int shaped = native * 5 <= shown * 6 && shown * 5 <= native * 6;
+	if (fits && shaped)
+	{
+		for (int y = 0; y < sh; y++)
+			for (int x = 0; x < sw; x++) dst[y * sw + x] = src[(size_t)y * sw + x] | 0xff000000u;
+		*ow = sw;
+		*oh = sh;
+		return 1;
+	}
+
+	thumb_resample(src, sw, sh, sw, dst, pw, ph, pw);
+	*ow = pw;
+	*oh = ph;
+	return 1;
+}
+
+void thumb_compose(const uint32_t *src, int pw, int ph, int w, int h, int console, uint32_t *dst)
+{
+	for (int i = 0; i < w * h; i++) dst[i] = 0xff000000u;
+	if (!src || pw < 1 || ph < 1) return;
+
+	// Twice or more by a whole number: every pixel the same size and as sharp as it was.
+	int k = (w / pw < h / ph) ? w / pw : h / ph;
+	if (k >= 2)
+	{
+		int ox = (w - pw * k) / 2, oy = (h - ph * k) / 2;
+		thumb_resample(src, pw, ph, pw, dst + (size_t)oy * w + ox, pw * k, ph * k, w);
+		return;
+	}
+
+	/*
+	  A console's picture had an overscan border the television hid: 8 pixels a side on a
+	  256-wide frame, 8 lines top and bottom on a 240-line one (a 224-line frame has lost
+	  them already). If losing that border lets a whole-number scale fit, take it.
+	*/
+	if (console)
+	{
+		int cx = pw / 32, cy = (ph >= 240) ? ph / 30 : 0;
+		int cw = pw - 2 * cx, chh = ph - 2 * cy;
+		int kc = (w / cw < h / chh) ? w / cw : h / chh;
+		if (kc >= 2)
+		{
+			int ox = (w - cw * kc) / 2, oy = (h - chh * kc) / 2;
+			thumb_resample(src + (size_t)cy * pw + cx, cw, chh, pw, dst + (size_t)oy * w + ox, cw * kc, chh * kc, w);
+			return;
+		}
+	}
+
+	/*
+	  Otherwise fill the tile by nearest neighbour - crisp, a row thicker here and there -
+	  when the picture is close to the tile's shape (a NES's 8:7 in a 4:3 tile is the
+	  shape the television gave it); a picture of another shape keeps its own, on black.
+	*/
+	long long a = (long long)pw * h, b = (long long)ph * w;
+	int fw = w, fh = h;
+	if (!(a * 5 <= b * 6 && b * 5 <= a * 6))
+	{
+		if (a > b) fh = (int)((long long)w * ph / pw);
+		else fw = (int)((long long)h * pw / ph);
+		if (fw < 1) fw = 1;
+		if (fh < 1) fh = 1;
+	}
+	thumb_resample(src, pw, ph, pw, dst + (size_t)((h - fh) / 2) * w + (w - fw) / 2, fw, fh, w);
+}
+
+// A slot thumbnail read at its own size and composed into w x h - see thumb_compose().
+static uint32_t *decode_slot(const char *path, int w, int h, int console)
+{
+	Imlib_Load_Error err = IMLIB_LOAD_ERROR_NONE;
+	Imlib_Image img = imlib_load_image_with_error_return(path, &err);
+	if (!img) return 0;
+
+	imlib_context_set_image(img);
+	int pw = imlib_image_get_width(), ph = imlib_image_get_height();
+	const uint32_t *src = (const uint32_t *)imlib_image_get_data_for_reading_only();
+	uint32_t *dst = (pw > 0 && ph > 0 && src) ? (uint32_t *)malloc((size_t)w * h * 4) : 0;
+	if (dst) thumb_compose(src, pw, ph, w, h, console, dst);
+	imlib_free_image_and_decache();
+	return dst;
+}
+
+const uint32_t *art_slot_thumb(const char *fullpath, int w, int h, int console)
+{
+	return thumb_get(fullpath, w, h, console ? 2 : 1);
 }
 
 /* ---------------------------------------------------------------- fetch --- */
