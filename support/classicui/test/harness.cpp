@@ -2464,6 +2464,34 @@ static void assert_slots()
 	char tp[1024];
 	check(lib_slot_thumb(sm, 0, tp, sizeof(tp)), "slot 1 thumbnail path resolves");
 	check(art_thumb(tp, 200, 150) != 0, "slot 1 thumbnail decodes");
+
+	/*
+	  Every Suspend Point thumbnail is one box, the picture at its display shape inside
+	  it: thumb_letterbox(). Measured by where the picture's edges land.
+	*/
+	{
+		static uint32_t src[512 * 224], box[CH_THUMB_W * CH_THUMB_H];
+		for (int i = 0; i < 512 * 224; i++) src[i] = 0xff00ff00u;
+		struct { int sw, sh, arx, ary, pw, ph; const char *what; } t[] =
+		{
+			{ 160, 144, 10,  9, 213, 192, "a Game Boy keeps its 10:9 panel, bars left and right" },
+			{ 512, 224,  4,  3, 256, 192, "a SNES frame of doubled columns fills the 4:3 box" },
+			{ 320, 240,  3,  4, 144, 192, "a vertical arcade game stands up in the box" },
+			{ 240, 160,  0,  0, 256, 171, "a core that reports no aspect keeps its pixel shape" },
+		};
+		for (size_t k = 0; k < sizeof(t) / sizeof(t[0]); k++)
+		{
+			thumb_letterbox(src, t[k].sw, t[k].sh, t[k].arx, t[k].ary, box);
+			int pw = 0, ph = 0;
+			for (int x = 0; x < CH_THUMB_W; x++) if (box[(CH_THUMB_H / 2) * CH_THUMB_W + x] == 0xff00ff00u) pw++;
+			for (int y = 0; y < CH_THUMB_H; y++) if (box[y * CH_THUMB_W + CH_THUMB_W / 2] == 0xff00ff00u) ph++;
+			int ok = (pw == t[k].pw && ph == t[k].ph && box[0] == 0xff000000u) ||
+				(pw == t[k].pw && ph == t[k].ph && t[k].pw == CH_THUMB_W && t[k].ph == CH_THUMB_H);
+			if (!ok) printf("  thumb %dx%d %d:%d -> %dx%d, want %dx%d\n", t[k].sw, t[k].sh,
+				t[k].arx, t[k].ary, pw, ph, t[k].pw, t[k].ph);
+			check(ok, t[k].what);
+		}
+	}
 	check(lib_slot_thumb(sm, 1, tp, sizeof(tp)) && art_thumb(tp, 200, 150) == 0,
 		"slot 2 has no thumbnail and degrades quietly");
 }

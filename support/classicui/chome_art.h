@@ -453,6 +453,20 @@ int art_fill_active();
 // Small ring cache keyed by path; decoded on demand at w x h.
 const uint32_t *art_thumb(const char *fullpath, int w, int h);
 
+/*
+  A Suspend Point thumbnail: the frame at its display shape inside one fixed box.
+
+  Every thumbnail is the same size (CH_THUMB_W x CH_THUMB_H) so the strip lines up, and the
+  picture in it keeps the shape it had on the television: arx:ary is what the core
+  reports (current_video_info) - 4:3 for a console whose wide pixels the screen
+  stretched, the panel's own shape for a handheld, 3:4 for a vertical arcade game - and
+  0 or an absurd ratio falls back to the frame's pixel ratio. Nearest neighbour, centred
+  on black. dst holds CH_THUMB_W * CH_THUMB_H pixels.
+*/
+#define CH_THUMB_W 256
+#define CH_THUMB_H 192
+void thumb_letterbox(const uint32_t *src, int sw, int sh, int arx, int ary, uint32_t *dst);
+
 // Forget every decode of this file - call it after rewriting one.
 void art_forget(const char *fullpath);
 
