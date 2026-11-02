@@ -454,23 +454,30 @@ int art_fill_active();
 const uint32_t *art_thumb(const char *fullpath, int w, int h);
 
 /*
-  A Suspend Point thumbnail: the frame at its display shape inside one fixed box.
+  A Suspend Point thumbnail, in two halves.
 
-  Every thumbnail is the same size (CH_THUMB_W x CH_THUMB_H) so the strip lines up, and the
-  picture in it keeps the shape it had on the television: arx:ary is what the core
-  reports (current_video_info) - 4:3 for a console whose wide pixels the screen
-  stretched, the panel's own shape for a handheld, 3:4 for a vertical arcade game - and
-  0 or an absurd ratio falls back to the frame's pixel ratio. Centred on black; grown by
-  nearest neighbour, shrunk by averaging. dst holds CH_THUMB_W * CH_THUMB_H pixels.
+  thumb_picture() makes the file, at save time: the frame at its own size, pixel for
+  pixel, when it fits CH_THUMB_W x CH_THUMB_H and its pixel shape is within a fifth of
+  the shape it had on the television (arx:ary, what the core reports in
+  current_video_info: 4:3 for a console, the panel's shape for a handheld, 3:4 for a
+  vertical arcade game; 0 or an absurd ratio means the frame's own). Otherwise it is
+  scaled to that shape inside the box: averaged where it shrinks, so no row is dropped,
+  nearest neighbour where it grows. dst holds CH_THUMB_W * CH_THUMB_H pixels; the size
+  written comes back in ow x oh. 0 when there is no frame.
 
-  240 lines, so a 224- or 240-line console only ever grows into it and keeps every row
-  sharp: at 192 a NES frame had to lose a row in seven, or blur them together, and its
-  status-bar letters went with them. Only a wider source (SNES hi-res, a 640-wide PSX
-  frame) or a taller one (PAL, 480i) is shrunk.
+  thumb_compose() draws one into a w x h tile: by a whole number when twice or more fits
+  (a Game Boy at 2x), else - for a console - by a whole number once its overscan border is
+  cropped, if that fits, else filling the tile by nearest neighbour when the picture is
+  close to the tile's shape and keeping its own shape on black when not. Shrinking still
+  averages. dst holds w * h pixels.
+
+  art_slot_thumb() is thumb_compose() on a file, cached with art_thumb()'s decodes.
 */
 #define CH_THUMB_W 320
 #define CH_THUMB_H 240
-void thumb_letterbox(const uint32_t *src, int sw, int sh, int arx, int ary, uint32_t *dst);
+int thumb_picture(const uint32_t *src, int sw, int sh, int arx, int ary, uint32_t *dst, int *ow, int *oh);
+void thumb_compose(const uint32_t *src, int pw, int ph, int w, int h, int console, uint32_t *dst);
+const uint32_t *art_slot_thumb(const char *fullpath, int w, int h, int console);
 
 // Forget every decode of this file - call it after rewriting one.
 void art_forget(const char *fullpath);

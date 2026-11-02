@@ -47,8 +47,8 @@ void screenshot_cb(void);
 
 // Captures the current scaler output straight to an absolute path, scaled down to
 // max_w - by nearest neighbour - and to out_h when given, else with the source
-// aspect preserved. out_h < 0 asks for a Suspend Point thumbnail: Classic Home's one
-// box, the picture at the core's display aspect inside it (thumb_letterbox()). Synchronous, intended for small thumbnails (Classic Home's
+// aspect preserved. out_h < 0 asks for a Suspend Point thumbnail: the frame at its own size
+// where it fits, else at the core's display aspect inside Classic Home's box (thumb_picture()). Synchronous, intended for small thumbnails (Classic Home's
 // suspend points). Returns 1 on success, 0 if the scaler is unavailable or a
 // normal screenshot is already in flight.
 int screenshot_thumbnail(const char *fullpath, int max_w, int out_h = 0);
