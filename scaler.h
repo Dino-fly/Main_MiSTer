@@ -46,10 +46,11 @@ void request_screenshot(char *cmd, int scaled = 0);
 void screenshot_cb(void);
 
 // Captures the current scaler output straight to an absolute path, scaled down to
-// max_w with the source aspect preserved. Synchronous, intended for small
-// thumbnails (Classic Home's suspend points). Returns 1 on success, 0 if the
-// scaler is unavailable or a normal screenshot is already in flight.
-int screenshot_thumbnail(const char *fullpath, int max_w);
+// max_w - by nearest neighbour - and to out_h when given, else with the source
+// aspect preserved. Synchronous, intended for small thumbnails (Classic Home's
+// suspend points). Returns 1 on success, 0 if the scaler is unavailable or a
+// normal screenshot is already in flight.
+int screenshot_thumbnail(const char *fullpath, int max_w, int out_h = 0);
 
 /*
   Writes an ARGB buffer straight to disk, format taken from the filename extension,
