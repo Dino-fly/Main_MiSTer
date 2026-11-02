@@ -1,0 +1,102 @@
+#!/bin/bash
+# mister-scene - the native frame of a scene Dinofly saved in a suspend slot, for the
+# Display screen's lookshots (render_looks.py --corpus renders them on the Mac).
+#
+#   mister-scene <sys> "<game>" <slot> <out.png> [--look NAME] [--settle S] [--dry-run]
+#
+# Places the shelf on the game (mister-ui goto), resumes suspend slot <slot> the way a
+# player does (down into the strip, right slot-1 times, enter), waits for the core,
+# waits --settle seconds (default 8) for the state to load, optionally applies a look
+# (its core options decide the colour of the frame: a phosphor, a GB palette), then
+# asks the firmware for TWO native `screenshot`s 0.7 s apart. The frame is the core's
+# own, pre-scaler: no look of the scaler's is in it, which is what the renderer wants.
+#
+# Where it goes: support/classicui/tools/corpus/scenes/<look-id>.<class>.png in a
+# worktree - render_looks.py takes that scene first for that look's lookshot. Grab a
+# handheld palette look's scene under None (the renderer applies the palette); grab a
+# computer look's under the look itself (--look), whose colour is a core option.
+#
+# Output: <out.png> (the second grab), <out>.meta (game, slot, look, both md5s, firmware
+# md5, date). Exit 0 on a still scene, 4 when the two grabs differ (animated - the file
+# is still written; take it only if the moment does not matter), 1 on error.
+set -euo pipefail
+. "$(dirname "$0")/lib.sh"
+HERE="$(dirname "$0")"
+
+LOOK=""; SETTLE=8; DRY=0; ARGS=()
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--look) LOOK="$2"; shift ;;
+	--settle) SETTLE="$2"; shift ;;
+	--dry-run) DRY=1 ;;
+	-h|--help) sed -n '2,21p' "$0"; exit 0 ;;
+	*) ARGS+=("$1") ;;
+	esac
+	shift
+done
+[ ${#ARGS[@]} -eq 4 ] || die "usage: mister-scene <sys> \"<game>\" <slot> <out.png> [--look NAME] (see --help)" 2
+SYS="${ARGS[0]}"; GAME="${ARGS[1]}"; SLOT="${ARGS[2]}"; OUT="${ARGS[3]}"
+case "$SLOT" in ''|*[!0-9]*) die "slot must be a number from 1" 2 ;; esac
+[ "$SLOT" -ge 1 ] || die "slot must be a number from 1" 2
+OUT="${OUT%.png}"
+NAME="scene-$$"
+need_mister
+
+UI=("$HERE/mister-ui")
+[ "$DRY" = 1 ] && UI+=(--dry-run)
+
+if [ "$DRY" = 1 ]; then
+	echo "would: mister-ui menu (only if a core is running)"
+else
+	core=$(mister_ssh 'cat /tmp/CORENAME 2>/dev/null' </dev/null || true)
+	[ -z "$core" ] || [ "$core" = "MENU" ] || "${UI[@]}" menu >/dev/null
+fi
+
+"${UI[@]}" goto "$SYS" "$GAME"
+"${UI[@]}" key down
+# Not `seq 2 $SLOT`: BSD seq counts DOWN when the end is smaller, so slot 1 got two rights.
+for (( i = 1; i < SLOT; i++ )); do "${UI[@]}" key right; done
+"${UI[@]}" key enter
+
+if [ "$DRY" = 1 ]; then
+	echo "would: wait for CORENAME to leave MENU, then ${SETTLE}s"
+else
+	t0=$(date +%s); core=MENU
+	while [ $(( $(date +%s) - t0 )) -lt 40 ]; do
+		core=$(mister_ssh 'cat /tmp/CORENAME 2>/dev/null' </dev/null || true)
+		[ -n "$core" ] && [ "$core" != "MENU" ] && break
+		sleep 1
+	done
+	[ "$core" != "MENU" ] || die "no core after 40s - is slot $SLOT filled for this game? (pidof MiSTer)"
+	echo "core $core up; letting the state settle ${SETTLE}s"
+	sleep "$SETTLE"
+fi
+
+if [ -n "$LOOK" ]; then
+	"${UI[@]}" look "$LOOK"
+	[ "$DRY" = 1 ] || sleep 2
+fi
+
+if [ "$DRY" = 1 ]; then
+	echo "would: screenshot $NAME-a.png, $NAME-b.png 0.7s apart; pull to $OUT.png"
+	exit 0
+fi
+
+sums=$(mister_ssh "cd /media/fat/screenshots && rm -f $NAME-a.png $NAME-b.png;
+	echo 'screenshot $NAME-a.png' > /dev/MiSTer_cmd; sleep 0.7;
+	echo 'screenshot $NAME-b.png' > /dev/MiSTer_cmd; sleep 2;
+	test -f $NAME-a.png && test -f $NAME-b.png && md5sum $NAME-a.png $NAME-b.png | cut -d' ' -f1" </dev/null) \
+	|| die "firmware wrote no screenshot (is the game on screen with no menu open?)"
+a=$(echo "$sums" | sed -n 1p); b=$(echo "$sums" | sed -n 2p)
+mister_scp_from "/media/fat/screenshots/$NAME-b.png" "$OUT.png"
+mister_ssh "rm -f /media/fat/screenshots/$NAME-a.png /media/fat/screenshots/$NAME-b.png" </dev/null
+FW_MD5=$(mister_ssh 'md5sum /media/fat/MiSTer | cut -d" " -f1' </dev/null)
+printf 'sys=%s\ngame=%s\nslot=%s\nlook=%s\ncore=%s\nmd5_a=%s\nmd5_b=%s\nfirmware_md5=%s\ndate=%s\n' \
+	"$SYS" "$GAME" "$SLOT" "${LOOK:-}" "$core" "$a" "$b" "$FW_MD5" "$(date -u +%FT%TZ)" > "$OUT.meta"
+
+if [ "$a" = "$b" ]; then
+	echo "SCENE OK $OUT.png (still; core $core, firmware md5=$FW_MD5)"
+	exit 0
+fi
+echo "SCENE ANIMATED $OUT.png (the two grabs differ; core $core)"
+exit 4

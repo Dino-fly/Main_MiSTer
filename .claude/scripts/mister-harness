@@ -37,6 +37,12 @@ bash "$SCRIPT" > "$LOG" 2>&1 || rc=$?
 TOOK=$(( $(date +%s) - T0 ))
 SUM=$(grep -a -E '^[0-9]+ checks, [0-9]+ failures' "$LOG" | tail -1 || true)
 CHECKS=$(sed -nE 's/^([0-9]+) checks.*/\1/p' <<<"$SUM"); FAILS=$(sed -nE 's/.*, ([0-9]+) failures.*/\1/p' <<<"$SUM")
+if [ "$LOOKS" = 1 ]; then
+	# look_metrics.py ends with "all checks passed" or "N check(s) FAILED" and prints no total.
+	SUM=$(grep -a -E '^(all checks passed|[0-9]+ check\(s\) FAILED)' "$LOG" | tail -1 || true)
+	CHECKS=looks; FAILS=$(sed -nE 's/^([0-9]+) check.*/\1/p' <<<"$SUM")
+	[ "$SUM" = "all checks passed" ] && FAILS=0
+fi
 LINE="$WT checks=${CHECKS:-?} failures=${FAILS:-?} took=${TOOK}s log=$LOG"
 if [ "$rc" = 0 ] && [ "${FAILS:-1}" = 0 ]; then echo "HARNESS OK $LINE"; exit 0; fi
 echo "HARNESS FAIL (exit $rc) $LINE"
