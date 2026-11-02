@@ -2474,10 +2474,10 @@ static void assert_slots()
 		for (int i = 0; i < 512 * 224; i++) src[i] = 0xff00ff00u;
 		struct { int sw, sh, arx, ary, pw, ph; const char *what; } t[] =
 		{
-			{ 160, 144, 10,  9, 213, 192, "a Game Boy keeps its 10:9 panel, bars left and right" },
-			{ 512, 224,  4,  3, 256, 192, "a SNES frame of doubled columns fills the 4:3 box" },
-			{ 320, 240,  3,  4, 144, 192, "a vertical arcade game stands up in the box" },
-			{ 240, 160,  0,  0, 256, 171, "a core that reports no aspect keeps its pixel shape" },
+			{ 160, 144, 10,  9, 267, 240, "a Game Boy keeps its 10:9 panel, bars left and right" },
+			{ 512, 224,  4,  3, 320, 240, "a SNES frame of doubled columns fills the 4:3 box" },
+			{ 320, 240,  3,  4, 180, 240, "a vertical arcade game stands up in the box" },
+			{ 240, 160,  0,  0, 320, 213, "a core that reports no aspect keeps its pixel shape" },
 		};
 		for (size_t k = 0; k < sizeof(t) / sizeof(t[0]); k++)
 		{
@@ -2491,6 +2491,37 @@ static void assert_slots()
 				t[k].arx, t[k].ary, pw, ph, t[k].pw, t[k].ph);
 			check(ok, t[k].what);
 		}
+
+		/*
+		  No row is lost, growing or shrinking: a 4:3 frame of one-pixel white lines at
+		  every phase of the period nearest neighbour would drop one in - a NES frame (224
+		  lines, grown to 240) and a PAL one (288 lines, shrunk to 240, one row in six) -
+		  must show each line in the thumbnail, and a flat colour must stay that colour.
+		*/
+		const int lines[2] = { 224, 288 }, period[2] = { 7, 6 };
+		for (int f = 0; f < 2; f++)
+		{
+			int sh = lines[f], per = period[f], lost = 0;
+			for (int phase = 0; phase < per; phase++)
+			{
+				for (int i = 0; i < 256 * sh; i++) src[i] = ((i / 256) % per == phase) ? 0xffffffffu : 0xff000000u;
+				thumb_letterbox(src, 256, sh, 4, 3, box);
+				for (int sy = phase; sy < sh; sy += per)
+				{
+					int dy = sy * CH_THUMB_H / sh, lit = 0;
+					for (int y = dy - 1; y <= dy + 1; y++)
+						if (y >= 0 && y < CH_THUMB_H && (box[y * CH_THUMB_W + CH_THUMB_W / 2] & 0xff) >= 0x60) lit = 1;
+					if (!lit) lost++;
+				}
+			}
+			if (lost) printf("  thumb: %d of %d one-pixel lines lost, %d -> %d lines\n", lost, sh, sh, CH_THUMB_H);
+			check(lost == 0, f ? "shrinking a frame into the thumbnail drops no row"
+				: "growing a NES frame into the thumbnail drops no row");
+		}
+
+		for (int i = 0; i < 256 * 288; i++) src[i] = 0xff3080c0u;
+		thumb_letterbox(src, 256, 288, 4, 3, box);
+		check(box[100 * CH_THUMB_W + 100] == 0xff3080c0u, "a flat colour survives the averaging unchanged");
 	}
 	check(lib_slot_thumb(sm, 1, tp, sizeof(tp)) && art_thumb(tp, 200, 150) == 0,
 		"slot 2 has no thumbnail and degrades quietly");

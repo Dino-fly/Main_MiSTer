@@ -460,11 +460,16 @@ const uint32_t *art_thumb(const char *fullpath, int w, int h);
   picture in it keeps the shape it had on the television: arx:ary is what the core
   reports (current_video_info) - 4:3 for a console whose wide pixels the screen
   stretched, the panel's own shape for a handheld, 3:4 for a vertical arcade game - and
-  0 or an absurd ratio falls back to the frame's pixel ratio. Nearest neighbour, centred
-  on black. dst holds CH_THUMB_W * CH_THUMB_H pixels.
+  0 or an absurd ratio falls back to the frame's pixel ratio. Centred on black; grown by
+  nearest neighbour, shrunk by averaging. dst holds CH_THUMB_W * CH_THUMB_H pixels.
+
+  240 lines, so a 224- or 240-line console only ever grows into it and keeps every row
+  sharp: at 192 a NES frame had to lose a row in seven, or blur them together, and its
+  status-bar letters went with them. Only a wider source (SNES hi-res, a 640-wide PSX
+  frame) or a taller one (PAL, 480i) is shrunk.
 */
-#define CH_THUMB_W 256
-#define CH_THUMB_H 192
+#define CH_THUMB_W 320
+#define CH_THUMB_H 240
 void thumb_letterbox(const uint32_t *src, int sw, int sh, int arx, int ary, uint32_t *dst);
 
 // Forget every decode of this file - call it after rewriting one.
