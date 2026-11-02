@@ -6,6 +6,14 @@
 #   - broad container/process kills: docker kill/rm/stop $(docker ps ...), pkill -f, kill -1,
 #     killall on anything but the literal `MiSTer`
 #   - rm of /media/fat/MiSTer
+# Allowed without a marker (standing permission from the owner, 2026-10-30), but only
+# after ~/.config/classicui/bin/leak-scan passes on the command text and every file it
+# uploads (zip members included):
+#   - gh release create/edit/upload/delete-asset with -R Dino-fly/Main_MiSTer
+#   - gh issue comment with -R Dino-fly/Main_MiSTer (a new comment only: no --edit-last
+#     or --delete-last). The hook cannot see the chat: posting only text the owner
+#     approved there, from a --body-file, is the agent's rule (CLAUDE.md), not this check.
+#     Write paths as ~/... - the command text itself is scanned too.
 # Blocked unless a human set a one-time marker with `approve-once` (consumed on use):
 #   - gh issue/pr/discussion/release/repo writes, gh api with a write method   -> approve-once gh
 #   - git push (never to `origin` = MiSTer-devel; a local push-guard may veto) -> approve-once push
@@ -48,6 +56,29 @@ md5_marker_fresh() {
 	local age; age=$(( $(date +%s) - $(stat -f %m "$CFG/md5-verified" 2>/dev/null || echo 0) ))
 	[ "$age" -lt 1800 ]
 }
+
+# ---- 2a. releases on the fork: standing permission, leak-scanned ------------------
+if { has '\bgh +release +(create|edit|upload|delete-asset)\b' || has '\bgh +issue +comment\b'; } \
+	&& ! has '\bgh +issue +comment\b[^|;&]*--(edit-last|delete-last)\b' \
+	&& has '(-R|--repo)[= ]+Dino-fly/Main_MiSTer([[:space:]]|$)'; then
+	SCAN="$CFG/bin/leak-scan"
+	[ -x "$SCAN" ] || deny "release writes need $SCAN (it keeps the real name out of release files)"
+	BASE=$(grep -oE '\bcd +[^;&|[:space:]]+' <<<"$CMD" | head -1 | awk '{print $2}')
+	BASE=${BASE/#\~/$HOME}
+	files=()
+	while IFS= read -r tok; do
+		tok=${tok/#\~/$HOME}
+		if [ -f "$tok" ]; then files+=("$tok")
+		elif [ -n "$BASE" ] && [ -f "$BASE/$tok" ]; then files+=("$BASE/$tok")
+		elif [ -n "$CWD" ] && [ -f "$CWD/$tok" ]; then files+=("$CWD/$tok")
+		fi
+	done < <(xargs -n1 printf '%s\n' <<<"$CMD" 2>/dev/null)
+	tmp=$(mktemp); printf '%s\n' "$CMD" > "$tmp"
+	out=$("$SCAN" "$tmp" "${files[@]}" 2>&1); src=$?
+	rm -f "$tmp"
+	[ $src -eq 0 ] || deny "leak-scan refused this release write: ${out//$tmp/the command text}"
+	exit 0
+fi
 
 # ---- 2. public output and pushes: one-time human approval ---------------------------
 if has '\bgh +(issue|pr|discussion|release) +(comment|create|close|edit|merge|review|delete|reopen|lock|unlock|upload|ready|transfer|pin|unpin)\b' \

@@ -29,7 +29,10 @@ A miss costs one request against the unmatched allowance, which is the scarce on
 (2000/day against 20000). The whole run is budgeted well inside a single day's worth
 of the scarce number even if every single lookup misses.
 """
-import json, os, sys, time, urllib.parse, urllib.request
+import json, os, sys, tempfile, time, urllib.parse, urllib.request
+
+# Results file: $SSMATCH_OUT, else ssmatch.json in the system temp directory.
+OUT = os.environ.get("SSMATCH_OUT") or os.path.join(tempfile.gettempdir(), "ssmatch.json")
 
 BUDGET = 200          # hard ceiling on requests for the entire run
 GAP    = 1.5          # seconds between requests
@@ -191,7 +194,7 @@ for r in rows:
             print(f"\nABORTED: {payload}")
             rec[tag] = {"status": "aborted"}
             out.append(rec)
-            json.dump(out, open("ssmatch.json", "w"), indent=1)
+            json.dump(out, open(OUT, "w"), indent=1)
             print(f"spent {spent} requests")
             sys.exit(2)
         if st == "hit":
@@ -205,6 +208,6 @@ for r in rows:
             print(f"  {r['entry'][:34]:34} {tag:14} {st}", flush=True)
 
     out.append(rec)
-    json.dump(out, open("ssmatch.json", "w"), indent=1)
+    json.dump(out, open(OUT, "w"), indent=1)
 
 print(f"\nspent {spent} requests of {BUDGET}")

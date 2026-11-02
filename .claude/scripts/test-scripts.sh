@@ -21,7 +21,7 @@ case_() {  # expected-rc name command...
 echo "== syntax"
 for f in "$S"/*; do [ -f "$f" ] || continue; case_ 0 "bash -n $(basename "$f")" bash -n "$f"; done
 echo "== --help"
-for t in mister-find mister-build mister-deploy mister-capture mister-ui mister-log mister-fresh mister-harness upstream-merge-trial farm-poll; do
+for t in mister-find mister-build mister-deploy mister-capture mister-scene mister-ui mister-log mister-fresh mister-harness upstream-merge-trial farm-poll; do
 	case_ 0 "$t --help" "$S/$t" --help
 done
 case_ 2 "approve-once (usage)" "$S/approve-once"
@@ -31,6 +31,8 @@ case_ 0 "mister-deploy --dry-run"  "$S/mister-deploy" "$WT/bin/MiSTer" --dry-run
 case_ 0 "mister-capture --dry-run" "$S/mister-capture" smoke --dry-run
 case_ 0 "mister-ui --dry-run"      "$S/mister-ui" state --dry-run
 case_ 0 "mister-ui goto --dry-run" "$S/mister-ui" goto gbc "Oracle" --dry-run
+case_ 0 "mister-scene --dry-run"   "$S/mister-scene" gb "Zelda" 3 "$CLASSICUI_CFG/x.png" --look DMG --dry-run
+case_ 2 "mister-scene bad slot"    "$S/mister-scene" gb "Zelda" 0 x.png --dry-run
 case_ 0 "mister-log --dry-run"     "$S/mister-log" since 0 -g 'ui ' --dry-run
 case_ 0 "mister-fresh --dry-run"   "$S/mister-fresh" --restart --sys gbc --game x --launch --dry-run
 case_ 0 "mister-harness --dry-run" "$S/mister-harness" "$WT" --dry-run
