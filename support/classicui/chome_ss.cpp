@@ -195,6 +195,8 @@ static const ss_sysmap builtin[] =
 	{ "cpc",      "65"  },   // Amstrad CPC
 	{ "msx",      "113" },   // MSX (and MSX2: Skyscraper lists both as 113)
 	{ "apple2",   "86"  },   // Apple II
+	{ "pet",      "240" },   // Commodore PET (Skyscraper's screenscraper_platforms.json, "PET")
+	{ "mac",      "146" },   // Macintosh ("Mac OS" there; platforms_idmap.csv: macintosh,146)
 
 	/*
 	  ao486 is MiSTer's PC-compatible DOS core - "PC / DOS" in the library table, extensions

@@ -105,6 +105,8 @@ MAP = [
     # monitor with a command prompt on it, which survives and says the same thing.
     ("ao486", "retroarch", "IBM - PC and Compatibles"),
     ("apple2", "retroarch", "Apple - II"),
+    ("pet", "retroarch", "Commodore - PET"),
+    ("mac", "retroarch", "Apple - Macintosh"),
 
     # Not a system: what a card falls back to when it is a folder, or a system this
     # table has never heard of. Kept here rather than with the pictograms so that

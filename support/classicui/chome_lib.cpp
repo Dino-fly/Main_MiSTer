@@ -172,6 +172,11 @@ static const sys_def defaults[] =
 	{ "msx",   "MSX",                           "MSX",  "_Computer/MSX",         "MSX",     "rom,dsk,cas",  "Microsoft - MSX",                                'f', 1, 3, 1, 0, 0x6e4a2b, 0, CH_SS_NO      },
 	{ "ao486", "PC / DOS",                      "DOS",  "_Computer/ao486",       "AO486",   "img,vhd,ima",  "DOS",                                            's', 0, 4, 1, 0, 0x4a4c58, 0, CH_SS_NO      },
 	{ "apple2","Apple II",                      "AII",  "_Computer/Apple-II",    "Apple-II","dsk,nib,po",   "Apple - II",                                     'f', 0, 3, 1, 0, 0x5e5e5e, 0, CH_SS_NO      },
+	// PET: F1 is the one file slot (TAP, PRG). Mac Plus: F1 is the primary floppy (DSK);
+	// its SCSI disks are S slots a shelf entry cannot fill. Read off the cores' CONF_STR
+	// 2026-11-02 (PET2001_20260731, MacPlus_20260731).
+	{ "pet",   "Commodore PET",                 "PET",  "_Computer/PET2001",     "PET2001", "prg,tap",      "Commodore - PET",                                'f', 1, 3, 1, 0, 0x2e5e3a, 0, CH_SS_NO      },
+	{ "mac",   "Macintosh",                     "MAC",  "_Computer/MacPlus",     "MACPLUS", "dsk",          "Apple - Macintosh",                              'f', 1, 3, 1, 0, 0x6e6e6e, 0, CH_SS_NO      },
 };
 
 /*
