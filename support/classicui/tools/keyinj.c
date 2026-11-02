@@ -1,7 +1,9 @@
 /*
   Minimal uinput keyboard, so a test can press buttons on the MiSTer.
 
-  Usage: keyinj <code|name>[:hold_ms] ...   e.g.  keyinj f12 up up enter:60 down
+  Usage: keyinj <code|name>[+<code|name>...][:hold_ms] ...   e.g.  keyinj f12 up up enter:60 down
+  A '+' presses the keys together, in order, and lets go in reverse: leftalt+f1 is the
+  stock savestate hotkey.
 
   It registers a device carrying the whole keyboard range, waits for the firmware to
   notice it (MiSTer enumerates input devices on an inotify event and that is not
@@ -55,7 +57,10 @@ struct { const char *name; int code; } names[] = {
 	{ "l", KEY_MINUS }, { "r", KEY_EQUAL },
 	{ "minus", KEY_MINUS }, { "equal", KEY_EQUAL },
 	// X on a pad: cycles which file a multi-version card will launch.
-	{ "tab", KEY_TAB }, { 0, 0 }
+	{ "tab", KEY_TAB },
+	// The stock savestate hotkeys: alt+f1..f4 save, f1..f4 load (with the core's own map).
+	{ "leftalt", KEY_LEFTALT }, { "f1", KEY_F1 }, { "f2", KEY_F2 }, { "f3", KEY_F3 },
+	{ "f4", KEY_F4 }, { 0, 0 }
 };
 
 int main(int argc, char **argv)
@@ -89,15 +94,25 @@ int main(int argc, char **argv)
 		char *colon = strchr(buf, ':');
 		if (colon) { *colon = 0; hold = atoi(colon + 1); }
 
-		int code = -1;
-		if (buf[0] >= '0' && buf[0] <= '9') code = atoi(buf);
-		else for (int k = 0; names[k].name; k++) if (!strcasecmp(buf, names[k].name)) code = names[k].code;
+		int codes[8], n = 0, bad = 0;
+		for (char *tok = strtok(buf, "+"); tok && n < 8; tok = strtok(0, "+"))
+		{
+			int code = -1;
+			if (tok[0] >= '0' && tok[0] <= '9') code = atoi(tok);
+			else for (int k = 0; names[k].name; k++) if (!strcasecmp(tok, names[k].name)) code = names[k].code;
+			if (code < 0) { fprintf(stderr, "unknown key: %s\n", tok); bad = 1; break; }
+			codes[n++] = code;
+		}
+		if (bad || !n) continue;
 
-		if (code < 0) { fprintf(stderr, "unknown key: %s\n", buf); continue; }
-
-		printf("key %s -> %d (hold %dms)\n", buf, code, hold);
+		printf("key %s (%d key%s, hold %dms)\n", argv[i], n, n > 1 ? "s" : "", hold);
 		fflush(stdout);
-		key(code, hold);
+		if (n == 1) { key(codes[0], hold); continue; }
+
+		for (int k = 0; k < n; k++) { emit(EV_KEY, codes[k], 1); emit(EV_SYN, SYN_REPORT, 0); usleep(30000); }
+		usleep(hold * 1000);
+		for (int k = n - 1; k >= 0; k--) { emit(EV_KEY, codes[k], 0); emit(EV_SYN, SYN_REPORT, 0); }
+		usleep(120000);
 	}
 
 	usleep(300000);

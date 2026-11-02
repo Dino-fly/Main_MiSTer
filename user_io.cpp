@@ -2262,7 +2262,13 @@ int process_ss(const char *rom_name, int enable)
 							snprintf(png, sizeof(png), "%s", ss_name);
 							char *dot = strrchr(png, '.');
 							if (dot) strcpy(dot, ".png");
-							screenshot_thumbnail(getFullPath(png), 256);
+							/*
+							  At the strip's one size, 256x192 - the display aspect, as
+							  ss_write_thumb() writes it. By the frame's own pixel ratio a
+							  SNES state came out 256x112 and a NES one 256x224, and the
+							  strip showed every system at a different height.
+							*/
+							screenshot_thumbnail(getFullPath(png), 256, 192);
 						}
 					}
 				}

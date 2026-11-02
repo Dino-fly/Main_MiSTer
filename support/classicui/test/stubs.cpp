@@ -1348,9 +1348,9 @@ int user_io_ss_copy_slot(int from, int to)
 }
 
 // The real one reads the FPGA scaler buffer; the harness has no core running.
-int screenshot_thumbnail(const char *fullpath, int max_w)
+int screenshot_thumbnail(const char *fullpath, int max_w, int out_h)
 {
-	printf("  [stub] screenshot_thumbnail(\"%s\", %d)\n", fullpath ? fullpath : "", max_w);
+	printf("  [stub] screenshot_thumbnail(\"%s\", %d, %d)\n", fullpath ? fullpath : "", max_w, out_h);
 	return 0;
 }
 

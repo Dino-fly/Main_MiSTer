@@ -695,7 +695,7 @@ int screenshot_grab(uint32_t *dst, int max_px, int *out_w, int *out_h)
     return 1;
 }
 
-int screenshot_thumbnail(const char *fullpath, int max_w)
+int screenshot_thumbnail(const char *fullpath, int max_w, int out_h)
 {
     // screenshot_outputbuf is shared with the async screenshot path.
     if (screenshot_pending_atomic || screenshot_requested || !fullpath || max_w < 8)
@@ -722,7 +722,7 @@ int screenshot_thumbnail(const char *fullpath, int max_w)
     mister_scaler_free(ms);
 
     int ow = max_w;
-    int oh = (int)(((long long)max_w * h) / w);
+    int oh = (out_h > 0) ? out_h : (int)(((long long)max_w * h) / w);
     if (oh < 1) oh = 1;
 
     bool ok = write_screenshot(fullpath, screenshot_outputbuf, w, h, ow, oh);
