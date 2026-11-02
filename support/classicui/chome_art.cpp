@@ -1381,6 +1381,38 @@ const uint32_t *art_thumb(const char *fullpath, int w, int h)
 	return victim->data;
 }
 
+/*
+  Which source pixels make up destination pixel d along one axis of sn -> dn, and how much
+  of it each covers. Shrinking, every source pixel lands in the average of the ones it
+  overlaps: picking one in every few instead dropped a row in seven of a 224-line NES
+  frame and took a stroke out of nearly every letter of its status bar. Growing (or
+  equal), nearest neighbour: no pixel is lost that way and the edges stay hard.
+  Weights are in units where the whole destination pixel is wsum.
+*/
+struct thumb_span { int i0, n, wsum; int w[16]; };
+
+static void thumb_span_of(int d, int dn, int sn, thumb_span *s)
+{
+	if (dn >= sn || sn > dn * 16)
+	{
+		s->i0 = (int)(((long long)d * sn) / dn);
+		s->n = 1;
+		s->w[0] = s->wsum = 1;
+		return;
+	}
+	// Source pixel i spans [i*dn, (i+1)*dn), destination pixel d spans [d*sn, (d+1)*sn).
+	int a = d * sn, b = (d + 1) * sn;
+	s->i0 = a / dn;
+	s->n = 0;
+	s->wsum = sn;
+	for (int i = s->i0; i * dn < b && s->n < 16; i++)
+	{
+		int lo = i * dn > a ? i * dn : a;
+		int hi = (i + 1) * dn < b ? (i + 1) * dn : b;
+		s->w[s->n++] = hi - lo;
+	}
+}
+
 void thumb_letterbox(const uint32_t *src, int sw, int sh, int arx, int ary, uint32_t *dst)
 {
 	const int bw = CH_THUMB_W, bh = CH_THUMB_H;
@@ -1407,11 +1439,38 @@ void thumb_letterbox(const uint32_t *src, int sw, int sh, int arx, int ary, uint
 	if (ph > bh) ph = bh;
 
 	int ox = (bw - pw) / 2, oy = (bh - ph) / 2;
+	static thumb_span xs[CH_THUMB_W];
+	for (int x = 0; x < pw; x++) thumb_span_of(x, pw, sw, &xs[x]);
+
 	for (int y = 0; y < ph; y++)
 	{
-		const uint32_t *srow = src + (size_t)((y * sh) / ph) * sw;
+		thumb_span ys;
+		thumb_span_of(y, ph, sh, &ys);
 		uint32_t *drow = dst + (size_t)(oy + y) * bw + ox;
-		for (int x = 0; x < pw; x++) drow[x] = srow[(x * sw) / pw] | 0xff000000u;
+		for (int x = 0; x < pw; x++)
+		{
+			const thumb_span *sx = &xs[x];
+			uint64_t r = 0, g = 0, b = 0;
+			for (int j = 0; j < ys.n; j++)
+			{
+				const uint32_t *p = src + (size_t)(ys.i0 + j) * sw + sx->i0;
+				uint32_t rr = 0, gg = 0, bb = 0;
+				for (int i = 0; i < sx->n; i++)
+				{
+					rr += ((p[i] >> 16) & 0xff) * sx->w[i];
+					gg += ((p[i] >> 8) & 0xff) * sx->w[i];
+					bb += (p[i] & 0xff) * sx->w[i];
+				}
+				r += rr * ys.w[j];
+				g += gg * ys.w[j];
+				b += bb * ys.w[j];
+			}
+			uint64_t den = (uint64_t)sx->wsum * ys.wsum;
+			r = (r + den / 2) / den;
+			g = (g + den / 2) / den;
+			b = (b + den / 2) / den;
+			drow[x] = 0xff000000u | (uint32_t)(r << 16 | g << 8 | b);
+		}
 	}
 }
 
