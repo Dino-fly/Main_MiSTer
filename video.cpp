@@ -3564,9 +3564,38 @@ void video_mode_adjust(bool force)
 	static bool rep_force = false;
 	if (force) rep_force = true;
 
-	// mode is pinned while the framebuffer owns the analog output (fb terminal or
-	// an alternative front-end); core video changes are picked up after release
-	if (vga_fb_takeover) return;
+	/*
+	  The mode is pinned while the framebuffer owns the analog output (fb terminal or
+	  an alternative front-end); core video changes are picked up after release.
+
+	  Except the menu core's subcarrier. The front-end takes the port on its first
+	  frame, and the first poll that reaches here comes a second after the firmware
+	  starts - so after a core change (a fresh process) the menu core could be held
+	  before it was ever sent UIO_SET_YC_PAR. Its subcarrier registers then stay at
+	  their power-up zero, and an external encoder shows the shelf in black and white
+	  until the next core load. Our menu.rbf opens sys_top's vgas_en gate, so that
+	  reference does reach the scaler path, and it has to be programmed here.
+
+	  Only the measurement and set_yc_mode() run: everything past this point can call
+	  video_set_mode(), which would throw away the TV mode the takeover pinned. And
+	  only for the menu core: a game core under its in-game menu was measured and
+	  programmed before the menu opened, and measuring here would use up a
+	  resolution change that the path below needs to see after release.
+	*/
+	if (vga_fb_takeover)
+	{
+		if (is_menu())
+		{
+			VideoInfo vi = current_video_info;
+			if (get_video_info(rep_force, &vi) || rep_force)
+			{
+				current_video_info = vi;
+				set_yc_mode();
+				rep_force = false;
+			}
+		}
+		return;
+	}
 
 	VideoInfo video_info = current_video_info;
 
