@@ -5488,6 +5488,26 @@ int input_test(int getchar)
 			clear_autofire(i);
 		}
 
+		/*
+		  menu_key_dev points into the table about to be wiped, and the rescan below
+		  refills it in /dev/input order, not the old one. Left alone, a front-end asking
+		  which pad pressed the last menu key read an empty or different slot - no name,
+		  no vid/pid, mmap all zero - so its button pictures fell back to bare letters and
+		  keyboard chips, and changed on every rescan. A pad that comes and goes (a SNAC
+		  port whose presence flaps) rescans constantly, so that was constant. Remember
+		  who it was and find the same device again once the table is rebuilt.
+		*/
+		char mk_name[sizeof(input[0].name)] = {};
+		uint16_t mk_vid = 0, mk_pid = 0;
+		if (menu_key_dev >= 0 && menu_key_dev < NUMDEV)
+		{
+			memcpy(mk_name, input[menu_key_dev].name, sizeof(mk_name));
+			mk_vid = input[menu_key_dev].vid;
+			mk_pid = input[menu_key_dev].pid;
+		}
+		menu_key_dev = -1;
+		menu_key_src_dev = -1;
+
 		memset(input, 0, sizeof(input));
 
 		int n = 0;
@@ -5870,6 +5890,20 @@ int input_test(int getchar)
 			closedir(d);
 
 			mergedevs();
+
+			// The same pad as before the rescan, if it is still here (see above).
+			if (mk_name[0] || mk_vid || mk_pid)
+			{
+				for (int i = 0; i < n; i++)
+				{
+					if (input[i].vid == mk_vid && input[i].pid == mk_pid && !strcmp(input[i].name, mk_name))
+					{
+						menu_key_dev = i;
+						break;
+					}
+				}
+			}
+
 			for (int i = 0; i < n; i++)
 			{
 				input[i].gcdb_version = input[i].version;

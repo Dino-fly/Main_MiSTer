@@ -205,22 +205,48 @@ static int hat_val(uint16_t buttons, int neg_bit, int pos_bit)
 	return 0;
 }
 
+/*
+  Presence is debounced, both ways, by time rather than by poll count: the poll is
+  only as regular as the main loop that calls it.
+
+  Creating or destroying a uinput device is not cheap for the rest of the firmware:
+  input.cpp sees /dev/input change, closes every input device and enumerates them all
+  again. A port whose presence bit flickers - reported with two PSX pads in, the second
+  one apparently coming and going - turned that into a rescan many times a second, and
+  the whole UI lagged with it. So a pad has to read present for a short run before its
+  device is made, and absent for a longer one before it is taken away; in between, the
+  device stays and keeps its last state. A real unplug is noticed a third of a second
+  later, which nobody can see.
+*/
+#define SNAC_PRESENT_MS 20
+#define SNAC_ABSENT_MS  300
+static uint32_t present_since[2] = {};   // 0 = not in a present run (GetTimer is never 0 here)
+static uint32_t absent_since[2] = {};
+
 static void pad_update(int idx, int connected, uint8_t id, uint16_t buttons, const uint8_t *axes)
 {
 	snac_pad_t *pad = &pads[idx];
 
 	if (!connected)
 	{
+		present_since[idx] = 0;
 		if (pad->fd >= 0)
 		{
+			if (!absent_since[idx]) absent_since[idx] = GetTimer(SNAC_ABSENT_MS);
+			if (!CheckTimer(absent_since[idx])) return;   // hold: may be a flicker
 			printf("snacpad: pad %d disconnected\n", idx + 1);
 			pad_destroy(idx);
 		}
+		absent_since[idx] = 0;
 		return;
 	}
 
+	absent_since[idx] = 0;
 	if (pad->fd < 0)
 	{
+		if (!present_since[idx]) present_since[idx] = GetTimer(SNAC_PRESENT_MS);
+		if (!CheckTimer(present_since[idx])) return;
+		present_since[idx] = 0;
 		pad->fd = pad_create(idx);
 		if (pad->fd < 0) return;
 		pad_reset_state(pad);
@@ -503,6 +529,8 @@ void snacpad_init()
 	wanted = 0;
 	owned_logged = -1;
 	bad_id_said[0] = bad_id_said[1] = 0;
+	present_since[0] = present_since[1] = 0;
+	absent_since[0] = absent_since[1] = 0;
 	poll_timer = 0;
 }
 
